@@ -23,7 +23,7 @@ Fappin' and Fraggin'
 - An expanded **screenshot system** with pattern-based naming, optional view metadata sidecars, watermark compositing, and OpenGL cube-map capture. See the [Screenshot guide](docs/SCREENSHOTS.md).
 - CPMA/CNQ3-style **rainbow text color escapes**, with live preview right in the console input line.
 - **SDL3** support for video, audio, and input on modern platforms.
-- OpenAL is the default audio backend, with device selection, **spatial reverb, occlusion**, and an easy fallback to the original mixer. See the [Audio guide](docs/AUDIO.md).
+- OpenAL is the default audio backend, with HRTF-aware positional audio, device/HRTF/output selection, **spatial reverb, occlusion**, tone shaping, latency diagnostics, and an easy fallback to the original mixer. See the [Audio guide](docs/AUDIO.md).
 - Compatibility support for Quake III Arena 1.17 **`.dm3` demo playback** alongside standard retail `.dm_XX` demo formats.
 - Compatibility support for older **Quake 3 IHV / q3test `IBSP v43` maps** alongside standard retail Quake III Arena BSP content.
 - Quick-and-simple compatibility support for **Quake Live `IBSP v47` BSPs**, including ignored advert data and `advertisement` entity fallback to `func_static`.
@@ -59,7 +59,7 @@ Fappin' and Fraggin'
 - [Display Guide](docs/DISPLAY.md) for renderer choice, video modes, render scaling, HDR, anti-aliasing, and bloom tuning.
 - [Visuals Guide](docs/VISUALS.md) for player highlighting and the current visual presentation controls.
 - [Aspect Correction Guide](docs/ASPECT_CORRECTION.md) for HUD, menu, and cinematic presentation options.
-- [Audio Guide](docs/AUDIO.md) for backend selection, volume, music, spatial audio, and sound debugging tools.
+- [Audio Guide](docs/AUDIO.md) for backend defaults, device/HRTF selection, volume, music, spatial audio, fallback behavior, and troubleshooting tools.
 - [Console Guide](docs/CONSOLE.md) for console scaling, interaction, completion, and appearance.
 - [Screenshot Guide](docs/SCREENSHOTS.md) for capture commands, naming patterns, view metadata sidecars, watermarks, and cube-map export.
 - [Technical Notes](docs/fnquake3/TECHNICAL.md) for maintainers, release flow, and repo conventions.

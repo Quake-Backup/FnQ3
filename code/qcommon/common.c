@@ -3288,11 +3288,14 @@ static void CPUID( int func, unsigned int *regs )
 }
 
 #ifdef USE_AFFINITY_MASK
-#if idx64
+#if idx64 && !defined(__clang__)
 extern void CPUID_EX( int func, int param, unsigned int *regs );
 #else
-void CPUID_EX( int func, int param, unsigned int *regs )
+static void CPUID_EX( int func, int param, unsigned int *regs )
 {
+#if defined(__clang__)
+	__cpuidex( (int*)regs, func, param );
+#else
 	__asm {
 		push edi
 		mov eax, func
@@ -3305,8 +3308,9 @@ void CPUID_EX( int func, int param, unsigned int *regs )
 		mov [edi+12], edx
 		pop edi
 	}
+#endif
 }
-#endif // !idx64
+#endif // !idx64 || __clang__
 #endif // USE_AFFINITY_MASK
 
 #else // clang/gcc/mingw

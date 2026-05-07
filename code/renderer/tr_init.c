@@ -22,6 +22,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // tr_init.c -- functions that are not called every frame
 
 #include "tr_local.h"
+#ifdef RENDERER_GLX
+#include "../rendererglx/glx_module.h"
+#endif
 
 glconfig_t	glConfig;
 qboolean	nonPowerOfTwoTextures;
@@ -633,6 +636,9 @@ static void InitOpenGL( void )
 			ri.Error( ERR_FATAL, "Error resolving core OpenGL function '%s'", err );
 
 		R_InitExtensions();
+#ifdef RENDERER_GLX
+		GLX_Renderer_OnOpenGLReady( &glConfig, gl_extensions );
+#endif
 
 		gls.windowWidth = glConfig.vidWidth;
 		gls.windowHeight = glConfig.vidHeight;
@@ -695,6 +701,9 @@ static void InitOpenGL( void )
 			ri.Error( ERR_FATAL, "Error resolving core OpenGL function '%s'", err );
 
 		R_InitExtensions();
+#ifdef RENDERER_GLX
+		GLX_Renderer_OnOpenGLReady( &glConfig, gl_extensions );
+#endif
 
 		QGL_InitARB();
 
@@ -2254,6 +2263,9 @@ static void R_Register( void )
 	ri.Cmd_AddCommand( "screenshotJPEG", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "screenshotBMP", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "gfxinfo", GfxInfo_f );
+#ifdef RENDERER_GLX
+	GLX_Renderer_RegisterCommands();
+#endif
 
 	//
 	// temporary latched variables that can only change over a restart
@@ -2507,7 +2519,11 @@ static void R_Register( void )
 	r_showcluster = ri.Cvar_Get ("r_showcluster", "0", CVAR_CHEAT);
 	ri.Cvar_SetDescription( r_showcluster, "Shows current cluster index." );
 	r_speeds = ri.Cvar_Get ("r_speeds", "0", CVAR_CHEAT);
-	ri.Cvar_SetDescription( r_speeds, "Prints out various debugging stats from PVS:\n 0: Disabled\n 1: Backend BSP\n 2: Frontend grid culling\n 3: Current view cluster index\n 4: Dynamic lighting\n 5: zFar clipping\n 6: Flares" );
+	ri.Cvar_SetDescription( r_speeds, "Prints out various debugging stats from PVS:\n 0: Disabled\n 1: Backend BSP\n 2: Frontend grid culling\n 3: Current view cluster index\n 4: Dynamic lighting\n 5: zFar clipping\n 6: Flares"
+#ifdef RENDERER_GLX
+		"\n 7: GLx capability and bootstrap counters"
+#endif
+	);
 	r_debugSurface = ri.Cvar_Get ("r_debugSurface", "0", CVAR_CHEAT);
 	ri.Cvar_SetDescription( r_debugSurface, "Backend visual debugging tool for bezier mesh surfaces." );
 	r_nobind = ri.Cvar_Get ("r_nobind", "0", CVAR_CHEAT);
@@ -2732,6 +2748,9 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 	ri.Cmd_RemoveCommand( "skinlist" );
 	ri.Cmd_RemoveCommand( "gfxinfo" );
 	ri.Cmd_RemoveCommand( "shaderstate" );
+#ifdef RENDERER_GLX
+	GLX_Renderer_RemoveCommands();
+#endif
 
 	//if ( tr.registered ) {
 		//R_IssuePendingRenderCommands();
@@ -2739,6 +2758,10 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 	//}
 
 	R_DoneFreeType();
+
+#ifdef RENDERER_GLX
+	GLX_Renderer_Shutdown( code );
+#endif
 
 	// shut down platform specific OpenGL stuff
 	if ( code != REF_KEEP_CONTEXT ) {
@@ -2798,6 +2821,9 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	static refexport_t	re;
 
 	ri = *rimp;
+#ifdef RENDERER_GLX
+	GLX_Renderer_SetImports( &ri );
+#endif
 
 	Com_Memset( &re, 0, sizeof( re ) );
 

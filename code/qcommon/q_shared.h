@@ -200,6 +200,9 @@ void CopyLongSwap( void *dest, void *src );
 // use GCC/Clang functions
 #define Q_setjmp __builtin_setjmp
 #define Q_longjmp __builtin_longjmp
+#elif defined(__clang__)
+#define Q_setjmp setjmp
+#define Q_longjmp longjmp
 #elif idx64 && (_MSC_VER >= 1910)
 // use custom setjmp()/longjmp() implementations
 #define Q_setjmp Q_setjmp_c

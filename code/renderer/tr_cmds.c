@@ -20,6 +20,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 #include "tr_local.h"
+#ifdef RENDERER_GLX
+#include "../rendererglx/glx_module.h"
+#endif
 
 /*
 =====================
@@ -64,6 +67,12 @@ static void R_PerformanceCounters( void ) {
 		ri.Printf( PRINT_ALL, "flare adds:%i tests:%i renders:%i\n", 
 			backEnd.pc.c_flareAdds, backEnd.pc.c_flareTests, backEnd.pc.c_flareRenders );
 	}
+#ifdef RENDERER_GLX
+	else if ( r_speeds->integer == 7 )
+	{
+		GLX_Renderer_PrintFrameCounters();
+	}
+#endif
 
 	Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 	Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
@@ -97,7 +106,13 @@ static void R_IssueRenderCommands( void ) {
 	// actually start the commands going
 	if ( !r_skipBackEnd->integer ) {
 		// let it start on the new batch
+#ifdef RENDERER_GLX
+		GLX_Renderer_BeginBackendTimer();
+#endif
 		RB_ExecuteRenderCommands( cmdList->cmds );
+#ifdef RENDERER_GLX
+		GLX_Renderer_EndBackendTimer();
+#endif
 	}
 }
 
@@ -451,6 +466,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 
 	R_IssueRenderCommands();
 
+#ifdef RENDERER_GLX
+	GLX_Renderer_FrameComplete();
+#endif
 	R_PerformanceCounters();
 
 	R_InitNextFrame();

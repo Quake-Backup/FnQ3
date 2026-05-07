@@ -199,6 +199,16 @@ extern cvar_t *s_muteWhenMinimized;
 extern cvar_t *s_backend;
 extern cvar_t *s_backendActive;
 extern cvar_t *s_alDevice;
+extern cvar_t *s_alHrtf;
+extern cvar_t *s_alHrtfId;
+extern cvar_t *s_alOutputMode;
+extern cvar_t *s_alDistanceModel;
+extern cvar_t *s_alFrequency;
+extern cvar_t *s_alRefresh;
+extern cvar_t *s_alMonoSources;
+extern cvar_t *s_alStereoSources;
+extern cvar_t *s_alOutputLimiter;
+extern cvar_t *s_alSpatializeStereo;
 
 extern cvar_t *s_testsound;
 
@@ -240,3 +250,5 @@ extern int	   sfxScratchIndex;
 
 qboolean S_Base_Init( soundInterface_t *si );
 qboolean S_OpenAL_Init( soundInterface_t *si );
+void S_OpenAL_ListDevices( void );
+void S_OpenAL_ListHrtfs( void );

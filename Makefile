@@ -43,13 +43,14 @@ USE_SYSTEM_OGG    = 0
 USE_SYSTEM_VORBIS = 0
 
 USE_VULKAN       = 1
+USE_GLX          = 0
 USE_OPENGL       = 1
 USE_OPENGL2      = 0
 USE_OPENGL_API   = 1
 USE_VULKAN_API   = 1
 USE_RENDERER_DLOPEN = 1
 
-# valid options: opengl, vulkan, opengl2
+# valid options: opengl, glx, vulkan, opengl2
 RENDERER_DEFAULT = opengl
 
 CNAME            = fnquake3
@@ -185,6 +186,7 @@ ifeq ($(USE_RENDERER_DLOPEN),0)
   endif
   ifeq ($(RENDERER_DEFAULT),opengl2)
     USE_OPENGL=0
+    USE_GLX=0
     USE_OPENGL2=1
     USE_VULKAN=0
     USE_OPENGL_API=1
@@ -192,14 +194,27 @@ ifeq ($(USE_RENDERER_DLOPEN),0)
   endif
   ifeq ($(RENDERER_DEFAULT),vulkan)
     USE_OPENGL=0
+    USE_GLX=0
     USE_OPENGL2=0
     USE_VULKAN=1
     USE_OPENGL_API=0
+  endif
+  ifeq ($(RENDERER_DEFAULT),glx)
+    USE_OPENGL=0
+    USE_GLX=1
+    USE_OPENGL2=0
+    USE_VULKAN=0
+    USE_OPENGL_API=1
+    USE_VULKAN_API=0
   endif
 endif
 
 ifneq ($(USE_VULKAN),0)
   USE_VULKAN_API=1
+endif
+
+ifneq ($(USE_GLX),0)
+  USE_OPENGL_API=1
 endif
 
 
@@ -213,6 +228,7 @@ SDIR=$(MOUNT_DIR)/server
 RCDIR=$(MOUNT_DIR)/renderercommon
 R1DIR=$(MOUNT_DIR)/renderer
 R2DIR=$(MOUNT_DIR)/renderer2
+RXDIR=$(MOUNT_DIR)/rendererglx
 RVDIR=$(MOUNT_DIR)/renderervk
 SDLDIR=$(MOUNT_DIR)/sdl
 SDLHDIR=$(MOUNT_DIR)/libsdl/include
@@ -668,6 +684,7 @@ TARGET_CLIENT = $(CNAME)$(ARCHEXT)$(BINEXT)
 
 TARGET_REND1 = $(RENDERER_PREFIX)_opengl_$(SHLIBNAME)
 TARGET_REND2 = $(RENDERER_PREFIX)_opengl2_$(SHLIBNAME)
+TARGET_RENDX = $(RENDERER_PREFIX)_glx_$(SHLIBNAME)
 TARGET_RENDV = $(RENDERER_PREFIX)_vulkan_$(SHLIBNAME)
 
 TARGET_SERVER = $(DNAME)$(ARCHEXT)$(BINEXT)
@@ -688,6 +705,9 @@ ifneq ($(BUILD_CLIENT),0)
     endif
     ifeq ($(USE_OPENGL2),1)
       TARGETS += $(B)/$(TARGET_REND2)
+    endif
+    ifeq ($(USE_GLX),1)
+      TARGETS += $(B)/$(TARGET_RENDX)
     endif
     ifeq ($(USE_VULKAN),1)
       TARGETS += $(B)/$(TARGET_RENDV)
@@ -735,6 +755,16 @@ endef
 define DO_REND_CC
 $(echo_cmd) "REND_CC $<"
 $(Q)$(CC) $(CFLAGS) $(RENDCFLAGS) -o $@ -c $<
+endef
+
+define DO_GLX_REND_CC
+$(echo_cmd) "GLX_REND_CC $<"
+$(Q)$(CC) $(CFLAGS) $(RENDCFLAGS) -DRENDERER_GLX -o $@ -c $<
+endef
+
+define DO_GLX_REND_CXX
+$(echo_cmd) "GLX_REND_CXX $<"
+$(Q)$(CXX) $(CXXFLAGS) $(RENDCFLAGS) -DRENDERER_GLX -o $@ -c $<
 endef
 
 define DO_REF_STR
@@ -860,6 +890,7 @@ endif
 	@if [ ! -d $(B)/rend1 ];then $(MKDIR) $(B)/rend1;fi
 	@if [ ! -d $(B)/rend2 ];then $(MKDIR) $(B)/rend2;fi
 	@if [ ! -d $(B)/rend2/glsl ];then $(MKDIR) $(B)/rend2/glsl;fi
+	@if [ ! -d $(B)/rendx ];then $(MKDIR) $(B)/rendx;fi
 	@if [ ! -d $(B)/rendv ];then $(MKDIR) $(B)/rendv;fi
 ifneq ($(BUILD_SERVER),0)
 	@if [ ! -d $(B)/ded ];then $(MKDIR) $(B)/ded/qvm;fi
@@ -908,6 +939,55 @@ ifneq ($(USE_RENDERER_DLOPEN), 0)
     $(B)/rend1/q_shared.o \
     $(B)/rend1/puff.o \
     $(B)/rend1/q_math.o
+endif
+
+Q3RENDXOBJ = \
+  $(B)/rendx/tr_animation.o \
+  $(B)/rendx/tr_arb.o \
+  $(B)/rendx/tr_backend.o \
+  $(B)/rendx/tr_bsp.o \
+  $(B)/rendx/tr_cmds.o \
+  $(B)/rendx/tr_curve.o \
+  $(B)/rendx/tr_flares.o \
+  $(B)/rendx/tr_font.o \
+  $(B)/rendx/tr_image.o \
+  $(B)/rendx/tr_image_png.o \
+  $(B)/rendx/tr_image_jpg.o \
+  $(B)/rendx/tr_image_bmp.o \
+  $(B)/rendx/tr_image_tga.o \
+  $(B)/rendx/tr_image_pcx.o \
+  $(B)/rendx/tr_image_wal.o \
+  $(B)/rendx/tr_init.o \
+  $(B)/rendx/tr_light.o \
+  $(B)/rendx/tr_main.o \
+  $(B)/rendx/tr_marks.o \
+  $(B)/rendx/tr_mesh.o \
+  $(B)/rendx/tr_model.o \
+  $(B)/rendx/tr_model_iqm.o \
+  $(B)/rendx/tr_noise.o \
+  $(B)/rendx/tr_scene.o \
+  $(B)/rendx/tr_shade.o \
+  $(B)/rendx/tr_shade_calc.o \
+  $(B)/rendx/tr_shader.o \
+  $(B)/rendx/tr_shadows.o \
+  $(B)/rendx/tr_sky.o \
+  $(B)/rendx/tr_surface.o \
+  $(B)/rendx/tr_vbo.o \
+  $(B)/rendx/tr_world.o \
+  $(B)/rendx/glx_caps.o \
+  $(B)/rendx/glx_debug.o \
+  $(B)/rendx/glx_material.o \
+  $(B)/rendx/glx_module.o \
+  $(B)/rendx/glx_postprocess.o \
+  $(B)/rendx/glx_profiler.o \
+  $(B)/rendx/glx_static_world.o \
+  $(B)/rendx/glx_stream.o
+
+ifneq ($(USE_RENDERER_DLOPEN), 0)
+  Q3RENDXOBJ += \
+    $(B)/rendx/q_shared.o \
+    $(B)/rendx/puff.o \
+    $(B)/rendx/q_math.o
 endif
 
 Q3REND2OBJ = \
@@ -1213,6 +1293,9 @@ ifeq ($(USE_OGG_VORBIS),1)
 endif
 
 ifneq ($(USE_RENDERER_DLOPEN),1)
+  ifeq ($(USE_GLX),1)
+    Q3OBJ += $(Q3RENDXOBJ)
+  else
   ifeq ($(USE_VULKAN),1)
     Q3OBJ += $(Q3RENDVOBJ)
   else
@@ -1222,6 +1305,7 @@ ifneq ($(USE_RENDERER_DLOPEN),1)
     else
       Q3OBJ += $(Q3REND1OBJ)
     endif
+  endif
   endif
 endif
 
@@ -1353,6 +1437,10 @@ $(STRINGIFY): $(MOUNT_DIR)/renderer2/stringify.c
 $(B)/$(TARGET_REND2): $(Q3REND2OBJ) $(Q3REND2STROBJ)
 	$(echo_cmd) "LD $@"
 	$(Q)$(CC) -o $@ $(Q3REND2OBJ) $(Q3REND2STROBJ) $(SHLIBCFLAGS) $(SHLIBLDFLAGS)
+
+$(B)/$(TARGET_RENDX): $(Q3RENDXOBJ)
+	$(echo_cmd) "LD $@"
+	$(Q)$(CXX) -o $@ $(Q3RENDXOBJ) $(SHLIBCFLAGS) $(SHLIBLDFLAGS)
 
 $(B)/$(TARGET_RENDV): $(Q3RENDVOBJ)
 	$(echo_cmd) "LD $@"
@@ -1531,6 +1619,18 @@ $(B)/rend2/%.o: $(RCDIR)/%.c
 
 $(B)/rend2/%.o: $(CMDIR)/%.c
 	$(DO_REND_CC)
+
+$(B)/rendx/%.o: $(R1DIR)/%.c
+	$(DO_GLX_REND_CC)
+
+$(B)/rendx/%.o: $(RCDIR)/%.c
+	$(DO_GLX_REND_CC)
+
+$(B)/rendx/%.o: $(CMDIR)/%.c
+	$(DO_GLX_REND_CC)
+
+$(B)/rendx/%.o: $(RXDIR)/%.cpp
+	$(DO_GLX_REND_CXX)
 
 $(B)/rendv/%.o: $(RVDIR)/%.c
 	$(DO_REND_CC)

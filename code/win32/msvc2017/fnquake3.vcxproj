@@ -370,6 +370,12 @@
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\audio\AudioSystemBackend.inl" />
+    <ClInclude Include="..\..\audio\AudioSystemOpenAL.inl" />
+    <ClInclude Include="..\..\audio\AudioSystemShared.inl" />
+    <ClInclude Include="..\..\audio\AudioSystemStreams.inl" />
+    <ClInclude Include="..\..\audio\AudioSystemWorld.inl" />
+    <ClInclude Include="..\..\audio\AudioZoneFormat.h" />
     <ClInclude Include="..\..\cgame\cg_public.h" />
     <ClInclude Include="..\..\client\client.h" />
     <ClInclude Include="..\..\client\cl_curl.h" />

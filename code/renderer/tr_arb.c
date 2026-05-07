@@ -1,5 +1,8 @@
 #include "tr_local.h"
 #include "tr_common.h"
+#ifdef RENDERER_GLX
+#include "../rendererglx/glx_module.h"
+#endif
 
 #define COMMON_DEPTH_STENCIL
 //#define DEPTH_RENDER_BUFFER
@@ -70,6 +73,42 @@ qboolean blitMSfbo = qfalse;
 #endif
 
 extern void RB_SetGL2D( void );
+
+#if defined(RENDERER_GLX) && defined(USE_FBO)
+static void GLX_RecordFboInitState( qboolean requested, qboolean ready,
+	qboolean programReady, qboolean framebufferFnsReady )
+{
+	GLX_Renderer_RecordFboInit( requested, ready, programReady, framebufferFnsReady,
+		glConfig.vidWidth, glConfig.vidHeight, gls.captureWidth, gls.captureHeight,
+		gls.windowWidth, gls.windowHeight, fboInternalFormat, fboTextureFormat,
+		fboTextureType, frameBufferMultiSampling, superSampled, windowAdjusted,
+		blitFilter, r_hdr ? r_hdr->integer : 0, r_renderScale ? r_renderScale->integer : 0,
+		r_bloom ? r_bloom->integer : 0 );
+}
+
+static void GLX_RecordBloomCreateState( int result )
+{
+	GLX_Renderer_RecordBloomCreate( result,
+		r_bloom_passes ? r_bloom_passes->integer : 0, fboBloomPasses,
+		glConfig.numTextureUnits );
+}
+
+static void GLX_RecordBloomState( int result, qboolean finalStage )
+{
+	GLX_Renderer_RecordBloom( result, finalStage,
+		r_bloom ? r_bloom->integer : 0,
+		r_bloom_passes ? r_bloom_passes->integer : 0,
+		fboBloomPasses,
+		fboBloomBlendBase,
+		fboBloomFilterSize,
+		glConfig.numTextureUnits,
+		r_bloom_threshold_mode ? r_bloom_threshold_mode->integer : 0,
+		r_bloom_modulate ? r_bloom_modulate->integer : 0,
+		r_bloom_threshold ? r_bloom_threshold->value : 0.0f,
+		r_bloom_intensity ? r_bloom_intensity->value : 0.0f,
+		r_bloom_reflection ? r_bloom_reflection->value : 0.0f );
+}
+#endif
 
 qboolean GL_ProgramAvailable( void )
 {
@@ -1054,6 +1093,10 @@ qboolean ARB_UpdatePrograms( void )
 		return qfalse;
 
 	fboBloomBlendBase = r_bloom_blend_base->integer;
+	if ( fboBloomBlendBase < 0 )
+		fboBloomBlendBase = 0;
+	if ( fboBloomBlendBase >= r_bloom_passes->integer )
+		fboBloomBlendBase = r_bloom_passes->integer - 1;
 	if ( !ARB_CompileProgram( Fragment, ARB_BuildBlendProgram( buf, r_bloom_passes->integer - fboBloomBlendBase ), programs[ BLENDX_FRAGMENT ] ) )
 		return qfalse;
 
@@ -1461,6 +1504,9 @@ static qboolean FBO_CreateBloom( void )
 	{
 		ri.Printf( PRINT_WARNING, "...not enough texture units (%i) for %i-pass bloom\n",
 			glConfig.numTextureUnits, r_bloom_passes->integer );
+#ifdef RENDERER_GLX
+		GLX_RecordBloomCreateState( GLX_BLOOM_CREATE_TEXTURE_UNITS );
+#endif
 		return qfalse;
 	}
 
@@ -1469,6 +1515,9 @@ static qboolean FBO_CreateBloom( void )
 		// we may need depth/stencil buffers for first bloom buffer in \r_bloom 2 mode
 		if ( !FBO_Create( &frameBuffers[ i*2 + BLOOM_BASE + 0 ], width, height, i == 0 ? qtrue : qfalse, NULL, NULL ) ||
 			!FBO_Create( &frameBuffers[ i*2 + BLOOM_BASE + 1 ], width, height, qfalse, NULL, NULL ) ) {
+#ifdef RENDERER_GLX
+			GLX_RecordBloomCreateState( GLX_BLOOM_CREATE_FBO );
+#endif
 			return qfalse;
 		}
 		width = width / 2;
@@ -1479,6 +1528,9 @@ static qboolean FBO_CreateBloom( void )
 	}
 
 	ri.Printf( PRINT_ALL, "...%i bloom passes\n", fboBloomPasses );
+#ifdef RENDERER_GLX
+	GLX_RecordBloomCreateState( GLX_BLOOM_CREATE_SUCCESS );
+#endif
 
 	return qtrue;
 }
@@ -1568,6 +1620,10 @@ void FBO_BlitSS( void )
 {
 	const frameBuffer_t *src = &frameBuffers[ fboReadIndex ];
 	const frameBuffer_t *dst = &frameBuffers[ 4 ];
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordFboBlit( GLX_FBO_BLIT_SS, qfalse,
+		src->width, src->height, dst->width, dst->height );
+#endif
 
 	FBO_Bind( GL_DRAW_FRAMEBUFFER, dst->fbo );
 	
@@ -1586,6 +1642,10 @@ void FBO_BlitMS( qboolean depthOnly )
 
 	const frameBuffer_t *r = &frameBufferMS;
 	const frameBuffer_t *d = &frameBuffers[ 0 ];
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordFboBlit( GLX_FBO_BLIT_MS, depthOnly,
+		r->width, r->height, d->width, d->height );
+#endif
 
 	fboReadIndex = 0;
 
@@ -1654,6 +1714,10 @@ void FBO_CopyScreen( void )
 	const frameBuffer_t *dst;
 	const frameBuffer_t *src;
 	int yCrop;
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordFboCopyScreen( backEnd.viewParms.viewportWidth,
+		backEnd.viewParms.viewportHeight );
+#endif
 
 	qglViewport( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
 	qglScissor( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
@@ -1795,6 +1859,9 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 
 	if ( backEnd.doneBloom || !backEnd.doneSurfaces )
 	{
+#ifdef RENDERER_GLX
+		GLX_RecordBloomState( GLX_BLOOM_RESULT_SKIPPED, finalStage );
+#endif
 		return qfalse;
 	}
 
@@ -1807,6 +1874,9 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 			ri.Printf( PRINT_WARNING, "...error creating framebuffers for bloom\n" );
 			ri.Cvar_Set( "r_bloom", "0" );
 			FBO_CleanBloom();
+#ifdef RENDERER_GLX
+			GLX_RecordBloomState( GLX_BLOOM_RESULT_CREATE_FAILED, finalStage );
+#endif
 			return qfalse;
 		}
 		else
@@ -1950,6 +2020,11 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 		fboReadIndex = BLOOM_BASE;
 	}
 
+#ifdef RENDERER_GLX
+	GLX_RecordBloomState( finalStage ? GLX_BLOOM_RESULT_FINAL : GLX_BLOOM_RESULT_INTERMEDIATE,
+		finalStage );
+#endif
+
 	return finalStage;
 }
 
@@ -2003,9 +2078,18 @@ void FBO_PostProcess( void )
 		qglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
 
 	minimized = ri.CL_IsMinimized();
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordPostProcessFrame( minimized,
+		( r_bloom->integer && programCompiled && qglActiveTextureARB ) ? qtrue : qfalse,
+		programCompiled ? qtrue : qfalse, backEnd.screenshotMask, windowAdjusted,
+		fboReadIndex, r_hdr->integer, r_renderScale->integer, r_greyscale->value );
+#endif
 
 	if ( r_bloom->integer && programCompiled && qglActiveTextureARB ) {
 		if ( FBO_Bloom( gamma, obScale, !minimized ) ) {
+#ifdef RENDERER_GLX
+			GLX_Renderer_RecordPostProcessResult( GLX_POSTPROCESS_RESULT_BLOOM_FINAL );
+#endif
 			return;
 		}
 	}
@@ -2018,6 +2102,9 @@ void FBO_PostProcess( void )
 		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, gamma, gamma, gamma, obScale );
 		RenderQuad( w, h );
 		ARB_ProgramDisable();
+#ifdef RENDERER_GLX
+		GLX_Renderer_RecordPostProcessResult( GLX_POSTPROCESS_RESULT_GAMMA_DIRECT );
+#endif
 		return;
 	}
 
@@ -2031,6 +2118,13 @@ void FBO_PostProcess( void )
 
 	if ( !minimized ) {
 		FBO_BlitToBackBuffer( 1 );
+#ifdef RENDERER_GLX
+		GLX_Renderer_RecordPostProcessResult( GLX_POSTPROCESS_RESULT_GAMMA_BLIT );
+#endif
+#ifdef RENDERER_GLX
+	} else {
+		GLX_Renderer_RecordPostProcessResult( GLX_POSTPROCESS_RESULT_MINIMIZED );
+#endif
 	}
 }
 
@@ -2117,6 +2211,9 @@ void QGL_DoneFBO( void )
 		FBO_CleanDepth();
 		fboEnabled = qfalse;
 		fboBloomInited = qfalse;
+#ifdef RENDERER_GLX
+		GLX_Renderer_RecordFboShutdown();
+#endif
 	}
 }
 
@@ -2139,7 +2236,13 @@ void QGL_InitFBO( void )
 		ri.Printf( PRINT_WARNING, "...FBO is not available\n" );
 
 	if ( !r_fbo->integer || !qglGenProgramsARB || !qglGenFramebuffers )
+	{
+#ifdef RENDERER_GLX
+		GLX_RecordFboInitState( r_fbo->integer ? qtrue : qfalse, qfalse,
+			qglGenProgramsARB ? qtrue : qfalse, qglGenFramebuffers ? qtrue : qfalse );
+#endif
 		return;
+	}
 
 	qglGetError(); // reset error code
 
@@ -2192,6 +2295,9 @@ void QGL_InitFBO( void )
 	{
 		QGL_DoneFBO();
 	}
+#ifdef RENDERER_GLX
+	GLX_RecordFboInitState( qtrue, fboEnabled, qtrue, qtrue );
+#endif
 }
 #endif // USE_FBO
 

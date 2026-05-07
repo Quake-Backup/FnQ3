@@ -32,6 +32,7 @@ cvar_t	*cl_motd;
 
 #ifdef USE_RENDERER_DLOPEN
 static cvar_t *cl_renderer;
+static qboolean isValidRenderer( const char *s );
 #endif
 
 cvar_t	*rcon_client_password;
@@ -2016,6 +2017,58 @@ static void CL_Vid_Restart_f( void ) {
 		CL_Vid_Restart( REF_DESTROY_WINDOW );
 	}
 }
+
+
+#ifdef USE_RENDERER_DLOPEN
+/*
+=================
+CL_RendererSwitch_f
+
+Switch the active renderer and restart the video subsystem.
+=================
+*/
+static void CL_RendererSwitch_f( void ) {
+	const char *renderer;
+	const char *mode;
+	refShutdownCode_t shutdownCode;
+
+	if ( !cl_renderer ) {
+		Com_Printf( "renderer_switch: renderer cvars are not initialized\n" );
+		return;
+	}
+
+	if ( Cmd_Argc() < 2 || Cmd_Argc() > 3 ) {
+		Com_Printf( "usage: renderer_switch <renderer> [fast|keep_window|full]\n" );
+		Com_Printf( "current renderer: %s\n", cl_renderer->string );
+		return;
+	}
+
+	renderer = Cmd_Argv( 1 );
+	if ( !renderer[0] || !isValidRenderer( renderer ) ) {
+		Com_Printf( "renderer_switch: invalid renderer name \"%s\"\n", renderer );
+		return;
+	}
+
+	mode = Cmd_Argv( 2 );
+	if ( !mode[0] || Q_stricmp( mode, "fast" ) == 0 || Q_stricmp( mode, "keep_window" ) == 0 ) {
+		shutdownCode = REF_KEEP_WINDOW;
+	} else if ( Q_stricmp( mode, "full" ) == 0 || Q_stricmp( mode, "destroy_window" ) == 0 ) {
+		shutdownCode = REF_DESTROY_WINDOW;
+	} else {
+		Com_Printf( "usage: renderer_switch <renderer> [fast|keep_window|full]\n" );
+		return;
+	}
+
+	if ( Q_stricmp( cl_renderer->string, renderer ) == 0 ) {
+		Com_Printf( "renderer_switch: %s is already active, restarting renderer.\n", cl_renderer->string );
+	} else {
+		Com_Printf( "renderer_switch: %s -> %s\n", cl_renderer->string, renderer );
+		Cvar_Set( "cl_renderer", renderer );
+	}
+
+	CL_Vid_Restart( shutdownCode );
+}
+#endif
 
 
 /*
@@ -4240,6 +4293,9 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("clientinfo", CL_Clientinfo_f);
 	Cmd_AddCommand ("snd_restart", CL_Snd_Restart_f);
 	Cmd_AddCommand ("vid_restart", CL_Vid_Restart_f);
+#ifdef USE_RENDERER_DLOPEN
+	Cmd_AddCommand ("renderer_switch", CL_RendererSwitch_f);
+#endif
 	Cmd_AddCommand ("disconnect", CL_Disconnect_f);
 	Cmd_AddCommand ("record", CL_Record_f);
 	Cmd_SetCommandCompletionFunc( "record", CL_CompleteRecordName );
@@ -4325,6 +4381,9 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 	Cmd_RemoveCommand ("clientinfo");
 	Cmd_RemoveCommand ("snd_restart");
 	Cmd_RemoveCommand ("vid_restart");
+#ifdef USE_RENDERER_DLOPEN
+	Cmd_RemoveCommand ("renderer_switch");
+#endif
 	Cmd_RemoveCommand ("disconnect");
 	Cmd_RemoveCommand ("record");
 	Cmd_RemoveCommand ("demo");

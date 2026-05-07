@@ -34,6 +34,16 @@ cvar_t *s_muteWhenUnfocused;
 cvar_t *s_backend;
 cvar_t *s_backendActive;
 cvar_t *s_alDevice;
+cvar_t *s_alHrtf;
+cvar_t *s_alHrtfId;
+cvar_t *s_alOutputMode;
+cvar_t *s_alDistanceModel;
+cvar_t *s_alFrequency;
+cvar_t *s_alRefresh;
+cvar_t *s_alMonoSources;
+cvar_t *s_alStereoSources;
+cvar_t *s_alOutputLimiter;
+cvar_t *s_alSpatializeStereo;
 
 static soundInterface_t si;
 
@@ -350,6 +360,16 @@ static void S_AlDebugDump_f( void )
 		( s_backendActive != NULL ) ? s_backendActive->string : "none" );
 }
 
+static void S_AlListDevices_f( void )
+{
+	S_OpenAL_ListDevices();
+}
+
+static void S_AlListHrtfs_f( void )
+{
+	S_OpenAL_ListHrtfs();
+}
+
 //=============================================================================
 
 /*
@@ -462,6 +482,38 @@ void S_Init( void )
 	s_alDevice = Cvar_Get( "s_alDevice", "", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	Cvar_SetDescription( s_alDevice, "Selects the OpenAL playback device when s_backend is set to openal.\n"
 		"Leave blank to use the system default device." );
+	s_alHrtf = Cvar_Get( "s_alHrtf", "auto", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_SetDescription( s_alHrtf, "Requests OpenAL Soft HRTF rendering for stereo/headphone output. Requires snd_restart.\n"
+		"Available values:\n"
+		"  " S_COLOR_CYAN "auto" S_COLOR_WHITE " - let OpenAL decide based on device/output\n"
+		"  " S_COLOR_CYAN "on" S_COLOR_WHITE " - request HRTF and report if the device denies it\n"
+		"  " S_COLOR_CYAN "off" S_COLOR_WHITE " - request non-HRTF rendering" );
+	s_alHrtfId = Cvar_Get( "s_alHrtfId", "", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_SetDescription( s_alHrtfId, "Preferred OpenAL Soft HRTF name or numeric index. Leave blank for the device default. Requires snd_restart." );
+	s_alOutputMode = Cvar_Get( "s_alOutputMode", "auto", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_SetDescription( s_alOutputMode, "Requests the OpenAL Soft output mode. Requires snd_restart.\n"
+		"Available values: auto, headphones, speakers, surround, quad, 5.1, 6.1, 7.1." );
+	s_alDistanceModel = Cvar_Get( "s_alDistanceModel", "inverse_clamped", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_SetDescription( s_alDistanceModel, "Requests the OpenAL distance attenuation model for world sounds. Requires snd_restart.\n"
+		"Available values: none, inverse, inverse_clamped, linear, linear_clamped, exponent, exponent_clamped." );
+	s_alFrequency = Cvar_Get( "s_alFrequency", "48000", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_CheckRange( s_alFrequency, "8000", "192000", CV_INTEGER );
+	Cvar_SetDescription( s_alFrequency, "Requests the OpenAL mix frequency in Hz. Requires snd_restart." );
+	s_alRefresh = Cvar_Get( "s_alRefresh", "100", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_CheckRange( s_alRefresh, "20", "1000", CV_INTEGER );
+	Cvar_SetDescription( s_alRefresh, "Requests the OpenAL context refresh rate in Hz. Requires snd_restart." );
+	s_alMonoSources = Cvar_Get( "s_alMonoSources", "64", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_CheckRange( s_alMonoSources, "16", "256", CV_INTEGER );
+	Cvar_SetDescription( s_alMonoSources, "Requests the number of OpenAL mono/3D source slots. Requires snd_restart." );
+	s_alStereoSources = Cvar_Get( "s_alStereoSources", "8", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_CheckRange( s_alStereoSources, "0", "64", CV_INTEGER );
+	Cvar_SetDescription( s_alStereoSources, "Requests the number of OpenAL stereo source slots. Requires snd_restart." );
+	s_alOutputLimiter = Cvar_Get( "s_alOutputLimiter", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_CheckRange( s_alOutputLimiter, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( s_alOutputLimiter, "Requests OpenAL Soft output limiting when the device supports it. Requires snd_restart." );
+	s_alSpatializeStereo = Cvar_Get( "s_alSpatializeStereo", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	Cvar_CheckRange( s_alSpatializeStereo, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( s_alSpatializeStereo, "Allows two-channel world samples to use OpenAL positional routing instead of the authored direct path. Requires snd_restart." );
 	Cvar_Set( "s_backendActive", "none" );
 
 	cv = Cvar_Get( "s_initsound", "1", 0 );
@@ -479,6 +531,8 @@ void S_Init( void )
 		Cmd_AddCommand( "s_stop", S_StopAllSounds );
 		Cmd_AddCommand( "s_info", S_SoundInfo );
 		Cmd_AddCommand( "s_alDebugDump", S_AlDebugDump_f );
+		Cmd_AddCommand( "s_alListDevices", S_AlListDevices_f );
+		Cmd_AddCommand( "s_alListHrtfs", S_AlListHrtfs_f );
 
 		if ( !started && !Q_stricmp( s_backend->string, "openal" ) ) {
 			started = S_OpenAL_Init( &si );
@@ -540,6 +594,8 @@ void S_Shutdown( void )
 	Cmd_RemoveCommand( "s_stop" );
 	Cmd_RemoveCommand( "s_info" );
 	Cmd_RemoveCommand( "s_alDebugDump" );
+	Cmd_RemoveCommand( "s_alListDevices" );
+	Cmd_RemoveCommand( "s_alListHrtfs" );
 
 	S_CodecShutdown();
 

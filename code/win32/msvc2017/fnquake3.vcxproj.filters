@@ -216,6 +216,24 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\audio\AudioSystemBackend.inl">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\audio\AudioSystemOpenAL.inl">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\audio\AudioSystemShared.inl">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\audio\AudioSystemStreams.inl">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\audio\AudioSystemWorld.inl">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\audio\AudioZoneFormat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\game\bg_public.h">
       <Filter>Header Files</Filter>
     </ClInclude>

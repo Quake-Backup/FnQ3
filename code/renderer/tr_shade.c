@@ -23,6 +23,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_local.h"
 
+#ifdef RENDERER_GLX
+#include "../rendererglx/glx_module.h"
+
+#ifndef GL_ARRAY_BUFFER_BINDING_ARB
+#define GL_ARRAY_BUFFER_BINDING_ARB 0x8894
+#endif
+#ifndef GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB
+#define GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB 0x8895
+#endif
+#endif
+
 /*
 
   THIS ENTIRE FILE IS BACK END
@@ -37,6 +48,9 @@ R_DrawElements
 ==================
 */
 void R_DrawElements( int numIndexes, const glIndex_t *indexes ) {
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordDraw( numIndexes, GLX_DRAW_GENERIC );
+#endif
 	qglDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE, indexes );
 }
 
@@ -51,6 +65,368 @@ SURFACE SHADERS
 
 shaderCommands_t	tess;
 static qboolean	setArraysOnce;
+
+#ifdef RENDERER_GLX
+static int GLX_MaterialStageFlags( const shaderStage_t *pStage )
+{
+	int flags = 0;
+
+	if ( pStage->mtEnv ) {
+		flags |= GLX_STAGE_MULTITEXTURE;
+	}
+	if ( pStage->depthFragment ) {
+		flags |= GLX_STAGE_DEPTH_FRAGMENT;
+	}
+	if ( pStage->stateBits & GLS_BLEND_BITS ) {
+		flags |= GLX_STAGE_BLEND;
+	}
+	if ( pStage->stateBits & GLS_ATEST_BITS ) {
+		flags |= GLX_STAGE_ALPHA_TEST;
+	}
+	if ( pStage->stateBits & GLS_DEPTHMASK_TRUE ) {
+		flags |= GLX_STAGE_DEPTH_WRITE;
+	}
+	if ( pStage->bundle[0].lightmap != LIGHTMAP_INDEX_NONE ||
+		pStage->bundle[1].lightmap != LIGHTMAP_INDEX_NONE ) {
+		flags |= GLX_STAGE_LIGHTMAP;
+	}
+	if ( pStage->bundle[0].numImageAnimations > 1 ||
+		pStage->bundle[1].numImageAnimations > 1 ) {
+		flags |= GLX_STAGE_ANIMATED_IMAGE;
+	}
+	if ( pStage->bundle[0].isVideoMap || pStage->bundle[1].isVideoMap ) {
+		flags |= GLX_STAGE_VIDEO_MAP;
+	}
+	if ( pStage->bundle[0].isScreenMap || pStage->bundle[1].isScreenMap ) {
+		flags |= GLX_STAGE_SCREEN_MAP;
+	}
+	if ( pStage->bundle[0].dlight || pStage->bundle[1].dlight ) {
+		flags |= GLX_STAGE_DLIGHT_MAP;
+	}
+	if ( pStage->bundle[0].numTexMods || pStage->bundle[1].numTexMods ) {
+		flags |= GLX_STAGE_TEXMOD;
+	}
+	if ( pStage->tessFlags & ( TESS_ENV0 | TESS_ENV1 ) ) {
+		flags |= GLX_STAGE_ENVIRONMENT;
+	}
+	if ( pStage->tessFlags & TESS_ST0 ) {
+		flags |= GLX_STAGE_ST0;
+	}
+	if ( pStage->tessFlags & TESS_ST1 ) {
+		flags |= GLX_STAGE_ST1;
+	}
+
+	return flags;
+}
+
+static void GLX_RecordMaterialStage( const shaderStage_t *pStage, int path, int numVertexes, int numIndexes )
+{
+	if ( !pStage ) {
+		return;
+	}
+
+	GLX_Renderer_RecordMaterialStage( path, GLX_MaterialStageFlags( pStage ), pStage->stateBits,
+		pStage->rgbGen, pStage->alphaGen, pStage->bundle[0].tcGen, pStage->bundle[1].tcGen,
+		pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods, numVertexes, numIndexes );
+}
+
+static int GLX_AlignInt( int value, int alignment )
+{
+	const int remainder = value % alignment;
+
+	if ( remainder == 0 ) {
+		return value;
+	}
+
+	return value + alignment - remainder;
+}
+
+static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const shaderStage_t *pStage, qboolean multitexture, GLint multitextureEnv )
+{
+	glxStreamReservation_t reservation;
+	qboolean ok = qtrue;
+	qboolean glxMaterialBound = qfalse;
+	int xyzBytes;
+	int colorBytes;
+	int texBytes;
+	int tex1Bytes;
+	int indexBytes;
+	int colorOffset;
+	int texOffset;
+	int tex1Offset;
+	int indexOffset;
+	int totalBytes;
+	int materialFlags;
+	GLint oldArrayBuffer = 0;
+	GLint oldElementArrayBuffer = 0;
+
+	if ( !GLX_Renderer_StreamDrawEnabled() ) {
+		return qfalse;
+	}
+	if ( !qglBindBufferARB ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_NO_BIND_BUFFER );
+		return qfalse;
+	}
+	if ( !input || !pStage ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_BAD_INPUT );
+		return qfalse;
+	}
+	if ( multitexture && !GLX_Renderer_StreamDrawMultitextureEnabled() ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_MULTITEXTURE );
+		return qfalse;
+	}
+	if ( pStage->depthFragment && ( multitexture || !GLX_Renderer_StreamDrawDepthFragmentEnabled() ) ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_DEPTH_FRAGMENT );
+		return qfalse;
+	}
+	if ( !input->svars.texcoordPtr[0] ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_NO_TEXCOORDS );
+		return qfalse;
+	}
+	if ( multitexture && !input->svars.texcoordPtr[1] ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_NO_TEXCOORDS );
+		return qfalse;
+	}
+	if ( input->numVertexes <= 0 || input->numIndexes <= 0 ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_EMPTY_BATCH );
+		return qfalse;
+	}
+
+	materialFlags = GLX_MaterialStageFlags( pStage );
+	if ( !GLX_Renderer_StreamDrawAllowsMaterial( materialFlags, pStage->stateBits,
+		pStage->rgbGen, pStage->alphaGen, pStage->bundle[0].tcGen, pStage->bundle[0].numTexMods ) ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_KEY );
+		return qfalse;
+	}
+
+	xyzBytes = input->numVertexes * (int)sizeof( input->xyz[0] );
+	colorBytes = input->numVertexes * (int)sizeof( input->svars.colors[0] );
+	texBytes = input->numVertexes * (int)sizeof( input->svars.texcoordPtr[0][0] );
+	tex1Bytes = multitexture ? input->numVertexes * (int)sizeof( input->svars.texcoordPtr[1][0] ) : 0;
+	indexBytes = input->numIndexes * (int)sizeof( input->indexes[0] );
+	colorOffset = GLX_AlignInt( xyzBytes, 16 );
+	texOffset = GLX_AlignInt( colorOffset + colorBytes, 16 );
+	tex1Offset = GLX_AlignInt( texOffset + texBytes, 16 );
+	indexOffset = GLX_AlignInt( tex1Offset + tex1Bytes, 16 );
+	totalBytes = GLX_AlignInt( indexOffset + indexBytes, 64 );
+
+	if ( !GLX_Renderer_StreamReserve( totalBytes, 64, &reservation ) ) {
+		GLX_Renderer_RecordStreamDrawResult( input->numVertexes, input->numIndexes,
+			totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, qfalse );
+		return qfalse;
+	}
+
+	if ( !GLX_Renderer_StreamUploadAt( &reservation, 0, input->xyz, xyzBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_Renderer_StreamUploadAt( &reservation, colorOffset, input->svars.colors, colorBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_Renderer_StreamUploadAt( &reservation, texOffset, input->svars.texcoordPtr[0], texBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && multitexture && !GLX_Renderer_StreamUploadAt( &reservation, tex1Offset, input->svars.texcoordPtr[1], tex1Bytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_Renderer_StreamUploadAt( &reservation, indexOffset, input->indexes, indexBytes ) ) {
+		ok = qfalse;
+	}
+	GLX_Renderer_StreamCommit( &reservation );
+
+	if ( !ok ) {
+		GLX_Renderer_RecordStreamDrawResult( input->numVertexes, input->numIndexes,
+			totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, qfalse );
+		return qfalse;
+	}
+
+	if ( GLX_Renderer_MaterialRendererActive() ) {
+		GL_ProgramDisable();
+		glxMaterialBound = GLX_Renderer_BindMaterialStage( materialFlags, pStage->stateBits,
+			pStage->rgbGen, pStage->alphaGen, pStage->bundle[0].tcGen, pStage->bundle[1].tcGen,
+			pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods, multitextureEnv, qfalse );
+		if ( !glxMaterialBound ) {
+			GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_PROGRAM );
+			GLX_Renderer_RecordStreamDrawResult( input->numVertexes, input->numIndexes,
+				totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, qfalse );
+			return qfalse;
+		}
+	}
+
+	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
+	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
+
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), (const GLvoid *)(intptr_t)( reservation.offset ) );
+	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, (const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
+	if ( multitexture ) {
+		GL_ClientState( 1, CLS_TEXCOORD_ARRAY );
+		qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + tex1Offset ) );
+	} else {
+		GL_ClientState( 1, CLS_NONE );
+	}
+
+	GLX_Renderer_RecordDraw( input->numIndexes, GLX_DRAW_STREAM_GENERIC );
+	qglDrawElements( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+
+	if ( glxMaterialBound && pStage->depthFragment ) {
+		GLX_Renderer_UnbindMaterial();
+		glxMaterialBound = qfalse;
+	}
+
+	if ( pStage->depthFragment ) {
+		GL_State( pStage->stateBits | GLS_DEPTHMASK_TRUE );
+		GL_ProgramEnable();
+		GLX_Renderer_RecordDraw( input->numIndexes, GLX_DRAW_STREAM_GENERIC );
+		qglDrawElements( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
+			(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+		GL_ProgramDisable();
+	}
+
+	if ( glxMaterialBound ) {
+		GLX_Renderer_UnbindMaterial();
+	}
+
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
+	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, input->svars.colors[0].rgba );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoordPtr[0] );
+	if ( multitexture ) {
+		GL_ClientState( 1, CLS_TEXCOORD_ARRAY );
+		qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoordPtr[1] );
+	} else {
+		GL_ClientState( 1, CLS_NONE );
+		GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	}
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+
+	GLX_Renderer_RecordStreamDrawResult( input->numVertexes, input->numIndexes,
+		totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, qtrue );
+	return qtrue;
+}
+
+static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
+{
+	glxStreamReservation_t reservation;
+	qboolean ok = qtrue;
+	qboolean glxMaterialBound = qfalse;
+	int xyzBytes;
+	int colorBytes;
+	int texBytes;
+	int indexBytes;
+	int colorOffset;
+	int texOffset;
+	int indexOffset;
+	int totalBytes;
+	GLint oldArrayBuffer = 0;
+	GLint oldElementArrayBuffer = 0;
+
+	if ( !GLX_Renderer_StreamDrawEnabled() ) {
+		return qfalse;
+	}
+	if ( !GLX_Renderer_StreamDrawFogEnabled() ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_FOG );
+		return qfalse;
+	}
+	if ( !qglBindBufferARB ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_NO_BIND_BUFFER );
+		return qfalse;
+	}
+	if ( !input ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_BAD_INPUT );
+		return qfalse;
+	}
+	if ( input->numVertexes <= 0 || input->numIndexes <= 0 ) {
+		GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_EMPTY_BATCH );
+		return qfalse;
+	}
+
+	xyzBytes = input->numVertexes * (int)sizeof( input->xyz[0] );
+	colorBytes = input->numVertexes * (int)sizeof( input->svars.colors[0] );
+	texBytes = input->numVertexes * (int)sizeof( input->svars.texcoords[0][0] );
+	indexBytes = input->numIndexes * (int)sizeof( input->indexes[0] );
+	colorOffset = GLX_AlignInt( xyzBytes, 16 );
+	texOffset = GLX_AlignInt( colorOffset + colorBytes, 16 );
+	indexOffset = GLX_AlignInt( texOffset + texBytes, 16 );
+	totalBytes = GLX_AlignInt( indexOffset + indexBytes, 64 );
+
+	if ( !GLX_Renderer_StreamReserve( totalBytes, 64, &reservation ) ) {
+		GLX_Renderer_RecordStreamDrawResult( input->numVertexes, input->numIndexes,
+			totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, qfalse );
+		return qfalse;
+	}
+
+	if ( !GLX_Renderer_StreamUploadAt( &reservation, 0, input->xyz, xyzBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_Renderer_StreamUploadAt( &reservation, colorOffset, input->svars.colors, colorBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_Renderer_StreamUploadAt( &reservation, texOffset, input->svars.texcoords[0], texBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_Renderer_StreamUploadAt( &reservation, indexOffset, input->indexes, indexBytes ) ) {
+		ok = qfalse;
+	}
+	GLX_Renderer_StreamCommit( &reservation );
+
+	if ( !ok ) {
+		GLX_Renderer_RecordStreamDrawResult( input->numVertexes, input->numIndexes,
+			totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, qfalse );
+		return qfalse;
+	}
+
+	if ( GLX_Renderer_MaterialRendererActive() ) {
+		GL_ProgramDisable();
+		glxMaterialBound = GLX_Renderer_BindFogMaterial();
+		if ( !glxMaterialBound ) {
+			GLX_Renderer_RecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_PROGRAM );
+			GLX_Renderer_RecordStreamDrawResult( input->numVertexes, input->numIndexes,
+				totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, qfalse );
+			return qfalse;
+		}
+	}
+
+	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
+	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
+
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), (const GLvoid *)(intptr_t)( reservation.offset ) );
+	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, (const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
+
+	GLX_Renderer_RecordDraw( input->numIndexes, GLX_DRAW_STREAM_GENERIC );
+	qglDrawElements( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+
+	if ( glxMaterialBound ) {
+		GLX_Renderer_UnbindMaterial();
+	}
+
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
+	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, input->svars.colors[0].rgba );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoords[0] );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+
+	GLX_Renderer_RecordStreamDrawResult( input->numVertexes, input->numIndexes,
+		totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, qtrue );
+	return qtrue;
+}
+#endif
 
 /*
 =================
@@ -267,8 +643,14 @@ t1 = most downstream according to spec
 */
 static void DrawMultitextured( const shaderCommands_t *input, int stage ) {
 	const shaderStage_t *pStage;
+	qboolean glxStreamedDraw = qfalse;
+	GLint glxMultitextureEnv;
 
 	pStage = tess.xstages[ stage ];
+
+#ifdef RENDERER_GLX
+	GLX_RecordMaterialStage( pStage, GLX_STAGE_PATH_GENERIC, input->numVertexes, input->numIndexes );
+#endif
 
 	GL_State( pStage->stateBits );
 
@@ -300,11 +682,18 @@ static void DrawMultitextured( const shaderCommands_t *input, int stage ) {
 
 	if ( r_lightmap->integer ) {
 		GL_TexEnv( GL_REPLACE );
+		glxMultitextureEnv = GL_REPLACE;
 	} else {
 		GL_TexEnv( pStage->mtEnv );
+		glxMultitextureEnv = pStage->mtEnv;
 	}
 
-	R_DrawElements( input->numIndexes, input->indexes );
+#ifdef RENDERER_GLX
+	glxStreamedDraw = GLX_TryStreamDrawStage( input, pStage, qtrue, glxMultitextureEnv );
+#endif
+	if ( !glxStreamedDraw ) {
+		R_DrawElements( input->numIndexes, input->indexes );
+	}
 
 	//
 	// disable texturing on TEXTURE1, then select TEXTURE0
@@ -476,6 +865,7 @@ Blends a fog texture on top of everything else
 static void RB_FogPass( void ) {
 	const fog_t *fog = tr.world->fogs + tess.fogNum;
 	int i;
+	qboolean glxStreamedDraw = qfalse;
 
 	for ( i = 0; i < tess.numVertexes; i++ ) {
 		tess.svars.colors[i] = fog->colorInt;
@@ -498,7 +888,12 @@ static void RB_FogPass( void ) {
 		GL_State( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
 	}
 
-	R_DrawElements( tess.numIndexes, tess.indexes );
+#ifdef RENDERER_GLX
+	glxStreamedDraw = GLX_TryStreamDrawFogPass( &tess );
+#endif
+	if ( !glxStreamedDraw ) {
+		R_DrawElements( tess.numIndexes, tess.indexes );
+	}
 }
 
 
@@ -837,6 +1232,12 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 		}
 		else
 		{
+			qboolean glxStreamedDraw = qfalse;
+
+#ifdef RENDERER_GLX
+			GLX_RecordMaterialStage( pStage, GLX_STAGE_PATH_GENERIC, input->numVertexes, input->numIndexes );
+#endif
+
 			if ( !setArraysOnce )
 			{
 				R_ComputeTexCoords( 0, &pStage->bundle[0] );
@@ -859,13 +1260,19 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 			//
 			// draw
 			//
-			R_DrawElements( input->numIndexes, input->indexes );
-			if ( pStage->depthFragment )
+#ifdef RENDERER_GLX
+			glxStreamedDraw = GLX_TryStreamDrawStage( input, pStage, qfalse, 0 );
+#endif
+			if ( !glxStreamedDraw )
 			{
-				GL_State( pStage->stateBits | GLS_DEPTHMASK_TRUE );
-				GL_ProgramEnable();
 				R_DrawElements( input->numIndexes, input->indexes );
-				GL_ProgramDisable();
+				if ( pStage->depthFragment )
+				{
+					GL_State( pStage->stateBits | GLS_DEPTHMASK_TRUE );
+					GL_ProgramEnable();
+					R_DrawElements( input->numIndexes, input->indexes );
+					GL_ProgramDisable();
+				}
 			}
 		}
 
@@ -883,6 +1290,7 @@ void RB_StageIteratorGeneric( void )
 {
 	const shaderCommands_t *input;
 	shader_t		*shader;
+	qboolean arraysLocked = qfalse;
 
 #ifdef USE_PMLIGHT
 	if ( tess.dlightPass )
@@ -967,7 +1375,13 @@ void RB_StageIteratorGeneric( void )
 	//
 	if ( qglLockArraysEXT )
 	{
-		qglLockArraysEXT( 0, input->numVertexes );
+#ifdef RENDERER_GLX
+		if ( !GLX_Renderer_StreamDrawEnabled() )
+#endif
+		{
+			qglLockArraysEXT( 0, input->numVertexes );
+			arraysLocked = qtrue;
+		}
 	}
 
 	//
@@ -999,7 +1413,7 @@ void RB_StageIteratorGeneric( void )
 	//
 	// unlock arrays
 	//
-	if ( qglUnlockArraysEXT )
+	if ( arraysLocked && qglUnlockArraysEXT )
 	{
 		qglUnlockArraysEXT();
 	}
@@ -1079,11 +1493,52 @@ void RB_EndSurface( void ) {
 	}
 	backEnd.pc.c_totalIndexes += tess.numIndexes * tess.numPasses;
 
+#ifdef RENDERER_GLX
+	{
+		int glxBatchFlags = 0;
+
+#ifdef USE_VBO
+		if ( tess.vboIndex ) {
+			glxBatchFlags |= GLX_BATCH_VBO;
+		}
+#endif
+		if ( tess.fogNum && tess.shader->fogPass ) {
+			glxBatchFlags |= GLX_BATCH_FOG;
+		}
+		if ( tess.shader->multitextureEnv ) {
+			glxBatchFlags |= GLX_BATCH_MULTITEXTURE;
+		}
+		if ( tess.shader->polygonOffset ) {
+			glxBatchFlags |= GLX_BATCH_POLYGON_OFFSET;
+		}
+
+		GLX_Renderer_RecordShaderBatch( tess.shader->name, (int)tess.shader->sort,
+			tess.numPasses, input->numVertexes, input->numIndexes, glxBatchFlags );
+	}
+#endif
+
 	//
 	// call off to shader specific tess end function
 	//
+#ifdef RENDERER_GLX
+	GLX_Renderer_PushShaderDebugGroup( tess.shader->name, input->numVertexes, input->numIndexes, tess.numPasses );
+#endif
 	tess.shader->optimalStageIteratorFunc();
 	RB_CelOutlineTessEnd();
+#ifdef RENDERER_GLX
+	GLX_Renderer_PopDebugGroup();
+#endif
+
+#ifdef RENDERER_GLX
+#ifdef USE_VBO
+	if ( !VBO_Active() )
+#endif
+	{
+		GLX_Renderer_ShadowUploadTess( input->numVertexes, input->numIndexes,
+			input->xyz, input->numVertexes * (int)sizeof( input->xyz[0] ),
+			input->indexes, input->numIndexes * (int)sizeof( input->indexes[0] ) );
+	}
+#endif
 
 	//
 	// draw debugging stuff

@@ -64,7 +64,7 @@ struct MaterialRequest {
 	int tcGen1;
 	int texMods0;
 	int texMods1;
-	int multitextureEnv;
+	int materialCombine;
 	qboolean fogPass;
 };
 

@@ -343,6 +343,110 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 		totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, qtrue );
 	return qtrue;
 }
+
+static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input,
+	int numIndexes, const glIndex_t *indexes, const float *texCoords, const float *colors )
+{
+	glxStreamReservation_t reservation;
+	qboolean ok = qtrue;
+	int xyzBytes;
+	int colorBytes;
+	int texBytes;
+	int indexBytes;
+	int colorOffset;
+	int texOffset;
+	int indexOffset;
+	int totalBytes;
+	int materialFlags;
+	GLint oldArrayBuffer = 0;
+	GLint oldElementArrayBuffer = 0;
+
+	if ( !GLX_CompatStreamDrawEnabled() ) {
+		return qfalse;
+	}
+	if ( !qglBindBufferARB ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_NO_BIND_BUFFER );
+		return qfalse;
+	}
+	if ( !input || !indexes || !texCoords || !colors ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_BAD_INPUT );
+		return qfalse;
+	}
+	if ( input->numVertexes <= 0 || numIndexes <= 0 ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_EMPTY_BATCH );
+		return qfalse;
+	}
+
+	materialFlags = GLX_STAGE_DLIGHT_MAP | GLX_STAGE_ST0;
+	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0, 0, 0, 0, 0, 0 ) ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_KEY );
+		return qfalse;
+	}
+
+	xyzBytes = input->numVertexes * (int)sizeof( input->xyz[0] );
+	colorBytes = input->numVertexes * 4 * (int)sizeof( colors[0] );
+	texBytes = input->numVertexes * 2 * (int)sizeof( texCoords[0] );
+	indexBytes = numIndexes * (int)sizeof( indexes[0] );
+	colorOffset = GLX_CompatAlignInt( xyzBytes, 16 );
+	texOffset = GLX_CompatAlignInt( colorOffset + colorBytes, 16 );
+	indexOffset = GLX_CompatAlignInt( texOffset + texBytes, 16 );
+	totalBytes = GLX_CompatAlignInt( indexOffset + indexBytes, 64 );
+
+	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
+		GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	if ( !GLX_CompatStreamUploadAt( &reservation, 0, input->xyz, xyzBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_CompatStreamUploadAt( &reservation, colorOffset, colors, colorBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_CompatStreamUploadAt( &reservation, texOffset, texCoords, texBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_CompatStreamUploadAt( &reservation, indexOffset, indexes, indexBytes ) ) {
+		ok = qfalse;
+	}
+	GLX_CompatStreamCommit( &reservation );
+
+	if ( !ok ) {
+		GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
+	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
+
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), (const GLvoid *)(intptr_t)( reservation.offset ) );
+	qglColorPointer( 4, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
+
+	GLX_CompatRecordDraw( numIndexes, GLX_DRAW_STREAM_GENERIC );
+	qglDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
+	qglColorPointer( 4, GL_FLOAT, 0, colors );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, texCoords );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+
+	GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
+	return qtrue;
+}
 #endif
 
 /*
@@ -645,6 +749,7 @@ static void ProjectDlightTexture( void ) {
 	vec3_t	origin;
 	float	*texCoords;
 	float	*colors;
+	qboolean glxStreamedDraw;
 	byte	clipBits[SHADER_MAX_VERTEXES];
 	float	texCoordsArray[SHADER_MAX_VERTEXES][2];
 	float	colorArray[SHADER_MAX_VERTEXES][4];
@@ -763,7 +868,14 @@ static void ProjectDlightTexture( void ) {
 			GL_State( GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL );
 		}
 
-		R_DrawElements( numIndexes, hitIndexes );
+		glxStreamedDraw = qfalse;
+#ifdef RENDERER_GLX
+		glxStreamedDraw = GLX_TryStreamDrawDynamicLightPass( &tess, numIndexes,
+			hitIndexes, texCoordsArray[0], colorArray[0] );
+#endif
+		if ( !glxStreamedDraw ) {
+			R_DrawElements( numIndexes, hitIndexes );
+		}
 
 		backEnd.pc.c_totalIndexes += numIndexes;
 		backEnd.pc.c_dlightIndexes += numIndexes;

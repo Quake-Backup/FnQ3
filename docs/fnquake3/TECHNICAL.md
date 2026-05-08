@@ -130,7 +130,7 @@ Dry-run renderer gate artifacts are planning evidence only. Blocking release evi
 - `FNQ3_AUDIO_LOOPBACK_TESTS` builds the deterministic audio test targets under [`tests/audio`](../../tests/audio). `fnq3_audio_zone_tests` validates `.azb` runtime parsing, v1/v2 compatibility, zone priority selection, portal blend bounds, and invalid sidecar rejection; CTest registers it as `fnq3_audio_zones`. `fnq3_audio_recovery_tests` validates the device-loss policy without real hardware disconnects: poll cadence, retry suppression, one-shot warnings, reconnect notification, disabled auto-recovery, and force/skip decisions; CTest registers it as `fnq3_audio_recovery`. `fnq3_audio_loopback_tests` is a headless OpenAL Soft loopback harness that dynamically loads OpenAL, skips with exit code `77` when `ALC_SOFT_loopback` is unavailable, and otherwise verifies HRTF status visibility and mode switching, distance attenuation, direct-channel isolation, stereo/quad/5.1/6.1/7.1 speaker-layout routing where supported, UHJ/B-Format buffer acceptance where supported, idle silence, and EFX low-/high-/band-pass filters; CTest registers it as `fnq3_audio_loopback`.
 - `AL_SOFT_source_latency` is optional. When present, `s_alDebugDump` should use `AL_SEC_OFFSET_LATENCY_SOFT` for the selected OpenAL source so voice-level offset/latency diagnostics line up with the device-level clock/latency values printed by `s_info`.
 - `s_alSourceClassDebug` is a developer cvar for dump-only source-class aggregation. It should not affect source allocation, routing, filters, or playback state.
-- `fnq3-audiozonesc` builds the optional audio-zone sidecar compiler under [`code/tools/audiozones`](../../code/tools/audiozones). It compiles `maps/<mapname>.audiozones` text files into little-endian `maps/<mapname>.azb` files with AABB zones, preset index, reverb gain, occlusion multiplier, LF/HF tone multipliers, transition time, priority, and a short debug name. It can also generate a first-pass sidecar directly from an IBSP v46/v47 map with `--from-bsp`, using BSP leaves, clusters, areas, draw surfaces, brushes, shader contents, and surface flags to classify room bounds, environment presets, material class metadata, and generated portal hints. Use `--audit [--samples N]` on generated sidecars before listening passes; it runs the client runtime parser, summarizes preset/material/portal coverage, warns about suspicious overlaps or portal patterns, and reports deterministic lookup/profile timing. Runtime loading uses normal `FS_ReadFile` search semantics, so sidecars can live loose or in packages without creating a new asset path.
+- `fnq3-audiozonesc` builds the optional audio-zone sidecar compiler under [`code/tools/audiozones`](../../code/tools/audiozones). It compiles `maps/<mapname>.audiozones` text files into little-endian `maps/<mapname>.azb` files with AABB zones, preset index, reverb gain, occlusion multiplier, LF/HF tone multipliers, transition time, priority, and a short debug name. It can also generate a first-pass sidecar directly from an IBSP v46/v47 map with `--from-bsp`, using BSP leaves, clusters, areas, draw surfaces, brushes, shader contents, and surface flags to classify room bounds, environment presets, material class metadata, generated portal hints, and per-portal blend tuning. `--material-map <path>` layers maintainer shader-pattern overrides into BSP classification; material votes are weighted by whether evidence came from visible draw surfaces, brush bodies, or brush sides, and coarsened zones recompute dominant material metadata from accumulated weights. Use `--audit [--samples N]` on generated sidecars before listening passes; it runs the client runtime parser, summarizes preset/material/portal/tuning coverage, warns about suspicious overlaps or portal patterns, reports deterministic lookup/profile timing, and emits confidence/anomaly scores for triage. Runtime loading uses normal `FS_ReadFile` search semantics, so sidecars can live loose or in packages without creating a new asset path.
 - Keep dedicated-server builds free of the OpenAL runtime dependency.
 
 ### Audio Zone Sidecars
@@ -146,11 +146,14 @@ Runtime behavior:
 - The selected zone overrides only the audio environment values. It does not affect collision, visibility, demos, protocol, VM behavior, entity state, or asset compatibility.
 - If a selected zone uses the `outdoors` or `underwater` preset, or a version 2 sidecar marks it with the matching flag, the corresponding environment flag is set so the existing tone-class logic keeps behaving consistently.
 - `s_info`, `s_alDebugOverlay 2`, and `s_alDebugDump` expose whether zones are active, which material metadata they carried, and which values they contributed.
-- The runtime accepts both version 1 and version 2 `.azb` sidecars. Version 2 adds material class and portal metadata for generated maps; material tuning is baked into the zone values by the compiler, and portal hints provide a bounded crossfade toward adjacent zones near generated boundaries.
+- The runtime accepts version 1, version 2, and version 3 `.azb` sidecars. Version 2 adds material class and portal metadata for generated maps; version 3 adds per-portal blend distance, minimum threshold, maximum crossfade, and blend-curve metadata. Material tuning is baked into the zone values by the compiler, and portal hints provide a bounded crossfade toward adjacent zones near generated boundaries. Version 2 portals inherit the default 192-unit smooth blend, 0.02 minimum threshold, and 0.45 maximum crossfade.
 - Generated BSP zones use negative priorities. Hand-authored overrides merged with `fnq3-audiozonesc --from-bsp --merge maps/foo.audiozones maps/foo.bsp` therefore win with their default priority `0`, while still allowing broader generated fallback coverage.
-- `fnq3-audiozonesc --audit --samples 32768 maps/foo.azb` is the maintainer-facing preflight for large generated sidecars. Treat warnings as prompts for manual listening, merge overrides, or compiler tuning; `--strict` can make warnings fail in temporary sweep jobs.
+- `fnq3-audiozonesc --audit --samples 32768 maps/foo.azb` is the maintainer-facing preflight for large generated sidecars. Treat warnings, low confidence, and high anomaly scores as prompts for manual listening, merge overrides, or compiler tuning; `--strict` can make warnings fail in temporary sweep jobs.
+- `python scripts/audio_zone_sweep.py --tool path/to/fnq3-audiozonesc --relative-root baseq3 --override-root baseq3 --output-root .tmp/audio-zone-sweeps/baseq3 --strict baseq3/maps` is the bulk migration path for map estates. It preserves map-relative output names, merges matching `.audiozones` overrides, runs `--audit` on each generated sidecar, and emits JSON/CSV reports for review or CI artifacts. Use `--dry-run` first when validating a new map tree.
+- Material maps use one rule per line: `shader/pattern material [preset name] [flag outdoor] [weight N]`. Patterns are case-insensitive substrings unless they contain `*` or `?`, where they become simple wildcards. Use them for custom shader packs whose names do not advertise their acoustic material.
 
-The source format intentionally stays small:
+The source format intentionally stays small, but it can express the version 2
+and version 3 metadata needed for production overrides:
 
 ```text
 audiozones 1
@@ -158,16 +161,27 @@ audiozones 1
 zone "atrium" {
   bounds -512 -512 -64 512 512 384
   environment hall
+  material stone
+  flag outdoor
   reverbGain 1.10
   occlusionMultiplier 0.85
   lpfBias 0.95
   hpfBias 1.00
   transitionMs 900
   priority 10
+
+  portal "hallway" {
+    bounds 512 -128 -64 512 128 192
+    openness 0.80
+    blendDistance 128
+    minBlend 0.03
+    maxBlend 0.35
+    curve ease-out
+  }
 }
 ```
 
-Accepted environment names are `small-room`, `room`, `stone-room`, `hallway`, `hall`, `outdoors`, and `underwater`. `bounds` may be replaced by separate `mins` and `maxs` properties. `directHF`/`wetHF` and `directLF`/`wetLF` are available when a zone needs separate low-pass or high-pass bias instead of the combined `lpfBias`/`hpfBias` shortcuts.
+Accepted environment names are `small-room`, `room`, `stone-room`, `hallway`, `hall`, `outdoors`, and `underwater`. `bounds` may be replaced by separate `mins` and `maxs` properties. `directHF`/`wetHF` and `directLF`/`wetLF` are available when a zone needs separate low-pass or high-pass bias instead of the combined `lpfBias`/`hpfBias` shortcuts. `material` accepts `unknown`, `neutral`, `stone`, `metal`, `liquid`, `sky`, or `soft`; `flag outdoor`, `flag underwater`, `outdoor true`, and `underwater true` set runtime environment flags. `portal "<target>" { bounds ... openness ... }` defines an explicit transition surface. Optional portal tuning accepts `blendDistance`, `minBlend`, `maxBlend`, and `curve`; curves are `smooth`, `linear`, `ease-in`, or `ease-out`. Merged override files keep authored materials, flags, portals, and portal tuning while clearing only the internal generated flag.
 
 ### Audio Migration Expectations
 
@@ -177,6 +191,7 @@ Accepted environment names are `small-room`, `room`, `stone-room`, `hallway`, `h
 - Keep fallback deterministic and observable: requested device first, system default device if the requested device cannot be opened, safer OpenAL context attributes next, then legacy backend fallback. Console warnings should explain denied or unsupported requests without treating normal OpenAL capability differences as fatal errors.
 - Keep mono world sounds positional and keep local/UI/announcer, raw/music streams, and stereo samples on the direct non-spatial path by default. `s_alSpatializeStereo` is an opt-in compatibility escape hatch for two-channel world samples only, and only on runtimes with `AL_SOFT_source_spatialize`; authored surround layouts must remain direct. UHJ/B-Format tags must stay explicit and additive so existing multichannel content is never silently reclassified.
 - Keep audio-zone sidecars optional and data-only. They may refine environmental rendering, but must not become required content or a gameplay contract.
+- For large map collections, prefer the audio-zone sweep script over one-off shell loops so generation, material-map usage, strict audit status, override usage, warnings, confidence/anomaly scores, and lookup-profile metrics land in reproducible JSON/CSV reports.
 - Update [`docs/AUDIO.md`](../AUDIO.md) for player-facing defaults and troubleshooting, and update the README templates rather than hand-editing generated README outputs. After template changes, run `python scripts/generate_docs.py`.
 - Validate audio-facing migration changes with a normal client build. Run `fnq3_audio_zones` for sidecar parser/runtime changes and `fnq3_audio_recovery` for device-loss policy changes; when OpenAL Soft loopback is available, also run `fnq3_audio_loopback` so HRTF reporting, distance gain, direct stereo routing, idle silence, and EFX filters stay covered.
 

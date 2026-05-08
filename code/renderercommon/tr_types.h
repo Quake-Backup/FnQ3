@@ -180,7 +180,7 @@ typedef enum {
 	GLHW_PERMEDIA2			// where you don't have src*dst
 } glHardwareType_t;
 
-typedef struct {
+typedef struct glconfig_s {
 	char					renderer_string[MAX_STRING_CHARS];
 	char					vendor_string[MAX_STRING_CHARS];
 	char					version_string[MAX_STRING_CHARS];

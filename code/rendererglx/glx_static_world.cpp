@@ -654,7 +654,7 @@ static StaticWorldRunPacket GLX_StaticWorld_ClassifyRunAgainstPacket( const Stat
 static StaticWorldRunPacket GLX_StaticWorld_ClassifyRunPacketByByteScan( const StaticWorldStats &stats,
 	int offsetBytes, int runBytes, int firstItem, int itemCount, const char *shaderName, int sort )
 {
-	StaticWorldRunPacket result { StaticWorldPacketMatch::None, -1 };
+	StaticWorldRunPacket result { StaticWorldPacketMatch::NoMatch, -1 };
 
 	if ( offsetBytes < 0 || runBytes <= 0 ) {
 		return result;
@@ -663,7 +663,7 @@ static StaticWorldRunPacket GLX_StaticWorld_ClassifyRunPacketByByteScan( const S
 	for ( int i = 0; i < stats.packetCount; i++ ) {
 		result = GLX_StaticWorld_ClassifyRunAgainstPacket( stats.packets[i], i, offsetBytes, runBytes,
 			firstItem, itemCount, shaderName, sort );
-		if ( result.match != StaticWorldPacketMatch::None ) {
+		if ( result.match != StaticWorldPacketMatch::NoMatch ) {
 			return result;
 		}
 	}
@@ -678,7 +678,7 @@ static qboolean GLX_StaticWorld_ClassifyRunPacketByItemLookup( StaticWorldStats 
 	long long runLastItem;
 	int firstPacket;
 	int lastPacket;
-	StaticWorldRunPacket lookupResult { StaticWorldPacketMatch::None, -1 };
+	StaticWorldRunPacket lookupResult { StaticWorldPacketMatch::NoMatch, -1 };
 
 	if ( !stats || !result ) {
 		return qfalse;
@@ -719,7 +719,7 @@ static qboolean GLX_StaticWorld_ClassifyRunPacketByItemLookup( StaticWorldStats 
 
 	lookupResult = GLX_StaticWorld_ClassifyRunAgainstPacket( stats->packets[firstPacket], firstPacket,
 		offsetBytes, runBytes, firstItem, itemCount, shaderName, sort );
-	if ( lookupResult.match == StaticWorldPacketMatch::None ) {
+	if ( lookupResult.match == StaticWorldPacketMatch::NoMatch ) {
 		stats->itemLookupMismatches++;
 		return qfalse;
 	}
@@ -732,7 +732,7 @@ static qboolean GLX_StaticWorld_ClassifyRunPacketByItemLookup( StaticWorldStats 
 static StaticWorldRunPacket GLX_StaticWorld_ClassifyRunPacketResult( StaticWorldStats *stats, int offsetBytes, int runBytes,
 	int firstItem, int itemCount, const char *shaderName, int sort )
 {
-	StaticWorldRunPacket result { StaticWorldPacketMatch::None, -1 };
+	StaticWorldRunPacket result { StaticWorldPacketMatch::NoMatch, -1 };
 
 	if ( !stats || offsetBytes < 0 || runBytes <= 0 ) {
 		return result;
@@ -904,7 +904,7 @@ static void GLX_StaticWorld_RecordSubmittedRun( StaticWorldStats *stats, int ind
 	case StaticWorldPacketMatch::ItemMismatch:
 		stats->drawPacketItemMismatches++;
 		break;
-	case StaticWorldPacketMatch::None:
+	case StaticWorldPacketMatch::NoMatch:
 	default:
 		stats->drawPacketMisses++;
 		break;
@@ -2767,7 +2767,7 @@ void GLX_StaticWorld_RecordDeviceRuns( StaticWorldStats *stats, int runCount,
 			finishCommandRun();
 			itemMismatches++;
 			break;
-		case StaticWorldPacketMatch::None:
+		case StaticWorldPacketMatch::NoMatch:
 		default:
 			finishCommandRun();
 			misses++;

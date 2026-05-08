@@ -1,10 +1,8 @@
 #ifndef GLX_STREAM_LOGIC_H
 #define GLX_STREAM_LOGIC_H
 
-#include "../qcommon/q_shared.h"
-#include "../renderercommon/tr_public.h"
-#include "glx_local.h"
-#include "glx_module.h"
+#include "../renderercommon/tr_glx_public.h"
+#include "glx_types.h"
 
 #include <cctype>
 
@@ -52,6 +50,13 @@ struct StreamMaterialGateResult {
 	qboolean hasScreenMap;
 	qboolean hasVideoMap;
 	qboolean hasSecondTexcoord;
+};
+
+struct StreamSpecialDrawGateConfig {
+	qboolean streamDraw;
+	qboolean shadows;
+	qboolean beams;
+	qboolean postprocess;
 };
 
 static ID_INLINE int GLX_Stream_LogicStricmp( const char *lhs, const char *rhs )
@@ -235,6 +240,21 @@ static ID_INLINE StreamMaterialGateResult GLX_Stream_EvaluateMaterialGate(
 	}
 
 	return result;
+}
+
+static ID_INLINE qboolean GLX_Stream_EvaluateShadowDrawGate( const StreamSpecialDrawGateConfig &config )
+{
+	return config.streamDraw && config.shadows ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean GLX_Stream_EvaluateBeamDrawGate( const StreamSpecialDrawGateConfig &config )
+{
+	return config.streamDraw && config.beams ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean GLX_Stream_EvaluatePostProcessDrawGate( const StreamSpecialDrawGateConfig &config )
+{
+	return config.streamDraw && config.postprocess ? qtrue : qfalse;
 }
 
 } // namespace glx

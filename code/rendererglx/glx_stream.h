@@ -31,6 +31,9 @@ struct StreamState {
 	cvar_t *r_glxStreamDrawDynamicLights;
 	cvar_t *r_glxStreamDrawScreenMaps;
 	cvar_t *r_glxStreamDrawVideoMaps;
+	cvar_t *r_glxStreamDrawShadows;
+	cvar_t *r_glxStreamDrawBeams;
+	cvar_t *r_glxStreamDrawPostProcess;
 	StreamStrategy strategy;
 	char reason[96];
 	int ringMegabytes;
@@ -89,6 +92,9 @@ struct StreamState {
 	unsigned int streamedDrawVideoMapDraws;
 	unsigned int streamedDrawVideoMapAccepted;
 	unsigned int streamedDrawVideoMapRejected;
+	unsigned int streamedDrawShadowDraws;
+	unsigned int streamedDrawBeamDraws;
+	unsigned int streamedDrawPostProcessDraws;
 	unsigned int streamedDrawVertexes;
 	unsigned int streamedDrawIndexes;
 	unsigned int largestReservationBytes;
@@ -121,6 +127,9 @@ qboolean GLX_Stream_DrawEnvironmentEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawDynamicLightsEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawScreenMapsEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawVideoMapsEnabled( const StreamState &state );
+qboolean GLX_Stream_DrawShadowsEnabled( const StreamState &state );
+qboolean GLX_Stream_DrawBeamsEnabled( const StreamState &state );
+qboolean GLX_Stream_DrawPostProcessEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned int stateBits,
 	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 );
 void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIndexes,

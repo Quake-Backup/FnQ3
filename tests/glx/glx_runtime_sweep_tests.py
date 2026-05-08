@@ -225,7 +225,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                         "glx: tier compat, batches 10, draws 20/300 idx, stream map-range/ready 1.25MB/2wraps/0rejects shadow 3, frames 4, backend queries 5, gpu 0.27 ms, static 6 batches/7 packets/8 surfaces/9 verts/10 indexes 2.50 MB, arena ready 3.75 MB",
                         "glx: material renderer on/ready programs 24, binds 12/13 attempts, switches 4, cache 5/6, failures 0 compile/0 link/0 precache/0 bind, labels 8",
                         "glx: postprocess fbo ready 640x480 capture 640x480 bloom 2, frames 3 final 2 prefinal 1 gamma 0/3, copies 4, msaa 5, ssaa 6, last bloom-final",
-                        "glx: stream draws 7/8 attempts, 90 idx, 0.50MB/index 0.10MB/tex1 0.20MB, mt 1, fog 2, depthfrag 3, texmod 4, env 5, dlight 0, screen 0, video 0, fallbacks 0, skips 1",
+                        "glx: stream draws 7/8 attempts, 90 idx, 0.50MB/index 0.10MB/tex1 0.20MB, mt 1, fog 2, depthfrag 3, texmod 4, env 5, dlight 0, screen 0, video 0, shadow 2, beam 3, post 4, fallbacks 0, skips 1",
                         "glx: static draw 11/12 calls, 130 idx, packets 1 full/2 partial/3 miss, manifest 4/5 idx, soft 6/7 calls/8 idx, arena 9, legacy 10, fallbacks 0, policy skips 1",
                         "glx: static MDI 1/2 calls, 3 runs/4 idx, fallbacks 0, skips 5, errors 0, largest 6",
                     ]
@@ -239,6 +239,9 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["tier"], "compat")
             self.assertEqual(performance["latest"]["drawIndexes"], 300)
             self.assertEqual(performance["latest"]["streamDrawAttempts"], 8)
+            self.assertEqual(performance["latest"]["streamDrawShadows"], 2)
+            self.assertEqual(performance["latest"]["streamDrawBeams"], 3)
+            self.assertEqual(performance["latest"]["streamDrawPostProcess"], 4)
             self.assertEqual(performance["max"]["staticMdiLargest"], 6)
 
     def test_gate_evaluation_requires_performance_samples(self) -> None:

@@ -19,12 +19,19 @@ namespace fnq3_audiozones {
 
 constexpr std::uint8_t kMagic[4] = { 'F', 'Q', 'A', 'Z' };
 constexpr std::uint32_t kLegacyVersion = 1;
-constexpr std::uint32_t kVersion = 2;
+constexpr std::uint32_t kMetadataVersion = 2;
+constexpr std::uint32_t kPortalTuningVersion = 3;
+constexpr std::uint32_t kVersion = kPortalTuningVersion;
 constexpr std::uint32_t kMaxZones = 1024;
 constexpr std::uint32_t kMaxZonePortals = 16;
 constexpr std::uint32_t kMaxNameBytes = 63;
 constexpr std::uint32_t kMaxFileBytes = 1024u * 1024u;
 constexpr std::uint32_t kDefaultTransitionMs = 650;
+constexpr float kDefaultPortalBlendDistance = 192.0f;
+constexpr float kMinimumPortalBlendDistance = 1.0f;
+constexpr float kMaximumPortalBlendDistance = 4096.0f;
+constexpr float kDefaultPortalMinimumBlend = 0.02f;
+constexpr float kDefaultPortalMaximumBlend = 0.45f;
 
 enum class Preset : std::uint32_t {
 	SmallRoom = 0,
@@ -54,6 +61,14 @@ enum ZoneFlags : std::uint8_t {
 	ZoneFlagUnderwater = 1u << 2u
 };
 
+enum class PortalBlendCurve : std::uint8_t {
+	Smooth = 0,
+	Linear = 1,
+	EaseIn = 2,
+	EaseOut = 3,
+	Count
+};
+
 constexpr const char *kPresetNames[] = {
 	"small-room",
 	"room",
@@ -72,6 +87,13 @@ constexpr const char *kMaterialClassNames[] = {
 	"liquid",
 	"sky",
 	"soft"
+};
+
+constexpr const char *kPortalBlendCurveNames[] = {
+	"smooth",
+	"linear",
+	"ease-in",
+	"ease-out"
 };
 
 } // namespace fnq3_audiozones

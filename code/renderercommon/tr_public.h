@@ -127,7 +127,7 @@ typedef struct {
 //
 // these are the functions imported by the refresh module
 //
-typedef struct {
+typedef struct refimport_s {
 	// print message on the local console
 	void	FORMAT_PRINTF(2, 3) (QDECL *Printf)( printParm_t printLevel, const char *fmt, ... );
 

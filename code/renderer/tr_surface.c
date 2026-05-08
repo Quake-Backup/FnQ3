@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 // tr_surf.c
 #include "tr_local.h"
+#include "tr_glx_compat.h"
 
 /*
 
@@ -399,6 +400,7 @@ static void RB_SurfaceBeam( void )
 	vec3_t direction, normalized_direction;
 	vec3_t points[NUM_BEAM_SEGS+1][2]; // [startPoint,endPoint]
 	vec3_t oldorigin, origin;
+	qboolean glxStreamedDraw = qfalse;
 
 	e = &backEnd.currentEntity->e;
 
@@ -436,7 +438,15 @@ static void RB_SurfaceBeam( void )
 	GL_ClientState( 0, CLS_NONE );
 
 	qglVertexPointer( 3, GL_FLOAT, 0, &points[0][0] );
-	qglDrawArrays( GL_TRIANGLE_STRIP, 0, (NUM_BEAM_SEGS+1)*2 );
+#ifdef RENDERER_GLX
+	if ( GLX_CompatStreamDrawBeamsEnabled() ) {
+		glxStreamedDraw = GLX_CompatTryStreamDrawArrayPass( (NUM_BEAM_SEGS+1)*2,
+			&points[0][0], (int)sizeof( points[0][0] ), GL_TRIANGLE_STRIP, GLX_STAGE_BEAM_PASS );
+	}
+#endif
+	if ( !glxStreamedDraw ) {
+		qglDrawArrays( GL_TRIANGLE_STRIP, 0, (NUM_BEAM_SEGS+1)*2 );
+	}
 
 	qglEnable( GL_TEXTURE_2D );
 }

@@ -239,7 +239,7 @@ static void GLX_Material_PrintObjectLog( const MaterialState &state, GLuint obje
 
 static qboolean GLX_Material_ModeForRequest( const MaterialRequest &request, MaterialProgramMode *mode )
 {
-	return GLX_Material_ModeForInputs( request.flags, request.multitextureEnv, request.fogPass, mode );
+	return GLX_Material_ModeForInputs( request.flags, request.materialCombine, request.fogPass, mode );
 }
 
 static unsigned int GLX_Material_FeaturesForRequest( const MaterialRequest &request )
@@ -745,11 +745,11 @@ void GLX_Material_PrintInfo( const MaterialState &state )
 	RI().Printf( PRINT_ALL, "  material fallbacks: unsupported %u, disabled %u, not-ready %u, full %u, discarded without GL delete %u\n",
 		state.unsupportedRequests, state.disabledSkips, state.notReadySkips,
 		state.programLimitSkips, state.contextlessDeletes );
-	RI().Printf( PRINT_ALL, "  material last key: %s, flags 0x%x, state 0x%x, rgb %i alpha %i tc %i/%i texmods %i/%i env %i fog %s\n",
+	RI().Printf( PRINT_ALL, "  material last key: %s, flags 0x%x, state 0x%x, rgb %i alpha %i tc %i/%i texmods %i/%i combine %i fog %s\n",
 		lastKeyName, state.lastRequest.flags, state.lastRequest.stateBits,
 		state.lastRequest.rgbGen, state.lastRequest.alphaGen, state.lastRequest.tcGen0,
 		state.lastRequest.tcGen1, state.lastRequest.texMods0, state.lastRequest.texMods1,
-		state.lastRequest.multitextureEnv, BoolName( state.lastRequest.fogPass ) );
+		state.lastRequest.materialCombine, BoolName( state.lastRequest.fogPass ) );
 	if ( state.lastError[0] ) {
 		RI().Printf( PRINT_ALL, "  material last error: %s\n", state.lastError );
 	}

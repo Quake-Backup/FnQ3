@@ -53,21 +53,24 @@ bool MaterialKeysClassifyRcShapes()
 	CHECK( key.mode == glx::MaterialProgramMode::SingleTexture );
 	CHECK( key.features == ( glx::GLX_MATERIAL_FEATURE_TEXMOD | glx::GLX_MATERIAL_FEATURE_ENVIRONMENT ) );
 
-	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE, GL_MODULATE, 0, 0,
+	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE,
+		GLX_MATERIAL_COMBINE_MODULATE, 0, 0,
 		qfalse, &key ) == qtrue );
 	CHECK( key.mode == glx::MaterialProgramMode::MultiModulate );
 	CHECK( key.features == glx::GLX_MATERIAL_FEATURE_NONE );
 
 	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE | GLX_STAGE_TEXMOD,
-		GL_ADD, 0, 1, qfalse, &key ) == qtrue );
+		GLX_MATERIAL_COMBINE_ADD, 0, 1, qfalse, &key ) == qtrue );
 	CHECK( key.mode == glx::MaterialProgramMode::MultiAdd );
 	CHECK( key.features == glx::GLX_MATERIAL_FEATURE_TEXMOD );
 
-	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE, GL_REPLACE, 0, 0,
+	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE,
+		GLX_MATERIAL_COMBINE_REPLACE, 0, 0,
 		qfalse, &key ) == qtrue );
 	CHECK( key.mode == glx::MaterialProgramMode::MultiReplace );
 
-	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE, GL_DECAL, 0, 0,
+	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE,
+		GLX_MATERIAL_COMBINE_DECAL, 0, 0,
 		qfalse, &key ) == qtrue );
 	CHECK( key.mode == glx::MaterialProgramMode::MultiDecal );
 
@@ -82,8 +85,31 @@ bool MaterialKeysRejectUnsupportedCombines()
 		qfalse, &key ) == qfalse );
 
 	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_TEXMOD | GLX_STAGE_ENVIRONMENT,
-		GL_ADD, 4, 4, qtrue, &key ) == qtrue );
+		GLX_MATERIAL_COMBINE_ADD, 4, 4, qtrue, &key ) == qtrue );
 	CHECK( key.mode == glx::MaterialProgramMode::Fog );
+	CHECK( key.features == glx::GLX_MATERIAL_FEATURE_NONE );
+
+	return true;
+}
+
+bool MaterialKeysTreatSpecialSceneFlagsAsGates()
+{
+	glx::MaterialProgramKey key {};
+
+	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_DLIGHT_MAP | GLX_STAGE_SCREEN_MAP,
+		0, 0, 0, qfalse, &key ) == qtrue );
+	CHECK( key.mode == glx::MaterialProgramMode::SingleTexture );
+	CHECK( key.features == glx::GLX_MATERIAL_FEATURE_NONE );
+
+	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_VIDEO_MAP | GLX_STAGE_TEXMOD,
+		0, 1, 0, qfalse, &key ) == qtrue );
+	CHECK( key.mode == glx::MaterialProgramMode::SingleTexture );
+	CHECK( key.features == glx::GLX_MATERIAL_FEATURE_TEXMOD );
+
+	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_SHADOW_PASS | GLX_STAGE_BEAM_PASS |
+		GLX_STAGE_POSTPROCESS_PASS,
+		0, 0, 0, qfalse, &key ) == qtrue );
+	CHECK( key.mode == glx::MaterialProgramMode::SingleTexture );
 	CHECK( key.features == glx::GLX_MATERIAL_FEATURE_NONE );
 
 	return true;
@@ -149,6 +175,109 @@ bool StreamBroadKeyModeRemainsDeveloperEscapeHatch()
 	CHECK( result.hasScreenMap == qtrue );
 	CHECK( result.hasVideoMap == qtrue );
 	CHECK( result.hasSecondTexcoord == qtrue );
+
+	return true;
+}
+
+bool StreamSpecialSceneGatesAreExplicit()
+{
+	glx::StreamMaterialGateConfig config {};
+	glx::StreamMaterialGateResult result;
+
+	config.keyMode = 0;
+	config.dynamicLights = qtrue;
+
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DLIGHT_MAP, 0, 0, config );
+	CHECK( result.allowed == qtrue );
+	CHECK( result.hasDynamicLight == qtrue );
+
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DLIGHT_MAP | GLX_STAGE_SCREEN_MAP,
+		0, 0, config );
+	CHECK( result.allowed == qfalse );
+	CHECK( result.hasDynamicLight == qtrue );
+	CHECK( result.hasScreenMap == qtrue );
+
+	config.screenMaps = qtrue;
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DLIGHT_MAP | GLX_STAGE_SCREEN_MAP,
+		0, 0, config );
+	CHECK( result.allowed == qtrue );
+
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_VIDEO_MAP, 0, 0, config );
+	CHECK( result.allowed == qfalse );
+	CHECK( result.hasVideoMap == qtrue );
+
+	config.videoMaps = qtrue;
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_VIDEO_MAP, 0, 0, config );
+	CHECK( result.allowed == qtrue );
+
+	config.keyMode = 1;
+	config.dynamicLights = qfalse;
+	config.screenMaps = qfalse;
+	config.videoMaps = qfalse;
+	result = glx::GLX_Stream_EvaluateMaterialGate(
+		GLX_STAGE_DLIGHT_MAP | GLX_STAGE_SCREEN_MAP | GLX_STAGE_VIDEO_MAP,
+		0, 0, config );
+	CHECK( result.allowed == qfalse );
+	CHECK( result.hasDynamicLight == qtrue );
+	CHECK( result.hasScreenMap == qtrue );
+	CHECK( result.hasVideoMap == qtrue );
+
+	return true;
+}
+
+bool StreamShadowGateIsExplicit()
+{
+	glx::StreamSpecialDrawGateConfig config {};
+
+	config.streamDraw = qtrue;
+	config.shadows = qfalse;
+	CHECK( glx::GLX_Stream_EvaluateShadowDrawGate( config ) == qfalse );
+
+	config.streamDraw = qfalse;
+	config.shadows = qtrue;
+	CHECK( glx::GLX_Stream_EvaluateShadowDrawGate( config ) == qfalse );
+
+	config.streamDraw = qtrue;
+	config.shadows = qtrue;
+	CHECK( glx::GLX_Stream_EvaluateShadowDrawGate( config ) == qtrue );
+
+	return true;
+}
+
+bool StreamBeamGateIsExplicit()
+{
+	glx::StreamSpecialDrawGateConfig config {};
+
+	config.streamDraw = qtrue;
+	config.beams = qfalse;
+	CHECK( glx::GLX_Stream_EvaluateBeamDrawGate( config ) == qfalse );
+
+	config.streamDraw = qfalse;
+	config.beams = qtrue;
+	CHECK( glx::GLX_Stream_EvaluateBeamDrawGate( config ) == qfalse );
+
+	config.streamDraw = qtrue;
+	config.beams = qtrue;
+	CHECK( glx::GLX_Stream_EvaluateBeamDrawGate( config ) == qtrue );
+
+	return true;
+}
+
+bool StreamPostProcessGateIsExplicit()
+{
+	glx::StreamSpecialDrawGateConfig config {};
+
+	config.streamDraw = qtrue;
+	config.postprocess = qfalse;
+	CHECK( glx::GLX_Stream_EvaluatePostProcessDrawGate( config ) == qfalse );
+
+	config.streamDraw = qfalse;
+	config.postprocess = qtrue;
+	CHECK( glx::GLX_Stream_EvaluatePostProcessDrawGate( config ) == qfalse );
+
+	config.streamDraw = qtrue;
+	config.postprocess = qtrue;
+	CHECK( glx::GLX_Stream_EvaluatePostProcessDrawGate( config ) == qtrue );
 
 	return true;
 }
@@ -290,11 +419,11 @@ bool StaticWorldPacketLogicClassifiesRunsAndPolicies()
 
 	result = glx::GLX_StaticWorld_ClassifyRunAgainstPacketView( packet, 3,
 		200, 24, 100, 4, "textures/other", 7 );
-	CHECK( result.match == glx::StaticWorldPacketMatch::None );
+	CHECK( result.match == glx::StaticWorldPacketMatch::NoMatch );
 
 	result = glx::GLX_StaticWorld_ClassifyRunAgainstPacketView( packet, 3,
 		200, 24, 100, 4, "textures/base_floor/test", 8 );
-	CHECK( result.match == glx::StaticWorldPacketMatch::None );
+	CHECK( result.match == glx::StaticWorldPacketMatch::NoMatch );
 
 	CHECK( glx::GLX_StaticWorld_DrawPolicyFromString( "full" ) == glx::StaticWorldDrawPolicy::FullPackets );
 	CHECK( glx::GLX_StaticWorld_DrawPolicyFromString( "packet" ) == glx::StaticWorldDrawPolicy::ContainedPackets );
@@ -310,7 +439,7 @@ bool StaticWorldPacketLogicClassifiesRunsAndPolicies()
 	CHECK( glx::GLX_StaticWorld_DrawPolicyAllows( glx::StaticWorldDrawPolicy::ContainedPackets,
 		glx::StaticWorldPacketMatch::ItemMismatch ) == qfalse );
 	CHECK( glx::GLX_StaticWorld_DrawPolicyAllows( glx::StaticWorldDrawPolicy::AllRuns,
-		glx::StaticWorldPacketMatch::None ) == qtrue );
+		glx::StaticWorldPacketMatch::NoMatch ) == qtrue );
 
 	return true;
 }
@@ -327,8 +456,13 @@ int main()
 	const Test tests[] = {
 		{ "MaterialKeysClassifyRcShapes", MaterialKeysClassifyRcShapes },
 		{ "MaterialKeysRejectUnsupportedCombines", MaterialKeysRejectUnsupportedCombines },
+		{ "MaterialKeysTreatSpecialSceneFlagsAsGates", MaterialKeysTreatSpecialSceneFlagsAsGates },
 		{ "StreamGatesMatchRcAllowlist", StreamGatesMatchRcAllowlist },
 		{ "StreamBroadKeyModeRemainsDeveloperEscapeHatch", StreamBroadKeyModeRemainsDeveloperEscapeHatch },
+		{ "StreamSpecialSceneGatesAreExplicit", StreamSpecialSceneGatesAreExplicit },
+		{ "StreamShadowGateIsExplicit", StreamShadowGateIsExplicit },
+		{ "StreamBeamGateIsExplicit", StreamBeamGateIsExplicit },
+		{ "StreamPostProcessGateIsExplicit", StreamPostProcessGateIsExplicit },
 		{ "CapabilityLogicClassifiesTiersAndExtensions", CapabilityLogicClassifiesTiersAndExtensions },
 		{ "StreamStrategySelectionFollowsFallbackLadder", StreamStrategySelectionFollowsFallbackLadder },
 		{ "StaticWorldPacketLogicClassifiesRunsAndPolicies", StaticWorldPacketLogicClassifiesRunsAndPolicies },

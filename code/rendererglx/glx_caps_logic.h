@@ -1,7 +1,7 @@
 #ifndef GLX_CAPS_LOGIC_H
 #define GLX_CAPS_LOGIC_H
 
-#include "glx_local.h"
+#include "glx_types.h"
 
 #include <cctype>
 #include <cstdlib>

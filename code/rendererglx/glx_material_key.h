@@ -2,9 +2,7 @@
 #define GLX_MATERIAL_KEY_H
 
 #include "../qcommon/q_shared.h"
-#include "../renderercommon/tr_public.h"
-#include "../renderer/qgl.h"
-#include "glx_module.h"
+#include "../renderercommon/tr_glx_public.h"
 
 namespace glx {
 
@@ -26,7 +24,7 @@ struct MaterialProgramKey {
 	unsigned int features;
 };
 
-static ID_INLINE qboolean GLX_Material_ModeForInputs( int flags, int multitextureEnv,
+static ID_INLINE qboolean GLX_Material_ModeForInputs( int flags, int materialCombine,
 	qboolean fogPass, MaterialProgramMode *mode )
 {
 	if ( !mode ) {
@@ -43,17 +41,17 @@ static ID_INLINE qboolean GLX_Material_ModeForInputs( int flags, int multitextur
 		return qtrue;
 	}
 
-	switch ( multitextureEnv ) {
-	case GL_MODULATE:
+	switch ( materialCombine ) {
+	case GLX_MATERIAL_COMBINE_MODULATE:
 		*mode = MaterialProgramMode::MultiModulate;
 		return qtrue;
-	case GL_ADD:
+	case GLX_MATERIAL_COMBINE_ADD:
 		*mode = MaterialProgramMode::MultiAdd;
 		return qtrue;
-	case GL_REPLACE:
+	case GLX_MATERIAL_COMBINE_REPLACE:
 		*mode = MaterialProgramMode::MultiReplace;
 		return qtrue;
-	case GL_DECAL:
+	case GLX_MATERIAL_COMBINE_DECAL:
 		*mode = MaterialProgramMode::MultiDecal;
 		return qtrue;
 	default:
@@ -80,12 +78,12 @@ static ID_INLINE unsigned int GLX_Material_FeaturesForInputs( int flags,
 	return features;
 }
 
-static ID_INLINE qboolean GLX_Material_KeyForInputs( int flags, int multitextureEnv,
+static ID_INLINE qboolean GLX_Material_KeyForInputs( int flags, int materialCombine,
 	int texMods0, int texMods1, qboolean fogPass, MaterialProgramKey *key )
 {
 	MaterialProgramMode mode;
 
-	if ( !key || !GLX_Material_ModeForInputs( flags, multitextureEnv, fogPass, &mode ) ) {
+	if ( !key || !GLX_Material_ModeForInputs( flags, materialCombine, fogPass, &mode ) ) {
 		return qfalse;
 	}
 

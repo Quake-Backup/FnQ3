@@ -157,6 +157,9 @@
     <ClInclude Include="..\..\renderercommon\tr_public.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\renderercommon\tr_glx_public.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\renderercommon\tr_types.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -185,6 +188,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\rendererglx\glx_stream.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_types.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

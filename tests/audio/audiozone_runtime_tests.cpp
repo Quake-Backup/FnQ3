@@ -32,6 +32,10 @@ struct PortalSpec {
 	float mins[3] = { 0.0f, 0.0f, 0.0f };
 	float maxs[3] = { 0.0f, 0.0f, 0.0f };
 	float openness = 1.0f;
+	float blendDistance = azfmt::kDefaultPortalBlendDistance;
+	float minimumBlend = azfmt::kDefaultPortalMinimumBlend;
+	float maximumBlend = azfmt::kDefaultPortalMaximumBlend;
+	std::uint8_t blendCurve = static_cast<std::uint8_t>( azfmt::PortalBlendCurve::Smooth );
 };
 
 struct ZoneSpec {
@@ -113,7 +117,7 @@ void AppendZoneRecord( Bytes &bytes, const ZoneSpec &zone, std::uint32_t version
 	AppendU8( bytes, static_cast<std::uint8_t>( zone.name.size() ) );
 	bytes.insert( bytes.end(), zone.name.begin(), zone.name.end() );
 
-	if ( version >= azfmt::kVersion ) {
+	if ( version >= azfmt::kMetadataVersion ) {
 		AppendU8( bytes, zone.materialClass );
 		AppendU8( bytes, zone.flags );
 		AppendU16( bytes, static_cast<std::uint16_t>( zone.portals.size() ) );
@@ -122,6 +126,12 @@ void AppendZoneRecord( Bytes &bytes, const ZoneSpec &zone, std::uint32_t version
 			AppendVec3( bytes, portal.mins );
 			AppendVec3( bytes, portal.maxs );
 			AppendF32( bytes, portal.openness );
+			if ( version >= azfmt::kPortalTuningVersion ) {
+				AppendF32( bytes, portal.blendDistance );
+				AppendF32( bytes, portal.minimumBlend );
+				AppendF32( bytes, portal.maximumBlend );
+				AppendU8( bytes, portal.blendCurve );
+			}
 		}
 	}
 }
@@ -220,7 +230,7 @@ bool ParsesVersion2MetadataAndPortalBlend() {
 
 	std::vector<azrt::AudioZone> zones;
 	std::string error;
-	CHECK( ParseZones( MakeSidecar( azfmt::kVersion, { room, hall } ), zones, error ) );
+	CHECK( ParseZones( MakeSidecar( azfmt::kMetadataVersion, { room, hall } ), zones, error ) );
 	CHECK( zones.size() == 2u );
 	CHECK( zones[0].materialClass == static_cast<std::uint8_t>( azfmt::MaterialClass::Metal ) );
 	CHECK( ( zones[0].flags & azfmt::ZoneFlagGenerated ) != 0 );
@@ -228,6 +238,10 @@ bool ParsesVersion2MetadataAndPortalBlend() {
 	CHECK( ( zones[0].flags & 0x80u ) == 0 );
 	CHECK( zones[0].portals.size() == 1u );
 	CHECK( zones[0].portals[0].targetZone == 1u );
+	CHECK( Near( zones[0].portals[0].blendDistance, azrt::kAudioZonePortalBlendDistance ) );
+	CHECK( Near( zones[0].portals[0].minimumBlend, azrt::kAudioZonePortalMinimumBlend ) );
+	CHECK( Near( zones[0].portals[0].maximumBlend, azrt::kAudioZonePortalMaxBlend ) );
+	CHECK( zones[0].portals[0].blendCurve == static_cast<std::uint8_t>( azfmt::PortalBlendCurve::Smooth ) );
 
 	const float nearPortal[3] = { 500.0f, 64.0f, 64.0f };
 	const azrt::AudioZonePortalBlend nearBlend = azrt::FindAudioZonePortalBlend( zones, zones[0], nearPortal );
@@ -236,6 +250,57 @@ bool ParsesVersion2MetadataAndPortalBlend() {
 
 	const float farFromPortal[3] = { 32.0f, 64.0f, 64.0f };
 	const azrt::AudioZonePortalBlend farBlend = azrt::FindAudioZonePortalBlend( zones, zones[0], farFromPortal );
+	CHECK( farBlend.target == nullptr );
+	CHECK( Near( farBlend.blend, 0.0f ) );
+	return true;
+}
+
+bool ParsesVersion3PerPortalTuning() {
+	ZoneSpec room;
+	room.maxs[0] = 512.0f;
+	room.maxs[1] = 128.0f;
+	room.maxs[2] = 128.0f;
+	room.name = "room";
+
+	PortalSpec tunedPortal;
+	tunedPortal.targetZone = 1u;
+	tunedPortal.mins[0] = 512.0f;
+	tunedPortal.mins[1] = 0.0f;
+	tunedPortal.mins[2] = 0.0f;
+	tunedPortal.maxs[0] = 512.0f;
+	tunedPortal.maxs[1] = 128.0f;
+	tunedPortal.maxs[2] = 128.0f;
+	tunedPortal.openness = 1.0f;
+	tunedPortal.blendDistance = 64.0f;
+	tunedPortal.minimumBlend = 0.0f;
+	tunedPortal.maximumBlend = 1.0f;
+	tunedPortal.blendCurve = static_cast<std::uint8_t>( azfmt::PortalBlendCurve::EaseOut );
+	room.portals.push_back( tunedPortal );
+
+	ZoneSpec hall;
+	hall.mins[0] = 512.0f;
+	hall.maxs[0] = 1024.0f;
+	hall.maxs[1] = 128.0f;
+	hall.maxs[2] = 128.0f;
+	hall.name = "hall";
+
+	std::vector<azrt::AudioZone> zones;
+	std::string error;
+	CHECK( ParseZones( MakeSidecar( azfmt::kVersion, { room, hall } ), zones, error ) );
+	CHECK( zones.size() == 2u );
+	CHECK( zones[0].portals.size() == 1u );
+	CHECK( Near( zones[0].portals[0].blendDistance, 64.0f ) );
+	CHECK( Near( zones[0].portals[0].minimumBlend, 0.0f ) );
+	CHECK( Near( zones[0].portals[0].maximumBlend, 1.0f ) );
+	CHECK( zones[0].portals[0].blendCurve == static_cast<std::uint8_t>( azfmt::PortalBlendCurve::EaseOut ) );
+
+	const float quarterProximity[3] = { 464.0f, 64.0f, 64.0f };
+	const azrt::AudioZonePortalBlend tunedBlend = azrt::FindAudioZonePortalBlend( zones, zones[0], quarterProximity );
+	CHECK( tunedBlend.target == &zones[1] );
+	CHECK( Near( tunedBlend.blend, 0.4375f ) );
+
+	const float outsideDistance[3] = { 448.0f, 64.0f, 64.0f };
+	const azrt::AudioZonePortalBlend farBlend = azrt::FindAudioZonePortalBlend( zones, zones[0], outsideDistance );
 	CHECK( farBlend.target == nullptr );
 	CHECK( Near( farBlend.blend, 0.0f ) );
 	return true;
@@ -263,6 +328,14 @@ bool RejectsInvalidSidecars() {
 	target.name = "target";
 	CHECK( !ParseZones( MakeSidecar( azfmt::kVersion, { badPortal, target } ), zones, error ) );
 	CHECK( error == "invalid zone portal record" );
+
+	ZoneSpec badCurve;
+	PortalSpec invalidCurve;
+	invalidCurve.targetZone = 1u;
+	invalidCurve.blendCurve = static_cast<std::uint8_t>( azfmt::PortalBlendCurve::Count );
+	badCurve.portals.push_back( invalidCurve );
+	CHECK( !ParseZones( MakeSidecar( azfmt::kVersion, { badCurve, target } ), zones, error ) );
+	CHECK( error == "invalid zone portal record" );
 	return true;
 }
 
@@ -278,6 +351,7 @@ int main() {
 		{ "ParseLegacySidecarPreservesCompatibilityDefaults", ParseLegacySidecarPreservesCompatibilityDefaults },
 		{ "SelectsPriorityThenSmallerVolume", SelectsPriorityThenSmallerVolume },
 		{ "ParsesVersion2MetadataAndPortalBlend", ParsesVersion2MetadataAndPortalBlend },
+		{ "ParsesVersion3PerPortalTuning", ParsesVersion3PerPortalTuning },
 		{ "RejectsInvalidSidecars", RejectsInvalidSidecars }
 	};
 

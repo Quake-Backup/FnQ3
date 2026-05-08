@@ -9,7 +9,7 @@
 namespace glx {
 
 enum class StaticWorldPacketMatch {
-	None,
+	NoMatch,
 	Partial,
 	Full,
 	ItemMismatch
@@ -110,7 +110,7 @@ static ID_INLINE StaticWorldRunPacket GLX_StaticWorld_ClassifyRunAgainstPacketVi
 	const StaticWorldPacketView &packet, int packetIndex, int offsetBytes, int runBytes,
 	int firstItem, int itemCount, const char *shaderName, int sort )
 {
-	StaticWorldRunPacket result { StaticWorldPacketMatch::None, -1 };
+	StaticWorldRunPacket result { StaticWorldPacketMatch::NoMatch, -1 };
 	const long long runStart = offsetBytes;
 	const long long runEnd = runStart + runBytes;
 	const long long packetStart = packet.indexOffset;

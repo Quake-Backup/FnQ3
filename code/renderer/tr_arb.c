@@ -176,11 +176,145 @@ void GL_ProgramEnable( void )
 
 
 #ifdef USE_PMLIGHT
+#ifdef RENDERER_GLX
+static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *indexes )
+{
+	const shaderCommands_t *input;
+	const vec2_t *texCoords;
+	glxStreamReservation_t reservation;
+	qboolean ok = qtrue;
+	int xyzBytes;
+	int normalBytes;
+	int texBytes;
+	int indexBytes;
+	int normalOffset;
+	int texOffset;
+	int indexOffset;
+	int totalBytes;
+	int materialFlags;
+	GLint oldArrayBuffer = 0;
+	GLint oldElementArrayBuffer = 0;
+
+	if ( !GLX_CompatStreamDrawEnabled() ) {
+		return qfalse;
+	}
+	if ( !qglBindBufferARB ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_NO_BIND_BUFFER );
+		return qfalse;
+	}
+
+	input = &tess;
+	texCoords = (const vec2_t *)input->svars.texcoordPtr[0];
+	if ( !indexes || !texCoords ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_BAD_INPUT );
+		return qfalse;
+	}
+	if ( input->numVertexes <= 0 || numIndexes <= 0 ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_EMPTY_BATCH );
+		return qfalse;
+	}
+
+	materialFlags = GLX_STAGE_DLIGHT_MAP | GLX_STAGE_ST0;
+	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0, 0, 0, 0, 0, 0 ) ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_KEY );
+		return qfalse;
+	}
+
+	xyzBytes = input->numVertexes * (int)sizeof( input->xyz[0] );
+	normalBytes = input->numVertexes * (int)sizeof( input->normal[0] );
+	texBytes = input->numVertexes * (int)sizeof( texCoords[0] );
+	indexBytes = numIndexes * (int)sizeof( indexes[0] );
+	normalOffset = GLX_CompatAlignInt( xyzBytes, 16 );
+	texOffset = GLX_CompatAlignInt( normalOffset + normalBytes, 16 );
+	indexOffset = GLX_CompatAlignInt( texOffset + texBytes, 16 );
+	totalBytes = GLX_CompatAlignInt( indexOffset + indexBytes, 64 );
+
+	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
+		GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	if ( !GLX_CompatStreamUploadAt( &reservation, 0, input->xyz, xyzBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_CompatStreamUploadAt( &reservation, normalOffset, input->normal, normalBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_CompatStreamUploadAt( &reservation, texOffset, texCoords, texBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_CompatStreamUploadAt( &reservation, indexOffset, indexes, indexBytes ) ) {
+		ok = qfalse;
+	}
+	GLX_CompatStreamCommit( &reservation );
+
+	if ( !ok ) {
+		GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
+	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
+
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_NORMAL_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), (const GLvoid *)(intptr_t)( reservation.offset ) );
+	qglNormalPointer( GL_FLOAT, sizeof( input->normal[0] ), (const GLvoid *)(intptr_t)( reservation.offset + normalOffset ) );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
+
+	GLX_CompatRecordDraw( numIndexes, GLX_DRAW_STREAM_GENERIC );
+	qglDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_NORMAL_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
+	qglNormalPointer( GL_FLOAT, sizeof( input->normal[0] ), input->normal );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, texCoords );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+
+	GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
+	return qtrue;
+}
+#endif
+
+static void ARB_DrawLightingElements( int numIndexes, const glIndex_t *indexes )
+{
+	qboolean glxStreamedDraw = qfalse;
+
+	if ( numIndexes <= 0 ) {
+		return;
+	}
+
+#ifdef RENDERER_GLX
+	glxStreamedDraw = GLX_TryStreamDrawPMLightPass( numIndexes, indexes );
+#endif
+	if ( glxStreamedDraw ) {
+		return;
+	}
+
+	if ( qglLockArraysEXT )
+		qglLockArraysEXT( 0, tess.numVertexes );
+
+	R_DrawElements( numIndexes, indexes );
+
+	if ( qglUnlockArraysEXT )
+		qglUnlockArraysEXT();
+}
+
 static void ARB_Lighting( const shaderStage_t* pStage )
 {
 	const dlight_t* dl;
 	byte clipBits[ SHADER_MAX_VERTEXES ];
-	unsigned hitIndexes[ SHADER_MAX_INDEXES ];
+	glIndex_t hitIndexes[ SHADER_MAX_INDEXES ];
 	int numIndexes;
 	int clip;
 	int i;
@@ -252,7 +386,7 @@ static void ARB_Lighting( const shaderStage_t* pStage )
 
 	R_BindAnimatedImage( &pStage->bundle[ tess.shader->lightingBundle ] );
 	
-	R_DrawElements( numIndexes, hitIndexes );
+	ARB_DrawLightingElements( numIndexes, hitIndexes );
 }
 
 
@@ -271,7 +405,7 @@ static void ARB_Lighting_Fast( const shaderStage_t* pStage )
 
 	R_BindAnimatedImage( &pStage->bundle[ tess.shader->lightingBundle ] );
 	
-	R_DrawElements( tess.numIndexes, tess.indexes );
+	ARB_DrawLightingElements( tess.numIndexes, tess.indexes );
 }
 
 
@@ -379,23 +513,18 @@ void ARB_LightingPass( void )
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_NORMAL_ARRAY );
 
-	// since this is guaranteed to be a single pass, fill and lock all the arrays
+	// Since this is a single pass, prepare the array state once; the draw helper
+	// locks client arrays only when it falls back from the GLx stream path.
 
 	qglTexCoordPointer( 2, GL_FLOAT, 0, tess.svars.texcoordPtr[0] );
 	qglNormalPointer( GL_FLOAT, sizeof( tess.normal[0] ), tess.normal );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
-
-	if ( qglLockArraysEXT )
-		qglLockArraysEXT( 0, tess.numVertexes );
 
 	// CPU may limit performance in following cases
 	if ( tess.light->linear || gl_version >= 40 )
 		ARB_Lighting_Fast( pStage );
 	else
 		ARB_Lighting( pStage );
-
-	if ( qglUnlockArraysEXT )
-		qglUnlockArraysEXT();
 
 	// reset polygon offset
 	if ( tess.shader->polygonOffset ) 
@@ -881,6 +1010,7 @@ static void RenderQuad( int w, int h )
 {
 	static const vec2_t t[4] = { {0.0, 1.0}, {1.0, 1.0}, {0.0, 0.0}, {1.0, 0.0} };
 	static vec3_t v[4] = { { 0 } };
+	qboolean glxStreamedDraw = qfalse;
 	
 	v[1][0] = w;
 	v[2][1] = h;
@@ -892,7 +1022,13 @@ static void RenderQuad( int w, int h )
 	qglVertexPointer( 3, GL_FLOAT, 0, v );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, t );
 
-	qglDrawArrays( GL_TRIANGLE_STRIP, 0, 4 );
+	if ( GLX_CompatStreamDrawPostProcessEnabled() ) {
+		glxStreamedDraw = GLX_CompatTryStreamDrawArrayTexcoordPass( 4, v,
+			(int)sizeof( v[0] ), t, 0, GL_TRIANGLE_STRIP, GLX_STAGE_POSTPROCESS_PASS );
+	}
+	if ( !glxStreamedDraw ) {
+		qglDrawArrays( GL_TRIANGLE_STRIP, 0, 4 );
+	}
 }
 
 
@@ -1829,6 +1965,7 @@ static void R_Bloom_LensEffect( float alpha )
 	vec2_t coords[ ARRAY_LEN(lc) * 6 ];
 	vec4_t colors[ ARRAY_LEN(lc) * 6 ];
 	vec4_t color;
+	qboolean glxStreamedDraw = qfalse;
 
 	alpha /= (float)ARRAY_LEN( lc );
 	for ( i = 0; i < ARRAY_LEN( lc ); i++ ) {
@@ -1842,7 +1979,14 @@ static void R_Bloom_LensEffect( float alpha )
 	qglTexCoordPointer( 2, GL_FLOAT, 0, coords );
 	qglColorPointer( 4, GL_FLOAT, 0, colors );
 
-	qglDrawArrays( GL_TRIANGLES, 0, ARRAY_LEN( verts ) );
+	if ( GLX_CompatStreamDrawPostProcessEnabled() ) {
+		glxStreamedDraw = GLX_CompatTryStreamDrawArrayTexcoordColorPass(
+			(int)ARRAY_LEN( verts ), verts, (int)sizeof( verts[0] ), coords, 0,
+			colors, 4, GL_FLOAT, 0, GL_TRIANGLES, GLX_STAGE_POSTPROCESS_PASS );
+	}
+	if ( !glxStreamedDraw ) {
+		qglDrawArrays( GL_TRIANGLES, 0, ARRAY_LEN( verts ) );
+	}
 }
 
 

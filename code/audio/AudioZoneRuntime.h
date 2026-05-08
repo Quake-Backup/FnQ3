@@ -27,9 +27,9 @@ namespace fnq3_audiozones_runtime {
 
 namespace azfmt = fnq3_audiozones;
 
-constexpr float kAudioZonePortalBlendDistance = 192.0f;
-constexpr float kAudioZonePortalMaxBlend = 0.45f;
-constexpr float kAudioZonePortalMinimumBlend = 0.02f;
+constexpr float kAudioZonePortalBlendDistance = azfmt::kDefaultPortalBlendDistance;
+constexpr float kAudioZonePortalMaxBlend = azfmt::kDefaultPortalMaximumBlend;
+constexpr float kAudioZonePortalMinimumBlend = azfmt::kDefaultPortalMinimumBlend;
 
 struct Vec3f {
 	float v[3] = { 0.0f, 0.0f, 0.0f };
@@ -73,19 +73,48 @@ struct AudioZonePortal {
 	Vec3f mins;
 	Vec3f maxs;
 	float openness = 0.0f;
+	float blendDistance = azfmt::kDefaultPortalBlendDistance;
+	float minimumBlend = azfmt::kDefaultPortalMinimumBlend;
+	float maximumBlend = azfmt::kDefaultPortalMaximumBlend;
+	std::uint8_t blendCurve = static_cast<std::uint8_t>( azfmt::PortalBlendCurve::Smooth );
 
-	float Influence( const float *origin ) const {
+	float CurveProximity( float proximity ) const {
+		proximity = ClampFloat( proximity, 0.0f, 1.0f );
+		switch ( static_cast<azfmt::PortalBlendCurve>( blendCurve ) ) {
+		case azfmt::PortalBlendCurve::Linear:
+			return proximity;
+		case azfmt::PortalBlendCurve::EaseIn:
+			return proximity * proximity;
+		case azfmt::PortalBlendCurve::EaseOut: {
+			const float inverse = 1.0f - proximity;
+			return 1.0f - inverse * inverse;
+		}
+		case azfmt::PortalBlendCurve::Smooth:
+		default:
+			return SmoothStep( proximity );
+		}
+	}
+
+	float Blend( const float *origin ) const {
 		if ( openness <= 0.0f || origin == nullptr ) {
 			return 0.0f;
 		}
 
 		const float distance = DistancePointToBounds( origin, mins, maxs );
-		if ( distance >= kAudioZonePortalBlendDistance ) {
+		if ( distance >= blendDistance ) {
 			return 0.0f;
 		}
 
-		const float proximity = 1.0f - ( distance / kAudioZonePortalBlendDistance );
-		return SmoothStep( proximity ) * ClampFloat( openness, 0.0f, 1.0f );
+		const float proximity = 1.0f - ( distance / blendDistance );
+		const float influence = CurveProximity( proximity ) * ClampFloat( openness, 0.0f, 1.0f );
+		if ( influence <= minimumBlend ) {
+			return 0.0f;
+		}
+		return ClampFloat( influence, 0.0f, maximumBlend );
+	}
+
+	float Influence( const float *origin ) const {
+		return Blend( origin );
 	}
 };
 
@@ -145,6 +174,22 @@ inline bool ReadAudioZoneU8( const std::uint8_t *&cursor, const std::uint8_t *en
 	}
 	out = *cursor++;
 	return true;
+}
+
+inline void NormalizeAudioZonePortalTuning( AudioZonePortal &portal ) {
+	portal.openness = ClampFloat( portal.openness, 0.0f, 1.0f );
+	portal.blendDistance = ClampFloat( portal.blendDistance, azfmt::kMinimumPortalBlendDistance, azfmt::kMaximumPortalBlendDistance );
+	portal.minimumBlend = ClampFloat( portal.minimumBlend, 0.0f, 1.0f );
+	portal.maximumBlend = ClampFloat( portal.maximumBlend, 0.0f, 1.0f );
+	if ( portal.minimumBlend > portal.maximumBlend ) {
+		std::swap( portal.minimumBlend, portal.maximumBlend );
+	}
+}
+
+inline bool IsSupportedAudioZoneVersion( std::uint32_t version ) {
+	return version == azfmt::kLegacyVersion ||
+		version == azfmt::kMetadataVersion ||
+		version == azfmt::kPortalTuningVersion;
 }
 
 inline bool ReadAudioZoneU16( const std::uint8_t *&cursor, const std::uint8_t *end, std::uint16_t &out ) {
@@ -215,7 +260,7 @@ inline bool ParseAudioZoneBinary( const std::uint8_t *data, std::size_t length, 
 		error = "truncated header";
 		return false;
 	}
-	if ( version != azfmt::kLegacyVersion && version != azfmt::kVersion ) {
+	if ( !IsSupportedAudioZoneVersion( version ) ) {
 		error = "unsupported version " + std::to_string( version );
 		return false;
 	}
@@ -277,7 +322,7 @@ inline bool ParseAudioZoneBinary( const std::uint8_t *data, std::size_t length, 
 		zone.name.assign( reinterpret_cast<const char *>( cursor ), nameLength );
 		cursor += nameLength;
 
-		if ( version >= azfmt::kVersion ) {
+		if ( version >= azfmt::kMetadataVersion ) {
 			std::uint8_t materialClass = 0;
 			std::uint8_t flags = 0;
 			std::uint16_t portalCount = 0;
@@ -307,12 +352,26 @@ inline bool ParseAudioZoneBinary( const std::uint8_t *data, std::size_t length, 
 					error = "truncated zone portal record";
 					return false;
 				}
-				if ( zonePortal.targetZone >= zoneCount || !std::isfinite( zonePortal.openness ) ) {
+				if ( version >= azfmt::kPortalTuningVersion ) {
+					if ( !ReadAudioZoneF32( cursor, end, zonePortal.blendDistance ) ||
+						!ReadAudioZoneF32( cursor, end, zonePortal.minimumBlend ) ||
+						!ReadAudioZoneF32( cursor, end, zonePortal.maximumBlend ) ||
+						!ReadAudioZoneU8( cursor, end, zonePortal.blendCurve ) ) {
+						error = "truncated zone portal tuning";
+						return false;
+					}
+				}
+				if ( zonePortal.targetZone >= zoneCount ||
+					!std::isfinite( zonePortal.openness ) ||
+					!std::isfinite( zonePortal.blendDistance ) ||
+					!std::isfinite( zonePortal.minimumBlend ) ||
+					!std::isfinite( zonePortal.maximumBlend ) ||
+					zonePortal.blendCurve >= static_cast<std::uint8_t>( azfmt::PortalBlendCurve::Count ) ) {
 					error = "invalid zone portal record";
 					return false;
 				}
 				NormalizeAudioZonePortalBounds( zonePortal );
-				zonePortal.openness = ClampFloat( zonePortal.openness, 0.0f, 1.0f );
+				NormalizeAudioZonePortalTuning( zonePortal );
 				zone.portals.push_back( zonePortal );
 			}
 		}
@@ -355,15 +414,15 @@ inline AudioZonePortalBlend FindAudioZonePortalBlend( const std::vector<AudioZon
 		if ( &target == &zone ) {
 			continue;
 		}
-		const float influence = portal.Influence( origin );
-		if ( influence > bestInfluence ) {
-			bestInfluence = influence;
+		const float blend = portal.Blend( origin );
+		if ( blend > bestInfluence ) {
+			bestInfluence = blend;
 			result.target = &target;
 		}
 	}
 
-	if ( result.target != nullptr && bestInfluence > kAudioZonePortalMinimumBlend ) {
-		result.blend = ClampFloat( bestInfluence, 0.0f, kAudioZonePortalMaxBlend );
+	if ( result.target != nullptr && bestInfluence > 0.0f ) {
+		result.blend = bestInfluence;
 	} else {
 		result.target = nullptr;
 		result.blend = 0.0f;

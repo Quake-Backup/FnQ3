@@ -223,6 +223,9 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	state->streamedDrawVideoMapDraws = 0;
 	state->streamedDrawVideoMapAccepted = 0;
 	state->streamedDrawVideoMapRejected = 0;
+	state->streamedDrawShadowDraws = 0;
+	state->streamedDrawBeamDraws = 0;
+	state->streamedDrawPostProcessDraws = 0;
 	state->streamedDrawVertexes = 0;
 	state->streamedDrawIndexes = 0;
 	state->largestReservationBytes = 0;
@@ -555,6 +558,18 @@ void GLX_Stream_RegisterCvars( StreamState *state )
 	state->r_glxStreamDrawVideoMaps = RI().Cvar_Get( "r_glxStreamDrawVideoMaps", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawVideoMaps,
 		"Allow GLx streamed draws for video-map stages. Experimental and off by default." );
+
+	state->r_glxStreamDrawShadows = RI().Cvar_Get( "r_glxStreamDrawShadows", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxStreamDrawShadows,
+		"Allow GLx streamed draws for stencil shadow-volume passes. Experimental and off by default." );
+
+	state->r_glxStreamDrawBeams = RI().Cvar_Get( "r_glxStreamDrawBeams", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxStreamDrawBeams,
+		"Allow GLx streamed draws for immediate beam entity draw-array passes. Experimental and off by default." );
+
+	state->r_glxStreamDrawPostProcess = RI().Cvar_Get( "r_glxStreamDrawPostProcess", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxStreamDrawPostProcess,
+		"Allow GLx streamed draws for fullscreen postprocess draw-array passes. Experimental and off by default." );
 }
 
 void GLX_Stream_OnOpenGLReady( StreamState *state, const Capabilities &caps )
@@ -852,6 +867,33 @@ qboolean GLX_Stream_DrawVideoMapsEnabled( const StreamState &state )
 		state.r_glxStreamDrawVideoMaps && state.r_glxStreamDrawVideoMaps->integer ? qtrue : qfalse;
 }
 
+qboolean GLX_Stream_DrawShadowsEnabled( const StreamState &state )
+{
+	StreamSpecialDrawGateConfig config {};
+
+	config.streamDraw = GLX_Stream_DrawEnabled( state );
+	config.shadows = state.r_glxStreamDrawShadows && state.r_glxStreamDrawShadows->integer ? qtrue : qfalse;
+	return GLX_Stream_EvaluateShadowDrawGate( config );
+}
+
+qboolean GLX_Stream_DrawBeamsEnabled( const StreamState &state )
+{
+	StreamSpecialDrawGateConfig config {};
+
+	config.streamDraw = GLX_Stream_DrawEnabled( state );
+	config.beams = state.r_glxStreamDrawBeams && state.r_glxStreamDrawBeams->integer ? qtrue : qfalse;
+	return GLX_Stream_EvaluateBeamDrawGate( config );
+}
+
+qboolean GLX_Stream_DrawPostProcessEnabled( const StreamState &state )
+{
+	StreamSpecialDrawGateConfig config {};
+
+	config.streamDraw = GLX_Stream_DrawEnabled( state );
+	config.postprocess = state.r_glxStreamDrawPostProcess && state.r_glxStreamDrawPostProcess->integer ? qtrue : qfalse;
+	return GLX_Stream_EvaluatePostProcessDrawGate( config );
+}
+
 static void GLX_Stream_RecordMaterialGate( StreamState *state, qboolean present, qboolean allowed,
 	unsigned int *accepted, unsigned int *rejected )
 {
@@ -958,6 +1000,15 @@ void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIn
 		}
 		if ( materialFlags & GLX_STAGE_VIDEO_MAP ) {
 			state->streamedDrawVideoMapDraws++;
+		}
+		if ( materialFlags & GLX_STAGE_SHADOW_PASS ) {
+			state->streamedDrawShadowDraws++;
+		}
+		if ( materialFlags & GLX_STAGE_BEAM_PASS ) {
+			state->streamedDrawBeamDraws++;
+		}
+		if ( materialFlags & GLX_STAGE_POSTPROCESS_PASS ) {
+			state->streamedDrawPostProcessDraws++;
 		}
 	} else {
 		state->streamedDrawFallbacks++;
@@ -1112,7 +1163,16 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 	RI().Printf( PRINT_ALL, "  dynamic stream video-map gate: %s, accepted %u, rejected %u\n",
 		BoolName( GLX_Stream_DrawVideoMapsEnabled( state ) ),
 		state.streamedDrawVideoMapAccepted, state.streamedDrawVideoMapRejected );
-	RI().Printf( PRINT_ALL, "  dynamic stream draws: %u/%u attempts, %u verts, %u indexes, %.2f MB, index %.2f MB, tex1 %.2f MB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, fallbacks %u\n",
+	RI().Printf( PRINT_ALL, "  dynamic stream shadow-volume gate: %s, draws %u\n",
+		BoolName( GLX_Stream_DrawShadowsEnabled( state ) ),
+		state.streamedDrawShadowDraws );
+	RI().Printf( PRINT_ALL, "  dynamic stream beam gate: %s, draws %u\n",
+		BoolName( GLX_Stream_DrawBeamsEnabled( state ) ),
+		state.streamedDrawBeamDraws );
+	RI().Printf( PRINT_ALL, "  dynamic stream postprocess gate: %s, draws %u\n",
+		BoolName( GLX_Stream_DrawPostProcessEnabled( state ) ),
+		state.streamedDrawPostProcessDraws );
+	RI().Printf( PRINT_ALL, "  dynamic stream draws: %u/%u attempts, %u verts, %u indexes, %.2f MB, index %.2f MB, tex1 %.2f MB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, shadow %u, beam %u, post %u, fallbacks %u\n",
 		state.streamedDraws, state.streamedDrawAttempts,
 		state.streamedDrawVertexes, state.streamedDrawIndexes,
 		static_cast<double>( state.streamedDrawBytes ) / ( 1024.0 * 1024.0 ),
@@ -1126,6 +1186,9 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 		state.streamedDrawDynamicLightDraws,
 		state.streamedDrawScreenMapDraws,
 		state.streamedDrawVideoMapDraws,
+		state.streamedDrawShadowDraws,
+		state.streamedDrawBeamDraws,
+		state.streamedDrawPostProcessDraws,
 		state.streamedDrawFallbacks );
 	RI().Printf( PRINT_ALL, "  dynamic stream draw skips: %u (bind %u, input %u, mt %u, depthfrag %u, texcoord %u, empty %u, key %u, fog %u, program %u)\n",
 		state.streamedDrawSkips,

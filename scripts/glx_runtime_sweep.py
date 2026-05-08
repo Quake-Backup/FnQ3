@@ -185,11 +185,13 @@ GLX_POSTPROCESS_SUMMARY_RE = re.compile(
     re.IGNORECASE,
 )
 GLX_STREAM_DRAW_SUMMARY_RE = re.compile(
-    r"glx:\s*stream draws\s+(?P<draws>\d+)/(?P<attempts>\d+)\s+attempts,\s*"
-    r"(?P<indexes>\d+)\s+idx,\s*(?P<megabytes>\d+(?:\.\d+)?)MB/index\s+"
-    r"(?P<indexMegabytes>\d+(?:\.\d+)?)MB/tex1\s+(?P<tex1Megabytes>\d+(?:\.\d+)?)MB,.*"
-    r"fallbacks\s+(?P<fallbacks>\d+),\s*skips\s+(?P<skips>\d+)",
-    re.IGNORECASE,
+	r"glx:\s*stream draws\s+(?P<draws>\d+)/(?P<attempts>\d+)\s+attempts,\s*"
+	r"(?P<indexes>\d+)\s+idx,\s*(?P<megabytes>\d+(?:\.\d+)?)MB/index\s+"
+	r"(?P<indexMegabytes>\d+(?:\.\d+)?)MB/tex1\s+(?P<tex1Megabytes>\d+(?:\.\d+)?)MB,.*?"
+	r"(?:shadow\s+(?P<shadows>\d+),\s*)?(?:beam\s+(?P<beams>\d+),\s*)?"
+	r"(?:post\s+(?P<postprocess>\d+),\s*)?"
+	r"fallbacks\s+(?P<fallbacks>\d+),\s*skips\s+(?P<skips>\d+)",
+	re.IGNORECASE,
 )
 GLX_STATIC_DRAW_SUMMARY_RE = re.compile(
     r"glx:\s*static draw\s+(?P<calls>\d+)/(?P<attempts>\d+)\s+calls,\s*"
@@ -247,6 +249,9 @@ PROFILE_CVARS = {
         "r_glxStreamDrawDynamicLights": "0",
         "r_glxStreamDrawScreenMaps": "0",
         "r_glxStreamDrawVideoMaps": "0",
+        "r_glxStreamDrawShadows": "0",
+        "r_glxStreamDrawBeams": "0",
+        "r_glxStreamDrawPostProcess": "0",
         "r_glxMaterialRenderer": "1",
         "r_glxGpuTiming": "1",
     },
@@ -273,6 +278,9 @@ PROFILE_CVARS = {
         "r_glxStreamDrawDynamicLights": "0",
         "r_glxStreamDrawScreenMaps": "0",
         "r_glxStreamDrawVideoMaps": "0",
+        "r_glxStreamDrawShadows": "0",
+        "r_glxStreamDrawBeams": "0",
+        "r_glxStreamDrawPostProcess": "0",
         "r_glxMaterialRenderer": "1",
         "r_glxMaterialPrecache": "1",
         "r_glxStaticWorldArena": "0",
@@ -306,6 +314,9 @@ PROFILE_CVARS = {
         "r_glxStreamDrawDynamicLights": "0",
         "r_glxStreamDrawScreenMaps": "0",
         "r_glxStreamDrawVideoMaps": "0",
+        "r_glxStreamDrawShadows": "0",
+        "r_glxStreamDrawBeams": "0",
+        "r_glxStreamDrawPostProcess": "0",
         "r_glxMaterialRenderer": "1",
         "r_glxMaterialPrecache": "1",
         "r_glxStaticWorldArena": "0",
@@ -1722,6 +1733,12 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 "streamDraw",
                 ("draws", "attempts", "indexes", "fallbacks", "skips"),
             )
+            if match.group("shadows") is not None:
+                perf_record_numeric(performance, "streamDrawShadows", int(match.group("shadows")))
+            if match.group("beams") is not None:
+                perf_record_numeric(performance, "streamDrawBeams", int(match.group("beams")))
+            if match.group("postprocess") is not None:
+                perf_record_numeric(performance, "streamDrawPostProcess", int(match.group("postprocess")))
             for key in ("megabytes", "indexMegabytes", "tex1Megabytes"):
                 perf_record_numeric(performance, prefixed_key("streamDraw", key), float(match.group(key)))
             continue

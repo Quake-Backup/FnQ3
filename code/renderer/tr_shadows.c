@@ -20,6 +20,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 #include "tr_local.h"
+#include "tr_glx_compat.h"
 
 
 /*
@@ -494,6 +495,92 @@ static void R_CalcShadowEdges( void ) {
 	}
 }
 
+#ifdef RENDERER_GLX
+static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
+{
+	glxStreamReservation_t reservation;
+	qboolean ok = qtrue;
+	int numVertexes;
+	int xyzBytes;
+	int indexBytes;
+	int indexOffset;
+	int totalBytes;
+	GLint oldArrayBuffer = 0;
+	GLint oldElementArrayBuffer = 0;
+
+	if ( !GLX_CompatStreamDrawShadowsEnabled() ) {
+		return qfalse;
+	}
+	if ( !qglBindBufferARB ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_NO_BIND_BUFFER );
+		return qfalse;
+	}
+	if ( tess.numVertexes <= 0 || tess.numIndexes <= 0 ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_EMPTY_BATCH );
+		return qfalse;
+	}
+
+	numVertexes = tess.numVertexes * 2;
+	xyzBytes = numVertexes * (int)sizeof( tess.xyz[0] );
+	indexBytes = tess.numIndexes * (int)sizeof( tess.indexes[0] );
+	indexOffset = GLX_CompatAlignInt( xyzBytes, 16 );
+	totalBytes = GLX_CompatAlignInt( indexOffset + indexBytes, 64 );
+
+	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
+		GLX_CompatRecordStreamDrawResult( numVertexes, tess.numIndexes,
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS, qfalse );
+		return qfalse;
+	}
+
+	if ( !GLX_CompatStreamUploadAt( &reservation, 0, tess.xyz, xyzBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && !GLX_CompatStreamUploadAt( &reservation, indexOffset, tess.indexes, indexBytes ) ) {
+		ok = qfalse;
+	}
+	GLX_CompatStreamCommit( &reservation );
+
+	if ( !ok ) {
+		GLX_CompatRecordStreamDrawResult( numVertexes, tess.numIndexes,
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS, qfalse );
+		return qfalse;
+	}
+
+	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
+	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
+
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_NONE );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), (const GLvoid *)(intptr_t)( reservation.offset ) );
+
+	GL_Cull( CT_BACK_SIDED );
+	qglStencilOp( GL_KEEP, GL_KEEP, GL_INCR );
+	GLX_CompatRecordDraw( tess.numIndexes, GLX_DRAW_STREAM_GENERIC );
+	qglDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+
+	GL_Cull( CT_FRONT_SIDED );
+	qglStencilOp( GL_KEEP, GL_KEEP, GL_DECR );
+	GLX_CompatRecordDraw( tess.numIndexes, GLX_DRAW_STREAM_GENERIC );
+	qglDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+
+	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_NONE );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+
+	GLX_CompatRecordStreamDrawResult( numVertexes, tess.numIndexes,
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS, qtrue );
+	return qtrue;
+}
+#endif
+
 
 /*
 =================
@@ -512,6 +599,7 @@ void RB_ShadowTessEnd( void ) {
 	int		numTris;
 	vec3_t	lightDir;
 	GLboolean rgba[4];
+	qboolean glxStreamedDraw = qfalse;
 
 	if ( glConfig.stencilBits < 4 ) {
 		return;
@@ -577,9 +665,6 @@ void RB_ShadowTessEnd( void ) {
 
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
 
-	if ( qglLockArraysEXT )
-		qglLockArraysEXT( 0, tess.numVertexes*2 );
-
 	// draw the silhouette edges
 
 	qglDisable( GL_TEXTURE_2D );
@@ -594,18 +679,26 @@ void RB_ShadowTessEnd( void ) {
 	qglEnable( GL_STENCIL_TEST );
 	qglStencilFunc( GL_ALWAYS, 1, 255 );
 
-	GL_Cull( CT_BACK_SIDED );
-	qglStencilOp( GL_KEEP, GL_KEEP, GL_INCR );
+#ifdef RENDERER_GLX
+	glxStreamedDraw = GLX_TryStreamDrawStencilShadowVolume();
+#endif
+	if ( !glxStreamedDraw ) {
+		if ( qglLockArraysEXT )
+			qglLockArraysEXT( 0, tess.numVertexes*2 );
 
-	R_DrawElements( tess.numIndexes, tess.indexes );
+		GL_Cull( CT_BACK_SIDED );
+		qglStencilOp( GL_KEEP, GL_KEEP, GL_INCR );
 
-	GL_Cull( CT_FRONT_SIDED );
-	qglStencilOp( GL_KEEP, GL_KEEP, GL_DECR );
+		R_DrawElements( tess.numIndexes, tess.indexes );
 
-	R_DrawElements( tess.numIndexes, tess.indexes );
+		GL_Cull( CT_FRONT_SIDED );
+		qglStencilOp( GL_KEEP, GL_KEEP, GL_DECR );
 
-	if ( qglUnlockArraysEXT )
-		qglUnlockArraysEXT();
+		R_DrawElements( tess.numIndexes, tess.indexes );
+
+		if ( qglUnlockArraysEXT )
+			qglUnlockArraysEXT();
+	}
 
 	// re-enable writing to the color buffer
 	qglColorMask(rgba[0], rgba[1], rgba[2], rgba[3]);
@@ -636,6 +729,7 @@ void RB_ShadowFinish( void ) {
 		{ -100,-100, -10 },
 		{  100,-100, -10 }
 	};
+	qboolean glxStreamedDraw = qfalse;
 
 	if ( !backEnd.doneShadows ) {
 		return;
@@ -668,7 +762,15 @@ void RB_ShadowFinish( void ) {
 
 	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, 0, verts );
-	qglDrawArrays( GL_TRIANGLE_STRIP, 0, 4 );
+#ifdef RENDERER_GLX
+	if ( GLX_CompatStreamDrawShadowsEnabled() ) {
+		glxStreamedDraw = GLX_CompatTryStreamDrawArrayPass( 4, verts,
+			(int)sizeof( verts[0] ), GL_TRIANGLE_STRIP, GLX_STAGE_SHADOW_PASS );
+	}
+#endif
+	if ( !glxStreamedDraw ) {
+		qglDrawArrays( GL_TRIANGLE_STRIP, 0, 4 );
+	}
 
 	qglColor4f( 1, 1, 1, 1 );
 	qglDisable( GL_STENCIL_TEST );

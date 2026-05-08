@@ -261,7 +261,7 @@ FnQuake3 can read optional compiled audio-zone sidecars named `maps/<mapname>.az
 - `s_info`: Reports whether audio zones are disabled, missing, loaded, and which zone is currently active.
 - `s_alDebugOverlay 2` and `s_alDebugDump`: Include active zone name, material metadata, portal blend target when one is active, plus the zone-adjusted wet, low/high-frequency, occlusion, and transition values.
 
-Sidecars are compiled with the repo tool target `fnq3-audiozonesc`. Maintainers can write `maps/<mapname>.audiozones` by hand or generate a first-pass sidecar from an existing `.bsp`, then layer small overrides on top. The compiler workflow and authoring syntax are documented in the maintainer notes and in `code/tools/audiozones/README.md`.
+Sidecars are compiled with the repo tool target `fnq3-audiozonesc`. Maintainers can write `maps/<mapname>.audiozones` by hand or generate a first-pass sidecar from an existing `.bsp`, then layer small overrides on top. Current sidecars can carry material metadata, portal hints, and optional per-portal blend tuning while older version 1 and version 2 sidecars remain readable. The compiler workflow and authoring syntax are documented in the maintainer notes and in `code/tools/audiozones/README.md`.
 
 ### Doppler
 

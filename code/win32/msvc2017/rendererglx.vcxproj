@@ -265,6 +265,7 @@
     <ClInclude Include="..\..\renderer\qgl.h" />
     <ClInclude Include="..\..\renderer\tr_common.h" />
     <ClInclude Include="..\..\renderer\tr_local.h" />
+    <ClInclude Include="..\..\renderercommon\tr_glx_public.h" />
     <ClInclude Include="..\..\renderercommon\tr_public.h" />
     <ClInclude Include="..\..\renderercommon\tr_types.h" />
     <ClInclude Include="..\..\rendererglx\glx_caps.h" />
@@ -276,6 +277,7 @@
     <ClInclude Include="..\..\rendererglx\glx_profiler.h" />
     <ClInclude Include="..\..\rendererglx\glx_static_world.h" />
     <ClInclude Include="..\..\rendererglx\glx_stream.h" />
+    <ClInclude Include="..\..\rendererglx\glx_types.h" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\..\asm\common_x64.asm">

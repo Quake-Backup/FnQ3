@@ -1,84 +1,26 @@
 #ifndef GLX_MODULE_H
 #define GLX_MODULE_H
 
+#include "../qcommon/q_shared.h"
+#include "../renderercommon/tr_glx_public.h"
+
+#ifndef __TR_TYPES_H
+typedef struct glconfig_s glconfig_t;
+#endif
+
+#ifndef __TR_PUBLIC_H
+typedef struct refimport_s refimport_t;
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define GLX_DRAW_GENERIC 0
-#define GLX_DRAW_VBO_DEVICE 1
-#define GLX_DRAW_VBO_SOFT 2
-#define GLX_DRAW_DEBUG 3
-#define GLX_DRAW_STREAM_GENERIC 4
-
-#define GLX_BATCH_VBO 0x0001
-#define GLX_BATCH_FOG 0x0002
-#define GLX_BATCH_MULTITEXTURE 0x0004
-#define GLX_BATCH_POLYGON_OFFSET 0x0008
-
-#define GLX_STAGE_PATH_GENERIC 0
-#define GLX_STAGE_PATH_VBO 1
-
-#define GLX_STAGE_MULTITEXTURE 0x0001
-#define GLX_STAGE_DEPTH_FRAGMENT 0x0002
-#define GLX_STAGE_BLEND 0x0004
-#define GLX_STAGE_ALPHA_TEST 0x0008
-#define GLX_STAGE_DEPTH_WRITE 0x0010
-#define GLX_STAGE_LIGHTMAP 0x0020
-#define GLX_STAGE_ANIMATED_IMAGE 0x0040
-#define GLX_STAGE_VIDEO_MAP 0x0080
-#define GLX_STAGE_SCREEN_MAP 0x0100
-#define GLX_STAGE_DLIGHT_MAP 0x0200
-#define GLX_STAGE_TEXMOD 0x0400
-#define GLX_STAGE_ENVIRONMENT 0x0800
-#define GLX_STAGE_ST0 0x1000
-#define GLX_STAGE_ST1 0x2000
-
-#define GLX_STREAM_SKIP_NO_BIND_BUFFER 0
-#define GLX_STREAM_SKIP_BAD_INPUT 1
-#define GLX_STREAM_SKIP_MULTITEXTURE 2
-#define GLX_STREAM_SKIP_DEPTH_FRAGMENT 3
-#define GLX_STREAM_SKIP_NO_TEXCOORDS 4
-#define GLX_STREAM_SKIP_EMPTY_BATCH 5
-#define GLX_STREAM_SKIP_MATERIAL_KEY 6
-#define GLX_STREAM_SKIP_FOG 7
-#define GLX_STREAM_SKIP_MATERIAL_PROGRAM 8
-
-#define GLX_POSTPROCESS_RESULT_NONE 0
-#define GLX_POSTPROCESS_RESULT_BLOOM_FINAL 1
-#define GLX_POSTPROCESS_RESULT_GAMMA_DIRECT 2
-#define GLX_POSTPROCESS_RESULT_GAMMA_BLIT 3
-#define GLX_POSTPROCESS_RESULT_MINIMIZED 4
-
-#define GLX_BLOOM_CREATE_NONE 0
-#define GLX_BLOOM_CREATE_SUCCESS 1
-#define GLX_BLOOM_CREATE_TEXTURE_UNITS 2
-#define GLX_BLOOM_CREATE_FBO 3
-
-#define GLX_BLOOM_RESULT_NONE 0
-#define GLX_BLOOM_RESULT_SKIPPED 1
-#define GLX_BLOOM_RESULT_INTERMEDIATE 2
-#define GLX_BLOOM_RESULT_FINAL 3
-#define GLX_BLOOM_RESULT_CREATE_FAILED 4
-
-#define GLX_FBO_BLIT_MS 1
-#define GLX_FBO_BLIT_SS 2
-
-typedef struct glxStreamReservation_s {
-	unsigned int buffer;
-	unsigned int offset;
-	unsigned int bytes;
-	void *ptr;
-	int strategy;
-	int mapped;
-	int committed;
-} glxStreamReservation_t;
 
 void GLX_Renderer_RegisterCommands( void );
 void GLX_Renderer_RemoveCommands( void );
 void GLX_Renderer_SetImports( refimport_t *imports );
 void GLX_Renderer_OnOpenGLReady( const glconfig_t *config, const char *extensions );
-void GLX_Renderer_Shutdown( refShutdownCode_t code );
+void GLX_Renderer_Shutdown( int code );
 void GLX_Renderer_BeginBackendTimer( void );
 void GLX_Renderer_EndBackendTimer( void );
 void GLX_Renderer_FrameComplete( void );
@@ -99,13 +41,16 @@ void GLX_Renderer_RecordMaterialStage( int path, int flags, unsigned int stateBi
 qboolean GLX_Renderer_MaterialRendererActive( void );
 qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stateBits,
 	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
-	int multitextureEnv, qboolean fogPass );
+	int materialCombine, qboolean fogPass );
 qboolean GLX_Renderer_BindFogMaterial( void );
 void GLX_Renderer_UnbindMaterial( void );
 qboolean GLX_Renderer_StreamDrawEnabled( void );
 qboolean GLX_Renderer_StreamDrawMultitextureEnabled( void );
 qboolean GLX_Renderer_StreamDrawFogEnabled( void );
 qboolean GLX_Renderer_StreamDrawDepthFragmentEnabled( void );
+qboolean GLX_Renderer_StreamDrawShadowsEnabled( void );
+qboolean GLX_Renderer_StreamDrawBeamsEnabled( void );
+qboolean GLX_Renderer_StreamDrawPostProcessEnabled( void );
 qboolean GLX_Renderer_StreamDrawAllowsMaterial( int flags, unsigned int stateBits,
 	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 );
 qboolean GLX_Renderer_StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation );

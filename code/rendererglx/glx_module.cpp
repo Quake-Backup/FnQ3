@@ -1,4 +1,5 @@
 #include "glx_local.h"
+#include "glx_module.h"
 #include "glx_caps.h"
 #include "glx_debug.h"
 #include "glx_material.h"
@@ -106,6 +107,9 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxStreamDrawDynamicLights", "0", "0", "0" },
 	{ "r_glxStreamDrawScreenMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawVideoMaps", "0", "0", "0" },
+	{ "r_glxStreamDrawShadows", "0", "0", "0" },
+	{ "r_glxStreamDrawBeams", "0", "0", "0" },
+	{ "r_glxStreamDrawPostProcess", "0", "0", "0" },
 	{ "r_glxMaterialRenderer", "0", "1", "1" },
 	{ "r_glxMaterialPrecache", "0", "1", "1" },
 	{ "r_glxGpuTiming", "0", "1", "1" },
@@ -273,7 +277,7 @@ public:
 	void RegisterCommands();
 	void RemoveCommands();
 	void OnOpenGLReady( const glconfig_t *config, const char *extensions );
-	void Shutdown( refShutdownCode_t code );
+	void Shutdown( int code );
 	void BeginBackendTimer();
 	void EndBackendTimer();
 	void FrameComplete();
@@ -292,13 +296,16 @@ public:
 		int tcGen0, int tcGen1, int texMods0, int texMods1, int numVertexes, int numIndexes );
 	qboolean MaterialRendererActive() const;
 	qboolean BindMaterialStage( int flags, unsigned int stateBits, int rgbGen, int alphaGen,
-		int tcGen0, int tcGen1, int texMods0, int texMods1, int multitextureEnv, qboolean fogPass );
+		int tcGen0, int tcGen1, int texMods0, int texMods1, int materialCombine, qboolean fogPass );
 	qboolean BindFogMaterial();
 	void UnbindMaterial();
 	qboolean StreamDrawEnabled() const;
 	qboolean StreamDrawMultitextureEnabled() const;
 	qboolean StreamDrawFogEnabled() const;
 	qboolean StreamDrawDepthFragmentEnabled() const;
+	qboolean StreamDrawShadowsEnabled() const;
+	qboolean StreamDrawBeamsEnabled() const;
+	qboolean StreamDrawPostProcessEnabled() const;
 	qboolean StreamDrawAllowsMaterial( int flags, unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 );
 	qboolean StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation );
 	qboolean StreamUploadAt( glxStreamReservation_t *reservation, int relativeOffset, const void *data, int bytes );
@@ -419,7 +426,7 @@ void RendererModule::OnOpenGLReady( const glconfig_t *config, const char *extens
 		BoolName( GLX_Debug_CallbackInstalled( debug_ ) ) );
 }
 
-void RendererModule::Shutdown( refShutdownCode_t code )
+void RendererModule::Shutdown( int code )
 {
 	(void)code;
 
@@ -657,7 +664,13 @@ void RendererModule::PrintCaps() const
 		BoolName( GLX_Stream_DrawScreenMapsEnabled( stream_ ) ) );
 	RI().Printf( PRINT_ALL, "  dynamic stream draw video maps: %s\n",
 		BoolName( GLX_Stream_DrawVideoMapsEnabled( stream_ ) ) );
-	RI().Printf( PRINT_ALL, "  dynamic stream draws: %u/%u attempts, %.2f MB, index %.2f MB, tex1 %.2f MB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u\n",
+	RI().Printf( PRINT_ALL, "  dynamic stream draw shadows: %s\n",
+		BoolName( GLX_Stream_DrawShadowsEnabled( stream_ ) ) );
+	RI().Printf( PRINT_ALL, "  dynamic stream draw beams: %s\n",
+		BoolName( GLX_Stream_DrawBeamsEnabled( stream_ ) ) );
+	RI().Printf( PRINT_ALL, "  dynamic stream draw postprocess: %s\n",
+		BoolName( GLX_Stream_DrawPostProcessEnabled( stream_ ) ) );
+	RI().Printf( PRINT_ALL, "  dynamic stream draws: %u/%u attempts, %.2f MB, index %.2f MB, tex1 %.2f MB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, shadow %u, beam %u, post %u\n",
 		stream_.streamedDraws, stream_.streamedDrawAttempts,
 		static_cast<double>( stream_.streamedDrawBytes ) / ( 1024.0 * 1024.0 ),
 		static_cast<double>( stream_.streamedDrawIndexBytes ) / ( 1024.0 * 1024.0 ),
@@ -669,7 +682,10 @@ void RendererModule::PrintCaps() const
 		stream_.streamedDrawEnvironmentDraws,
 		stream_.streamedDrawDynamicLightDraws,
 		stream_.streamedDrawScreenMapDraws,
-		stream_.streamedDrawVideoMapDraws );
+		stream_.streamedDrawVideoMapDraws,
+		stream_.streamedDrawShadowDraws,
+		stream_.streamedDrawBeamDraws,
+		stream_.streamedDrawPostProcessDraws );
 	RI().Printf( PRINT_ALL, "  dynamic stream draw material keys: accepted %u, rejected %u, texmod accepted %u, texmod rejected %u, env accepted %u, env rejected %u, dlight accepted %u, dlight rejected %u, screen accepted %u, screen rejected %u, video accepted %u, video rejected %u\n",
 		stream_.streamedDrawMaterialAccepted, stream_.streamedDrawMaterialRejected,
 		stream_.streamedDrawTexModAccepted, stream_.streamedDrawTexModRejected,
@@ -872,7 +888,7 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.msaaBlits,
 		postprocess_.ssaaBlits,
 		GLX_PostProcess_ResultName( postprocess_.lastResult ) );
-	RI().Printf( PRINT_ALL, "glx: stream draws %u/%u attempts, %u idx, %.2fMB/index %.2fMB/tex1 %.2fMB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, fallbacks %u, skips %u\n",
+	RI().Printf( PRINT_ALL, "glx: stream draws %u/%u attempts, %u idx, %.2fMB/index %.2fMB/tex1 %.2fMB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, shadow %u, beam %u, post %u, fallbacks %u, skips %u\n",
 		stream_.streamedDraws,
 		stream_.streamedDrawAttempts,
 		stream_.streamedDrawIndexes,
@@ -887,6 +903,9 @@ void RendererModule::PrintFrameCounters() const
 		stream_.streamedDrawDynamicLightDraws,
 		stream_.streamedDrawScreenMapDraws,
 		stream_.streamedDrawVideoMapDraws,
+		stream_.streamedDrawShadowDraws,
+		stream_.streamedDrawBeamDraws,
+		stream_.streamedDrawPostProcessDraws,
 		stream_.streamedDrawFallbacks,
 		stream_.streamedDrawSkips );
 	RI().Printf( PRINT_ALL, "glx: stream reservation last %u bytes at %u using %s, largest %u bytes, same-frame wrap rejects %u\n",
@@ -1087,7 +1106,7 @@ qboolean RendererModule::MaterialRendererActive() const
 }
 
 qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, int rgbGen, int alphaGen,
-	int tcGen0, int tcGen1, int texMods0, int texMods1, int multitextureEnv, qboolean fogPass )
+	int tcGen0, int tcGen1, int texMods0, int texMods1, int materialCombine, qboolean fogPass )
 {
 	MaterialRequest request {};
 
@@ -1099,7 +1118,7 @@ qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, i
 	request.tcGen1 = tcGen1;
 	request.texMods0 = texMods0;
 	request.texMods1 = texMods1;
-	request.multitextureEnv = multitextureEnv;
+	request.materialCombine = materialCombine;
 	request.fogPass = fogPass;
 
 	return GLX_Material_BindStage( &material_, request );
@@ -1133,6 +1152,21 @@ qboolean RendererModule::StreamDrawFogEnabled() const
 qboolean RendererModule::StreamDrawDepthFragmentEnabled() const
 {
 	return GLX_Stream_DrawDepthFragmentEnabled( stream_ );
+}
+
+qboolean RendererModule::StreamDrawShadowsEnabled() const
+{
+	return GLX_Stream_DrawShadowsEnabled( stream_ );
+}
+
+qboolean RendererModule::StreamDrawBeamsEnabled() const
+{
+	return GLX_Stream_DrawBeamsEnabled( stream_ );
+}
+
+qboolean RendererModule::StreamDrawPostProcessEnabled() const
+{
+	return GLX_Stream_DrawPostProcessEnabled( stream_ );
 }
 
 qboolean RendererModule::StreamDrawAllowsMaterial( int flags, unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 )
@@ -1426,7 +1460,7 @@ extern "C" void GLX_Renderer_OnOpenGLReady( const glconfig_t *config, const char
 	glx::g_module.OnOpenGLReady( config, extensions );
 }
 
-extern "C" void GLX_Renderer_Shutdown( refShutdownCode_t code )
+extern "C" void GLX_Renderer_Shutdown( int code )
 {
 	glx::g_module.Shutdown( code );
 }
@@ -1512,10 +1546,10 @@ extern "C" qboolean GLX_Renderer_MaterialRendererActive( void )
 
 extern "C" qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stateBits,
 	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
-	int multitextureEnv, qboolean fogPass )
+	int materialCombine, qboolean fogPass )
 {
 	return glx::g_module.BindMaterialStage( flags, stateBits, rgbGen, alphaGen,
-		tcGen0, tcGen1, texMods0, texMods1, multitextureEnv, fogPass );
+		tcGen0, tcGen1, texMods0, texMods1, materialCombine, fogPass );
 }
 
 extern "C" qboolean GLX_Renderer_BindFogMaterial( void )
@@ -1546,6 +1580,21 @@ extern "C" qboolean GLX_Renderer_StreamDrawFogEnabled( void )
 extern "C" qboolean GLX_Renderer_StreamDrawDepthFragmentEnabled( void )
 {
 	return glx::g_module.StreamDrawDepthFragmentEnabled();
+}
+
+extern "C" qboolean GLX_Renderer_StreamDrawShadowsEnabled( void )
+{
+	return glx::g_module.StreamDrawShadowsEnabled();
+}
+
+extern "C" qboolean GLX_Renderer_StreamDrawBeamsEnabled( void )
+{
+	return glx::g_module.StreamDrawBeamsEnabled();
+}
+
+extern "C" qboolean GLX_Renderer_StreamDrawPostProcessEnabled( void )
+{
+	return glx::g_module.StreamDrawPostProcessEnabled();
 }
 
 extern "C" qboolean GLX_Renderer_StreamDrawAllowsMaterial( int flags, unsigned int stateBits,

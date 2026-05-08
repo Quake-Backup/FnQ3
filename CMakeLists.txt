@@ -145,6 +145,14 @@ IF(FNQ3_AUDIO_LOOPBACK_TESTS)
 	target_compile_features(fnq3_audio_zone_tests PRIVATE cxx_std_17)
 	target_include_directories(fnq3_audio_zone_tests PRIVATE code/audio)
 	add_test(NAME fnq3_audio_zones COMMAND fnq3_audio_zone_tests)
+	add_test(NAME fnq3_audio_zone_authoring
+		COMMAND $<TARGET_FILE:fnq3-audiozonesc> -o "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/audiozone_authoring_test.azb" "${CMAKE_CURRENT_SOURCE_DIR}/tests/audio/authoring_metadata.audiozones")
+	add_test(NAME fnq3_audio_zone_authoring_audit
+		COMMAND $<TARGET_FILE:fnq3-audiozonesc> --audit --strict --samples 512 "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/audiozone_authoring_test.azb")
+	set_tests_properties(fnq3_audio_zone_authoring PROPERTIES FIXTURES_SETUP fnq3_audio_zone_authoring_fixture)
+	set_tests_properties(fnq3_audio_zone_authoring_audit PROPERTIES
+		DEPENDS fnq3_audio_zone_authoring
+		FIXTURES_REQUIRED fnq3_audio_zone_authoring_fixture)
 
 	ADD_EXECUTABLE(fnq3_audio_recovery_tests tests/audio/recovery_policy_tests.cpp)
 	target_compile_features(fnq3_audio_recovery_tests PRIVATE cxx_std_17)
@@ -159,6 +167,14 @@ IF(FNQ3_AUDIO_LOOPBACK_TESTS)
 	ENDIF()
 	add_test(NAME fnq3_audio_loopback COMMAND fnq3_audio_loopback_tests)
 	set_tests_properties(fnq3_audio_loopback PROPERTIES SKIP_RETURN_CODE 77)
+
+	find_package(Python3 COMPONENTS Interpreter)
+	IF(Python3_Interpreter_FOUND)
+		add_test(NAME fnq3_audio_zone_sweep_script
+			COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/audio/audio_zone_sweep_tests.py")
+		add_test(NAME fnq3_audio_zone_material_map
+			COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/audio/audio_zone_material_map_tests.py" $<TARGET_FILE:fnq3-audiozonesc>)
+	ENDIF()
 ENDIF()
 
 IF(FNQ3_GLX_LOGIC_TESTS)
@@ -168,9 +184,13 @@ IF(FNQ3_GLX_LOGIC_TESTS)
 	target_include_directories(fnq3_glx_logic_tests PRIVATE
 		code/rendererglx
 		code/qcommon
-		code/renderercommon
-		code/renderer)
+		code/renderercommon)
 	add_test(NAME fnq3_glx_logic COMMAND fnq3_glx_logic_tests)
+	find_package(Python3 COMPONENTS Interpreter)
+	IF(Python3_Interpreter_FOUND)
+		add_test(NAME fnq3_glx_header_boundary
+			COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/glx/glx_header_boundary_tests.py")
+	ENDIF()
 ENDIF()
 
 # renderers

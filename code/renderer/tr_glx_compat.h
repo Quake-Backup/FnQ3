@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define TR_GLX_COMPAT_H
 
 #include "tr_local.h"
+#include "../renderercommon/tr_glx_public.h"
 
 #ifdef RENDERER_GLX
 #include "../rendererglx/glx_module.h"
@@ -36,22 +37,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #endif
 #endif
 
-#ifndef RENDERER_GLX
-typedef struct glxStreamReservation_s {
-	unsigned int buffer;
-	unsigned int offset;
-	unsigned int bytes;
-	void *ptr;
-	int strategy;
-	int mapped;
-	int committed;
-} glxStreamReservation_t;
-#endif
-
 /*
  * The legacy OpenGL renderer is the temporary compatibility substrate for GLx.
- * Keep the cross-boundary vocabulary here so legacy draw code does not reach
+ * Keep module calls behind this facade so legacy draw code does not reach
  * directly into GLx internals as that substrate is carved into explicit pieces.
+ * Shared flag and payload vocabulary lives in renderercommon/tr_glx_public.h.
  */
 
 static ID_INLINE int GLX_CompatAlignInt( int value, int alignment )
@@ -231,6 +221,33 @@ static ID_INLINE qboolean GLX_CompatStreamDrawDepthFragmentEnabled( void )
 #endif
 }
 
+static ID_INLINE qboolean GLX_CompatStreamDrawShadowsEnabled( void )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_StreamDrawShadowsEnabled();
+#else
+	return qfalse;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatStreamDrawBeamsEnabled( void )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_StreamDrawBeamsEnabled();
+#else
+	return qfalse;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatStreamDrawPostProcessEnabled( void )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_StreamDrawPostProcessEnabled();
+#else
+	return qfalse;
+#endif
+}
+
 static ID_INLINE void GLX_CompatRecordStreamDrawSkip( int reason )
 {
 #ifdef RENDERER_GLX
@@ -294,6 +311,286 @@ static ID_INLINE void GLX_CompatRecordStreamDrawResult( int numVertexes, int num
 	(void)depthFragment;
 	(void)materialFlags;
 	(void)success;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
+	const void *xyz, int xyzStride, unsigned int primitive, int materialFlags )
+{
+#ifdef RENDERER_GLX
+	glxStreamReservation_t reservation;
+	qboolean ok = qtrue;
+	int xyzBytes;
+	int totalBytes;
+	GLint oldArrayBuffer = 0;
+
+	if ( !GLX_CompatStreamDrawEnabled() ) {
+		return qfalse;
+	}
+	if ( !qglBindBufferARB ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_NO_BIND_BUFFER );
+		return qfalse;
+	}
+	if ( vertexCount <= 0 || !xyz || xyzStride <= 0 ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_BAD_INPUT );
+		return qfalse;
+	}
+
+	xyzBytes = vertexCount * xyzStride;
+	totalBytes = GLX_CompatAlignInt( xyzBytes, 64 );
+
+	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
+		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	if ( !GLX_CompatStreamUploadAt( &reservation, 0, xyz, xyzBytes ) ) {
+		ok = qfalse;
+	}
+	GLX_CompatStreamCommit( &reservation );
+
+	if ( !ok ) {
+		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_NONE );
+	qglVertexPointer( 3, GL_FLOAT, xyzStride, (const GLvoid *)(intptr_t)( reservation.offset ) );
+
+	GLX_CompatRecordDraw( vertexCount, GLX_DRAW_STREAM_GENERIC );
+	qglDrawArrays( primitive, 0, vertexCount );
+
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_NONE );
+	qglVertexPointer( 3, GL_FLOAT, xyzStride, xyz );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+
+	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
+		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
+	return qtrue;
+#else
+	(void)vertexCount;
+	(void)xyz;
+	(void)xyzStride;
+	(void)primitive;
+	(void)materialFlags;
+	return qfalse;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCount,
+	const void *xyz, int xyzStride, const void *texcoords, int texcoordStride,
+	unsigned int primitive, int materialFlags )
+{
+#ifdef RENDERER_GLX
+	glxStreamReservation_t reservation;
+	qboolean ok = qtrue;
+	int xyzBytes;
+	int texcoordElementStride;
+	int texcoordBytes;
+	int texcoordOffset;
+	int totalBytes;
+	GLint oldArrayBuffer = 0;
+
+	if ( !GLX_CompatStreamDrawEnabled() ) {
+		return qfalse;
+	}
+	if ( !qglBindBufferARB ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_NO_BIND_BUFFER );
+		return qfalse;
+	}
+	if ( vertexCount <= 0 || !xyz || xyzStride <= 0 || !texcoords || texcoordStride < 0 ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_BAD_INPUT );
+		return qfalse;
+	}
+
+	xyzBytes = vertexCount * xyzStride;
+	texcoordElementStride = texcoordStride > 0 ? texcoordStride : (int)( 2 * sizeof( float ) );
+	texcoordBytes = vertexCount * texcoordElementStride;
+	texcoordOffset = GLX_CompatAlignInt( xyzBytes, 64 );
+	totalBytes = GLX_CompatAlignInt( texcoordOffset + texcoordBytes, 64 );
+
+	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
+		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	if ( !GLX_CompatStreamUploadAt( &reservation, 0, xyz, xyzBytes ) ) {
+		ok = qfalse;
+	}
+	if ( !GLX_CompatStreamUploadAt( &reservation, texcoordOffset, texcoords, texcoordBytes ) ) {
+		ok = qfalse;
+	}
+	GLX_CompatStreamCommit( &reservation );
+
+	if ( !ok ) {
+		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, xyzStride, (const GLvoid *)(intptr_t)( reservation.offset ) );
+	qglTexCoordPointer( 2, GL_FLOAT, texcoordStride,
+		(const GLvoid *)(intptr_t)( reservation.offset + texcoordOffset ) );
+
+	GLX_CompatRecordDraw( vertexCount, GLX_DRAW_STREAM_GENERIC );
+	qglDrawArrays( primitive, 0, vertexCount );
+
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, xyzStride, xyz );
+	qglTexCoordPointer( 2, GL_FLOAT, texcoordStride, texcoords );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+
+	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
+		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
+	return qtrue;
+#else
+	(void)vertexCount;
+	(void)xyz;
+	(void)xyzStride;
+	(void)texcoords;
+	(void)texcoordStride;
+	(void)primitive;
+	(void)materialFlags;
+	return qfalse;
+#endif
+}
+
+static ID_INLINE int GLX_CompatArrayElementBytes( int components, unsigned int type )
+{
+	if ( components <= 0 ) {
+		return 0;
+	}
+
+	switch ( type ) {
+	case GL_FLOAT:
+		return components * (int)sizeof( float );
+	case GL_UNSIGNED_BYTE:
+		return components * (int)sizeof( byte );
+	default:
+		return 0;
+	}
+}
+
+static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int vertexCount,
+	const void *xyz, int xyzStride, const void *texcoords, int texcoordStride,
+	const void *colors, int colorComponents, unsigned int colorType, int colorStride,
+	unsigned int primitive, int materialFlags )
+{
+#ifdef RENDERER_GLX
+	glxStreamReservation_t reservation;
+	qboolean ok = qtrue;
+	int xyzBytes;
+	int texcoordElementStride;
+	int texcoordBytes;
+	int colorElementBytes;
+	int colorElementStride;
+	int colorBytes;
+	int texcoordOffset;
+	int colorOffset;
+	int totalBytes;
+	GLint oldArrayBuffer = 0;
+
+	if ( !GLX_CompatStreamDrawEnabled() ) {
+		return qfalse;
+	}
+	if ( !qglBindBufferARB ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_NO_BIND_BUFFER );
+		return qfalse;
+	}
+
+	colorElementBytes = GLX_CompatArrayElementBytes( colorComponents, colorType );
+	if ( vertexCount <= 0 || !xyz || xyzStride <= 0 || !texcoords || texcoordStride < 0 ||
+		!colors || colorElementBytes <= 0 || colorStride < 0 ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_BAD_INPUT );
+		return qfalse;
+	}
+
+	xyzBytes = vertexCount * xyzStride;
+	texcoordElementStride = texcoordStride > 0 ? texcoordStride : (int)( 2 * sizeof( float ) );
+	texcoordBytes = vertexCount * texcoordElementStride;
+	colorElementStride = colorStride > 0 ? colorStride : colorElementBytes;
+	colorBytes = vertexCount * colorElementStride;
+	texcoordOffset = GLX_CompatAlignInt( xyzBytes, 64 );
+	colorOffset = GLX_CompatAlignInt( texcoordOffset + texcoordBytes, 64 );
+	totalBytes = GLX_CompatAlignInt( colorOffset + colorBytes, 64 );
+
+	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
+		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	if ( !GLX_CompatStreamUploadAt( &reservation, 0, xyz, xyzBytes ) ) {
+		ok = qfalse;
+	}
+	if ( !GLX_CompatStreamUploadAt( &reservation, texcoordOffset, texcoords, texcoordBytes ) ) {
+		ok = qfalse;
+	}
+	if ( !GLX_CompatStreamUploadAt( &reservation, colorOffset, colors, colorBytes ) ) {
+		ok = qfalse;
+	}
+	GLX_CompatStreamCommit( &reservation );
+
+	if ( !ok ) {
+		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+		return qfalse;
+	}
+
+	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, xyzStride, (const GLvoid *)(intptr_t)( reservation.offset ) );
+	qglTexCoordPointer( 2, GL_FLOAT, texcoordStride,
+		(const GLvoid *)(intptr_t)( reservation.offset + texcoordOffset ) );
+	qglColorPointer( colorComponents, colorType, colorStride,
+		(const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
+
+	GLX_CompatRecordDraw( vertexCount, GLX_DRAW_STREAM_GENERIC );
+	qglDrawArrays( primitive, 0, vertexCount );
+
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, xyzStride, xyz );
+	qglTexCoordPointer( 2, GL_FLOAT, texcoordStride, texcoords );
+	qglColorPointer( colorComponents, colorType, colorStride, colors );
+	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+
+	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
+		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
+	return qtrue;
+#else
+	(void)vertexCount;
+	(void)xyz;
+	(void)xyzStride;
+	(void)texcoords;
+	(void)texcoordStride;
+	(void)colors;
+	(void)colorComponents;
+	(void)colorType;
+	(void)colorStride;
+	(void)primitive;
+	(void)materialFlags;
+	return qfalse;
 #endif
 }
 
@@ -387,6 +684,22 @@ static ID_INLINE void GLX_CompatRecordMaterialStage( const shaderStage_t *pStage
 #endif
 }
 
+static ID_INLINE int GLX_CompatMaterialCombineForGLEnv( int mtEnv )
+{
+	switch ( mtEnv ) {
+	case GL_MODULATE:
+		return GLX_MATERIAL_COMBINE_MODULATE;
+	case GL_ADD:
+		return GLX_MATERIAL_COMBINE_ADD;
+	case GL_REPLACE:
+		return GLX_MATERIAL_COMBINE_REPLACE;
+	case GL_DECAL:
+		return GLX_MATERIAL_COMBINE_DECAL;
+	default:
+		return GLX_MATERIAL_COMBINE_INVALID;
+	}
+}
+
 static ID_INLINE qboolean GLX_CompatStreamDrawAllowsMaterial( int flags,
 	unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 )
 {
@@ -411,7 +724,8 @@ static ID_INLINE qboolean GLX_CompatBindMaterialStage( int flags, unsigned int s
 {
 #ifdef RENDERER_GLX
 	return GLX_Renderer_BindMaterialStage( flags, stateBits, rgbGen, alphaGen,
-		tcGen0, tcGen1, texMods0, texMods1, multitextureEnv, fogPass );
+		tcGen0, tcGen1, texMods0, texMods1,
+		GLX_CompatMaterialCombineForGLEnv( multitextureEnv ), fogPass );
 #else
 	(void)flags;
 	(void)stateBits;

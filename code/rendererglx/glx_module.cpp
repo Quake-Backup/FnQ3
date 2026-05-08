@@ -236,7 +236,7 @@ void RendererModule::OnOpenGLReady( const glconfig_t *config, const char *extens
 	GLX_Debug_LabelObject( debug_, GL_BUFFER, stream_.buffer, "GLx dynamic stream ring" );
 	GLX_Profiler_OnOpenGLReady( &profiler_, caps_ );
 
-	RI().Printf( PRINT_ALL, "GLx renderer bootstrap: tier %s, GL %i.%i, material %s, stream %s, timer query %s, KHR_debug %s\n",
+	RI().Printf( PRINT_ALL, "GLx renderer bootstrap: tier %s, GL %i.%i, material %s, stream %s, timer query %s, debug output %s\n",
 		GLX_Caps_TierName( caps_.tier ), caps_.major, caps_.minor,
 		BoolName( GLX_Material_Active( material_ ) ),
 		GLX_Stream_StrategyName( stream_.strategy ),
@@ -294,11 +294,15 @@ void RendererModule::PrintCaps() const
 	RI().Printf( PRINT_ALL, "  draw indirect: %s\n", BoolName( caps_.features.drawIndirect ) );
 	RI().Printf( PRINT_ALL, "  multi draw indirect: %s\n", BoolName( caps_.features.multiDrawIndirect ) );
 	RI().Printf( PRINT_ALL, "  direct state access: %s\n", BoolName( caps_.features.directStateAccess ) );
+	RI().Printf( PRINT_ALL, "  debug context: %s\n", BoolName( caps_.features.debugContext ) );
+	RI().Printf( PRINT_ALL, "  debug output: %s\n", BoolName( caps_.features.debugOutput ) );
+	RI().Printf( PRINT_ALL, "  KHR_debug labels/groups: %s\n", BoolName( caps_.features.khrDebug ) );
 	RI().Printf( PRINT_ALL, "  timer query feature: %s\n", BoolName( caps_.features.timerQuery ) );
 	RI().Printf( PRINT_ALL, "  timer query active: %s\n", BoolName( GLX_Profiler_TimerReady( profiler_ ) ) );
-	RI().Printf( PRINT_ALL, "  KHR_debug callback: %s\n", BoolName( GLX_Debug_CallbackInstalled( debug_ ) ) );
-	RI().Printf( PRINT_ALL, "  KHR_debug groups: %s\n",
-		BoolName( debug_.r_glxDebugGroups && debug_.r_glxDebugGroups->integer ? qtrue : qfalse ) );
+	RI().Printf( PRINT_ALL, "  debug output callback: %s\n", BoolName( GLX_Debug_CallbackInstalled( debug_ ) ) );
+	RI().Printf( PRINT_ALL, "  KHR_debug groups: %s requested, %s available\n",
+		BoolName( debug_.r_glxDebugGroups && debug_.r_glxDebugGroups->integer ? qtrue : qfalse ),
+		BoolName( debug_.fns.PushDebugGroup && debug_.fns.PopDebugGroup ? qtrue : qfalse ) );
 	RI().Printf( PRINT_ALL, "  material renderer: %s, ready %s, GLSL %s, programs %i\n",
 		material_.r_glxMaterialRenderer && material_.r_glxMaterialRenderer->integer ? "enabled" : "disabled",
 		BoolName( material_.ready ),

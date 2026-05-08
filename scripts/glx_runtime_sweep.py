@@ -78,6 +78,15 @@ PROFILE_CVARS = {
     },
 }
 
+PROFILE_MAPS = {
+    "baseline": "q3dm1",
+    "glx-world": "q3dm1",
+    "glx-material": "q3dm1",
+    "glx-bloom": "q3dm1",
+    "glx-parity": "q3dm1",
+    "glx-stress": "q3dm1,q3dm17",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -116,8 +125,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--maps",
-        default="q3dm1",
-        help="Comma-separated maps for screenshot sweeps. Empty disables map screenshots.",
+        default=None,
+        help=(
+            "Comma-separated maps for screenshot sweeps. Defaults to the selected "
+            "profile map set; empty disables map screenshots."
+        ),
     )
     parser.add_argument(
         "--demos",
@@ -449,7 +461,8 @@ def main() -> int:
     basepath = args.basepath.resolve() if args.basepath else exe.parent.resolve()
     renderers = split_csv(args.renderers)
     switch_sequence = split_csv(args.switch_sequence) if args.switch_sequence else list(renderers)
-    maps = split_csv(args.maps)
+    maps_value = args.maps if args.maps is not None else PROFILE_MAPS.get(args.profile, "q3dm1")
+    maps = split_csv(maps_value)
     demos = split_csv(args.demos)
 
     validate_renderers(renderers)

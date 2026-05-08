@@ -20,7 +20,7 @@ Fappin' and Fraggin'
 - Optional player highlighting with **rimlight** and **stencil border effects**, per-mode team or free colors, and teammate/enemy override colors. See the [Visuals guide](docs/VISUALS.md).
 - Flexible 4:3-aware **aspect correction** for HUDs, menus, UI model widgets, and cinematics, with sensible widescreen options when you want them. See the [Aspect Correction guide](docs/ASPECT_CORRECTION.md).
 - **Enhanced console** functionality, including configurable scaling, smoother scrolling, mouse interaction, text selection, drag and drop, and an optional live tab-completion popup. See the [Console guide](docs/CONSOLE.md).
-- An expanded **screenshot system** with pattern-based naming, optional view metadata sidecars, watermark compositing, and OpenGL cube-map capture. See the [Screenshot guide](docs/SCREENSHOTS.md).
+- An expanded **screenshot system** with pattern-based naming, optional view metadata sidecars, watermark compositing, and OpenGL-lineage cube-map capture. See the [Screenshot guide](docs/SCREENSHOTS.md).
 - CPMA/CNQ3-style **rainbow text color escapes**, with live preview right in the console input line.
 - **SDL3** support for video, audio, and input on modern platforms.
 - OpenAL is the default audio backend, with HRTF-aware positional audio, device/HRTF/output selection, **spatial reverb, occlusion**, tone shaping, latency diagnostics, and an easy fallback to the original mixer. See the [Audio guide](docs/AUDIO.md).

@@ -131,6 +131,17 @@ static const char *GLX_Debug_SeverityName( GLenum severity )
 	}
 }
 
+static void *GLX_Debug_GetProc( const char *name, const char *fallbackName = nullptr )
+{
+	void *proc = RI().GL_GetProcAddress ? RI().GL_GetProcAddress( name ) : nullptr;
+
+	if ( !proc && fallbackName ) {
+		proc = RI().GL_GetProcAddress( fallbackName );
+	}
+
+	return proc;
+}
+
 static void APIENTRY GLX_Debug_Callback( GLenum source, GLenum type, GLuint id, GLenum severity,
 	GLsizei length, const GLchar *message, const void *userParam )
 {
@@ -156,7 +167,7 @@ void GLX_Debug_RegisterCvars( DebugState *state )
 	}
 
 	state->r_glxDebug = RI().Cvar_Get( "r_glxDebug", "0", CVAR_ARCHIVE_ND | CVAR_LATCH | CVAR_DEVELOPER );
-	RI().Cvar_SetDescription( state->r_glxDebug, "Enable GLx KHR_debug callback wiring when the driver exposes it. Requires vid_restart." );
+	RI().Cvar_SetDescription( state->r_glxDebug, "Request a GLx debug context when supported and enable debug-output callback wiring when the driver exposes KHR_debug or ARB_debug_output. Requires vid_restart." );
 
 	state->r_glxDebugVerbose = RI().Cvar_Get( "r_glxDebugVerbose", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxDebugVerbose, "Print low-volume GLx debug notifications in addition to warnings and errors." );
@@ -175,30 +186,44 @@ void GLX_Debug_OnOpenGLReady( DebugState *state, const Capabilities &caps )
 	state->callbackInstalled = qfalse;
 	state->groupsPushed = 0;
 
-	if ( !caps.features.khrDebug || !RI().GL_GetProcAddress ) {
+	if ( !caps.features.debugOutput || !RI().GL_GetProcAddress ) {
 		return;
 	}
 
-	state->fns.Enable = reinterpret_cast<PFNGLXENABLEPROC>( RI().GL_GetProcAddress( "glEnable" ) );
-	state->fns.DebugMessageCallback = reinterpret_cast<PFNGLXDEBUGMESSAGECALLBACKPROC>( RI().GL_GetProcAddress( "glDebugMessageCallback" ) );
-	state->fns.DebugMessageControl = reinterpret_cast<PFNGLXDEBUGMESSAGECONTROLPROC>( RI().GL_GetProcAddress( "glDebugMessageControl" ) );
-	state->fns.ObjectLabel = reinterpret_cast<PFNGLXOBJECTLABELPROC>( RI().GL_GetProcAddress( "glObjectLabel" ) );
-	state->fns.PushDebugGroup = reinterpret_cast<PFNGLXPUSHDEBUGGROUPPROC>( RI().GL_GetProcAddress( "glPushDebugGroup" ) );
-	state->fns.PopDebugGroup = reinterpret_cast<PFNGLXPOPDEBUGGROUPPROC>( RI().GL_GetProcAddress( "glPopDebugGroup" ) );
+	state->fns.Enable = reinterpret_cast<PFNGLXENABLEPROC>( GLX_Debug_GetProc( "glEnable" ) );
+	state->fns.DebugMessageCallback = reinterpret_cast<PFNGLXDEBUGMESSAGECALLBACKPROC>(
+		GLX_Debug_GetProc( "glDebugMessageCallback", "glDebugMessageCallbackARB" ) );
+	state->fns.DebugMessageControl = reinterpret_cast<PFNGLXDEBUGMESSAGECONTROLPROC>(
+		GLX_Debug_GetProc( "glDebugMessageControl", "glDebugMessageControlARB" ) );
+
+	if ( caps.features.khrDebug ) {
+		state->fns.ObjectLabel = reinterpret_cast<PFNGLXOBJECTLABELPROC>( GLX_Debug_GetProc( "glObjectLabel" ) );
+		state->fns.PushDebugGroup = reinterpret_cast<PFNGLXPUSHDEBUGGROUPPROC>( GLX_Debug_GetProc( "glPushDebugGroup" ) );
+		state->fns.PopDebugGroup = reinterpret_cast<PFNGLXPOPDEBUGGROUPPROC>( GLX_Debug_GetProc( "glPopDebugGroup" ) );
+	}
 
 	if ( !state->r_glxDebug || !state->r_glxDebug->integer ) {
 		return;
 	}
 
-	if ( !state->fns.Enable || !state->fns.DebugMessageCallback ) {
-		RI().Printf( PRINT_WARNING, "GLx debug requested, but KHR_debug callback functions are unavailable.\n" );
+	if ( !state->fns.DebugMessageCallback ) {
+		RI().Printf( PRINT_WARNING, "GLx debug requested, but debug-output callback functions are unavailable.\n" );
 		return;
 	}
 
-	state->fns.Enable( GL_DEBUG_OUTPUT );
-	state->fns.Enable( GL_DEBUG_OUTPUT_SYNCHRONOUS );
+	if ( caps.features.khrDebug && !state->fns.Enable ) {
+		RI().Printf( PRINT_WARNING, "GLx KHR_debug requested, but glEnable is unavailable.\n" );
+		return;
+	}
 
-	if ( state->fns.DebugMessageControl && !GLX_Debug_Verbose( *state ) ) {
+	if ( state->fns.Enable ) {
+		if ( caps.features.khrDebug ) {
+			state->fns.Enable( GL_DEBUG_OUTPUT );
+		}
+		state->fns.Enable( GL_DEBUG_OUTPUT_SYNCHRONOUS );
+	}
+
+	if ( caps.features.khrDebug && state->fns.DebugMessageControl && !GLX_Debug_Verbose( *state ) ) {
 		state->fns.DebugMessageControl( GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr, GL_FALSE );
 	}
 

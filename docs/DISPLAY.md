@@ -9,9 +9,10 @@ For HUD, menu, and cinematic layout on widescreen displays, use the separate [As
 `cl_renderer` selects the rendering backend and requires `vid_restart`.
 
 - `cl_renderer opengl`: Best choice if you want the full bloom feature set. OpenGL exposes the extra bloom shape controls, the lens reflection effect, and the HUD-inclusive `r_bloom 2` mode.
+- `cl_renderer glx`: Experimental OpenGL-lineage renderer available only in builds made with `USE_GLX=1` or `-DUSE_GLX=ON`. It preserves the OpenGL display and bloom surface while GLx-owned capability, streaming, static-world, material, and profiling paths are brought up behind compatibility fallbacks.
 - `cl_renderer vulkan`: Modern backend with the same core display path controls for FBO rendering, HDR, multisampling, supersampling, render scaling, gamma, and greyscale. Bloom is available here too, but the exposed control set is smaller.
 
-If you are tuning bloom heavily, start on `opengl`. If you want the simpler cross-platform path and do not need the OpenGL-only bloom extras, `vulkan` is fine.
+If you are tuning bloom heavily, start on `opengl`. Use `glx` for renderer parity testing or GLx diagnostics. If you want the simpler cross-platform path and do not need the OpenGL-only bloom extras, `vulkan` is fine.
 
 ## Display Modes And Window Behavior
 
@@ -147,7 +148,7 @@ Bloom extracts bright areas from the rendered frame, blurs them through a downsa
 
 - `r_fbo 1` is required.
 - OpenGL and Vulkan both support bloom.
-- OpenGL exposes the largest bloom control set.
+- OpenGL exposes the largest bloom control set. GLx preserves that same control surface while it is experimental.
 - Vulkan currently exposes the shared extraction and intensity controls, but not the OpenGL-only shape controls.
 
 ### Shared Bloom Controls
@@ -179,9 +180,9 @@ Recommended tuning order:
 4. Adjust `r_bloom_modulate` if you want a tighter or more contrast-driven response.
 5. Adjust `r_bloom_intensity` last.
 
-### OpenGL-Only Bloom Controls
+### OpenGL And GLx Bloom Controls
 
-These settings are currently specific to the OpenGL renderer.
+These settings are currently specific to the OpenGL-lineage renderers, `opengl` and experimental `glx`.
 
 - `r_bloom_passes`: Number of downsampled bloom levels used in the effect. More passes generally create a wider haze and cost more GPU time. The engine may clamp the effective chain length based on hardware limits or very small internal render sizes.
 - `r_bloom_blend_base`: Which downsampled level to start blending from. Higher values skip the tighter levels and bias the result toward a broader, softer haze.
@@ -267,18 +268,18 @@ If bloom seems too weak:
 - Lower `r_bloom_threshold`.
 - Use `r_bloom_threshold_mode 0` or `2`.
 - Raise `r_bloom_intensity`.
-- On OpenGL, increase `r_bloom_passes` or `r_bloom_filter_size`.
+- On OpenGL or GLx, increase `r_bloom_passes` or `r_bloom_filter_size`.
 
 If bloom is making the whole frame look milky:
 
 - Raise `r_bloom_threshold`.
 - Lower `r_bloom_intensity`.
 - Use `r_bloom_threshold_mode 2`.
-- On OpenGL, lower `r_bloom_passes`, lower `r_bloom_filter_size`, or reduce `r_bloom_blend_base`.
+- On OpenGL or GLx, lower `r_bloom_passes`, lower `r_bloom_filter_size`, or reduce `r_bloom_blend_base`.
 
 If HUD elements are glowing and you do not want that:
 
-- On OpenGL, use `r_bloom 1` instead of `r_bloom 2`.
+- On OpenGL or GLx, use `r_bloom 1` instead of `r_bloom 2`.
 
 If nothing happens at all:
 
@@ -301,7 +302,7 @@ Use `vid_restart` after changes to:
 - `r_ext_multisample`
 - `r_renderWidth`, `r_renderHeight`, `r_renderScale`
 - `r_ext_supersample`
-- OpenGL `r_bloom_passes`
+- OpenGL or GLx `r_bloom_passes`
 - Vulkan `r_bloom`
 
 Settings that are usually safe to tune live:
@@ -314,9 +315,9 @@ Settings that are usually safe to tune live:
 - `r_bloom_threshold_mode`
 - `r_bloom_modulate`
 - `r_bloom_intensity`
-- OpenGL `r_bloom_blend_base`
-- OpenGL `r_bloom_filter_size`
-- OpenGL `r_bloom_reflection`
+- OpenGL or GLx `r_bloom_blend_base`
+- OpenGL or GLx `r_bloom_filter_size`
+- OpenGL or GLx `r_bloom_reflection`
 
 If a live change does not seem to take effect immediately, `vid_restart` is the safe fallback.
 

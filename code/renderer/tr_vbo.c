@@ -201,7 +201,7 @@ static void GLX_RecordStaticWorldPacketGroup( const shader_t *shader, int surfac
 		indexBytes = indexes * (int)sizeof( tess.indexes[0] );
 	}
 
-	GLX_Renderer_RecordStaticWorldPacket( shader && shader->name ? shader->name : "<unnamed>",
+	GLX_Renderer_RecordStaticWorldPacket( shader ? shader->name : "<unnamed>",
 		shader ? (int)shader->sort : 0, surfaces, vertexes, indexes, firstItem, itemCount,
 		vertexOffset, vertexBytes, indexOffset, indexBytes,
 		shaderStagePasses, GLX_StaticShaderBatchFlags( shader ) );
@@ -1541,7 +1541,9 @@ static void VBO_AddItemRangeToIBOBuffer( int offset, int length, int firstItem, 
 {
 	vbo_t *vbo = &world_vbo;
 	ibo_item_t *it;
+#ifdef RENDERER_GLX
 	int itemIndex = vbo->ibo_items_count;
+#endif
 
 	it = vbo->ibo_items + vbo->ibo_items_count++;
 
@@ -1573,7 +1575,7 @@ static void VBO_RenderIBOItems( void )
 			GLX_Renderer_StaticWorldDrawDeviceRunsFiltered( vbo->ibo_items_count,
 				vbo->ibo_counts, vbo->ibo_offsets, vbo->ibo_first_items, vbo->ibo_item_counts,
 				vbo->ibo_drawn, GL_INDEX_TYPE, (int)sizeof( glIndex_t ),
-				tess.shader && tess.shader->name ? tess.shader->name : "<unnamed>",
+				tess.shader ? tess.shader->name : "<unnamed>",
 				tess.shader ? (int)tess.shader->sort : 0,
 				curr_index_bind && curr_index_bind != VBO_world_indexes ? qtrue : qfalse );
 		}
@@ -1588,7 +1590,7 @@ static void VBO_RenderIBOItems( void )
 				vbo->ibo_items[ i ].offset, vbo->ibo_first_items ? vbo->ibo_first_items[ i ] : 0,
 				vbo->ibo_item_counts ? vbo->ibo_item_counts[ i ] : 0,
 				GL_INDEX_TYPE, (int)sizeof( glIndex_t ),
-				tess.shader && tess.shader->name ? tess.shader->name : "<unnamed>",
+				tess.shader ? tess.shader->name : "<unnamed>",
 				tess.shader ? (int)tess.shader->sort : 0,
 				curr_index_bind && curr_index_bind != VBO_world_indexes ? qtrue : qfalse ) ) {
 				continue;
@@ -1611,7 +1613,7 @@ static void VBO_RenderSoftItems( void )
 #ifdef RENDERER_GLX
 		if ( GLX_Renderer_StaticWorldDrawSoftIndexes( (int)vbo->soft_buffer_indexes,
 			vbo->soft_buffer, GL_INDEX_TYPE, (int)sizeof( glIndex_t ),
-			tess.shader && tess.shader->name ? tess.shader->name : "<unnamed>",
+			tess.shader ? tess.shader->name : "<unnamed>",
 			tess.shader ? (int)tess.shader->sort : 0,
 			curr_vertex_bind && curr_vertex_bind != VBO_world_data ? qtrue : qfalse ) ) {
 			return;
@@ -1701,7 +1703,7 @@ static void VBO_PrepareQueues( void )
 	GLX_Renderer_RecordStaticWorldDeviceRuns( vbo->ibo_items_count,
 		vbo->ibo_counts, vbo->ibo_offsets, vbo->ibo_first_items, vbo->ibo_item_counts,
 		(int)sizeof( glIndex_t ),
-		tess.shader && tess.shader->name ? tess.shader->name : "<unnamed>",
+		tess.shader ? tess.shader->name : "<unnamed>",
 		tess.shader ? (int)tess.shader->sort : 0 );
 #endif
 }

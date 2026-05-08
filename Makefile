@@ -176,6 +176,10 @@ ifndef USE_SYSTEM_VORBIS
   USE_SYSTEM_VORBIS=1
 endif
 
+ifeq ($(RENDERER_DEFAULT),glx)
+  USE_GLX=1
+endif
+
 ifeq ($(USE_RENDERER_DLOPEN),0)
   ifeq ($(RENDERER_DEFAULT),opengl)
     USE_OPENGL=1

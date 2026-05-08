@@ -37,8 +37,8 @@ The bootstrap modules currently provide:
 - `glxpostprocess` command output for FBO readiness, internal render target sizing, HDR/render-scale state, final gamma output, bloom chain creation, bloom pass mode, and screen-map/MSAA/SSAA blits.
 - `glxstaticworld [limit]`, `glxstaticworld hot [limit]`, `glxstaticworld commands [limit]`, and `glxstaticworld spans [limit]` command output for static-world cache, arena, queue, packet item ranges, draw-range inspection, packet heat ranking, indirect command inspection, and MDI span diagnostics.
 - `glxstreamtest` developer command for exercising one dynamic stream reservation/upload/commit without changing scene rendering.
-- `r_glxDebug` and `r_glxDebugVerbose` cvars for KHR_debug callback setup when the driver exposes it.
-- `r_glxDebugGroups` for optional KHR_debug groups around GLx-observed shader batch submission.
+- `r_glxDebug` and `r_glxDebugVerbose` cvars for platform debug-context requests plus debug-output callback setup when the driver exposes `KHR_debug` or `ARB_debug_output`.
+- `r_glxDebugGroups` for optional `KHR_debug` groups around GLx-observed shader batch submission.
 - `r_glxGpuTiming` for non-blocking backend GPU timing with timer queries when supported.
 - `r_glxPostProcessDebug` for optional logging of GLx-observed FBO, render-scale, gamma, and bloom parity events.
 - `r_glxWorldRenderer` for enabling the compatibility-first GLx static world renderer bundle with per-draw fallback.
@@ -72,8 +72,8 @@ This preserves compatibility while creating the measurement and capability surfa
 
 The current C++ boundary is intentionally small and split by ownership:
 
-- `glx_caps.*`: one-time OpenGL version, extension, feature, and capability-tier detection.
-- `glx_debug.*`: KHR_debug callback, object labels, debug groups, and debug-output filtering.
+- `glx_caps.*`: one-time OpenGL version, extension, debug-context state, feature, and capability-tier detection.
+- `glx_debug.*`: debug-output callback wiring, `KHR_debug` object labels/groups, and notification filtering.
 - `glx_profiler.*`: backend frame counters, rotating timer-query collection, shader-batch/material telemetry, and draw-call/index counters.
 - `glx_postprocess.*`: compatibility FBO lifecycle telemetry, render-scale/resolve counters, final gamma result tracking, and bloom parity accounting for the shared OpenGL postprocess path.
 - `glx_static_world.*`: static BSP/VBO cache accounting, GLx-owned packet manifest snapshots, optional static arena uploads/draw binding, optional GLx device-run submission, and prepared-queue split telemetry.
@@ -108,7 +108,7 @@ Typical local run from the repository root:
 python scripts/glx_runtime_sweep.py --exe code/win32/msvc2017/output/fnquake3.glx.x64.exe --basepath code/win32/msvc2017/output --renderers opengl,glx --switch-sequence opengl,glx,opengl,glx --maps q3dm1 --demos demo1
 ```
 
-Use `--profile baseline` for a conservative renderer-switch check, `--profile glx-parity` for the current world/material/bloom parity surface, or `--profile glx-stress` to include the indirect static-world paths. `--dry-run` writes the configs and manifest without launching the engine, which is useful on machines without retail assets installed. VS Code also has a `Release: Runtime Sweep x64 GLx` task that builds the x64 GLx client and runs the default `q3dm1` screenshot switch sweep.
+Use `--profile baseline` for a conservative renderer-switch check, `--profile glx-parity` for the current world/material/bloom parity surface, or `--profile glx-stress` to include the indirect static-world paths. Unless `--maps` is provided, the stress profile captures both `q3dm1` and `q3dm17` so the sweep covers a small stock map and a larger static-geometry scene. `--dry-run` writes the configs and manifest without launching the engine, which is useful on machines without retail assets installed. VS Code also has a `Release: Runtime Sweep x64 GLx` task that builds the x64 GLx client and runs the default `q3dm1` screenshot switch sweep.
 
 `r_glxStreamDrawKeyMode` controls the material-key allowlist used after the hard eligibility checks:
 
@@ -118,7 +118,7 @@ Use `--profile baseline` for a conservative renderer-switch check, `--profile gl
 
 Stream draw counters report accepted/rejected material keys and skip reasons for ineligible stages, including missing buffer binding support, multitexture, depth-fragment gating, missing texcoords, empty batches, material-key rejection, and fog-gate rejection. They also split out second-texture-coordinate upload pressure, multitexture draw count, fog draw count, and depth-fragment streamed stage count.
 
-Draw telemetry is recorded from the existing renderer hot paths: client-array draws through `R_DrawElements`, static-world device-index VBO draws, and static-world soft-index VBO draws. Material-stage telemetry is recorded from the generic and VBO stage iterators before each legacy pass binds state and submits indexes. It tracks fixed-function state bits, color/alpha generators, texture coordinate generators, texmod counts, multitexture, depth-fragment, blend, alpha-test, depth-write, lightmap, animated-image, video, screen-map, dynamic-light, and environment flags, plus a small fixed hot-key table by index pressure. `r_glxDebugGroups 1` wraps shader batches in KHR_debug groups when the extension functions are available, which helps external GL debuggers correlate driver output with id Tech 3 shader names.
+Draw telemetry is recorded from the existing renderer hot paths: client-array draws through `R_DrawElements`, static-world device-index VBO draws, and static-world soft-index VBO draws. Material-stage telemetry is recorded from the generic and VBO stage iterators before each legacy pass binds state and submits indexes. It tracks fixed-function state bits, color/alpha generators, texture coordinate generators, texmod counts, multitexture, depth-fragment, blend, alpha-test, depth-write, lightmap, animated-image, video, screen-map, dynamic-light, and environment flags, plus a small fixed hot-key table by index pressure. `r_glxDebug 1` asks SDL and WGL startup paths for a debug OpenGL context when `cl_renderer glx` is active, falling back to a regular context if the platform cannot provide one. `r_glxDebugGroups 1` wraps shader batches in `KHR_debug` groups when the extension functions are available, while `ARB_debug_output`-only drivers still get callback logging without object labels or groups.
 
 Shader-batch telemetry is recorded at `RB_EndSurface` before the existing stage iterator runs. It tracks batch count, vertex/index pressure, total stage passes, pass-count histogram, sort histogram, fog/multitexture/polygon-offset flags, VBO vs generic batches, largest batch, and a small fixed top-shader table by index pressure. Material-stage telemetry complements that batch view with per-pass keys so later streamed draw and GLSL permutation work can target the most common compatibility shapes first.
 

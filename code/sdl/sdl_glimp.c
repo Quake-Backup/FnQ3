@@ -59,6 +59,17 @@ static PFN_vkGetInstanceProcAddr qvkGetInstanceProcAddr;
 cvar_t *r_stereoEnabled;
 cvar_t *in_nograb;
 
+static qboolean GLW_ShouldRequestGLxDebugContext( void )
+{
+	const char *renderer = Cvar_VariableString( "cl_renderer" );
+
+	if ( !renderer || Q_stricmp( renderer, "glx" ) ) {
+		return qfalse;
+	}
+
+	return Cvar_VariableIntegerValue( "r_glxDebug" ) ? qtrue : qfalse;
+}
+
 static void GLW_ShowCursor( qboolean show )
 {
 	if ( show ) {
@@ -526,7 +537,8 @@ static int GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qbool
 		if ( !vulkan )
 #endif
 		{
-	
+			const qboolean requestDebugContext = GLW_ShouldRequestGLxDebugContext();
+
 #ifdef __sgi /* Fix for SGIs grabbing too many bits of color */
 			if (perChannelColorBits == 4)
 				perChannelColorBits = 0; /* Use minimum size for 16-bit color */
@@ -559,6 +571,9 @@ static int GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qbool
 
 			if ( !r_allowSoftwareGL->integer )
 				SDL_GL_SetAttribute( SDL_GL_ACCELERATED_VISUAL, 1 );
+
+			SDL_GL_SetAttribute( SDL_GL_CONTEXT_FLAGS,
+				requestDebugContext ? SDL_GL_CONTEXT_DEBUG_FLAG : 0 );
 		}
 
 		if ( ( SDL_window = GLW_CreateWindow( cl_title, x, y, config->vidWidth, config->vidHeight, flags ) ) == NULL )
@@ -630,10 +645,29 @@ static int GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qbool
 			{
 				if ( ( SDL_glContext = SDL_GL_CreateContext( SDL_window ) ) == NULL )
 				{
-					Com_DPrintf( "SDL_GL_CreateContext failed: %s\n", SDL_GetError( ) );
-					SDL_DestroyWindow( SDL_window );
-					SDL_window = NULL;
-					continue;
+					if ( GLW_ShouldRequestGLxDebugContext() )
+					{
+						Com_DPrintf( "SDL_GL_CreateContext with debug flag failed: %s\n", SDL_GetError( ) );
+						SDL_GL_SetAttribute( SDL_GL_CONTEXT_FLAGS, 0 );
+						SDL_glContext = SDL_GL_CreateContext( SDL_window );
+					}
+
+					if ( SDL_glContext == NULL )
+					{
+						Com_DPrintf( "SDL_GL_CreateContext failed: %s\n", SDL_GetError( ) );
+						SDL_DestroyWindow( SDL_window );
+						SDL_window = NULL;
+						continue;
+					}
+
+					if ( GLW_ShouldRequestGLxDebugContext() )
+					{
+						Com_Printf( "...SDL debug context unavailable, using regular OpenGL context\n" );
+					}
+				}
+				else if ( GLW_ShouldRequestGLxDebugContext() )
+				{
+					Com_Printf( "...created SDL OpenGL debug context\n" );
 				}
 			}
 

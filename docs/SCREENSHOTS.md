@@ -14,7 +14,7 @@ The standard commands remain familiar:
 - `screenshotJPEG`: Save a JPG screenshot.
 - `screenshotBMP`: Save a BMP screenshot.
 - `screenshot levelshot`: Save a levelshot to `levelshots/<map>.tga` using the current levelshot sizing and crop settings.
-- `screenshot cubemap`: Save a six-face PNG cube map on the OpenGL renderer.
+- `screenshot cubemap`: Save a six-face PNG cube map on the OpenGL-lineage renderers.
 - `screenshotPNG cubemap`: Explicit PNG cube-map command.
 - `screenshotTGA cubemap`: Save a six-face TGA cube map.
 - `screenshotJPEG cubemap`: Save a six-face JPG cube map.
@@ -198,7 +198,7 @@ seta r_screenshotWatermarkMargin "24"
 
 ## Cube Maps
 
-The OpenGL renderer can capture a six-face cube map from the current camera position through the `screenshot ... cubemap` subcommand.
+The OpenGL-lineage renderers, `opengl` and experimental `glx`, can capture a six-face cube map from the current camera position through the `screenshot ... cubemap` subcommand.
 
 - Each face is saved as a square image.
 - The renderer captures the five non-front faces from one frozen scene state inside the same scene submission.
@@ -225,7 +225,7 @@ That produces:
 
 Renderer status:
 
-- OpenGL renderer: full cube-map capture support.
+- OpenGL-lineage renderers: full cube-map capture support on `opengl` and experimental `glx`.
 - Vulkan renderer: normal screenshots, naming, metadata sidecars, watermarks, and levelshot visibility controls are supported, but `screenshot ... cubemap` currently prints a warning and does not capture.
 - `renderer2`: normal screenshots and levelshots honor the same levelshot visibility controls, but cube-map capture is not implemented there.
 
@@ -248,7 +248,7 @@ seta r_screenshotWatermarkScreenAlignment "center"
 seta r_screenshotWatermarkMargin "16"
 ```
 
-For cube-map export on the OpenGL renderer:
+For cube-map export on an OpenGL-lineage renderer:
 
 ```cfg
 seta r_screenshotNameFormat "{map}-{datetime}-{face}"

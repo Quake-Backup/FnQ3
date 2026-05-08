@@ -32,6 +32,8 @@ struct FeatureSet {
 	qboolean drawIndirect;
 	qboolean multiDrawIndirect;
 	qboolean directStateAccess;
+	qboolean debugContext;
+	qboolean debugOutput;
 	qboolean khrDebug;
 	qboolean timerQuery;
 };

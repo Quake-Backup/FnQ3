@@ -10,7 +10,7 @@ Install Visual Studio Community Edition 2017 or later, then open and build the `
 
 The resulting executable is written to `code/win32/msvc2017/output`.
 
-If you want the Vulkan backend, clean the solution, right-click the `fnquake3` project, open `Project Dependencies`, and select `renderervk` instead of `renderer`. The experimental GLx module is available as the separate `rendererglx` project.
+If you want the Vulkan backend, clean the solution, right-click the `fnquake3` project, open `Project Dependencies`, and select `renderervk` instead of `renderer`. If you want the experimental GLx backend, select the separate `rendererglx` project instead.
 
 ---
 
@@ -121,7 +121,7 @@ Several Makefile options are available for Linux, MinGW, and macOS builds:
 
 `USE_VULKAN=1` - build vulkan modular renderer, enabled by default
 
-`USE_GLX=0` - build the experimental GLx modular renderer, disabled by default while the renderer is being brought up. GLx currently reuses the compatibility OpenGL renderer as its rendering baseline while adding GLx-owned capability detection, debug callbacks, GPU timing, static-world telemetry, and stream strategy selection.
+`USE_GLX=1` - build the experimental GLx modular renderer, disabled by default while the renderer is being brought up. GLx currently reuses the compatibility OpenGL renderer as its rendering baseline while adding GLx-owned capability detection, debug callbacks, GPU timing, static-world telemetry, and stream strategy selection.
 
 `USE_OPENGL=1` - build opengl modular renderer, enabled by default
 
@@ -131,6 +131,8 @@ Several Makefile options are available for Linux, MinGW, and macOS builds:
 
 `RENDERER_DEFAULT=opengl` - set the default value for `\cl_renderer`, or choose the renderer used for a static build when `USE_RENDERER_DLOPEN=0`; valid options are `opengl`, `glx`, `opengl2`, `vulkan`
 
+Choosing `RENDERER_DEFAULT=glx` also enables `USE_GLX=1` so the selected renderer is actually included in the build.
+
 `USE_SYSTEM_JPEG=0` - use current system JPEG library, disabled by default
 
 Example:
@@ -138,3 +140,5 @@ Example:
 `make BUILD_SERVER=0 USE_RENDERER_DLOPEN=0 RENDERER_DEFAULT=vulkan` - build the client with a single static Vulkan renderer and skip the dedicated server binary
 
 `make BUILD_SERVER=0 USE_GLX=1` - include the experimental GLx renderer module so it can be selected with `\cl_renderer glx` after a `\vid_restart`
+
+For CMake/Ninja or CMake/Visual Studio builds, pass `-DUSE_GLX=ON` to include the experimental GLx modular renderer.

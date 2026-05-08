@@ -65,6 +65,17 @@ typedef enum {
 #define PFD_SUPPORT_COMPOSITION 0x00008000
 #endif
 
+#ifdef USE_OPENGL_API
+#ifndef WGL_CONTEXT_DEBUG_BIT_ARB
+#define WGL_CONTEXT_DEBUG_BIT_ARB 0x0001
+#endif
+#ifndef WGL_CONTEXT_FLAGS_ARB
+#define WGL_CONTEXT_FLAGS_ARB 0x2094
+#endif
+
+typedef HGLRC ( WINAPI *PFNWGLCREATECONTEXTATTRIBSARBPROC )( HDC hDC, HGLRC hShareContext, const int *attribList );
+#endif
+
 static DEVMODE dm_desktop;
 static DEVMODE dm_current;
 
@@ -94,6 +105,56 @@ glwstate_t glw_state;
 static cvar_t *r_maskMinidriver;		// allow a different dll name to be treated as if it were opengl32.dll
 static cvar_t *r_stereoEnabled;
 static cvar_t *r_verbose;				// used for verbose debug spew
+#endif
+
+#ifdef USE_OPENGL_API
+static qboolean GLW_ShouldRequestGLxDebugContext( void )
+{
+	const char *renderer = Cvar_VariableString( "cl_renderer" );
+
+	if ( !renderer || Q_stricmp( renderer, "glx" ) ) {
+		return qfalse;
+	}
+
+	return Cvar_VariableIntegerValue( "r_glxDebug" ) ? qtrue : qfalse;
+}
+
+static void GLW_TryReplaceWithDebugContext( HGLRC legacyContext )
+{
+	static const int debugAttribs[] = {
+		WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_DEBUG_BIT_ARB,
+		0
+	};
+	PFNWGLCREATECONTEXTATTRIBSARBPROC createContextAttribs;
+	HGLRC debugContext;
+
+	if ( !qwglGetProcAddress ) {
+		return;
+	}
+
+	createContextAttribs = (PFNWGLCREATECONTEXTATTRIBSARBPROC)qwglGetProcAddress( "wglCreateContextAttribsARB" );
+	if ( !createContextAttribs ) {
+		Com_Printf( "...WGL debug context requested, but WGL_ARB_create_context is unavailable\n" );
+		return;
+	}
+
+	debugContext = createContextAttribs( glw_state.hDC, NULL, debugAttribs );
+	if ( !debugContext ) {
+		Com_Printf( "...WGL debug context creation failed, using legacy context\n" );
+		return;
+	}
+
+	if ( !qwglMakeCurrent( NULL, NULL ) || !qwglMakeCurrent( glw_state.hDC, debugContext ) ) {
+		qwglDeleteContext( debugContext );
+		qwglMakeCurrent( glw_state.hDC, legacyContext );
+		Com_Printf( "...WGL debug context activation failed, using legacy context\n" );
+		return;
+	}
+
+	qwglDeleteContext( legacyContext );
+	glw_state.hGLRC = debugContext;
+	Com_Printf( "...created WGL debug context\n" );
+}
 #endif
 
 /*
@@ -445,6 +506,10 @@ static int GLW_MakeContext( PIXELFORMATDESCRIPTOR *pPFD )
 			return TRY_PFD_FAIL_HARD;
 		}
 		Com_Printf( "succeeded\n" );
+
+		if ( GLW_ShouldRequestGLxDebugContext() ) {
+			GLW_TryReplaceWithDebugContext( glw_state.hGLRC );
+		}
 	}
 
 	return TRY_PFD_SUCCESS;

@@ -4,7 +4,16 @@
 #include <cstdlib>
 #include <cstring>
 
+#ifndef GL_CONTEXT_FLAGS
+#define GL_CONTEXT_FLAGS 0x821E
+#endif
+#ifndef GL_CONTEXT_FLAG_DEBUG_BIT
+#define GL_CONTEXT_FLAG_DEBUG_BIT 0x00000002
+#endif
+
 namespace glx {
+
+typedef void ( APIENTRY *PFNGLXGETINTEGERVPROC )( GLenum pname, GLint *params );
 
 static void GLX_Caps_ParseVersion( Capabilities *caps, const char *version )
 {
@@ -64,8 +73,19 @@ void GLX_Caps_Init( Capabilities *caps, const glconfig_t *config, const char *ex
 	caps->features.drawIndirect = ToQBool( GLX_Caps_VersionAtLeast( *caps, 4, 0 ) || GLX_Caps_HasExtension( *caps, "GL_ARB_draw_indirect" ) || GLX_Caps_HasExtension( *caps, "GL_ARB_multi_draw_indirect" ) );
 	caps->features.multiDrawIndirect = ToQBool( GLX_Caps_VersionAtLeast( *caps, 4, 3 ) || GLX_Caps_HasExtension( *caps, "GL_ARB_multi_draw_indirect" ) );
 	caps->features.directStateAccess = ToQBool( GLX_Caps_VersionAtLeast( *caps, 4, 5 ) || GLX_Caps_HasExtension( *caps, "GL_ARB_direct_state_access" ) );
-	caps->features.khrDebug = ToQBool( GLX_Caps_VersionAtLeast( *caps, 4, 3 ) || GLX_Caps_HasExtension( *caps, "GL_KHR_debug" ) || GLX_Caps_HasExtension( *caps, "GL_ARB_debug_output" ) );
+	caps->features.khrDebug = ToQBool( GLX_Caps_VersionAtLeast( *caps, 4, 3 ) || GLX_Caps_HasExtension( *caps, "GL_KHR_debug" ) );
+	caps->features.debugOutput = ToQBool( caps->features.khrDebug || GLX_Caps_HasExtension( *caps, "GL_ARB_debug_output" ) );
 	caps->features.timerQuery = ToQBool( GLX_Caps_VersionAtLeast( *caps, 3, 3 ) || GLX_Caps_HasExtension( *caps, "GL_ARB_timer_query" ) || GLX_Caps_HasExtension( *caps, "GL_EXT_timer_query" ) );
+	if ( RI().GL_GetProcAddress && GLX_Caps_VersionAtLeast( *caps, 3, 0 ) ) {
+		PFNGLXGETINTEGERVPROC getIntegerv =
+			reinterpret_cast<PFNGLXGETINTEGERVPROC>( RI().GL_GetProcAddress( "glGetIntegerv" ) );
+		GLint contextFlags = 0;
+
+		if ( getIntegerv ) {
+			getIntegerv( GL_CONTEXT_FLAGS, &contextFlags );
+			caps->features.debugContext = ToQBool( ( contextFlags & GL_CONTEXT_FLAG_DEBUG_BIT ) != 0 );
+		}
+	}
 
 	if ( !GLX_Caps_VersionAtLeast( *caps, 2, 1 ) ) {
 		caps->tier = CapabilityTier::BelowFloor;

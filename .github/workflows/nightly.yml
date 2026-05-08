@@ -2,6 +2,7 @@ name: nightly
 
 permissions:
   contents: write
+  models: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -97,7 +98,7 @@ jobs:
         run: |
           if not exist bin mkdir bin
 
-          make release ARCH=${{ matrix.arch }} USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_VULKAN=1 || exit /b
+          make release ARCH=${{ matrix.arch }} USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1 || exit /b
           copy build\release-mingw32-${{ matrix.arch }}\fnquake3*.exe bin\ || exit /b
           copy build\release-mingw32-${{ matrix.arch }}\fnquake3*.dll bin\ || exit /b
           if exist build\release-mingw32-${{ matrix.arch }}\OpenAL32.dll copy build\release-mingw32-${{ matrix.arch }}\OpenAL32.dll bin\ || exit /b
@@ -161,6 +162,10 @@ jobs:
           copy code\win32\msvc2017\output\fnquake3_opengl_${{ matrix.rend_arch }}.dll bin\ || exit /b
           msbuild code\win32\msvc2017\renderer.vcxproj -p:Configuration=Release,Platform=${{ matrix.platform }} -t:Clean || exit /b
 
+          msbuild code\win32\msvc2017\rendererglx.vcxproj -p:Configuration=Release,Platform=${{ matrix.platform }} /p:PlatformToolset=v143 || exit /b
+          copy code\win32\msvc2017\output\fnquake3_glx_${{ matrix.rend_arch }}.dll bin\ || exit /b
+          msbuild code\win32\msvc2017\rendererglx.vcxproj -p:Configuration=Release,Platform=${{ matrix.platform }} -t:Clean || exit /b
+
           msbuild code\win32\msvc2017\renderervk.vcxproj -p:Configuration=Release,Platform=${{ matrix.platform }} /p:PlatformToolset=v143 || exit /b
           copy code\win32\msvc2017\output\fnquake3_vulkan_${{ matrix.rend_arch }}.dll bin\ || exit /b
           msbuild code\win32\msvc2017\renderervk.vcxproj -p:Configuration=Release,Platform=${{ matrix.platform }} -t:Clean || exit /b
@@ -215,7 +220,7 @@ jobs:
 
       - name: Build
         run: |
-          make ${{ matrix.rule }} -j$(nproc) ARCH=${{ matrix.arch }} COMPILE_ARCH=${{ matrix.arch }} CC=gcc DESTDIR=bin ${{ matrix.use_sdl }} USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_VULKAN=1
+          make ${{ matrix.rule }} -j$(nproc) ARCH=${{ matrix.arch }} COMPILE_ARCH=${{ matrix.arch }} CC=gcc DESTDIR=bin ${{ matrix.use_sdl }} USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1
 
       - uses: actions/upload-artifact@v7
         with:
@@ -245,7 +250,7 @@ jobs:
 
       - name: Build
         run: |
-          make install -j$(nproc) ARCH=aarch64 COMPILE_ARCH=aarch64 CC=gcc DESTDIR=bin USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_VULKAN=1
+          make install -j$(nproc) ARCH=aarch64 COMPILE_ARCH=aarch64 CC=gcc DESTDIR=bin USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1
 
       - uses: actions/upload-artifact@v7
         with:
@@ -276,7 +281,7 @@ jobs:
 
       - name: Build
         run: |
-          gmake install -j$(sysctl -n hw.logicalcpu) ARCH=${{ matrix.arch }} CC=clang DESTDIR=bin INSTALL=ginstall USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_VULKAN=1 STRIP=echo
+          gmake install -j$(sysctl -n hw.logicalcpu) ARCH=${{ matrix.arch }} CC=clang DESTDIR=bin INSTALL=ginstall USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1 STRIP=echo
 
       - uses: actions/upload-artifact@v7
         with:
@@ -315,6 +320,8 @@ jobs:
           python scripts/release.py --channel nightly --artifact-root artifacts --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}"
 
       - name: Build nightly release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           FROM_ARGS=()
           if [ -n "${{ needs.prepare.outputs.previous_nightly_commit }}" ]; then

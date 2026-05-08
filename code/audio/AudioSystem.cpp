@@ -25,10 +25,13 @@ extern "C" {
 #include "../openal/include/AL/al.h"
 #include "../openal/include/AL/alc.h"
 #include "../openal/include/AL/alext.h"
+#include "AudioDeviceRecovery.h"
 #include "AudioZoneFormat.h"
+#include "AudioZoneRuntime.h"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -60,4 +63,12 @@ extern "C" void S_OpenAL_ListDevices( void ) {
 
 extern "C" void S_OpenAL_ListHrtfs( void ) {
 	AudioSystem::Get().ListHrtfs();
+}
+
+extern "C" void S_OpenAL_ConfigHints( void ) {
+	AudioSystem::Get().PrintOpenALSoftConfigHints();
+}
+
+extern "C" qboolean S_OpenAL_RecoverDevice( qboolean force ) {
+	return AudioSystem::Get().RecoverDevice( force != qfalse ) ? qtrue : qfalse;
 }

@@ -38,6 +38,53 @@ static constexpr MaterialProgramMode kMaterialPrecacheModes[] = {
 	MaterialProgramMode::Fog
 };
 
+static constexpr unsigned int kMaterialPrecacheFeatures[] = {
+	GLX_MATERIAL_FEATURE_NONE,
+	GLX_MATERIAL_FEATURE_TEXMOD,
+	GLX_MATERIAL_FEATURE_ENVIRONMENT,
+	GLX_MATERIAL_FEATURE_TEXMOD | GLX_MATERIAL_FEATURE_ENVIRONMENT
+};
+
+static void GLX_Material_FeatureName( unsigned int features, char *out, size_t outSize )
+{
+	char text[64] = "";
+
+	if ( !out || outSize == 0 ) {
+		return;
+	}
+
+	if ( features == GLX_MATERIAL_FEATURE_NONE ) {
+		std::snprintf( out, outSize, "base" );
+		out[outSize - 1] = '\0';
+		return;
+	}
+
+	if ( features & GLX_MATERIAL_FEATURE_TEXMOD ) {
+		std::snprintf( text + std::strlen( text ), sizeof( text ) - std::strlen( text ), "%stexmod",
+			text[0] ? "+" : "" );
+	}
+	if ( features & GLX_MATERIAL_FEATURE_ENVIRONMENT ) {
+		std::snprintf( text + std::strlen( text ), sizeof( text ) - std::strlen( text ), "%senvironment",
+			text[0] ? "+" : "" );
+	}
+
+	std::snprintf( out, outSize, "%s", text[0] ? text : "unknown" );
+	out[outSize - 1] = '\0';
+}
+
+static void GLX_Material_KeyName( const MaterialProgramKey &key, char *out, size_t outSize )
+{
+	char features[64];
+
+	if ( !out || outSize == 0 ) {
+		return;
+	}
+
+	GLX_Material_FeatureName( key.features, features, sizeof( features ) );
+	std::snprintf( out, outSize, "%s/%s", GLX_Material_ModeName( key.mode ), features );
+	out[outSize - 1] = '\0';
+}
+
 static const char *GLX_Material_VertexSource()
 {
 	return
@@ -148,7 +195,7 @@ static void GLX_Material_ResetCounters( MaterialState *state )
 	state->notReadySkips = 0;
 	state->programLimitSkips = 0;
 	state->lastRequest = {};
-	state->lastMode = MaterialProgramMode::SingleTexture;
+	state->lastKey = { MaterialProgramMode::SingleTexture, GLX_MATERIAL_FEATURE_NONE };
 	GLX_Material_SetLastError( state, "" );
 }
 
@@ -192,43 +239,32 @@ static void GLX_Material_PrintObjectLog( const MaterialState &state, GLuint obje
 
 static qboolean GLX_Material_ModeForRequest( const MaterialRequest &request, MaterialProgramMode *mode )
 {
-	if ( !mode ) {
-		return qfalse;
-	}
-
-	if ( request.fogPass ) {
-		*mode = MaterialProgramMode::Fog;
-		return qtrue;
-	}
-
-	if ( !( request.flags & GLX_STAGE_MULTITEXTURE ) ) {
-		*mode = MaterialProgramMode::SingleTexture;
-		return qtrue;
-	}
-
-	switch ( request.multitextureEnv ) {
-	case GL_MODULATE:
-		*mode = MaterialProgramMode::MultiModulate;
-		return qtrue;
-	case GL_ADD:
-		*mode = MaterialProgramMode::MultiAdd;
-		return qtrue;
-	case GL_REPLACE:
-		*mode = MaterialProgramMode::MultiReplace;
-		return qtrue;
-	case GL_DECAL:
-		*mode = MaterialProgramMode::MultiDecal;
-		return qtrue;
-	default:
-		return qfalse;
-	}
+	return GLX_Material_ModeForInputs( request.flags, request.multitextureEnv, request.fogPass, mode );
 }
 
-static void GLX_Material_FragmentSource( MaterialProgramMode mode, char *out, size_t outSize )
+static unsigned int GLX_Material_FeaturesForRequest( const MaterialRequest &request )
+{
+	return GLX_Material_FeaturesForInputs( request.flags, request.texMods0, request.texMods1, request.fogPass );
+}
+
+static qboolean GLX_Material_KeyForRequest( const MaterialRequest &request, MaterialProgramKey *key )
+{
+	MaterialProgramMode mode;
+
+	if ( !key || !GLX_Material_ModeForRequest( request, &mode ) ) {
+		return qfalse;
+	}
+
+	key->mode = mode;
+	key->features = GLX_Material_FeaturesForRequest( request );
+	return qtrue;
+}
+
+static void GLX_Material_FragmentSource( const MaterialProgramKey &key, char *out, size_t outSize )
 {
 	const char *body = "";
 
-	switch ( mode ) {
+	switch ( key.mode ) {
 	case MaterialProgramMode::SingleTexture:
 	case MaterialProgramMode::Fog:
 		body =
@@ -261,6 +297,8 @@ static void GLX_Material_FragmentSource( MaterialProgramMode mode, char *out, si
 
 	std::snprintf( out, outSize,
 		"#version 120\n"
+		"#define GLX_MATERIAL_FEATURE_TEXMOD %u\n"
+		"#define GLX_MATERIAL_FEATURE_ENVIRONMENT %u\n"
 		"uniform sampler2D u_Texture0;\n"
 		"uniform sampler2D u_Texture1;\n"
 		"varying vec4 v_Color;\n"
@@ -269,7 +307,10 @@ static void GLX_Material_FragmentSource( MaterialProgramMode mode, char *out, si
 		"void main(void)\n"
 		"{\n"
 		"%s"
-		"}\n", body );
+		"}\n",
+		( key.features & GLX_MATERIAL_FEATURE_TEXMOD ) ? 1u : 0u,
+		( key.features & GLX_MATERIAL_FEATURE_ENVIRONMENT ) ? 1u : 0u,
+		body );
 	out[outSize - 1] = '\0';
 }
 
@@ -369,14 +410,14 @@ static void GLX_Material_ResetRuntime( MaterialState *state, qboolean deleteProg
 	GLX_Material_SetReason( state, "not initialized" );
 }
 
-static MaterialProgram *GLX_Material_FindProgram( MaterialState *state, MaterialProgramMode mode )
+static MaterialProgram *GLX_Material_FindProgram( MaterialState *state, const MaterialProgramKey &key )
 {
 	if ( !state ) {
 		return nullptr;
 	}
 
 	for ( int i = 0; i < state->programCount; i++ ) {
-		if ( state->programs[i].valid && state->programs[i].mode == mode ) {
+		if ( state->programs[i].valid && GLX_Material_KeyEquals( state->programs[i].key, key ) ) {
 			state->cacheHits++;
 			return &state->programs[i];
 		}
@@ -389,20 +430,23 @@ static MaterialProgram *GLX_Material_FindProgram( MaterialState *state, Material
 static void GLX_Material_LabelProgram( MaterialState *state, MaterialProgram *program )
 {
 	char label[64];
+	char keyName[64];
 
 	if ( !state || !program || !program->program || !state->fns.ObjectLabel ) {
 		return;
 	}
 
-	std::snprintf( label, sizeof( label ), "GLx material %s", GLX_Material_ModeName( program->mode ) );
+	GLX_Material_KeyName( program->key, keyName, sizeof( keyName ) );
+	std::snprintf( label, sizeof( label ), "GLx material %s", keyName );
 	label[sizeof( label ) - 1] = '\0';
 	state->fns.ObjectLabel( GL_PROGRAM, program->program, static_cast<GLsizei>( -1 ), label );
 	state->debugLabels++;
 }
 
-static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state, MaterialProgramMode mode )
+static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state, const MaterialProgramKey &key )
 {
 	char fragmentSource[2048];
+	char keyName[64];
 	MaterialProgram *program;
 	GLint ok = 0;
 
@@ -419,9 +463,10 @@ static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state, Materi
 	state->compileAttempts++;
 	program = &state->programs[state->programCount];
 	*program = {};
-	program->mode = mode;
+	program->key = key;
+	GLX_Material_KeyName( key, keyName, sizeof( keyName ) );
 
-	GLX_Material_FragmentSource( mode, fragmentSource, sizeof( fragmentSource ) );
+	GLX_Material_FragmentSource( key, fragmentSource, sizeof( fragmentSource ) );
 	program->vertexShader = GLX_Material_CompileShader( state, GL_VERTEX_SHADER, GLX_Material_VertexSource() );
 	program->fragmentShader = GLX_Material_CompileShader( state, GL_FRAGMENT_SHADER, fragmentSource );
 	if ( !program->vertexShader || !program->fragmentShader ) {
@@ -444,7 +489,7 @@ static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state, Materi
 	if ( !ok ) {
 		state->linkFailures++;
 		GLX_Material_SetLastError( state, "program link failed" );
-		RI().Printf( PRINT_WARNING, "GLx material program link failed for %s:\n", GLX_Material_ModeName( mode ) );
+		RI().Printf( PRINT_WARNING, "GLx material program link failed for %s:\n", keyName );
 		GLX_Material_PrintObjectLog( *state, program->program, qtrue, PRINT_WARNING );
 		GLX_Material_DeleteProgram( state, program );
 		return nullptr;
@@ -469,7 +514,7 @@ static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state, Materi
 
 	if ( state->r_glxMaterialDebug && state->r_glxMaterialDebug->integer ) {
 		RI().Printf( PRINT_ALL, "GLx material compiled %s program %u.\n",
-			GLX_Material_ModeName( mode ), program->program );
+			keyName, program->program );
 	}
 
 	return program;
@@ -487,12 +532,19 @@ static qboolean GLX_Material_PrecachePrograms( MaterialState *state )
 	state->precacheAttempts++;
 	for ( size_t i = 0; i < modeCount; i++ ) {
 		const MaterialProgramMode mode = kMaterialPrecacheModes[i];
-		MaterialProgram *program = GLX_Material_FindProgram( state, mode );
-		if ( !program ) {
-			program = GLX_Material_CreateProgram( state, mode );
-		}
-		if ( !program || !program->valid ) {
-			ok = qfalse;
+		const size_t featureCount = mode == MaterialProgramMode::Fog ? 1u :
+			sizeof( kMaterialPrecacheFeatures ) / sizeof( kMaterialPrecacheFeatures[0] );
+
+		for ( size_t featureIndex = 0; featureIndex < featureCount; featureIndex++ ) {
+			MaterialProgramKey key { mode, kMaterialPrecacheFeatures[featureIndex] };
+			MaterialProgram *program = GLX_Material_FindProgram( state, key );
+
+			if ( !program ) {
+				program = GLX_Material_CreateProgram( state, key );
+			}
+			if ( !program || !program->valid ) {
+				ok = qfalse;
+			}
 		}
 	}
 
@@ -534,7 +586,7 @@ void GLX_Material_OnOpenGLReady( MaterialState *state, const Capabilities &caps 
 	GLX_Material_Shutdown( state, qtrue );
 	GLX_Material_ResetCounters( state );
 	GLX_Material_SetReason( state, "not initialized" );
-	state->lastMode = MaterialProgramMode::SingleTexture;
+	state->lastKey = { MaterialProgramMode::SingleTexture, GLX_MATERIAL_FEATURE_NONE };
 
 	GetString = reinterpret_cast<PFNGLXGETSTRINGPROC>( GLX_Material_GetProc( "glGetString" ) );
 	version = GetString ? GetString( GL_SHADING_LANGUAGE_VERSION ) : nullptr;
@@ -586,7 +638,7 @@ qboolean GLX_Material_Active( const MaterialState &state )
 
 qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &request )
 {
-	MaterialProgramMode mode;
+	MaterialProgramKey key;
 	MaterialProgram *program;
 
 	if ( !state ) {
@@ -604,16 +656,16 @@ qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &re
 		state->notReadySkips++;
 		return qfalse;
 	}
-	if ( !GLX_Material_ModeForRequest( request, &mode ) ) {
+	if ( !GLX_Material_KeyForRequest( request, &key ) ) {
 		state->unsupportedRequests++;
 		GLX_Material_SetLastError( state, "unsupported material request" );
 		return qfalse;
 	}
 
-	state->lastMode = mode;
-	program = GLX_Material_FindProgram( state, mode );
+	state->lastKey = key;
+	program = GLX_Material_FindProgram( state, key );
 	if ( !program ) {
-		program = GLX_Material_CreateProgram( state, mode );
+		program = GLX_Material_CreateProgram( state, key );
 	}
 	if ( !program || !program->valid ) {
 		state->bindFailures++;
@@ -676,6 +728,10 @@ const char *GLX_Material_ModeName( MaterialProgramMode mode )
 
 void GLX_Material_PrintInfo( const MaterialState &state )
 {
+	char lastKeyName[64];
+
+	GLX_Material_KeyName( state.lastKey, lastKeyName, sizeof( lastKeyName ) );
+
 	RI().Printf( PRINT_ALL, "  material renderer: %s, ready %s, GLSL %s\n",
 		state.r_glxMaterialRenderer && state.r_glxMaterialRenderer->integer ? "enabled" : "disabled",
 		BoolName( state.ready ), state.glslVersion[0] ? state.glslVersion : "unknown" );
@@ -689,8 +745,8 @@ void GLX_Material_PrintInfo( const MaterialState &state )
 	RI().Printf( PRINT_ALL, "  material fallbacks: unsupported %u, disabled %u, not-ready %u, full %u, discarded without GL delete %u\n",
 		state.unsupportedRequests, state.disabledSkips, state.notReadySkips,
 		state.programLimitSkips, state.contextlessDeletes );
-	RI().Printf( PRINT_ALL, "  material last mode: %s, flags 0x%x, state 0x%x, rgb %i alpha %i tc %i/%i texmods %i/%i env %i fog %s\n",
-		GLX_Material_ModeName( state.lastMode ), state.lastRequest.flags, state.lastRequest.stateBits,
+	RI().Printf( PRINT_ALL, "  material last key: %s, flags 0x%x, state 0x%x, rgb %i alpha %i tc %i/%i texmods %i/%i env %i fog %s\n",
+		lastKeyName, state.lastRequest.flags, state.lastRequest.stateBits,
 		state.lastRequest.rgbGen, state.lastRequest.alphaGen, state.lastRequest.tcGen0,
 		state.lastRequest.tcGen1, state.lastRequest.texMods0, state.lastRequest.texMods1,
 		state.lastRequest.multitextureEnv, BoolName( state.lastRequest.fogPass ) );
@@ -700,11 +756,14 @@ void GLX_Material_PrintInfo( const MaterialState &state )
 
 	for ( int i = 0; i < state.programCount; i++ ) {
 		const MaterialProgram &program = state.programs[i];
+		char keyName[64];
+
 		if ( !program.valid ) {
 			continue;
 		}
+		GLX_Material_KeyName( program.key, keyName, sizeof( keyName ) );
 		RI().Printf( PRINT_ALL, "    program %u: %s, binds %u\n",
-			program.program, GLX_Material_ModeName( program.mode ), program.binds );
+			program.program, keyName, program.binds );
 	}
 }
 

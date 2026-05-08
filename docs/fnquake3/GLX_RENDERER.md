@@ -4,6 +4,8 @@
 
 GLx is an experimental renderer module under active development. It is build-gated with `USE_GLX` and is not the default renderer.
 
+The initial release-candidate gate policy is defined in [GLX_RC_GATES.md](GLX_RC_GATES.md). GLx should remain experimental until those gates pass on the blocking runtime matrix and the generated artifacts have been reviewed.
+
 ## Decision
 
 GLx keeps FnQuake3's existing renderer ABI intact:
@@ -48,6 +50,7 @@ The bootstrap modules currently provide:
 - `r_glxStaticWorldSoftDraw` for routing static-world CPU-index fallback runs through the GLx dispatcher.
 - `r_glxStaticWorldDrawPolicy` for restricting experimental GLx static draws to `full`, `contained`, or `all` packet ranges.
 - `r_glxStaticWorldMultiDraw` for developer-only batching of same-state static device-index runs with `glMultiDrawElements`.
+- `r_glxStaticWorldPacketBatch` for ordered full-packet static batch spans that submit from manifest-owned packet offsets before falling back to legacy run spans.
 - `r_glxStaticWorldIndirectBuffer` for developer-only upload of the static packet command manifest into a GL-owned indirect command buffer without drawing from it yet.
 - `r_glxStaticWorldIndirectDraw` for developer-only submission of full manifest-packet static draws through `glDrawElementsIndirect` when the command buffer is ready.
 - `r_glxStaticWorldMultiDrawIndirect` for developer-only submission of contiguous full-packet static command spans through `glMultiDrawElementsIndirect`.
@@ -60,6 +63,9 @@ The bootstrap modules currently provide:
 - `r_glxStreamDrawMultitexture` for separately opting eligible fixed-function multitexture stages into the streamed draw experiment.
 - `r_glxStreamDrawFog` for separately opting fog-only passes into the streamed draw experiment.
 - `r_glxStreamDrawDepthFragment` for separately opting eligible depth-fragment stages into the streamed draw experiment.
+- `r_glxStreamDrawTexMods` for separately opting CPU-computed texmod stages into the streamed draw experiment.
+- `r_glxStreamDrawEnvironment` for separately opting CPU-computed environment texture-coordinate stages into the streamed draw experiment.
+- `r_glxStreamDrawDynamicLights`, `r_glxStreamDrawScreenMaps`, and `r_glxStreamDrawVideoMaps` for explicit high-risk material-key experiments that stay off in the RC profile.
 - `r_glxMaterialRenderer` for using the independent GLSL material program path on streamed GLx draws when the driver can compile the complete compatibility shader set.
 - `r_glxMaterialPrecache` for compiling every supported GLx material permutation at OpenGL startup so shader failures fall back before the first draw.
 - `r_glxMaterialDebug` for material shader diagnostics, with level `2` dumping failed GLSL source.
@@ -72,13 +78,14 @@ This preserves compatibility while creating the measurement and capability surfa
 
 The current C++ boundary is intentionally small and split by ownership:
 
+- `code/renderer/tr_glx_compat.h`: renderer-owned compatibility facade between the legacy OpenGL substrate and the GLx module. Legacy OpenGL files include this local boundary instead of reaching directly into `code/rendererglx/`; it centralizes lifecycle handoff, frame timing, stream/material/static-world/postprocess reporting hooks, and the legacy shader-stage-to-GLx material key vocabulary.
 - `glx_caps.*`: one-time OpenGL version, extension, debug-context state, feature, and capability-tier detection.
 - `glx_debug.*`: debug-output callback wiring, `KHR_debug` object labels/groups, and notification filtering.
 - `glx_profiler.*`: backend frame counters, rotating timer-query collection, shader-batch/material telemetry, and draw-call/index counters.
 - `glx_postprocess.*`: compatibility FBO lifecycle telemetry, render-scale/resolve counters, final gamma result tracking, and bloom parity accounting for the shared OpenGL postprocess path.
 - `glx_static_world.*`: static BSP/VBO cache accounting, GLx-owned packet manifest snapshots, optional static arena uploads/draw binding, optional GLx device-run submission, and prepared-queue split telemetry.
 - `glx_stream.*`: dynamic stream policy selection, buffer lifecycle, reservation/upload/commit API, and counters for persistent-map, map-range, or orphan/subdata paths.
-- `glx_module.*`: the C ABI bridge used by the legacy renderer hooks.
+- `glx_module.*`: the C ABI bridge used behind the renderer compatibility facade. New legacy-renderer touch points should be added through `tr_glx_compat.h` rather than including this module header directly.
 
 `r_glxStreamMode auto` selects `persistent-map` only when buffer storage and sync objects are present, falls back to `map-range` when available, and otherwise uses the portable orphan/subdata path. Forced modes fall back rather than failing renderer initialization. The stream ring is allocated during OpenGL initialization and now exposes reserve/upload-at/commit primitives so one draw can safely upload several attribute ranges inside one contiguous reservation. When sync objects are available, frames that touched the stream insert a GL fence and the next stream reservation waits before reusing the reset frame range. Same-frame stream wraps are rejected instead of reusing the beginning of the ring while earlier draws from that frame may still be in flight; the caller falls back to the legacy draw path and the reject is counted separately from ordinary wraps. Scene draw submission still uses the legacy client-array path by default.
 
@@ -92,9 +99,26 @@ The current C++ boundary is intentionally small and split by ownership:
 
 `r_glxStreamDrawDepthFragment 1` additionally allows eligible single-texture `depthFragment` shader stages through the stream path. GLx uploads the prepared stage arrays once, issues the normal draw from stream offsets, then mirrors the legacy second pass by forcing depth writes, enabling the existing ARB sprite fragment program, and drawing the same streamed indexes again before restoring buffer and client-array state. This is separately gated because it changes a two-draw compatibility path and should be parity-tested independently from plain material stages.
 
-`r_glxMaterialRenderer 1` makes streamed GLx draws bind GLSL material programs instead of relying on fixed-function texture combiners for the supported compatibility-stage shapes. The first material slice covers single-texture, fixed-function multitexture modulate/add/replace/decal, and fog-only stream passes. Texture coordinate generation, texmods, colors, state bits, alpha test, texture binding, and fallback ordering still come from the legacy renderer before GLx uploads the already-computed arrays, keeping the shader layer small while parity is measured. Startup precache compiles the whole supported set by default; if any program fails to compile or link, the material path reports `not-ready` and the stream draw caller falls back to the legacy path instead of discovering the failure mid-frame.
+`r_glxStreamDrawTexMods 1` additionally allows shader stages whose texture coordinates were modified by the legacy CPU texmod pipeline to use the same stream path. GLx does not interpret texmod grammar or move that compatibility-sensitive math into GLSL here; it uploads the final texcoord arrays that `R_ComputeTexCoords` already produced. This is separately gated because texmods are common enough to matter but visible enough that they deserve their own parity switch and counters.
+
+`r_glxStreamDrawEnvironment 1` does the same for stages using legacy CPU-computed environment texture-coordinate generation. The renderer still calculates the final coordinates from the existing tessellation normals before GLx sees the draw, so this is another explicit prepared-array allowlist rather than a shader grammar migration. `r_glxStreamDrawDynamicLights`, `r_glxStreamDrawScreenMaps`, and `r_glxStreamDrawVideoMaps` split the remaining broad material-key experiments into named gates and counters, but they stay disabled in the RC profile because those paths are more view- and content-sensitive.
+
+`r_glxMaterialRenderer 1` makes streamed GLx draws bind GLSL material programs instead of relying on fixed-function texture combiners for the supported compatibility-stage shapes. The material cache is now keyed as a bounded permutation table: base combine mode (`single`, multitexture modulate/add/replace/decal, or fog) plus prepared-coordinate features (`base`, CPU-computed texmods, CPU-computed environment coordinates, or both). Texture coordinate generation, texmods, colors, state bits, alpha test, texture binding, and fallback ordering still come from the legacy renderer before GLx uploads the already-computed arrays, keeping the shader layer small while parity is measured. Startup precache compiles the complete RC permutation set by default; if any program fails to compile or link, the material path reports `not-ready` and the stream draw caller falls back to the legacy path instead of discovering the failure mid-frame.
 
 Postprocess parity is implemented by keeping the compatibility-proven OpenGL FBO and ARB-program postprocess path as the GLx baseline instead of introducing a second bloom algorithm. Under `RENDERER_GLX`, that shared path now reports FBO init/shutdown state, internal render/capture/window dimensions, HDR precision mode, internal render scaling, MSAA resolve blits, supersample capture blits, screen-map copies, final gamma output mode, minimized/screenshot fallback output, bloom chain allocation, and bloom execution. The counters distinguish `r_bloom 1` pre-final bloom from `r_bloom 2` final-pass bloom, record requested versus effective `r_bloom_passes`, and retain the active `r_bloom_blend_base`, `r_bloom_filter_size`, `r_bloom_threshold_mode`, `r_bloom_modulate`, `r_bloom_intensity`, and `r_bloom_reflection` values. This preserves the documented OpenGL bloom surface while making GLx failures visible through `glxpostprocess`, `glxinfo`, and `r_speeds 7`.
+
+## GLx Profiles
+
+`r_glxProfile` freezes the narrow GLx startup profile used by the release-candidate gates. It is intentionally separate from the lower-level developer cvars so automated sweeps and human testing can select the same profile before renderer registration, world VBO upload, static-world arena setup, and FBO-backed resources are built.
+
+| Profile | Purpose |
+|---|---|
+| blank / `manual` | Leave individual cvars alone for focused developer experiments. |
+| `off` | Restore compatibility defaults for the cvars owned by the GLx profile. |
+| `rc` | Conservative release-candidate surface: VBO world cache, GLx world renderer bundle, ordered packet-batch static spans, stream draw for proven stage shapes including CPU-computed texmods and environment coordinates, material renderer, final-pass bloom parity, and GPU timing. Indirect static-world stress paths and high-risk dynamic-light/screen-map/video-map stream gates stay off. |
+| `stress` | `rc` plus the indirect static-world buffer, single indirect draw, filtered MDI, compact MDI, and MDI span paths. |
+
+The `glxprofile` console command inspects and applies those same profiles: `glxprofile status`, `glxprofile rc`, `glxprofile stress`, `glxprofile off`, and `glxprofile manual`. For startup-stable testing, prefer `+set r_glxProfile rc` or `+set r_glxProfile stress` before the renderer loads. Applying a profile from the console is still useful, but VBO/FBO-backed resources need a map reload or `vid_restart` before every part of the profile can be rebuilt under the new settings.
 
 ## Runtime Switching and Sweep Harness
 
@@ -108,15 +132,44 @@ Typical local run from the repository root:
 python scripts/glx_runtime_sweep.py --exe code/win32/msvc2017/output/fnquake3.glx.x64.exe --basepath code/win32/msvc2017/output --renderers opengl,glx --switch-sequence opengl,glx,opengl,glx --maps q3dm1 --demos demo1
 ```
 
-Use `--profile baseline` for a conservative renderer-switch check, `--profile glx-parity` for the current world/material/bloom parity surface, or `--profile glx-stress` to include the indirect static-world paths. Unless `--maps` is provided, the stress profile captures both `q3dm1` and `q3dm17` so the sweep covers a small stock map and a larger static-geometry scene. `--dry-run` writes the configs and manifest without launching the engine, which is useful on machines without retail assets installed. VS Code also has a `Release: Runtime Sweep x64 GLx` task that builds the x64 GLx client and runs the default `q3dm1` screenshot switch sweep.
+Use `--profile baseline` for a conservative renderer-switch check, `--profile glx-parity` for the current RC candidate surface backed by `r_glxProfile rc`, or `--profile glx-stress` to include the indirect static-world paths through `r_glxProfile stress`. Unless `--maps` is provided, the stress profile captures both `q3dm1` and `q3dm17` so the sweep covers a small stock map and a larger static-geometry scene. `--dry-run` writes the configs and manifest without launching the engine, which is useful on machines without retail assets installed. The manifest records both the full expanded profile cvars and the smaller startup/config cvar sets used to launch the client. VS Code also has a `Release: Runtime Sweep x64 GLx` task that builds the x64 GLx client and runs the default `q3dm1` screenshot switch sweep.
+
+The same tool also exposes named RC gate presets:
+
+```sh
+python scripts/glx_runtime_sweep.py --list-gates
+python scripts/glx_runtime_sweep.py --gate rc-smoke --exe code/win32/msvc2017/output/fnquake3.glx.x64.exe --basepath code/win32/msvc2017/output
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe code/win32/msvc2017/output/fnquake3.glx.x64.exe --basepath code/win32/msvc2017/output
+```
+
+`rc-smoke` proves renderer lifecycle and screenshot capture. `rc-parity` is the conservative blocking RC gate and fails if GLx timedemo FPS drops below 90% of the legacy `opengl` run for the same demo on the same machine. `rc-stress` exercises the indirect static-world profile before advanced GLx paths are considered for default use.
+
+The dedicated `glx-verification` GitHub Actions workflow keeps that gate surface exercised in CI. Hosted jobs build and run `fnq3_glx_logic_tests`, then dry-run every RC gate and upload the generated configs, manifests, logs, and Markdown summaries. A manual workflow-dispatch runtime job is reserved for self-hosted GPU runners with retail assets; those non-dry-run artifacts are the ones that count toward the blocking RC evidence in [GLX_RC_GATES.md](GLX_RC_GATES.md).
+
+For visual regression checks, `glx_runtime_sweep.py` can also compare captured PNG screenshots against an approved baseline directory with `--screenshot-baseline-dir`, write difference images with `--screenshot-diff-dir`, and gate the run with `--screenshot-max-rms` plus `--screenshot-max-pixel-ratio`. Use `--approve-screenshot-baselines` only when deliberately refreshing a reviewed baseline set.
+
+Non-dry-run gate manifests also analyze GLx diagnostic output from the screenshot sweep. Material readiness and shader failures, FBO/bloom failures, dynamic-stream failure counters, static-world readiness loss, and static GL errors become explicit gate failures; ordinary compatibility fallback and packet-shape counters remain recorded for review rather than blocking by themselves.
+
+The sweep also enables `r_speeds 7` briefly around each GLx screenshot capture unless `--no-perf-samples` is supplied. Those compact `glx:` frame-counter lines are parsed into manifest and Markdown performance summaries, covering draw/index pressure, GPU timer text, stream strategy/readiness, material failure counts, postprocess output, stream draw pressure, and static-world counters. Named RC gates require at least one non-dry-run GLx performance sample.
+
+Those samples are now gateable evidence rather than passive telemetry. Named gates apply a built-in zero-tolerance budget for stream rejects, material failures, streamed/static draw fallbacks, and static MDI errors; `--performance-budget` can add runner-specific `max`/`min` thresholds. `--performance-baseline` compares aggregate counter growth against an approved JSON baseline, while `--approve-performance-baseline` refreshes that baseline only during an intentional review run.
+
+`fnq3_glx_logic_tests` provides the first renderer-focused pure logic test target. It runs without an OpenGL context or retail assets and covers the RC material permutation key classifier, unsupported multitexture combine rejection, capability-tier/version/extension logic, stream strategy fallback selection, stream draw material-gate allowlists, static-world packet classification, static draw-policy gating, and the developer-only broad key-mode escape hatch:
+
+```sh
+cmake --build .tmp/cmake-glx --target fnq3_glx_logic_tests --config Debug
+ctest --test-dir .tmp/cmake-glx -R fnq3_glx_logic --output-on-failure -C Debug
+```
 
 `r_glxStreamDrawKeyMode` controls the material-key allowlist used after the hard eligibility checks:
 
-- `0`: plain keys only, rejecting texmods and special dynamic bundles.
-- `1`: computed keys, allowing texmods while still rejecting video, screen-map, dynamic-light, and environment cases.
+- `0`: plain keys plus any explicitly enabled special-case gates, still rejecting ungated texmods, environment coordinates, and special dynamic bundles.
+- `1`: computed keys, allowing texmods as a compatibility shorthand while still rejecting video, screen-map, dynamic-light, and environment cases unless their explicit gates are enabled.
 - `2`: all currently eligible single-texture generic stages.
 
-Stream draw counters report accepted/rejected material keys and skip reasons for ineligible stages, including missing buffer binding support, multitexture, depth-fragment gating, missing texcoords, empty batches, material-key rejection, and fog-gate rejection. They also split out second-texture-coordinate upload pressure, multitexture draw count, fog draw count, and depth-fragment streamed stage count.
+For RC testing, prefer `r_glxStreamDrawKeyMode 0` plus the explicit gates (`r_glxStreamDrawMultitexture`, `r_glxStreamDrawFog`, `r_glxStreamDrawDepthFragment`, `r_glxStreamDrawTexMods`, and `r_glxStreamDrawEnvironment`) so each compatibility shape can be measured and backed out independently. `r_glxStreamDrawKeyMode 2` remains a developer escape hatch for broad experimentation, not an RC profile.
+
+Stream draw counters report accepted/rejected material keys and skip reasons for ineligible stages, including missing buffer binding support, multitexture, depth-fragment gating, missing texcoords, empty batches, material-key rejection, and fog-gate rejection. They also split out second-texture-coordinate upload pressure, multitexture draw count, fog draw count, depth-fragment streamed stage count, texmod accepted/rejected/drawn counts, environment accepted/rejected/drawn counts, and the still-disabled dynamic-light/screen-map/video-map gate counters.
 
 Draw telemetry is recorded from the existing renderer hot paths: client-array draws through `R_DrawElements`, static-world device-index VBO draws, and static-world soft-index VBO draws. Material-stage telemetry is recorded from the generic and VBO stage iterators before each legacy pass binds state and submits indexes. It tracks fixed-function state bits, color/alpha generators, texture coordinate generators, texmod counts, multitexture, depth-fragment, blend, alpha-test, depth-write, lightmap, animated-image, video, screen-map, dynamic-light, and environment flags, plus a small fixed hot-key table by index pressure. `r_glxDebug 1` asks SDL and WGL startup paths for a debug OpenGL context when `cl_renderer glx` is active, falling back to a regular context if the platform cannot provide one. `r_glxDebugGroups 1` wraps shader batches in `KHR_debug` groups when the extension functions are available, while `ARB_debug_output`-only drivers still get callback logging without object labels or groups.
 
@@ -142,6 +195,8 @@ Static-world queue telemetry now classifies every prepared device-index run agai
 
 `r_glxStaticWorldMultiDraw 1` lets GLx collapse eligible same-state static device-index runs from one VBO queue into one or more `glMultiDrawElements` calls when the driver exposes it. Each run carries its original VBO item range so GLx can classify whether visibility produced complete shader packets or partial packet runs. Multidraw is now filtered instead of all-or-nothing: GLx marks only the runs it actually submits, and the VBO iterator keeps rendering the remaining runs through the single-run GLx dispatcher or the original per-run `glDrawElements` loop. Non-eligible runs are treated as order barriers: GLx flushes any pending eligible batch before the barrier and leaves that barrier plus later runs to the legacy loop, so the experimental filtered path cannot move a later fast-path draw ahead of an earlier fallback draw. With broader policies such as `contained` or `all`, partial-but-allowed runs can still stay inside the ordered GLx span walker. It is implied by `r_glxWorldRenderer`.
 
+`r_glxStaticWorldPacketBatch 1` adds the conservative packet-level batch step used by the RC profile. After the legacy VBO queue has already sorted visible static surfaces and the shader stage has bound its normal compatibility state, GLx splits each eligible filtered batch into ordered spans. Full manifest-packet spans submit from the packet manifest's index counts and offsets with `glMultiDrawElements`; partial, contained, or legacy-shaped spans keep their original run offsets through the existing GLx fallback draw path. One-run spans are submitted immediately in queue order, so the packet path cannot move a later full packet ahead of an earlier fallback run. The result is a packet-owned submission edge for common full-packet visibility without enabling the indirect command-buffer experiments.
+
 `r_glxStaticWorldMultiDrawIndirect 1` adds an even narrower filtered-batch path on top of `r_glxStaticWorldMultiDraw`: if every run in a flushed filtered batch is a full manifest packet and those packets map to adjacent command-buffer slots, GLx submits that batch with one `glMultiDrawElementsIndirect` call. If the batch is partial, missing a command, non-adjacent, unsupported, or hits a GL error, GLx falls back to the existing `glMultiDrawElements` filtered batch without changing the draw order.
 
 `r_glxStaticWorldMultiDrawIndirectCompact 1` lets that same MDI gate upload a compact per-batch command list for full manifest packets that are visible in a non-adjacent order, or when the static command buffer was not uploaded. This preserves the VBO queue order by copying only the selected packet commands into a small `GL_DRAW_INDIRECT_BUFFER` immediately before the call. The compact command buffer is reused when possible: after an initial `glBufferData` allocation, later batches use `glBufferSubData` if the driver exposes it and the existing scratch capacity is large enough. When KHR_debug object labels are available, the lazily-created compact command buffer is labeled after the filtered submission path observes it. It remains separately gated because it trades fewer draw calls for per-batch command-buffer uploads and needs real-map telemetry before becoming a preferred path.
@@ -158,8 +213,4 @@ Static-world queue telemetry is recorded after the legacy VBO queue sorter has g
 
 Near-term GLx work should stay inside the renderer boundary:
 
-1. Extend the GLx static-world dispatcher from device-run and multidraw submission toward packet-level static batch submission while preserving id Tech 3 shader sort and stage behavior.
-2. Expand `r_glxStreamDraw` from generic, fog, and depth-fragment passes toward other selected special cases after the current streamed draw paths have parity coverage.
-3. Split the streamed draw prototype into explicit material-key allowlists once enough telemetry identifies the safest high-volume stage shapes.
-4. Introduce GLSL material permutations only after the compatibility baseline and static-world cache measurements are stable.
-5. Promote `glx` in user-facing docs only after it survives renderer switching, demo/screenshot regression checks, and display-parity visual review.
+1. Promote `glx` in user-facing docs only after it survives renderer switching, demo/screenshot regression checks, and display-parity visual review.

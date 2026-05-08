@@ -1,8 +1,6 @@
 #include "tr_local.h"
 #include "tr_common.h"
-#ifdef RENDERER_GLX
-#include "../rendererglx/glx_module.h"
-#endif
+#include "tr_glx_compat.h"
 
 #define COMMON_DEPTH_STENCIL
 //#define DEPTH_RENDER_BUFFER
@@ -78,7 +76,7 @@ extern void RB_SetGL2D( void );
 static void GLX_RecordFboInitState( qboolean requested, qboolean ready,
 	qboolean programReady, qboolean framebufferFnsReady )
 {
-	GLX_Renderer_RecordFboInit( requested, ready, programReady, framebufferFnsReady,
+	GLX_CompatRecordFboInit( requested, ready, programReady, framebufferFnsReady,
 		glConfig.vidWidth, glConfig.vidHeight, gls.captureWidth, gls.captureHeight,
 		gls.windowWidth, gls.windowHeight, fboInternalFormat, fboTextureFormat,
 		fboTextureType, frameBufferMultiSampling, superSampled, windowAdjusted,
@@ -88,14 +86,14 @@ static void GLX_RecordFboInitState( qboolean requested, qboolean ready,
 
 static void GLX_RecordBloomCreateState( int result )
 {
-	GLX_Renderer_RecordBloomCreate( result,
+	GLX_CompatRecordBloomCreate( result,
 		r_bloom_passes ? r_bloom_passes->integer : 0, fboBloomPasses,
 		glConfig.numTextureUnits );
 }
 
 static void GLX_RecordBloomState( int result, qboolean finalStage )
 {
-	GLX_Renderer_RecordBloom( result, finalStage,
+	GLX_CompatRecordBloom( result, finalStage,
 		r_bloom ? r_bloom->integer : 0,
 		r_bloom_passes ? r_bloom_passes->integer : 0,
 		fboBloomPasses,
@@ -1621,7 +1619,7 @@ void FBO_BlitSS( void )
 	const frameBuffer_t *src = &frameBuffers[ fboReadIndex ];
 	const frameBuffer_t *dst = &frameBuffers[ 4 ];
 #ifdef RENDERER_GLX
-	GLX_Renderer_RecordFboBlit( GLX_FBO_BLIT_SS, qfalse,
+	GLX_CompatRecordFboBlit( GLX_FBO_BLIT_SS, qfalse,
 		src->width, src->height, dst->width, dst->height );
 #endif
 
@@ -1643,7 +1641,7 @@ void FBO_BlitMS( qboolean depthOnly )
 	const frameBuffer_t *r = &frameBufferMS;
 	const frameBuffer_t *d = &frameBuffers[ 0 ];
 #ifdef RENDERER_GLX
-	GLX_Renderer_RecordFboBlit( GLX_FBO_BLIT_MS, depthOnly,
+	GLX_CompatRecordFboBlit( GLX_FBO_BLIT_MS, depthOnly,
 		r->width, r->height, d->width, d->height );
 #endif
 
@@ -1715,7 +1713,7 @@ void FBO_CopyScreen( void )
 	const frameBuffer_t *src;
 	int yCrop;
 #ifdef RENDERER_GLX
-	GLX_Renderer_RecordFboCopyScreen( backEnd.viewParms.viewportWidth,
+	GLX_CompatRecordFboCopyScreen( backEnd.viewParms.viewportWidth,
 		backEnd.viewParms.viewportHeight );
 #endif
 
@@ -2079,7 +2077,7 @@ void FBO_PostProcess( void )
 
 	minimized = ri.CL_IsMinimized();
 #ifdef RENDERER_GLX
-	GLX_Renderer_RecordPostProcessFrame( minimized,
+	GLX_CompatRecordPostProcessFrame( minimized,
 		( r_bloom->integer && programCompiled && qglActiveTextureARB ) ? qtrue : qfalse,
 		programCompiled ? qtrue : qfalse, backEnd.screenshotMask, windowAdjusted,
 		fboReadIndex, r_hdr->integer, r_renderScale->integer, r_greyscale->value );
@@ -2088,7 +2086,7 @@ void FBO_PostProcess( void )
 	if ( r_bloom->integer && programCompiled && qglActiveTextureARB ) {
 		if ( FBO_Bloom( gamma, obScale, !minimized ) ) {
 #ifdef RENDERER_GLX
-			GLX_Renderer_RecordPostProcessResult( GLX_POSTPROCESS_RESULT_BLOOM_FINAL );
+			GLX_CompatRecordPostProcessResult( GLX_POSTPROCESS_RESULT_BLOOM_FINAL );
 #endif
 			return;
 		}
@@ -2103,7 +2101,7 @@ void FBO_PostProcess( void )
 		RenderQuad( w, h );
 		ARB_ProgramDisable();
 #ifdef RENDERER_GLX
-		GLX_Renderer_RecordPostProcessResult( GLX_POSTPROCESS_RESULT_GAMMA_DIRECT );
+		GLX_CompatRecordPostProcessResult( GLX_POSTPROCESS_RESULT_GAMMA_DIRECT );
 #endif
 		return;
 	}
@@ -2119,11 +2117,11 @@ void FBO_PostProcess( void )
 	if ( !minimized ) {
 		FBO_BlitToBackBuffer( 1 );
 #ifdef RENDERER_GLX
-		GLX_Renderer_RecordPostProcessResult( GLX_POSTPROCESS_RESULT_GAMMA_BLIT );
+		GLX_CompatRecordPostProcessResult( GLX_POSTPROCESS_RESULT_GAMMA_BLIT );
 #endif
 #ifdef RENDERER_GLX
 	} else {
-		GLX_Renderer_RecordPostProcessResult( GLX_POSTPROCESS_RESULT_MINIMIZED );
+		GLX_CompatRecordPostProcessResult( GLX_POSTPROCESS_RESULT_MINIMIZED );
 #endif
 	}
 }
@@ -2212,7 +2210,7 @@ void QGL_DoneFBO( void )
 		fboEnabled = qfalse;
 		fboBloomInited = qfalse;
 #ifdef RENDERER_GLX
-		GLX_Renderer_RecordFboShutdown();
+		GLX_CompatRecordFboShutdown();
 #endif
 	}
 }

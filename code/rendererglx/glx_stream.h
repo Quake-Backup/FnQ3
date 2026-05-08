@@ -26,6 +26,11 @@ struct StreamState {
 	cvar_t *r_glxStreamDrawMultitexture;
 	cvar_t *r_glxStreamDrawFog;
 	cvar_t *r_glxStreamDrawDepthFragment;
+	cvar_t *r_glxStreamDrawTexMods;
+	cvar_t *r_glxStreamDrawEnvironment;
+	cvar_t *r_glxStreamDrawDynamicLights;
+	cvar_t *r_glxStreamDrawScreenMaps;
+	cvar_t *r_glxStreamDrawVideoMaps;
 	StreamStrategy strategy;
 	char reason[96];
 	int ringMegabytes;
@@ -69,6 +74,21 @@ struct StreamState {
 	unsigned int streamedDrawMultitextureDraws;
 	unsigned int streamedDrawFogDraws;
 	unsigned int streamedDrawDepthFragmentDraws;
+	unsigned int streamedDrawTexModDraws;
+	unsigned int streamedDrawTexModAccepted;
+	unsigned int streamedDrawTexModRejected;
+	unsigned int streamedDrawEnvironmentDraws;
+	unsigned int streamedDrawEnvironmentAccepted;
+	unsigned int streamedDrawEnvironmentRejected;
+	unsigned int streamedDrawDynamicLightDraws;
+	unsigned int streamedDrawDynamicLightAccepted;
+	unsigned int streamedDrawDynamicLightRejected;
+	unsigned int streamedDrawScreenMapDraws;
+	unsigned int streamedDrawScreenMapAccepted;
+	unsigned int streamedDrawScreenMapRejected;
+	unsigned int streamedDrawVideoMapDraws;
+	unsigned int streamedDrawVideoMapAccepted;
+	unsigned int streamedDrawVideoMapRejected;
 	unsigned int streamedDrawVertexes;
 	unsigned int streamedDrawIndexes;
 	unsigned int largestReservationBytes;
@@ -96,11 +116,16 @@ qboolean GLX_Stream_DrawEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawMultitextureEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawFogEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawDepthFragmentEnabled( const StreamState &state );
+qboolean GLX_Stream_DrawTexModsEnabled( const StreamState &state );
+qboolean GLX_Stream_DrawEnvironmentEnabled( const StreamState &state );
+qboolean GLX_Stream_DrawDynamicLightsEnabled( const StreamState &state );
+qboolean GLX_Stream_DrawScreenMapsEnabled( const StreamState &state );
+qboolean GLX_Stream_DrawVideoMapsEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned int stateBits,
-	int rgbGen, int alphaGen, int tcGen0, int texMods0 );
+	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 );
 void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
-	qboolean depthFragment, qboolean success );
+	qboolean depthFragment, int materialFlags, qboolean success );
 void GLX_Stream_RecordDrawSkip( StreamState *state, int reason );
 void GLX_Stream_RunSelfTest( StreamState *state );
 void GLX_Stream_ShadowUploadTess( StreamState *state, int numVertexes, int numIndexes,

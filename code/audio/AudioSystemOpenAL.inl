@@ -385,7 +385,11 @@ public:
 	bool ContextUsedFallback() const { return contextUsedFallback_; }
 	void PrintCapabilityMatrix() const;
 	void PrintHrtfList() const;
+	void PrintOpenALSoftConfigHints() const;
 	bool RefreshTimingDiagnostics();
+	bool RefreshDeviceConnection();
+	bool DeviceConnected() const;
+	bool RecoverDevice( bool force );
 	void SetMasterGain( float gain );
 	void UpdateListener( const float *origin, const float *velocity, const float axis[3][3] ) const;
 	void SetSourceSpatialize( ALuint source, bool spatialize ) const;
@@ -396,7 +400,9 @@ public:
 	void EndDeferredUpdates() const;
 	bool QuerySourceLatency( ALuint source, double &offsetSeconds, double &latencyMilliseconds ) const;
 	bool SupportsPCMChannels( int channels ) const;
+	bool SupportsSampleFormat( const AudioSampleFormat &format ) const;
 	ALenum PCM16FormatForChannels( int channels ) const;
+	ALenum PCM16FormatForSampleFormat( const AudioSampleFormat &format ) const;
 	const char *PCMChannelSupportDescription() const;
 
 	StreamBufferPool &BufferPool();
@@ -423,8 +429,11 @@ private:
 	bool CreateBestContext();
 	bool TryCreateContext( const std::vector<ALCint> &attributes, const char *modeName, bool fallback );
 	std::vector<ALCint> BuildContextAttributes( bool includeModernAttributes );
+	std::vector<ALCint> BuildDeviceResetAttributes();
 	bool ResolveRequestedHrtfId( ALCint &hrtfId ) const;
 	void ClearRequestedModernContextAttributes();
+	void RefreshActiveDeviceName();
+	void RefreshRuntimeStateAfterDeviceReset();
 	bool CreateFilter( ALuint &filter );
 	bool ConfigureFilter( ALuint filter, const AudioFilterSettings &settings ) const;
 	void DestroyFilter( ALuint &filter );
@@ -495,12 +504,52 @@ bool OpenALDevice::SupportsPCMChannels( int channels ) const {
 	return capabilities_.multiChannelFormats;
 }
 
-ALenum OpenALDevice::PCM16FormatForChannels( int channels ) const {
-	if ( !SupportsPCMChannels( channels ) ) {
+bool OpenALDevice::SupportsSampleFormat( const AudioSampleFormat &format ) const {
+	if ( !AudioSampleFormatCanBeRepresented( format ) ) {
+		return false;
+	}
+
+	switch ( format.encoding ) {
+	case AudioSampleEncoding::PCM:
+		return SupportsPCMChannels( format.channels );
+	case AudioSampleEncoding::UHJ:
+		return capabilities_.uhj;
+	case AudioSampleEncoding::BFormat2D:
+	case AudioSampleEncoding::BFormat3D:
+		return capabilities_.bFormat;
+	default:
+		return false;
+	}
+}
+
+ALenum OpenALDevice::PCM16FormatForSampleFormat( const AudioSampleFormat &format ) const {
+	if ( !SupportsSampleFormat( format ) ) {
 		return 0;
 	}
 
-	switch ( channels ) {
+	switch ( format.encoding ) {
+	case AudioSampleEncoding::PCM:
+		break;
+	case AudioSampleEncoding::UHJ:
+		switch ( format.channels ) {
+		case 2:
+			return AL_FORMAT_UHJ2CHN16_SOFT;
+		case 3:
+			return AL_FORMAT_UHJ3CHN16_SOFT;
+		case 4:
+			return AL_FORMAT_UHJ4CHN16_SOFT;
+		default:
+			return 0;
+		}
+	case AudioSampleEncoding::BFormat2D:
+		return AL_FORMAT_BFORMAT2D_16;
+	case AudioSampleEncoding::BFormat3D:
+		return AL_FORMAT_BFORMAT3D_16;
+	default:
+		return 0;
+	}
+
+	switch ( format.channels ) {
 	case 1:
 		return AL_FORMAT_MONO16;
 	case 2:
@@ -518,7 +567,29 @@ ALenum OpenALDevice::PCM16FormatForChannels( int channels ) const {
 	}
 }
 
+ALenum OpenALDevice::PCM16FormatForChannels( int channels ) const {
+	return PCM16FormatForSampleFormat( { AudioSampleEncoding::PCM, channels } );
+}
+
 const char *OpenALDevice::PCMChannelSupportDescription() const {
+	if ( capabilities_.multiChannelFormats && capabilities_.uhj && capabilities_.bFormat ) {
+		return "mono/stereo/quad/5.1/6.1/7.1, UHJ 2/3/4, B-Format 2D/3D";
+	}
+	if ( capabilities_.multiChannelFormats && capabilities_.uhj ) {
+		return "mono/stereo/quad/5.1/6.1/7.1, UHJ 2/3/4";
+	}
+	if ( capabilities_.multiChannelFormats && capabilities_.bFormat ) {
+		return "mono/stereo/quad/5.1/6.1/7.1, B-Format 2D/3D";
+	}
+	if ( capabilities_.uhj && capabilities_.bFormat ) {
+		return "mono/stereo, UHJ 2/3/4, B-Format 2D/3D";
+	}
+	if ( capabilities_.uhj ) {
+		return "mono/stereo, UHJ 2/3/4";
+	}
+	if ( capabilities_.bFormat ) {
+		return "mono/stereo, B-Format 2D/3D";
+	}
 	return capabilities_.multiChannelFormats ? "mono/stereo/quad/5.1/6.1/7.1" : "mono/stereo";
 }
 
@@ -586,6 +657,24 @@ bool OpenALDevice::QueryALCInt( ALCenum param, ALCint &value ) const {
 
 	value = queried;
 	return true;
+}
+
+bool OpenALDevice::RefreshDeviceConnection() {
+	capabilities_.connectedQuery = false;
+	capabilities_.connectedState = -1;
+
+	ALCint connected = ALC_TRUE;
+	if ( !QueryALCInt( ALC_CONNECTED, connected ) ) {
+		return false;
+	}
+
+	capabilities_.connectedQuery = true;
+	capabilities_.connectedState = connected;
+	return true;
+}
+
+bool OpenALDevice::DeviceConnected() const {
+	return !capabilities_.connectedQuery || capabilities_.connectedState != ALC_FALSE;
 }
 
 void *OpenALDevice::GetALCProcAddress( const char *name ) const {
@@ -745,6 +834,54 @@ std::vector<ALCint> OpenALDevice::BuildContextAttributes( bool includeModernAttr
 	return attributes;
 }
 
+std::vector<ALCint> OpenALDevice::BuildDeviceResetAttributes() {
+	std::vector<ALCint> attributes;
+	attributes.reserve( 14 );
+	ClearRequestedModernContextAttributes();
+
+	attributes.push_back( ALC_FREQUENCY );
+	attributes.push_back( ClampInt( CvarIntegerOrDefault( s_alFrequency, 48000 ), 8000, 192000 ) );
+	attributes.push_back( ALC_REFRESH );
+	attributes.push_back( ClampInt( CvarIntegerOrDefault( s_alRefresh, 100 ), 20, 1000 ) );
+
+	if ( capabilities_.hrtf ) {
+		const ALCint hrtfRequest = HrtfRequestFromCvar( s_alHrtf );
+		attributes.push_back( ALC_HRTF_SOFT );
+		attributes.push_back( hrtfRequest );
+		capabilities_.requestedHrtfAttribute = true;
+		capabilities_.requestedHrtf = hrtfRequest;
+
+		ALCint hrtfId = -1;
+		if ( hrtfRequest != ALC_FALSE && ResolveRequestedHrtfId( hrtfId ) ) {
+			attributes.push_back( ALC_HRTF_ID_SOFT );
+			attributes.push_back( hrtfId );
+			capabilities_.requestedHrtfIdAttribute = true;
+			capabilities_.requestedHrtfId = hrtfId;
+		}
+	}
+
+	if ( capabilities_.outputMode ) {
+		ALCint outputMode = ALC_ANY_SOFT;
+		if ( OutputModeFromCvar( s_alOutputMode, outputMode ) ) {
+			attributes.push_back( ALC_OUTPUT_MODE_SOFT );
+			attributes.push_back( outputMode );
+			capabilities_.requestedOutputModeAttribute = true;
+			capabilities_.requestedOutputMode = outputMode;
+		}
+	}
+
+	if ( capabilities_.outputLimiter ) {
+		const ALCint outputLimiter = CvarIntegerOrDefault( s_alOutputLimiter, 1 ) ? ALC_TRUE : ALC_FALSE;
+		attributes.push_back( ALC_OUTPUT_LIMITER_SOFT );
+		attributes.push_back( outputLimiter );
+		capabilities_.requestedOutputLimiterAttribute = true;
+		capabilities_.requestedOutputLimiter = outputLimiter;
+	}
+
+	attributes.push_back( 0 );
+	return attributes;
+}
+
 bool OpenALDevice::TryCreateContext( const std::vector<ALCint> &attributes, const char *modeName, bool fallback ) {
 	if ( !loader_.Ready() || device_ == nullptr ) {
 		return false;
@@ -825,16 +962,34 @@ void OpenALDevice::DiscoverALCCapabilities() {
 	}
 
 	capabilities_.enumerateAll = HasALCExtension( "ALC_ENUMERATE_ALL_EXT", true ) || HasALCExtension( "ALC_ENUMERATION_EXT", true );
+	capabilities_.disconnect = HasALCExtension( "ALC_EXT_disconnect", false );
 	capabilities_.hrtf = HasALCExtension( "ALC_SOFT_HRTF", false );
 	capabilities_.deviceClock = HasALCExtension( "ALC_SOFT_device_clock", false );
+	capabilities_.reopenDevice = HasALCExtension( "ALC_SOFT_reopen_device", false );
+	capabilities_.systemEvents = HasALCExtension( "ALC_SOFT_system_events", true );
 	capabilities_.outputLimiter = HasALCExtension( "ALC_SOFT_output_limiter", false );
 	capabilities_.outputMode = HasALCExtension( "ALC_SOFT_output_mode", false );
 	capabilities_.loopback = HasALCExtension( "ALC_SOFT_loopback", true );
+
+	RefreshDeviceConnection();
 
 	if ( capabilities_.hrtf ) {
 		capabilities_.alcGetStringiSOFT = reinterpret_cast<LPALCGETSTRINGISOFT>( GetALCProcAddress( "alcGetStringiSOFT" ) );
 		capabilities_.alcResetDeviceSOFT = reinterpret_cast<LPALCRESETDEVICESOFT>( GetALCProcAddress( "alcResetDeviceSOFT" ) );
 		DiscoverHrtfSpecifiers();
+	}
+	if ( capabilities_.reopenDevice ) {
+		capabilities_.alcReopenDeviceSOFT = reinterpret_cast<LPALCREOPENDEVICESOFT>( GetALCProcAddress( "alcReopenDeviceSOFT" ) );
+	}
+	if ( capabilities_.systemEvents ) {
+		capabilities_.alcEventIsSupportedSOFT = reinterpret_cast<LPALCEVENTISSUPPORTEDSOFT>( GetALCProcAddress( "alcEventIsSupportedSOFT" ) );
+		capabilities_.alcEventControlSOFT = reinterpret_cast<LPALCEVENTCONTROLSOFT>( GetALCProcAddress( "alcEventControlSOFT" ) );
+		capabilities_.alcEventCallbackSOFT = reinterpret_cast<LPALCEVENTCALLBACKSOFT>( GetALCProcAddress( "alcEventCallbackSOFT" ) );
+		if ( capabilities_.alcEventIsSupportedSOFT != nullptr ) {
+			capabilities_.defaultPlaybackEventSupport = capabilities_.alcEventIsSupportedSOFT( ALC_EVENT_TYPE_DEFAULT_DEVICE_CHANGED_SOFT, ALC_PLAYBACK_DEVICE_SOFT );
+			capabilities_.playbackAddedEventSupport = capabilities_.alcEventIsSupportedSOFT( ALC_EVENT_TYPE_DEVICE_ADDED_SOFT, ALC_PLAYBACK_DEVICE_SOFT );
+			capabilities_.playbackRemovedEventSupport = capabilities_.alcEventIsSupportedSOFT( ALC_EVENT_TYPE_DEVICE_REMOVED_SOFT, ALC_PLAYBACK_DEVICE_SOFT );
+		}
 	}
 	if ( capabilities_.deviceClock ) {
 		capabilities_.alcGetInteger64vSOFT = reinterpret_cast<LPALCGETINTEGER64VSOFT>( GetALCProcAddress( "alcGetInteger64vSOFT" ) );
@@ -954,8 +1109,12 @@ void OpenALDevice::DiscoverALCapabilities() {
 	capabilities_.directChannels = HasALExtension( "AL_SOFT_direct_channels" );
 	capabilities_.directChannelsRemix = HasALExtension( "AL_SOFT_direct_channels_remix" );
 	capabilities_.multiChannelFormats = HasALExtension( "AL_EXT_MCFORMATS" );
+	capabilities_.bFormat = HasALExtension( "AL_EXT_BFORMAT" );
+	capabilities_.uhj = HasALExtension( "AL_SOFT_UHJ" );
+	capabilities_.uhjEx = HasALExtension( "AL_SOFT_UHJ_ex" );
 	capabilities_.sourceSpatialize = HasALExtension( "AL_SOFT_source_spatialize" );
 	capabilities_.sourceLatency = HasALExtension( "AL_SOFT_source_latency" );
+	capabilities_.sourceEvents = HasALExtension( "AL_SOFT_events" );
 
 	QueryDistanceModel();
 
@@ -965,6 +1124,10 @@ void OpenALDevice::DiscoverALCapabilities() {
 	}
 	if ( capabilities_.sourceLatency ) {
 		capabilities_.alGetSourcedvSOFT = reinterpret_cast<LPALGETSOURCEDVSOFT>( GetALProcAddress( "alGetSourcedvSOFT" ) );
+	}
+	if ( capabilities_.sourceEvents ) {
+		capabilities_.alEventControlSOFT = reinterpret_cast<LPALEVENTCONTROLSOFT>( GetALProcAddress( "alEventControlSOFT" ) );
+		capabilities_.alEventCallbackSOFT = reinterpret_cast<LPALEVENTCALLBACKSOFT>( GetALProcAddress( "alEventCallbackSOFT" ) );
 	}
 
 	if ( capabilities_.hrtf ) {
@@ -996,6 +1159,17 @@ void OpenALDevice::PrintCapabilityMatrix() const {
 	Com_Printf( "  Mixer: %d Hz refresh %d Hz, mono sources %d, stereo sources %d\n",
 		caps.mixerFrequency, caps.refreshRate, caps.monoSources, caps.stereoSources );
 	Com_Printf( "  Device enumeration: %s\n", AvailableUnavailable( caps.enumerateAll ) );
+	Com_Printf( "  ALC_EXT_disconnect: %s (state %s)\n",
+		AvailableUnavailable( caps.disconnect ),
+		caps.connectedQuery ? ALCConnectedName( caps.connectedState ) : "not-queried" );
+	Com_Printf( "  ALC_SOFT_reopen_device: %s (alcReopenDeviceSOFT %s)\n",
+		AvailableUnavailable( caps.reopenDevice ),
+		LoadedMissing( caps.alcReopenDeviceSOFT ) );
+	Com_Printf( "  ALC_SOFT_system_events: %s (default %s, added %s, removed %s)\n",
+		AvailableUnavailable( caps.systemEvents ),
+		ALCEventSupportName( caps.defaultPlaybackEventSupport ),
+		ALCEventSupportName( caps.playbackAddedEventSupport ),
+		ALCEventSupportName( caps.playbackRemovedEventSupport ) );
 	Com_Printf( "  ALC_SOFT_HRTF: %s (status %s, HRTFs %d, alcGetStringiSOFT %s, alcResetDeviceSOFT %s)\n",
 		AvailableUnavailable( caps.hrtf ),
 		( caps.hrtfStatus >= 0 ) ? HrtfStatusName( caps.hrtfStatus ) : "not-queried",
@@ -1058,10 +1232,18 @@ void OpenALDevice::PrintCapabilityMatrix() const {
 	Com_Printf( "  AL_EXT_MCFORMATS: %s (PCM layouts %s)\n",
 		AvailableUnavailable( caps.multiChannelFormats ),
 		PCMChannelSupportDescription() );
+	Com_Printf( "  AL_SOFT_UHJ: %s (extended encodings %s)\n",
+		AvailableUnavailable( caps.uhj ),
+		YesNo( caps.uhjEx ) );
+	Com_Printf( "  AL_EXT_BFORMAT: %s\n", AvailableUnavailable( caps.bFormat ) );
 	Com_Printf( "  AL_SOFT_source_spatialize: %s\n", AvailableUnavailable( caps.sourceSpatialize ) );
 	Com_Printf( "  AL_SOFT_source_latency: %s (alGetSourcedvSOFT %s)\n",
 		AvailableUnavailable( caps.sourceLatency ),
 		LoadedMissing( caps.alGetSourcedvSOFT ) );
+	Com_Printf( "  AL_SOFT_events: %s (event control %s, callback %s)\n",
+		AvailableUnavailable( caps.sourceEvents ),
+		LoadedMissing( caps.alEventControlSOFT ),
+		LoadedMissing( caps.alEventCallbackSOFT ) );
 	Com_Printf( "  Distance model: requested %s, active %s\n",
 		ALDistanceModelName( caps.requestedDistanceModel ),
 		caps.distanceModelValid ? ALDistanceModelName( caps.distanceModel ) : "not-queried" );
@@ -1086,6 +1268,35 @@ void OpenALDevice::PrintHrtfList() const {
 		PrintHrtfSpecifierList( caps.hrtfSpecifiers, s_alHrtfId != nullptr ? s_alHrtfId->string : "" );
 	}
 	Com_Printf( "------------------------\n" );
+}
+
+void OpenALDevice::PrintOpenALSoftConfigHints() const {
+	const ModernOpenALCapabilities &caps = capabilities_;
+
+	Com_Printf( "----- OpenAL Soft Configuration Hints -----\n" );
+	Com_Printf( "FnQuake3 controls app-level startup requests with s_al* cvars; OpenAL Soft config files control library-global behavior.\n" );
+#if defined(_WIN32)
+	Com_Printf( "Config files: %%AppData%%\\alsoft.ini, or an app-local alsoft.ini beside the executable.\n" );
+#else
+	Com_Printf( "Config files: $XDG_CONFIG_HOME/alsoft.conf, /etc/xdg/alsoft.conf, or an app-local alsoft.conf beside the executable.\n" );
+#endif
+	Com_Printf( "High-value [general] options to inspect: stereo-mode, stereo-encoding, hrtf-mode, hrtf-size, default-hrtf, resampler, period_size, periods, output-limiter, channels, sample-type.\n" );
+	Com_Printf( "Surround/ambisonic [decoder] options to inspect: hq-mode, distance-comp, nfc, speaker-dist, and per-layout decoder files.\n" );
+	Com_Printf( "Backend-specific latency knobs are usually under [wasapi], [pipewire], [pulse], [alsa], or [jack]. Change one setting at a time and verify with s_info.\n" );
+	Com_Printf( "Live device support: disconnect query %s (state %s), reopen %s, system events %s.\n",
+		AvailableUnavailable( caps.disconnect ),
+		caps.connectedQuery ? ALCConnectedName( caps.connectedState ) : "not-queried",
+		AvailableUnavailable( caps.reopenDevice && caps.alcReopenDeviceSOFT != nullptr ),
+		AvailableUnavailable( caps.systemEvents ) );
+	Com_Printf( "Live render support: HRTF %s (status %s), output mode %s (active %s), limiter %s (state %s), resampler controlled by OpenAL Soft.\n",
+		AvailableUnavailable( caps.hrtf ),
+		( caps.hrtfStatus >= 0 ) ? HrtfStatusName( caps.hrtfStatus ) : "not-queried",
+		AvailableUnavailable( caps.outputMode ),
+		( caps.outputModeValue >= 0 ) ? ALCOutputModeName( caps.outputModeValue ) : "not-queried",
+		AvailableUnavailable( caps.outputLimiter ),
+		( caps.outputLimiterState >= 0 ) ? ALCBooleanName( caps.outputLimiterState ) : "not-queried" );
+	Com_Printf( "Immersive asset support: %s\n", PCMChannelSupportDescription() );
+	Com_Printf( "-------------------------------------------\n" );
 }
 
 bool OpenALDevice::CreateSource( ALuint &sourceOut ) {
@@ -1508,6 +1719,99 @@ void OpenALDevice::UpdateReverb( const EnvironmentState &environment ) {
 	}
 }
 
+void OpenALDevice::RefreshActiveDeviceName() {
+	activeDeviceName_.clear();
+	if ( !loader_.Ready() || device_ == nullptr || loader_.alcGetString == nullptr ) {
+		return;
+	}
+
+	const ALCchar *activeDevice = loader_.alcGetString( device_, ALC_DEVICE_SPECIFIER );
+	if ( activeDevice != nullptr ) {
+		activeDeviceName_ = reinterpret_cast<const char *>( activeDevice );
+	}
+}
+
+void OpenALDevice::RefreshRuntimeStateAfterDeviceReset() {
+	DiscoverALCCapabilities();
+	DiscoverALCapabilities();
+	BuildDeviceResetAttributes();
+	RefreshActiveDeviceName();
+	ApplyDistanceModel();
+	if ( loader_.Ready() && context_ != nullptr ) {
+		loader_.alDopplerFactor( 0.0f );
+		loader_.alListenerf( AL_GAIN, ( s_volume != nullptr ) ? ClampFloat( s_volume->value, 0.0f, 1.0f ) : 1.0f );
+		UpdateListener( nullptr, nullptr, nullptr );
+	}
+}
+
+bool OpenALDevice::RecoverDevice( bool force ) {
+	adr::RecoveryStartDecision recoveryStart = adr::PlanRecoveryStart( Ready() && device_ != nullptr, force, false, false );
+	if ( recoveryStart == adr::RecoveryStartDecision::Unavailable ) {
+		Com_Printf( "OpenAL device recovery unavailable: backend is not active\n" );
+		return false;
+	}
+
+	RefreshDeviceConnection();
+	recoveryStart = adr::PlanRecoveryStart( true, force, capabilities_.connectedQuery, DeviceConnected() );
+	if ( recoveryStart == adr::RecoveryStartDecision::SkipConnected ) {
+		Com_Printf( "OpenAL device recovery skipped: device still reports %s. Use s_alRecoverDevice force to reopen anyway.\n",
+			ALCConnectedName( capabilities_.connectedState ) );
+		return true;
+	}
+
+	const std::vector<ALCint> attributes = BuildDeviceResetAttributes();
+	const ALCint *attributePtr = attributes.size() > 1 ? attributes.data() : nullptr;
+	const char *targetDevice = ( requestedDeviceName_.empty() || usingDefaultFallback_ ) ? nullptr : requestedDeviceName_.c_str();
+
+	if ( capabilities_.alcReopenDeviceSOFT != nullptr ) {
+		loader_.alcGetError( device_ );
+		ALCboolean reopened = capabilities_.alcReopenDeviceSOFT( device_, targetDevice, attributePtr );
+		ALCenum error = loader_.alcGetError( device_ );
+		if ( reopened == ALC_FALSE && attributePtr != nullptr ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL device reopen rejected requested attributes (%s); retrying without attributes\n",
+				ALCErrorName( error ) );
+			loader_.alcGetError( device_ );
+			reopened = capabilities_.alcReopenDeviceSOFT( device_, targetDevice, nullptr );
+			error = loader_.alcGetError( device_ );
+		}
+		if ( reopened == ALC_TRUE ) {
+			RefreshRuntimeStateAfterDeviceReset();
+			Com_Printf( "OpenAL device recovery: reopened %s device '%s'\n",
+				targetDevice == nullptr ? "default" : "requested",
+				activeDeviceName_.empty() ? "unknown" : activeDeviceName_.c_str() );
+			PrintCapabilityMatrix();
+			return true;
+		}
+
+		Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL device reopen failed (%s)\n", ALCErrorName( error ) );
+	}
+
+	if ( capabilities_.alcResetDeviceSOFT != nullptr ) {
+		loader_.alcGetError( device_ );
+		ALCboolean reset = capabilities_.alcResetDeviceSOFT( device_, attributePtr );
+		ALCenum error = loader_.alcGetError( device_ );
+		if ( reset == ALC_FALSE && attributePtr != nullptr ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL device reset rejected requested attributes (%s); retrying without attributes\n",
+				ALCErrorName( error ) );
+			loader_.alcGetError( device_ );
+			reset = capabilities_.alcResetDeviceSOFT( device_, nullptr );
+			error = loader_.alcGetError( device_ );
+		}
+		if ( reset == ALC_TRUE ) {
+			RefreshRuntimeStateAfterDeviceReset();
+			Com_Printf( "OpenAL device recovery: reset active device '%s'\n",
+				activeDeviceName_.empty() ? "unknown" : activeDeviceName_.c_str() );
+			PrintCapabilityMatrix();
+			return true;
+		}
+
+		Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL device reset failed (%s)\n", ALCErrorName( error ) );
+	}
+
+	Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL device recovery is unavailable on this runtime; run snd_restart to rebuild the backend\n" );
+	return false;
+}
+
 bool OpenALDevice::Init() {
 	if ( !loader_.Load() ) {
 		return false;
@@ -1540,10 +1844,7 @@ bool OpenALDevice::Init() {
 
 	DiscoverALCapabilities();
 
-	const ALCchar *activeDevice = loader_.alcGetString( device_, ALC_DEVICE_SPECIFIER );
-	if ( activeDevice != nullptr ) {
-		activeDeviceName_ = reinterpret_cast<const char *>( activeDevice );
-	}
+	RefreshActiveDeviceName();
 
 	ApplyDistanceModel();
 	loader_.alDopplerFactor( 0.0f );

@@ -57,6 +57,7 @@ struct StaticWorldStats {
 	cvar_t *r_glxStaticWorldSoftDraw;
 	cvar_t *r_glxStaticWorldDrawPolicy;
 	cvar_t *r_glxStaticWorldMultiDraw;
+	cvar_t *r_glxStaticWorldPacketBatch;
 	cvar_t *r_glxStaticWorldIndirectBuffer;
 	cvar_t *r_glxStaticWorldIndirectDraw;
 	cvar_t *r_glxStaticWorldMultiDrawIndirect;
@@ -205,6 +206,17 @@ struct StaticWorldStats {
 	unsigned int multiDrawFilteredPolicyBarriers;
 	unsigned int multiDrawFilteredLastBarrierReason;
 	int multiDrawFilteredLastBarrierRun;
+	unsigned int packetBatchAttempts;
+	unsigned int packetBatchBatches;
+	unsigned int packetBatchRuns;
+	unsigned int packetBatchIndexes;
+	unsigned int packetBatchFallbackRuns;
+	unsigned int packetBatchSingleRuns;
+	unsigned int packetBatchLastSegments;
+	unsigned int packetBatchLastPacketRuns;
+	unsigned int packetBatchLastFallbackRuns;
+	unsigned int packetBatchLastSingles;
+	unsigned int packetBatchLargestSegments;
 	unsigned int multiDrawIndirectAttempts;
 	unsigned int multiDrawIndirectCalls;
 	unsigned int multiDrawIndirectStaticCalls;

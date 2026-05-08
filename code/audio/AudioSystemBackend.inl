@@ -29,13 +29,17 @@ public:
 	void SoundList();
 	void ListDevices() const;
 	void ListHrtfs() const;
+	void PrintOpenALSoftConfigHints() const;
+	bool RecoverDevice( bool force );
 	qboolean GetSpatialDebugInfo( spatialAudioDebugInfo_t *info ) const;
 	void DumpSpatialDebug() const;
 
 private:
 	static std::vector<short> ConvertStreamToPCM16( int samples, int rate, int width, int channels, const byte *data, float volume, int outputRate, int outputChannels );
 	bool QueueStreamChunk( StreamPlayer &player, int samples, int rate, int width, int channels, const byte *data, float volume, int outputChannels, bool logFallback );
+	int StreamOutputRate() const;
 	void ServiceBackgroundTrack();
+	bool UpdateDeviceState( int msec );
 	void CloseBackgroundStream();
 	SoundSample *GetSample( sfxHandle_t handle );
 	const SoundSample *GetSample( sfxHandle_t handle ) const;
@@ -51,6 +55,7 @@ private:
 	std::string backgroundIntro_;
 	std::string backgroundLoop_;
 	int backgroundStereoFallbackChannels_ = 0;
+	adr::DeviceRecoveryState deviceRecovery_;
 	bool started_ = false;
 	bool hardMuted_ = true;
 };
@@ -70,33 +75,69 @@ static int SelectStreamOutputChannels( const OpenALDevice &device, int channels 
 	return kDefaultStreamChannels;
 }
 
-static short ReadStreamPCM16Sample( const byte *data, size_t sampleIndex, int width, int channels ) {
+static float ReadStreamPCM16Sample( const byte *data, size_t sampleIndex, int width, int channels ) {
 	if ( data == nullptr ) {
-		return 0;
+		return 0.0f;
 	}
 	if ( width == 2 ) {
-		return ReadLittlePCM16( data + sampleIndex * sizeof( short ) );
+		return static_cast<float>( ReadLittlePCM16( data + sampleIndex * sizeof( short ) ) );
 	}
 	if ( channels == 1 ) {
-		return ConvertUnsignedPCM8ToPCM16( data[sampleIndex] );
+		return static_cast<float>( ConvertUnsignedPCM8ToPCM16( data[sampleIndex] ) );
 	}
-	return ConvertSignedPCM8ToPCM16( data[sampleIndex] );
+	return static_cast<float>( ConvertSignedPCM8ToPCM16( data[sampleIndex] ) );
 }
 
-static void WriteConvertedStreamFrame( const short *input, int inputChannels, short *output, int outputChannels, float gain ) {
+static float CubicInterpolatePCM16( float p0, float p1, float p2, float p3, float fraction ) {
+	const float f2 = fraction * fraction;
+	const float f3 = f2 * fraction;
+	return 0.5f * ( ( 2.0f * p1 ) +
+		( -p0 + p2 ) * fraction +
+		( 2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 ) * f2 +
+		( -p0 + 3.0f * p1 - 3.0f * p2 + p3 ) * f3 );
+}
+
+static float ReadInterpolatedStreamSample( const byte *data, int samples, int width, int channels, int channel, double sourcePosition ) {
+	if ( data == nullptr || samples <= 0 || channel < 0 || channel >= channels ) {
+		return 0.0f;
+	}
+
+	const int base = ClampInt( static_cast<int>( std::floor( sourcePosition ) ), 0, samples - 1 );
+	const float fraction = static_cast<float>( sourcePosition - static_cast<double>( base ) );
+	if ( samples == 1 || fraction <= 0.000001f ) {
+		return ReadStreamPCM16Sample( data, static_cast<size_t>( base ) * static_cast<size_t>( channels ) + static_cast<size_t>( channel ), width, channels );
+	}
+
+	const int i0 = ClampInt( base - 1, 0, samples - 1 );
+	const int i1 = base;
+	const int i2 = ClampInt( base + 1, 0, samples - 1 );
+	const int i3 = ClampInt( base + 2, 0, samples - 1 );
+	const size_t channelIndex = static_cast<size_t>( channel );
+	const float p0 = ReadStreamPCM16Sample( data, static_cast<size_t>( i0 ) * static_cast<size_t>( channels ) + channelIndex, width, channels );
+	const float p1 = ReadStreamPCM16Sample( data, static_cast<size_t>( i1 ) * static_cast<size_t>( channels ) + channelIndex, width, channels );
+	const float p2 = ReadStreamPCM16Sample( data, static_cast<size_t>( i2 ) * static_cast<size_t>( channels ) + channelIndex, width, channels );
+	const float p3 = ReadStreamPCM16Sample( data, static_cast<size_t>( i3 ) * static_cast<size_t>( channels ) + channelIndex, width, channels );
+	return CubicInterpolatePCM16( p0, p1, p2, p3, fraction );
+}
+
+static void WriteConvertedStreamFrame( const float *input, int inputChannels, short *output, int outputChannels, float gain ) {
 	if ( input == nullptr || output == nullptr || inputChannels <= 0 || outputChannels <= 0 ) {
 		return;
 	}
 
 	if ( outputChannels == inputChannels ) {
 		for ( int channel = 0; channel < outputChannels; ++channel ) {
-			output[channel] = ClampPCM16FromFloat( static_cast<float>( input[channel] ) * gain );
+			output[channel] = ClampPCM16FromFloat( input[channel] * gain );
 		}
 		return;
 	}
 
 	if ( outputChannels == kDefaultStreamChannels ) {
-		DownmixPCM16FrameToStereo( input, inputChannels, gain, output[0], output[1] );
+		float left = 0.0f;
+		float right = 0.0f;
+		DownmixFrameToStereoFloat( input, inputChannels, gain, left, right );
+		output[0] = ClampPCM16FromFloat( left );
+		output[1] = ClampPCM16FromFloat( right );
 		return;
 	}
 
@@ -104,7 +145,7 @@ static void WriteConvertedStreamFrame( const short *input, int inputChannels, sh
 		output[channel] = 0;
 	}
 	if ( inputChannels == 1 ) {
-		output[0] = ClampPCM16FromFloat( static_cast<float>( input[0] ) * gain );
+		output[0] = ClampPCM16FromFloat( input[0] * gain );
 		if ( outputChannels > 1 ) {
 			output[1] = output[0];
 		}
@@ -113,7 +154,7 @@ static void WriteConvertedStreamFrame( const short *input, int inputChannels, sh
 
 	const int copiedChannels = ( std::min )( inputChannels, outputChannels );
 	for ( int channel = 0; channel < copiedChannels; ++channel ) {
-		output[channel] = ClampPCM16FromFloat( static_cast<float>( input[channel] ) * gain );
+		output[channel] = ClampPCM16FromFloat( input[channel] * gain );
 	}
 }
 
@@ -141,12 +182,12 @@ std::vector<short> AudioSystem::ConvertStreamToPCM16( int samples, int rate, int
 	const int outputSamples = static_cast<int>( outputSamples64 );
 	pcm.resize( static_cast<size_t>( outputSamples ) * static_cast<size_t>( outputChannels ) );
 
+	const double sourceStep = static_cast<double>( rate ) / static_cast<double>( outputRate );
 	for ( int i = 0; i < outputSamples; ++i ) {
-		const int sourceIndex = ClampInt( static_cast<int>( static_cast<int64_t>( i ) * static_cast<int64_t>( rate ) / outputRate ), 0, samples - 1 );
-		const size_t sourceFrame = static_cast<size_t>( sourceIndex ) * static_cast<size_t>( channels );
-		std::array<short, kMaxPCMChannels> inputFrame = {};
+		const double sourcePosition = ( std::min )( static_cast<double>( samples - 1 ), static_cast<double>( i ) * sourceStep );
+		std::array<float, kMaxPCMChannels> inputFrame = {};
 		for ( int channel = 0; channel < channels; ++channel ) {
-			inputFrame[static_cast<size_t>( channel )] = ReadStreamPCM16Sample( data, sourceFrame + static_cast<size_t>( channel ), width, channels );
+			inputFrame[static_cast<size_t>( channel )] = ReadInterpolatedStreamSample( data, samples, width, channels, channel, sourcePosition );
 		}
 
 		WriteConvertedStreamFrame( inputFrame.data(), channels,
@@ -157,18 +198,28 @@ std::vector<short> AudioSystem::ConvertStreamToPCM16( int samples, int rate, int
 	return pcm;
 }
 
+int AudioSystem::StreamOutputRate() const {
+	const int mixerRate = device_.Capabilities().mixerFrequency;
+	if ( mixerRate >= 8000 && mixerRate <= 192000 ) {
+		return mixerRate;
+	}
+
+	return ClampInt( CvarIntegerOrDefault( s_alFrequency, kFallbackStreamRate ), 8000, 192000 );
+}
+
 bool AudioSystem::QueueStreamChunk( StreamPlayer &player, int samples, int rate, int width, int channels, const byte *data, float volume, int outputChannels, bool logFallback ) {
 	if ( outputChannels <= 0 ) {
 		return false;
 	}
 
-	const std::vector<short> pcm = ConvertStreamToPCM16( samples, rate, width, channels, data, volume, kStreamRate, outputChannels );
+	const int outputRate = StreamOutputRate();
+	const std::vector<short> pcm = ConvertStreamToPCM16( samples, rate, width, channels, data, volume, outputRate, outputChannels );
 	if ( pcm.empty() ) {
 		return false;
 	}
 
 	const int frameCount = static_cast<int>( pcm.size() / static_cast<size_t>( outputChannels ) );
-	if ( player.QueuePCM16( pcm.data(), frameCount, outputChannels, kStreamRate ) ) {
+	if ( player.QueuePCM16( pcm.data(), frameCount, outputChannels, outputRate ) ) {
 		return true;
 	}
 
@@ -177,12 +228,12 @@ bool AudioSystem::QueueStreamChunk( StreamPlayer &player, int samples, int rate,
 	}
 
 	player.Clear();
-	const std::vector<short> stereoPCM = ConvertStreamToPCM16( samples, rate, width, channels, data, volume, kStreamRate, kDefaultStreamChannels );
+	const std::vector<short> stereoPCM = ConvertStreamToPCM16( samples, rate, width, channels, data, volume, outputRate, kDefaultStreamChannels );
 	if ( stereoPCM.empty() ) {
 		return false;
 	}
 
-	if ( !player.QueuePCM16( stereoPCM.data(), static_cast<int>( stereoPCM.size() / static_cast<size_t>( kDefaultStreamChannels ) ), kDefaultStreamChannels, kStreamRate ) ) {
+	if ( !player.QueuePCM16( stereoPCM.data(), static_cast<int>( stereoPCM.size() / static_cast<size_t>( kDefaultStreamChannels ) ), kDefaultStreamChannels, outputRate ) ) {
 		return false;
 	}
 
@@ -226,6 +277,9 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 	s_alAudioZones = Cvar_Get( "s_alAudioZones", "1", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( s_alAudioZones, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( s_alAudioZones, "Enables optional maps/<map>.azb OpenAL audio-zone sidecars when present." );
+	s_alAutoRecover = Cvar_Get( "s_alAutoRecover", "1", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_alAutoRecover, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( s_alAutoRecover, "Automatically tries to reopen the OpenAL device after the runtime reports that it disconnected." );
 
 	if ( !device_.Init() ) {
 		return false;
@@ -242,6 +296,7 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 	sampleLookup_.clear();
 	started_ = true;
 	hardMuted_ = true;
+	deviceRecovery_ = {};
 
 	si->Shutdown = []() { AudioSystem::Get().Shutdown(); };
 	si->StartSound = []( const vec3_t origin, int entnum, int entchannel, sfxHandle_t sfxHandle ) { AudioSystem::Get().StartSound( origin, entnum, entchannel, sfxHandle ); };
@@ -286,12 +341,46 @@ void AudioSystem::Shutdown() {
 	device_.Shutdown();
 	started_ = false;
 	hardMuted_ = true;
+	deviceRecovery_ = {};
 	cls.soundRegistered = qfalse;
 }
 
 qboolean AudioSystem::IsSoftMuted() const {
 	return ( ( !gw_active && !gw_minimized && s_muteWhenUnfocused != nullptr && s_muteWhenUnfocused->integer ) ||
 		( gw_minimized && s_muteWhenMinimized != nullptr && s_muteWhenMinimized->integer ) ) ? qtrue : qfalse;
+}
+
+bool AudioSystem::UpdateDeviceState( int msec ) {
+	if ( !started_ || !device_.Ready() ) {
+		return false;
+	}
+
+	const adr::DevicePollDecision poll = adr::AdvanceDevicePoll( deviceRecovery_, msec, device_.DeviceConnected(), kOpenALDeviceStatePollMs );
+	if ( !poll.shouldPoll ) {
+		return poll.connected;
+	}
+
+	const bool refreshSucceeded = device_.RefreshDeviceConnection();
+	const adr::DevicePollResult result = adr::FinishDevicePoll(
+		deviceRecovery_,
+		refreshSucceeded,
+		device_.DeviceConnected(),
+		s_alAutoRecover != nullptr && s_alAutoRecover->integer != 0,
+		kOpenALDeviceRecoveryRetryMs );
+	if ( result.printReconnected ) {
+		Com_Printf( "OpenAL playback device reports connected again\n" );
+	}
+	if ( result.printDisconnectedWarning ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL playback device disconnected; use s_alRecoverDevice or snd_restart if audio does not return\n" );
+	}
+	if ( result.shouldAttemptRecovery ) {
+		const bool recovered = device_.RecoverDevice( false );
+		adr::FinishRecoveryAttempt( deviceRecovery_, recovered );
+		if ( recovered ) {
+			return true;
+		}
+	}
+	return result.connected;
 }
 
 SoundSample *AudioSystem::GetSample( sfxHandle_t handle ) {
@@ -589,8 +678,11 @@ void AudioSystem::UpdateEntityPosition( int entityNum, const float *origin ) {
 	world_.UpdateEntityPosition( entityNum, origin );
 }
 
-void AudioSystem::Update( int /*msec*/ ) {
+void AudioSystem::Update( int msec ) {
 	if ( !started_ ) {
+		return;
+	}
+	if ( !UpdateDeviceState( msec ) ) {
 		return;
 	}
 
@@ -623,6 +715,7 @@ void AudioSystem::ClearSoundBuffer() {
 }
 
 void AudioSystem::SoundInfo() {
+	device_.RefreshDeviceConnection();
 	device_.RefreshTimingDiagnostics();
 	const ModernOpenALCapabilities &caps = device_.Capabilities();
 
@@ -634,6 +727,9 @@ void AudioSystem::SoundInfo() {
 	if ( device_.UsingDefaultFallback() ) {
 		Com_Printf( "Device fallback: using system default device\n" );
 	}
+	Com_Printf( "Device state: %s%s\n",
+		caps.connectedQuery ? ALCConnectedName( caps.connectedState ) : "not-queried",
+		( caps.reopenDevice && caps.alcReopenDeviceSOFT != nullptr ) ? ", live reopen supported" : "" );
 	Com_Printf( "Context attributes: %s%s\n",
 		device_.ContextAttributeMode().empty() ? "not-created" : device_.ContextAttributeMode().c_str(),
 		device_.ContextUsedFallback() ? " (fallback)" : "" );
@@ -664,6 +760,7 @@ void AudioSystem::SoundInfo() {
 	Com_Printf( "OpenAL active context: frequency %d Hz, refresh %d Hz, mono sources %d, stereo sources %d\n",
 		caps.mixerFrequency, caps.refreshRate, caps.monoSources, caps.stereoSources );
 	Com_Printf( "OpenAL PCM layouts: %s\n", device_.PCMChannelSupportDescription() );
+	Com_Printf( "OpenAL stream output: %d Hz cubic SRC\n", StreamOutputRate() );
 	if ( caps.deviceClockValuesValid ) {
 		Com_Printf( "OpenAL timing: device clock %.3f s, device latency %.2f ms\n",
 			NanosecondsToSeconds( caps.deviceClockValue ),
@@ -697,7 +794,7 @@ void AudioSystem::SoundList() {
 			Com_Printf( "%4d : %s [%s %d Hz %d ms%s]\n",
 				static_cast<int>( i ),
 				sample.Name().c_str(),
-				PCMChannelLayoutName( sample.Channels() ),
+				sample.FormatName(),
 				sample.Rate(),
 				sample.DurationMs(),
 				sample.DefaultSample() ? " fallback" : "" );
@@ -721,4 +818,34 @@ void AudioSystem::ListHrtfs() const {
 	}
 
 	PrintOpenALHrtfListForRequestedDevice();
+}
+
+void AudioSystem::PrintOpenALSoftConfigHints() const {
+	if ( started_ && device_.Ready() ) {
+		device_.PrintOpenALSoftConfigHints();
+		return;
+	}
+
+	Com_Printf( "----- OpenAL Soft Configuration Hints -----\n" );
+	Com_Printf( "OpenAL backend is not active; start it with s_backend openal and snd_restart for live capability details.\n" );
+#if defined(_WIN32)
+	Com_Printf( "Config files: %%AppData%%\\alsoft.ini, or an app-local alsoft.ini beside the executable.\n" );
+#else
+	Com_Printf( "Config files: $XDG_CONFIG_HOME/alsoft.conf, /etc/xdg/alsoft.conf, or an app-local alsoft.conf beside the executable.\n" );
+#endif
+	Com_Printf( "Useful OpenAL Soft options include stereo-mode, stereo-encoding, hrtf-mode, hrtf-size, resampler, period_size, periods, output-limiter, channels, sample-type, and decoder hq-mode/distance-comp/nfc.\n" );
+	Com_Printf( "-------------------------------------------\n" );
+}
+
+bool AudioSystem::RecoverDevice( bool force ) {
+	if ( !started_ || !device_.Ready() ) {
+		Com_Printf( "OpenAL device recovery unavailable for backend '%s'\n",
+			( s_backendActive != nullptr ) ? s_backendActive->string : "none" );
+		return false;
+	}
+
+	const bool recovered = device_.RecoverDevice( force );
+	deviceRecovery_.warningPrinted = !device_.DeviceConnected();
+	deviceRecovery_.retryMs = recovered ? 0 : kOpenALDeviceRecoveryRetryMs;
+	return recovered;
 }

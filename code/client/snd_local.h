@@ -252,3 +252,5 @@ qboolean S_Base_Init( soundInterface_t *si );
 qboolean S_OpenAL_Init( soundInterface_t *si );
 void S_OpenAL_ListDevices( void );
 void S_OpenAL_ListHrtfs( void );
+void S_OpenAL_ConfigHints( void );
+qboolean S_OpenAL_RecoverDevice( qboolean force );

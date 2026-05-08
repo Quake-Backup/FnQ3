@@ -16,12 +16,15 @@ public:
 	bool DefaultSample() const { return defaultSample_; }
 	ALuint Buffer() const { return buffer_; }
 	int Channels() const { return channels_; }
+	const AudioSampleFormat &Format() const { return format_; }
+	const char *FormatName() const { return AudioSampleFormatName( format_ ); }
+	bool EncodedSoundField() const { return AudioSampleFormatIsEncodedSoundField( format_ ); }
 	int Rate() const { return rate_; }
 	int DurationMs() const { return durationMs_; }
 
 private:
-	static std::vector<short> ConvertToPCM16( const snd_info_t &info, const byte *data );
-	bool UploadPCM( OpenALDevice &device, const std::vector<short> &pcm, int channels, int rate );
+	static std::vector<short> ConvertToPCM16( const snd_info_t &info, const AudioSampleFormat &format, const byte *data );
+	bool UploadPCM( OpenALDevice &device, const std::vector<short> &pcm, const AudioSampleFormat &format, int rate );
 	bool GenerateFallbackTone( OpenALDevice &device );
 
 	std::string name_;
@@ -30,15 +33,17 @@ private:
 	bool missing_ = false;
 	bool defaultSample_ = false;
 	ALuint buffer_ = 0;
+	AudioSampleFormat format_;
 	int channels_ = 0;
 	int rate_ = 0;
 	int durationMs_ = 0;
 };
 
-std::vector<short> SoundSample::ConvertToPCM16( const snd_info_t &info, const byte *data ) {
+std::vector<short> SoundSample::ConvertToPCM16( const snd_info_t &info, const AudioSampleFormat &format, const byte *data ) {
 	std::vector<short> pcm;
 
-	if ( data == nullptr || info.samples <= 0 || info.rate <= 0 || !PCMChannelCountCanBeRepresented( info.channels ) ||
+	if ( data == nullptr || info.samples <= 0 || info.rate <= 0 || !AudioSampleFormatCanBeRepresented( format ) ||
+		format.channels != info.channels ||
 		( info.width != 1 && info.width != 2 ) || info.size <= 0 || info.dataofs < 0 ) {
 		return pcm;
 	}
@@ -75,17 +80,17 @@ std::vector<short> SoundSample::ConvertToPCM16( const snd_info_t &info, const by
 	return pcm;
 }
 
-bool SoundSample::UploadPCM( OpenALDevice &device, const std::vector<short> &pcm, int channels, int rate ) {
-	if ( pcm.empty() || !device.SupportsPCMChannels( channels ) || rate <= 0 ||
-		pcm.size() % static_cast<size_t>( channels ) != 0 ) {
+bool SoundSample::UploadPCM( OpenALDevice &device, const std::vector<short> &pcm, const AudioSampleFormat &format, int rate ) {
+	if ( pcm.empty() || !device.SupportsSampleFormat( format ) || rate <= 0 ||
+		pcm.size() % static_cast<size_t>( format.channels ) != 0 ) {
 		return false;
 	}
 	if ( !PCMByteCountFitsALsizei( pcm.size() ) ) {
 		return false;
 	}
 
-	const ALenum format = device.PCM16FormatForChannels( channels );
-	if ( format == 0 ) {
+	const ALenum alFormat = device.PCM16FormatForSampleFormat( format );
+	if ( alFormat == 0 ) {
 		return false;
 	}
 
@@ -98,16 +103,17 @@ bool SoundSample::UploadPCM( OpenALDevice &device, const std::vector<short> &pcm
 
 	const ALsizei byteCount = static_cast<ALsizei>( pcm.size() * sizeof( short ) );
 	device.AL().alGetError();
-	device.AL().alBufferData( buffer_, format, pcm.data(), byteCount, rate );
+	device.AL().alBufferData( buffer_, alFormat, pcm.data(), byteCount, rate );
 	if ( device.AL().alGetError() != AL_NO_ERROR ) {
 		device.AL().alDeleteBuffers( 1, &buffer_ );
 		buffer_ = 0;
 		return false;
 	}
 
-	channels_ = channels;
+	format_ = format;
+	channels_ = format.channels;
 	rate_ = rate;
-	const size_t frames = pcm.size() / static_cast<size_t>( channels );
+	const size_t frames = pcm.size() / static_cast<size_t>( format.channels );
 	const int64_t durationMs = static_cast<int64_t>( frames ) * 1000 / rate;
 	durationMs_ = durationMs > std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : static_cast<int>( durationMs );
 	return true;
@@ -124,7 +130,7 @@ bool SoundSample::GenerateFallbackTone( OpenALDevice &device ) {
 
 	defaultSample_ = true;
 	missing_ = false;
-	loaded_ = UploadPCM( device, pcm, 1, 22050 );
+	loaded_ = UploadPCM( device, pcm, { AudioSampleEncoding::PCM, 1 }, 22050 );
 	if ( loaded_ ) {
 		durationMs_ = 250;
 	} else {
@@ -156,7 +162,13 @@ bool SoundSample::EnsureLoaded( OpenALDevice &device, bool allowToneFallback ) {
 		return false;
 	}
 
-	const std::vector<short> pcm = ConvertToPCM16( info, reinterpret_cast<const byte *>( data ) );
+	const AudioSampleFormat sourceFormat = DetectAudioSampleFormatFromName( name_, info.channels );
+	if ( AudioSampleFormatIsEncodedSoundField( sourceFormat ) && !AudioSampleFormatCanBeRepresented( sourceFormat ) ) {
+		Com_DPrintf( S_COLOR_YELLOW "WARNING: audio sample %s is tagged as %s but has %d channels; treating it as ordinary PCM if possible\n",
+			name_.c_str(), AudioSampleFormatName( sourceFormat ), info.channels );
+	}
+	const AudioSampleFormat loadFormat = AudioSampleFormatCanBeRepresented( sourceFormat ) ? sourceFormat : AudioSampleFormat{ AudioSampleEncoding::PCM, info.channels };
+	const std::vector<short> pcm = ConvertToPCM16( info, loadFormat, reinterpret_cast<const byte *>( data ) );
 	Hunk_FreeTempMemory( data );
 
 	if ( pcm.empty() ) {
@@ -170,16 +182,24 @@ bool SoundSample::EnsureLoaded( OpenALDevice &device, bool allowToneFallback ) {
 
 	missing_ = false;
 	defaultSample_ = false;
-	if ( device.SupportsPCMChannels( info.channels ) ) {
-		loaded_ = UploadPCM( device, pcm, info.channels, info.rate );
+	if ( device.SupportsSampleFormat( loadFormat ) ) {
+		loaded_ = UploadPCM( device, pcm, loadFormat, info.rate );
 		if ( !loaded_ && info.channels > 2 ) {
-			Com_DPrintf( S_COLOR_YELLOW "WARNING: OpenAL rejected %s buffer for %s; retrying stereo downmix\n",
-				PCMChannelLayoutName( info.channels ), name_.c_str() );
+			Com_DPrintf( S_COLOR_YELLOW "WARNING: OpenAL rejected %s buffer for %s; retrying stereo fallback\n",
+				AudioSampleFormatName( loadFormat ), name_.c_str() );
+		}
+	}
+	if ( !loaded_ && AudioSampleFormatIsEncodedSoundField( loadFormat ) ) {
+		const std::vector<short> stereoPCM = DownmixEncodedSoundFieldToStereo( pcm, loadFormat );
+		loaded_ = UploadPCM( device, stereoPCM, { AudioSampleEncoding::PCM, kDefaultStreamChannels }, info.rate );
+		if ( loaded_ ) {
+			Com_DPrintf( S_COLOR_YELLOW "WARNING: using stereo fallback for %s sample %s because the active OpenAL runtime does not accept that encoded format\n",
+				AudioSampleFormatName( loadFormat ), name_.c_str() );
 		}
 	}
 	if ( !loaded_ && info.channels > 2 ) {
 		const std::vector<short> stereoPCM = DownmixPCM16ToStereo( pcm, info.channels );
-		loaded_ = UploadPCM( device, stereoPCM, kDefaultStreamChannels, info.rate );
+		loaded_ = UploadPCM( device, stereoPCM, { AudioSampleEncoding::PCM, kDefaultStreamChannels }, info.rate );
 	}
 
 	if ( !loaded_ ) {
@@ -200,6 +220,7 @@ void SoundSample::Unload( OpenALDevice &device ) {
 	loaded_ = false;
 	missing_ = false;
 	defaultSample_ = false;
+	format_ = AudioSampleFormat();
 	channels_ = 0;
 	rate_ = 0;
 	durationMs_ = 0;
@@ -1002,9 +1023,9 @@ bool Q3SoundWorld::RefreshAudioZonesForCurrentMap() {
 
 EnvironmentState Q3SoundWorld::EvaluateCurrentListenerEnvironment() const {
 	if ( audioZones_.Loaded() ) {
-		const AudioZone *zone = audioZones_.FindZone( listenerOrigin_.Data() );
-		if ( zone != nullptr ) {
-			return EnvironmentStateForAudioZone( *zone );
+		EnvironmentState zoneEnvironment;
+		if ( audioZones_.EvaluateEnvironment( listenerOrigin_.Data(), zoneEnvironment ) ) {
+			return zoneEnvironment;
 		}
 	}
 
@@ -1099,12 +1120,13 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 	const bool localOnly = IsLocalOnlyChannel( voice.entchannel );
 	const bool stereoSample = ( voice.sample->Channels() > 1 );
 	const bool twoChannelSample = ( voice.sample->Channels() == 2 );
+	const bool encodedSoundField = voice.sample->EncodedSoundField();
 	const bool stereoSpatializeRequested = ( s_alSpatializeStereo != nullptr && s_alSpatializeStereo->integer );
-	const bool spatializedStereoWorldSource = ( twoChannelSample && stereoSpatializeRequested && device_->Capabilities().sourceSpatialize &&
+	const bool spatializedStereoWorldSource = ( twoChannelSample && !encodedSoundField && stereoSpatializeRequested && device_->Capabilities().sourceSpatialize &&
 		!listenerAttached && !localOnly );
 	const bool monoWorldSource = ( voice.sample->Channels() == 1 && !listenerAttached && !localOnly );
 	const bool positionalSource = monoWorldSource || spatializedStereoWorldSource;
-	const bool directStereoSource = stereoSample && !spatializedStereoWorldSource;
+	const bool directStereoSource = stereoSample && !encodedSoundField && !spatializedStereoWorldSource;
 	const bool useOpenALDistance = positionalSource && device_->UsesOpenALDistanceAttenuation();
 	SpatialParams spatial;
 	if ( listenerAttached || localOnly ) {
@@ -1267,6 +1289,7 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 	int activeOneShots = 0;
 	int activeLoops = 0;
 	char environmentSummary[64];
+	char zoneSummary[128];
 
 	if ( info == nullptr || overlayMode <= 0 ) {
 		return qfalse;
@@ -1287,6 +1310,7 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 	}
 
 	FormatEnvironmentSummary( environment_, environmentSummary, sizeof( environmentSummary ) );
+	FormatAudioZoneSummary( environment_, zoneSummary, sizeof( zoneSummary ) );
 	Com_sprintf( info->lines[info->lineCount++], S_SPATIAL_DEBUG_LINE_CHARS,
 		"spatial %s reverb:%s env:%s",
 		device.LibraryName().empty() ? "openal" : "openal-soft",
@@ -1295,7 +1319,7 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 	Com_sprintf( info->lines[info->lineCount++], S_SPATIAL_DEBUG_LINE_CHARS,
 		"listener:%d voices shot:%d loop:%d zone:%s",
 		listenerNumber_, activeOneShots, activeLoops,
-		environment_.audioZone && !environment_.zoneName.empty() ? environment_.zoneName.c_str() : "generic" );
+		zoneSummary );
 	if ( overlayMode > 1 ) {
 		Com_sprintf( info->lines[info->lineCount++], S_SPATIAL_DEBUG_LINE_CHARS,
 			"env wet:%.2f lf/hf %.2f/%.2f wet %.2f/%.2f occx:%.2f",
@@ -1306,8 +1330,10 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 			environment_.wetHF,
 			environment_.occlusionMultiplier );
 		Com_sprintf( info->lines[info->lineCount++], S_SPATIAL_DEBUG_LINE_CHARS,
-			"env flags outdoors:%d underwater:%d transition:%dms",
-			environment_.outdoors, environment_.underwater, environment_.transitionMs );
+			"env flags out:%d water:%d mat:%s transition:%dms",
+			environment_.outdoors, environment_.underwater,
+			environment_.audioZone ? AudioZoneMaterialClassName( environment_.zoneMaterialClass ) : "none",
+			environment_.transitionMs );
 	}
 
 	selected = SelectDebugVoice( preferredEntity );
@@ -1357,14 +1383,16 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 void Q3SoundWorld::DumpSpatialDebug( const OpenALDevice &device, int preferredEntity ) const {
 	const SoundVoice *selected = SelectDebugVoice( preferredEntity );
 	char environmentSummary[64];
+	char zoneSummary[128];
 	std::array<SourceClassDebugCounter, 12> sourceClassCounters = {};
 	int sourceClassCounterCount = 0;
 
 	FormatEnvironmentSummary( environment_, environmentSummary, sizeof( environmentSummary ) );
+	FormatAudioZoneSummary( environment_, zoneSummary, sizeof( zoneSummary ) );
 	Com_Printf( "----- Spatial Audio Debug -----\n" );
 	Com_Printf( "Environment: %s (zone %s, reverb %s, blend %.2f, wet %.2f, directLF/HF %.2f/%.2f, wetLF/HF %.2f/%.2f, occx %.2f, outdoors %d, underwater %d, transition %dms)\n",
 		environmentSummary,
-		environment_.audioZone && !environment_.zoneName.empty() ? environment_.zoneName.c_str() : "generic",
+		zoneSummary,
 		device.CurrentReverbName(),
 		ClampFloat( environment_.blend, 0.0f, 1.0f ),
 		environment_.baseWet,
@@ -1376,6 +1404,13 @@ void Q3SoundWorld::DumpSpatialDebug( const OpenALDevice &device, int preferredEn
 		environment_.outdoors,
 		environment_.underwater,
 		environment_.transitionMs );
+	if ( environment_.audioZone ) {
+		Com_Printf( "Audio zone metadata: material=%s flags=0x%02x portal=%s %.2f\n",
+			AudioZoneMaterialClassName( environment_.zoneMaterialClass ),
+			environment_.zoneFlags,
+			environment_.zonePortalTargetName.empty() ? "none" : environment_.zonePortalTargetName.c_str(),
+			ClampFloat( environment_.zonePortalBlend, 0.0f, azrt::kAudioZonePortalMaxBlend ) );
+	}
 	Com_Printf( "Listener entity: %d\n", listenerNumber_ );
 
 	if ( selected != nullptr ) {

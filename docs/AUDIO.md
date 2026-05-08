@@ -20,6 +20,7 @@ If you want the short version first:
 - `s_alMonoSources` / `s_alStereoSources`: Request OpenAL source-count hints. Requires `snd_restart`.
 - `s_alOutputLimiter`: Request OpenAL Soft output limiting when supported. Requires `snd_restart`.
 - `s_alSpatializeStereo`: Optionally route two-channel world samples through OpenAL positional rendering. Default `0`; requires `snd_restart`.
+- `s_alAutoRecover 1`: Try OpenAL Soft live device recovery after a playback-device disconnect.
 - `s_volume`: Set the master volume for all game audio.
 - `s_musicVolume`: Set the music volume independently of gameplay sounds.
 - `s_muteWhenUnfocused 1`: Mute audio when the game window loses focus.
@@ -33,6 +34,8 @@ If you want the short version first:
 - `s_info`: Print the active backend, device, and runtime audio state.
 - `s_alListDevices`: List OpenAL playback devices, marking the default, requested, and active devices when known.
 - `s_alListHrtfs`: List OpenAL Soft HRTF specifiers for the active or requested device.
+- `s_alRecoverDevice`: Manually ask OpenAL Soft to reopen or reset the active playback device.
+- `s_alConfigHints`: Print OpenAL Soft configuration-file guidance and live capability hints.
 - `snd_restart`: Reinitialize the sound system after backend or latched-device changes.
 
 ## Backend Selection
@@ -81,6 +84,7 @@ Fresh configs start from these intended defaults:
 - `s_alSpatializeStereo 0`: Keep authored stereo samples on the stable direct path.
 - `s_alReverb 1` and `s_alOcclusion 1`: Enable the environmental layer on capable OpenAL devices.
 - `s_alReverbGain 1.0` and `s_alOcclusionStrength 1.0`: Use the neutral spatial tuning scale.
+- `s_alAutoRecover 1`: Let the OpenAL backend attempt a live device reopen if the runtime reports a disconnect.
 
 If you are upgrading from an older config, keep your existing `s_volume`, `s_musicVolume`, focus muting, and `s_doppler` choices. Then change OpenAL startup requests one at a time and run `snd_restart` after each latched change. `s_info` is the source of truth for the active result, because several OpenAL settings are requests that a device or runtime may decline.
 
@@ -90,6 +94,7 @@ Fallback is intentionally layered:
 - FnQuake3 tries the requested OpenAL device first, or the system default when `s_alDevice` is blank.
 - If a saved OpenAL device name cannot be opened, startup prints a warning and tries the system default before falling back to the legacy backend.
 - If a modern OpenAL context cannot be created, the engine retries with simpler attributes before giving up on OpenAL.
+- If an active OpenAL Soft device later disconnects and the runtime supports live reopen, FnQuake3 attempts a conservative reconnect before asking you to use `snd_restart`.
 - If OpenAL still cannot start, the sound system falls back to the legacy backend instead of leaving the client silent.
 - To force the old path from the start, set `s_backend legacy` and run `snd_restart`.
 
@@ -104,6 +109,7 @@ When `s_backend` is set to `openal`, `s_alDevice` lets you choose which playback
 - `s_alDevice` is latched, so you must run `snd_restart` after changing it.
 - `s_info` prints both the requested device and the active device, which is useful when the system falls back to a different output.
 - `s_alListDevices` prints the devices reported by OpenAL and marks the default, requested, and active device when those names are known.
+- `s_alRecoverDevice` asks OpenAL Soft to reopen or reset the active playback device without rebuilding the whole sound backend. This is most useful after a USB headset, Bluetooth device, HDMI output, or default-device route disappears and returns.
 - If a saved device name stops working after hardware or driver changes, set `s_alDevice ""`, run `snd_restart`, and then use `s_alListDevices` to pick a current name.
 
 Example:
@@ -148,7 +154,7 @@ These settings are intentionally requests, not guarantees. For example, an OpenA
 
 Run `s_info` after `snd_restart` to compare requested and active context values. On OpenAL Soft devices that expose `ALC_SOFT_device_clock`, `s_info` also reports a live device-clock snapshot and output latency in milliseconds. If latency is unavailable, FnQuake3 reports that explicitly instead of guessing.
 
-For OpenAL Soft installations, deeper latency tuning is usually done in the OpenAL Soft config rather than through game cvars. Smaller `period_size` or `periods` values can reduce latency, but they can also cause crackle on unstable devices, so change them gradually.
+For OpenAL Soft installations, deeper latency tuning is usually done in the OpenAL Soft config rather than through game cvars. Smaller `period_size` or `periods` values can reduce latency, but they can also cause crackle on unstable devices, so change them gradually. Run `s_alConfigHints` to print the relevant config-file locations, useful option names, and the live OpenAL capabilities FnQuake3 detected.
 
 Example OpenAL Soft test profile:
 
@@ -159,6 +165,8 @@ period_size = 256
 periods = 3
 output-limiter = true
 ```
+
+OpenAL Soft options worth knowing about include `stereo-mode`, `stereo-encoding`, `hrtf-mode`, `hrtf-size`, `default-hrtf`, `resampler`, `channels`, `sample-type`, and decoder options such as `hq-mode`, `distance-comp`, `nfc`, and `speaker-dist`. FnQuake3 does not need to own every one of those settings; it reports the active HRTF/output/limiter/device state and leaves advanced library-global policy in the OpenAL Soft config.
 
 ## Volume, Music, And Focus Muting
 
@@ -208,6 +216,8 @@ Important details:
 
 - HRTF availability depends on the OpenAL runtime and the active output device.
 - Surround playback is optional and capability-gated. Authored quad/5.1/6.1/7.1 PCM is submitted natively when `AL_EXT_MCFORMATS` is available; otherwise it is mixed down to stereo so the asset still plays.
+- Advanced immersive assets are opt-in by filename tag. WAV files tagged with `uhj`, `uhj2`, `uhj3`, or `uhj4` use OpenAL Soft UHJ formats when `AL_SOFT_UHJ` is available. Files tagged with `bformat2d`, `bformat3d`, or `ambisonic` use first-order B-Format when `AL_EXT_BFORMAT` is available. Untagged files keep the ordinary PCM interpretation.
+- If UHJ or B-Format support is unavailable, FnQuake3 falls back to a safe stereo render path instead of failing the sound. Two-channel UHJ remains stereo-compatible; B-Format uses its omni channel for fallback.
 - `s_info` reports the requested HRTF mode, active HRTF status, output-mode request, and active output mode when the runtime exposes that information.
 - `s_alListHrtfs` prints the HRTF names/indices exposed by OpenAL Soft. If OpenAL is active, it uses the live device; otherwise it opens the requested/default device temporarily for diagnostics.
 - If HRTF sounds worse on a particular headset or listener, use `s_alHrtf off` and run `snd_restart`.
@@ -249,9 +259,9 @@ FnQuake3 can read optional compiled audio-zone sidecars named `maps/<mapname>.az
 - `s_alAudioZones 1`: Enable `.azb` sidecars when present. This is the default.
 - `s_alAudioZones 0`: Ignore sidecars and use generic environment heuristics only.
 - `s_info`: Reports whether audio zones are disabled, missing, loaded, and which zone is currently active.
-- `s_alDebugOverlay 2` and `s_alDebugDump`: Include active zone name plus the zone-adjusted wet, low/high-frequency, occlusion, and transition values.
+- `s_alDebugOverlay 2` and `s_alDebugDump`: Include active zone name, material metadata, portal blend target when one is active, plus the zone-adjusted wet, low/high-frequency, occlusion, and transition values.
 
-Sidecars are compiled from `maps/<mapname>.audiozones` source files with the repo tool target `fnq3-audiozonesc`. The compiler and authoring syntax are documented in the maintainer notes and in `code/tools/audiozones/README.md`.
+Sidecars are compiled with the repo tool target `fnq3-audiozonesc`. Maintainers can write `maps/<mapname>.audiozones` by hand or generate a first-pass sidecar from an existing `.bsp`, then layer small overrides on top. The compiler workflow and authoring syntax are documented in the maintainer notes and in `code/tools/audiozones/README.md`.
 
 ### Doppler
 
@@ -394,6 +404,14 @@ Check the basics in this order:
 - Run `s_info` again and compare the requested device against the active device.
 - If the requested device is no longer listed or startup warns that it could not be opened, set `s_alDevice ""` to return to the system default.
 
+### Audio does not return after unplugging a device
+
+- Run `s_info` and check the `Device state` line.
+- Leave `s_alAutoRecover 1` enabled if your OpenAL Soft runtime supports live reopen.
+- Run `s_alRecoverDevice` after reconnecting the headset, HDMI output, or Bluetooth device.
+- Use `s_alRecoverDevice force` if the device reports connected but you want OpenAL Soft to reopen it anyway.
+- If live reopen is unavailable or fails, run `snd_restart`; if the device name changed, set `s_alDevice ""` first.
+
 ### HRTF stays disabled or sounds wrong
 
 - Run `s_info` and compare the requested and active HRTF/output lines.
@@ -421,7 +439,7 @@ That usually means OpenAL accepted the context but adjusted one or more requeste
 ### A map sounds different than expected
 
 - Run `s_info` and check the `Audio zones` line.
-- If a sidecar is loaded, use `s_alDebugOverlay 2` or `s_alDebugDump` to see the active zone name and tuned environment values.
+- If a sidecar is loaded, use `s_alDebugOverlay 2` or `s_alDebugDump` to see the active zone name, material, portal blend target, and tuned environment values.
 - Set `s_alAudioZones 0` to compare the same location against the generic environment heuristics.
 - Invalid `.azb` files are ignored with a console warning; missing files are harmless.
 

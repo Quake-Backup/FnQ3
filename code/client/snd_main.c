@@ -370,6 +370,24 @@ static void S_AlListHrtfs_f( void )
 	S_OpenAL_ListHrtfs();
 }
 
+static void S_AlConfigHints_f( void )
+{
+	S_OpenAL_ConfigHints();
+}
+
+static void S_AlRecoverDevice_f( void )
+{
+	qboolean force = qfalse;
+
+	if ( Cmd_Argc() > 1 ) {
+		const char *arg = Cmd_Argv( 1 );
+		force = ( !Q_stricmp( arg, "force" ) || !Q_stricmp( arg, "true" ) ||
+			!Q_stricmp( arg, "yes" ) || atoi( arg ) != 0 ) ? qtrue : qfalse;
+	}
+
+	S_OpenAL_RecoverDevice( force );
+}
+
 //=============================================================================
 
 /*
@@ -533,6 +551,8 @@ void S_Init( void )
 		Cmd_AddCommand( "s_alDebugDump", S_AlDebugDump_f );
 		Cmd_AddCommand( "s_alListDevices", S_AlListDevices_f );
 		Cmd_AddCommand( "s_alListHrtfs", S_AlListHrtfs_f );
+		Cmd_AddCommand( "s_alConfigHints", S_AlConfigHints_f );
+		Cmd_AddCommand( "s_alRecoverDevice", S_AlRecoverDevice_f );
 
 		if ( !started && !Q_stricmp( s_backend->string, "openal" ) ) {
 			started = S_OpenAL_Init( &si );
@@ -596,6 +616,8 @@ void S_Shutdown( void )
 	Cmd_RemoveCommand( "s_alDebugDump" );
 	Cmd_RemoveCommand( "s_alListDevices" );
 	Cmd_RemoveCommand( "s_alListHrtfs" );
+	Cmd_RemoveCommand( "s_alConfigHints" );
+	Cmd_RemoveCommand( "s_alRecoverDevice" );
 
 	S_CodecShutdown();
 

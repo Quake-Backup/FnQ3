@@ -56,12 +56,67 @@ shaderCommands_t	tess;
 static qboolean	setArraysOnce;
 #endif
 
+#ifdef USE_VULKAN
+static VkDescriptorSet R_ImageDescriptor( image_t *image )
+{
+	if ( !image ) {
+		ri.Printf( PRINT_WARNING, "R_ImageDescriptor: NULL image\n" );
+		image = tr.defaultImage;
+	}
+
+	if ( r_nobind->integer && tr.dlightImage ) {
+		image = tr.dlightImage;
+	}
+
+	image->frameUsed = tr.frameCount;
+	return image->descriptor;
+}
+
+
+static VkDescriptorSet R_AnimatedImageDescriptor( const textureBundle_t *bundle )
+{
+	int64_t index;
+	double v;
+
+	if ( bundle->isVideoMap ) {
+		ri.CIN_RunCinematic( bundle->videoMapHandle );
+		ri.CIN_UploadCinematic( bundle->videoMapHandle );
+		return R_ImageDescriptor( bundle->image[0] );
+	}
+
+	if ( bundle->isScreenMap ) {
+		if ( !backEnd.screenMapDone ) {
+			return R_ImageDescriptor( tr.blackImage );
+		}
+		return vk.screenMap.color_descriptor;
+	}
+
+	if ( bundle->numImageAnimations <= 1 ) {
+		return R_ImageDescriptor( bundle->image[0] );
+	}
+
+	v = tess.shaderTime * bundle->imageAnimationSpeed;
+	index = v;
+
+	if ( index < 0 ) {
+		index = 0;
+	}
+	index %= bundle->numImageAnimations;
+
+	return R_ImageDescriptor( bundle->image[ index ] );
+}
+#endif
+
+
 /*
 =================
 R_BindAnimatedImage
 =================
 */
 static void R_BindAnimatedImage( const textureBundle_t *bundle ) {
+#ifdef USE_VULKAN
+	vk_update_descriptor( glState.currenttmu + VK_DESC_TEXTURE_BASE, R_AnimatedImageDescriptor( bundle ) );
+#else
 	int64_t index;
 	double	v;
 
@@ -74,8 +129,6 @@ static void R_BindAnimatedImage( const textureBundle_t *bundle ) {
 	if ( bundle->isScreenMap /*&& backEnd.viewParms.frameSceneNum == 1*/ ) {
 		if ( !backEnd.screenMapDone )
 			GL_Bind( tr.blackImage );
-		else
-			vk_update_descriptor( glState.currenttmu + VK_DESC_TEXTURE_BASE, vk.screenMap.color_descriptor );
 		return;
 	}
 
@@ -99,6 +152,7 @@ static void R_BindAnimatedImage( const textureBundle_t *bundle ) {
 	index %= bundle->numImageAnimations;
 
 	GL_Bind( bundle->image[ index ] );
+#endif
 }
 
 
@@ -508,9 +562,15 @@ static void ProjectDlightTexture( void ) {
 		qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, colorArray );
 #endif
 
-		GL_Bind( tr.dlightImage );
-
 #ifdef USE_VULKAN
+		{
+			vk_material_t material;
+
+			vk_material_init( &material );
+			vk_material_set_descriptor( &material, VK_DESC_TEXTURE0, R_ImageDescriptor( tr.dlightImage ) );
+			vk_bind_material( &material );
+		}
+
 		if ( numIndexes != tess.numIndexes ) {
 			// re-bind index buffer for later fog pass
 			rebindIndex = qtrue;
@@ -521,6 +581,8 @@ static void ProjectDlightTexture( void ) {
 		vk_bind_geometry( TESS_RGBA0 | TESS_ST0 );
 		vk_draw_geometry( DEPTH_RANGE_NORMAL, qtrue );
 #else
+		GL_Bind( tr.dlightImage );
+
 		// include GLS_DEPTHFUNC_EQUAL so alpha tested surfaces don't add light
 		// where they aren't rendered
 
@@ -595,7 +657,13 @@ static void RB_FogPass( qboolean rebindIndex ) {
 	}
 	VK_SetFogParams( &uniform, &fog_stage );
 	VK_PushUniform( &uniform );
-	vk_update_descriptor( VK_DESC_FOG_ONLY, tr.fogImage->descriptor );
+	{
+		vk_material_t material;
+
+		vk_material_init( &material );
+		vk_material_set_descriptor( &material, VK_DESC_FOG_ONLY, tr.fogImage->descriptor );
+		vk_bind_material( &material );
+	}
 	vk_draw_geometry( DEPTH_RANGE_NORMAL, qtrue );
 #else
 	const fog_t	*fog = tr.world->fogs + tess.fogNum;
@@ -607,7 +675,13 @@ static void RB_FogPass( qboolean rebindIndex ) {
 
 	RB_CalcFogTexCoords( ( float * ) tess.svars.texcoords[0] );
 	tess.svars.texcoordPtr[ 0 ] = tess.svars.texcoords[ 0 ];
-	GL_Bind( tr.fogImage );
+	{
+		vk_material_t material;
+
+		vk_material_init( &material );
+		vk_material_set_descriptor( &material, VK_DESC_TEXTURE0, R_ImageDescriptor( tr.fogImage ) );
+		vk_bind_material( &material );
+	}
 
 	vk_bind_pipeline( pipeline );
 	if ( rebindIndex ) {
@@ -981,7 +1055,6 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 	if ( fogCollapse ) {
 		VK_SetFogParams( &uniform, &fog_stage );
 		VectorCopy( backEnd.or.viewOrigin, uniform.eyePos );
-		vk_update_descriptor( VK_DESC_FOG_COLLAPSE, tr.fogImage->descriptor );
 		pushUniform = qtrue;
 	} else
 #endif
@@ -1006,60 +1079,71 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 #endif
 
 #ifdef USE_VULKAN
-		tess_flags |= pStage->tessFlags;
+		{
+			vk_material_t material;
 
-		for ( i = 0;  i < pStage->numTexBundles; i++ ) {
-			if ( pStage->bundle[i].image[0] != NULL ) {
-				GL_SelectTexture( i );
-				R_BindAnimatedImage( &pStage->bundle[i] );
-				if ( tess_flags & ( TESS_ST0 << i ) ) {
-					R_ComputeTexCoords( i, &pStage->bundle[i] );
-				}
-				if ( tess_flags & ( TESS_RGBA0 << i ) ) {
-					R_ComputeColors( i, tess.svars.colors[i], pStage );
-				}
-				if ( tess_flags & (TESS_ENT0 << i) && backEnd.currentEntity ) {
-					uniform.ent.color[i][0] = backEnd.currentEntity->e.shader.rgba[0] / 255.0;
-					uniform.ent.color[i][1] = backEnd.currentEntity->e.shader.rgba[1] / 255.0;
-					uniform.ent.color[i][2] = backEnd.currentEntity->e.shader.rgba[2] / 255.0;
-					uniform.ent.color[i][3] = pStage->bundle[i].alphaGen == AGEN_IDENTITY ? 1.0 : (backEnd.currentEntity->e.shader.rgba[3] / 255.0);
-					pushUniform = qtrue;
+			vk_material_init( &material );
+
+			tess_flags |= pStage->tessFlags;
+
+			for ( i = 0;  i < pStage->numTexBundles; i++ ) {
+				if ( pStage->bundle[i].image[0] != NULL ) {
+					vk_material_set_descriptor( &material, VK_DESC_TEXTURE_BASE + i, R_AnimatedImageDescriptor( &pStage->bundle[i] ) );
+					if ( tess_flags & ( TESS_ST0 << i ) ) {
+						R_ComputeTexCoords( i, &pStage->bundle[i] );
+					}
+					if ( tess_flags & ( TESS_RGBA0 << i ) ) {
+						R_ComputeColors( i, tess.svars.colors[i], pStage );
+					}
+					if ( tess_flags & (TESS_ENT0 << i) && backEnd.currentEntity ) {
+						uniform.ent.color[i][0] = backEnd.currentEntity->e.shader.rgba[0] / 255.0;
+						uniform.ent.color[i][1] = backEnd.currentEntity->e.shader.rgba[1] / 255.0;
+						uniform.ent.color[i][2] = backEnd.currentEntity->e.shader.rgba[2] / 255.0;
+						uniform.ent.color[i][3] = pStage->bundle[i].alphaGen == AGEN_IDENTITY ? 1.0 : (backEnd.currentEntity->e.shader.rgba[3] / 255.0);
+						pushUniform = qtrue;
+					}
 				}
 			}
-		}
 
-		VK_SetTextureFactors( &uniform, pStage, 0 );
-		pushUniform = qtrue;
+			if ( fogCollapse ) {
+				vk_material_set_descriptor( &material, VK_DESC_FOG_COLLAPSE, tr.fogImage->descriptor );
+			}
 
-		if ( pushUniform ) {
-			pushUniform = qfalse;
-			VK_PushUniform( &uniform );
-		}
+			VK_SetTextureFactors( &uniform, pStage, 0 );
+			pushUniform = qtrue;
 
-		GL_SelectTexture( 0 );
+			if ( pushUniform ) {
+				pushUniform = qfalse;
+				VK_PushUniform( &uniform );
+			}
 
-		if ( r_lightmap->integer && pStage->bundle[1].lightmap != LIGHTMAP_INDEX_NONE ) {
-			//GL_SelectTexture( 0 );
-			GL_Bind( tr.whiteImage ); // replace diffuse texture with a white one thus effectively render only lightmap
-		}
+			GL_SelectTexture( 0 );
 
-		if ( backEnd.viewParms.portalView == PV_MIRROR ) {
-			pipeline = pStage->vk_mirror_pipeline[fog_stage];
-		} else {
-			pipeline = pStage->vk_pipeline[fog_stage];
-		}
+			if ( r_lightmap->integer && pStage->bundle[1].lightmap != LIGHTMAP_INDEX_NONE ) {
+				// Replace diffuse texture with a white one thus effectively render only lightmap.
+				vk_material_set_descriptor( &material, VK_DESC_TEXTURE0, R_ImageDescriptor( tr.whiteImage ) );
+			}
 
-		vk_bind_pipeline( pipeline );
-		vk_bind_geometry( tess_flags );
-		vk_draw_geometry( tess.depthRange, qtrue );
+			vk_bind_material( &material );
 
-		if ( pStage->depthFragment ) {
-			if ( backEnd.viewParms.portalView == PV_MIRROR )
-				pipeline = pStage->vk_mirror_pipeline_df;
-			else
-				pipeline = pStage->vk_pipeline_df;
+			if ( backEnd.viewParms.portalView == PV_MIRROR ) {
+				pipeline = pStage->vk_mirror_pipeline[fog_stage];
+			} else {
+				pipeline = pStage->vk_pipeline[fog_stage];
+			}
+
 			vk_bind_pipeline( pipeline );
+			vk_bind_geometry( tess_flags );
 			vk_draw_geometry( tess.depthRange, qtrue );
+
+			if ( pStage->depthFragment ) {
+				if ( backEnd.viewParms.portalView == PV_MIRROR )
+					pipeline = pStage->vk_mirror_pipeline_df;
+				else
+					pipeline = pStage->vk_pipeline_df;
+				vk_bind_pipeline( pipeline );
+				vk_draw_geometry( tess.depthRange, qtrue );
+			}
 		}
 #else
 		R_ComputeColors( 0, tess.svars.colors[0].rgba, pStage );
@@ -1185,7 +1269,6 @@ uint32_t VK_PushUniform( const vkUniform_t *uniform ) {
 	Com_Memcpy( vk.cmd->vertex_buffer_ptr + offset, uniform, sizeof( *uniform ) );
 	vk.cmd->vertex_buffer_offset = offset + vk.uniform_item_size;
 
-	vk_reset_descriptor( VK_DESC_UNIFORM );
 	vk_update_descriptor( VK_DESC_UNIFORM, vk.cmd->uniform_descriptor );
 	vk_update_descriptor_offset( VK_DESC_UNIFORM, vk.cmd->uniform_read_offset );
 
@@ -1230,16 +1313,22 @@ void VK_LightingPass( void )
 
 	abs_light = /* (pStage->stateBits & GLS_ATEST_BITS) && */ (cull == CT_TWO_SIDED) ? 1 : 0;
 
-	if ( fog_stage )
-		vk_update_descriptor( VK_DESC_FOG_DLIGHT, tr.fogImage->descriptor );
-
 	if ( tess.light->linear )
 		pipeline = vk.dlight1_pipelines_x[cull][tess.shader->polygonOffset][fog_stage][abs_light];
 	else
 		pipeline = vk.dlight_pipelines_x[cull][tess.shader->polygonOffset][fog_stage][abs_light];
 
 	GL_SelectTexture( 0 );
-	R_BindAnimatedImage( &pStage->bundle[ tess.shader->lightingBundle ] );
+	{
+		vk_material_t material;
+
+		vk_material_init( &material );
+		vk_material_set_descriptor( &material, VK_DESC_TEXTURE0, R_AnimatedImageDescriptor( &pStage->bundle[ tess.shader->lightingBundle ] ) );
+		if ( fog_stage ) {
+			vk_material_set_descriptor( &material, VK_DESC_FOG_DLIGHT, tr.fogImage->descriptor );
+		}
+		vk_bind_material( &material );
+	}
 
 #ifdef USE_VBO
 	if ( tess.vboIndex == 0 )

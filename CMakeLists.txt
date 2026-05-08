@@ -22,7 +22,8 @@ OPTION(USE_VULKAN "" ON)
 OPTION(USE_GLX "" OFF)
 OPTION(USE_SYSTEM_JPEG "" OFF)
 OPTION(USE_RENDERER_DLOPEN "" ON)
-OPTION(FNQ3_AUDIO_LOOPBACK_TESTS "Build deterministic OpenAL loopback audio tests" ON)
+OPTION(FNQ3_AUDIO_LOOPBACK_TESTS "Build deterministic audio runtime and OpenAL loopback tests" ON)
+OPTION(FNQ3_GLX_LOGIC_TESTS "Build deterministic GLx renderer logic tests" ON)
 
 IF(RENDERER_DEFAULT STREQUAL "glx")
 	SET(USE_GLX ON CACHE BOOL "Build the experimental GLx renderer" FORCE)
@@ -140,6 +141,16 @@ ENDIF()
 
 IF(FNQ3_AUDIO_LOOPBACK_TESTS)
 	enable_testing()
+	ADD_EXECUTABLE(fnq3_audio_zone_tests tests/audio/audiozone_runtime_tests.cpp)
+	target_compile_features(fnq3_audio_zone_tests PRIVATE cxx_std_17)
+	target_include_directories(fnq3_audio_zone_tests PRIVATE code/audio)
+	add_test(NAME fnq3_audio_zones COMMAND fnq3_audio_zone_tests)
+
+	ADD_EXECUTABLE(fnq3_audio_recovery_tests tests/audio/recovery_policy_tests.cpp)
+	target_compile_features(fnq3_audio_recovery_tests PRIVATE cxx_std_17)
+	target_include_directories(fnq3_audio_recovery_tests PRIVATE code/audio)
+	add_test(NAME fnq3_audio_recovery COMMAND fnq3_audio_recovery_tests)
+
 	ADD_EXECUTABLE(fnq3_audio_loopback_tests tests/audio/openal_loopback_tests.cpp)
 	target_compile_features(fnq3_audio_loopback_tests PRIVATE cxx_std_17)
 	target_include_directories(fnq3_audio_loopback_tests PRIVATE code/openal/include)
@@ -148,6 +159,18 @@ IF(FNQ3_AUDIO_LOOPBACK_TESTS)
 	ENDIF()
 	add_test(NAME fnq3_audio_loopback COMMAND fnq3_audio_loopback_tests)
 	set_tests_properties(fnq3_audio_loopback PROPERTIES SKIP_RETURN_CODE 77)
+ENDIF()
+
+IF(FNQ3_GLX_LOGIC_TESTS)
+	enable_testing()
+	ADD_EXECUTABLE(fnq3_glx_logic_tests tests/glx/glx_logic_tests.cpp)
+	target_compile_features(fnq3_glx_logic_tests PRIVATE cxx_std_17)
+	target_include_directories(fnq3_glx_logic_tests PRIVATE
+		code/rendererglx
+		code/qcommon
+		code/renderercommon
+		code/renderer)
+	add_test(NAME fnq3_glx_logic COMMAND fnq3_glx_logic_tests)
 ENDIF()
 
 # renderers

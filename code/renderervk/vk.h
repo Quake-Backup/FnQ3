@@ -34,6 +34,8 @@
 #endif
 //#define MIN_IMAGE_ALIGN (128*1024)
 #define MAX_ATTACHMENTS_IN_POOL (8+VK_NUM_BLOOM_PASSES*2) // depth + msaa + msaa-resolve + depth-resolve + screenmap.msaa + screenmap.resolve + screenmap.depth + bloom_extract + blur pairs
+#define VK_MAX_FRAME_TIMESTAMPS 64
+#define VK_PIPELINE_CACHE_MAX_BYTES (32 * 1024 * 1024)
 
 #define VK_DESC_STORAGE      0
 #define VK_DESC_UNIFORM      0
@@ -46,6 +48,8 @@
 #define VK_DESC_TEXTURE_BASE VK_DESC_TEXTURE0
 #define VK_DESC_FOG_ONLY     VK_DESC_TEXTURE1
 #define VK_DESC_FOG_DLIGHT   VK_DESC_TEXTURE1
+
+#define VK_DESCRIPTOR_MASK( index ) ( 1u << (index) )
 
 typedef enum {
 	TYPE_COLOR_BLACK,
@@ -198,6 +202,31 @@ typedef struct VK_Pipeline {
 	VkPipeline handle[ RENDER_PASS_COUNT ];
 } VK_Pipeline_t;
 
+typedef struct vk_material_s {
+	VkDescriptorSet descriptor[ VK_DESC_COUNT ];
+	uint32_t descriptor_mask;
+} vk_material_t;
+
+typedef enum {
+	VK_MEMORY_CATEGORY_STAGING,
+	VK_MEMORY_CATEGORY_GEOMETRY,
+	VK_MEMORY_CATEGORY_STORAGE,
+	VK_MEMORY_CATEGORY_STATIC_VBO,
+	VK_MEMORY_CATEGORY_WORLD_IMAGE,
+	VK_MEMORY_CATEGORY_ATTACHMENTS,
+	VK_MEMORY_CATEGORY_READBACK,
+	VK_MEMORY_CATEGORY_COUNT
+} vk_memory_category_t;
+
+typedef struct vk_memory_allocation_s {
+	VkDeviceMemory memory;
+	VkDeviceSize size;
+	uint32_t memory_type_index;
+	VkMemoryPropertyFlags properties;
+	vk_memory_category_t category;
+	qboolean transient;
+} vk_memory_allocation_t;
+
 // this structure must be in sync with shader uniforms!
 typedef struct vkUniform_s {
 	// light/env parameters:
@@ -266,9 +295,13 @@ void vk_destroy_samplers( void );
 
 uint32_t vk_find_pipeline_ext( uint32_t base, const Vk_Pipeline_Def *def, qboolean use );
 void vk_get_pipeline_def( uint32_t pipeline, Vk_Pipeline_Def *def );
+void vk_material_init( vk_material_t *material );
+void vk_material_set_descriptor( vk_material_t *material, int index, VkDescriptorSet descriptor );
+void vk_bind_material( const vk_material_t *material );
 
 void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_t height );
 void vk_create_pipelines( void );
+void vk_warm_pipelines( qboolean include_screenmap );
 
 //
 // Rendering setup.
@@ -309,13 +342,37 @@ void vk_update_descriptor_offset( int index, uint32_t offset );
 void vk_update_post_process_pipelines( void );
 
 const char *vk_format_string( VkFormat format );
+const char *vk_color_space_string( VkColorSpaceKHR colorSpace );
+
+#ifdef USE_VBO
+typedef struct vbo_record_stats_s {
+	uint32_t queued_items;
+	uint32_t device_local_draws;
+	uint32_t device_local_indexes;
+	uint32_t soft_draws;
+	uint32_t soft_indexes;
+	uint32_t record_packets;
+	uint32_t recordable_packets;
+	uint32_t recordable_draws;
+	uint32_t recordable_indexes;
+	uint32_t max_packet_indexes;
+	uint32_t packet_overflows;
+} vbo_record_stats_t;
 
 void VBO_PrepareQueues( void );
 void VBO_RenderIBOItems( void );
 void VBO_ClearQueue( void );
+void VBO_ResetRecordStats( void );
+const vbo_record_stats_t *VBO_GetRecordStats( void );
+#endif
 
 typedef struct vk_tess_s {
+	VkCommandPool command_pool;
 	VkCommandBuffer command_buffer;
+	VkQueryPool timestamp_query_pool;
+	uint32_t timestamp_query_count;
+	qboolean timestamp_query_valid;
+	char timestamp_query_names[ VK_MAX_FRAME_TIMESTAMPS ][32];
 
 	VkSemaphore image_acquired;
 	uint32_t	swapchain_image_index;
@@ -352,6 +409,13 @@ typedef struct vk_tess_s {
 	VkRect2D scissor_rect;
 } vk_tess_t;
 
+typedef struct vk_upload_context_s {
+	VkCommandPool command_pool;
+	VkCommandBuffer command_buffer;
+	VkFence fence;
+	qboolean submitted;
+} vk_upload_context_t;
+
 
 // Vk_Instance contains engine-specific vulkan resources that persist entire renderer lifetime.
 // This structure is initialized/deinitialized by vk_initialize/vk_shutdown functions correspondingly.
@@ -371,12 +435,14 @@ typedef struct {
 	VkSemaphore swapchain_rendering_finished[MAX_SWAPCHAIN_IMAGES];
 	//uint32_t swapchain_image_index;
 
-	VkCommandPool command_pool;
+	vk_upload_context_t upload_contexts[ NUM_COMMAND_BUFFERS ];
+	uint32_t upload_context_index;
 #ifdef USE_UPLOAD_QUEUE
+	VkCommandPool staging_command_pool;
 	VkCommandBuffer staging_command_buffer;
 #endif
 
-	VkDeviceMemory image_memory[ MAX_ATTACHMENTS_IN_POOL ];
+	vk_memory_allocation_t image_memory[ MAX_ATTACHMENTS_IN_POOL ];
 	uint32_t image_memory_count;
 
 	struct {
@@ -455,7 +521,7 @@ typedef struct {
 	struct {
 		VkBuffer		buffer;
 		byte			*buffer_ptr;
-		VkDeviceMemory	memory;
+		vk_memory_allocation_t allocation;
 		VkDescriptorSet	descriptor;
 	} storage;
 
@@ -465,11 +531,11 @@ typedef struct {
 
 	struct {
 		VkBuffer vertex_buffer;
-		VkDeviceMemory	buffer_memory;
+		vk_memory_allocation_t allocation;
 	} vbo;
 
 	// host visible memory that holds vertex, index and uniform data
-	VkDeviceMemory geometry_buffer_memory;
+	vk_memory_allocation_t geometry_buffer_allocation;
 	VkDeviceSize geometry_buffer_size;
 	VkDeviceSize geometry_buffer_size_new;
 
@@ -478,6 +544,21 @@ typedef struct {
 		VkDeviceSize vertex_buffer_max;
 		uint32_t push_size;
 		uint32_t push_size_max;
+		uint32_t descriptor_writes;
+		uint32_t descriptor_bind_calls;
+		uint32_t descriptor_bind_sets;
+		uint32_t material_descriptor_hits;
+		uint32_t material_descriptor_misses;
+		uint32_t command_pool_resets;
+		uint32_t upload_pool_resets;
+		uint32_t sync2_barriers;
+		uint32_t legacy_barriers;
+		VkDeviceSize memory_allocated;
+		VkDeviceSize memory_peak_allocated;
+		VkDeviceSize memory_by_category[ VK_MEMORY_CATEGORY_COUNT ];
+		uint32_t memory_allocations;
+		uint32_t memory_peak_allocations;
+		uint32_t memory_allocations_by_category[ VK_MEMORY_CATEGORY_COUNT ];
 	} stats;
 
 	//
@@ -517,6 +598,11 @@ typedef struct {
 	} modules;
 
 	VkPipelineCache pipelineCache;
+	char pipelineCachePath[MAX_QPATH];
+	uint32_t pipelineCacheInitialSize;
+	uint32_t pipelineCacheSavedSize;
+	qboolean pipelineCacheLoaded;
+	qboolean pipelineCacheSaveFailed;
 
 	VK_Pipeline_t pipelines[ MAX_VK_PIPELINES ];
 	uint32_t pipelines_count;
@@ -583,9 +669,18 @@ typedef struct {
 	qboolean fragmentStores;
 	qboolean dedicatedAllocation;
 	qboolean debugMarkers;
+	qboolean debugUtils;
+	qboolean swapchainColorspace;
+	qboolean hdrMetadata;
+	qboolean hdrDisplayActive;
+	qboolean synchronization2;
+	qboolean dynamicRendering;
+	qboolean timestamps;
 
 	float maxAnisotropy;
 	float maxLod;
+	float timestampPeriod;
+	uint32_t timestampValidBits;
 
 	VkFormat color_format;
 	VkFormat capture_format;
@@ -629,7 +724,7 @@ typedef struct {
 
 	struct staging_buffer_s {
 		VkBuffer handle;
-		VkDeviceMemory memory;
+		vk_memory_allocation_t allocation;
 		VkDeviceSize size;
 		byte *ptr; // pointer to mapped staging buffer
 #ifdef USE_UPLOAD_QUEUE
@@ -655,7 +750,7 @@ typedef struct {
 } Vk_Instance;
 
 typedef struct {
-	VkDeviceMemory memory;
+	vk_memory_allocation_t allocation;
 	VkDeviceSize used;
 } ImageChunk;
 

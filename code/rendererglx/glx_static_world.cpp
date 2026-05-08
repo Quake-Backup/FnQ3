@@ -1,6 +1,6 @@
 #include "glx_static_world.h"
+#include "glx_static_world_logic.h"
 
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -472,6 +472,17 @@ static void GLX_StaticWorld_ClearDrawStats( StaticWorldStats *stats )
 	stats->multiDrawFilteredPolicyBarriers = 0;
 	stats->multiDrawFilteredLastBarrierReason = GLX_STATIC_WORLD_FILTERED_BARRIER_NONE;
 	stats->multiDrawFilteredLastBarrierRun = -1;
+	stats->packetBatchAttempts = 0;
+	stats->packetBatchBatches = 0;
+	stats->packetBatchRuns = 0;
+	stats->packetBatchIndexes = 0;
+	stats->packetBatchFallbackRuns = 0;
+	stats->packetBatchSingleRuns = 0;
+	stats->packetBatchLastSegments = 0;
+	stats->packetBatchLastPacketRuns = 0;
+	stats->packetBatchLastFallbackRuns = 0;
+	stats->packetBatchLastSingles = 0;
+	stats->packetBatchLargestSegments = 0;
 	stats->multiDrawIndirectAttempts = 0;
 	stats->multiDrawIndirectCalls = 0;
 	stats->multiDrawIndirectStaticCalls = 0;
@@ -559,18 +570,6 @@ static void GLX_StaticWorld_CopyPacket( StaticWorldPacketStats *packet, const ch
 	packet->drawIndexes = 0;
 }
 
-enum class StaticWorldPacketMatch {
-	None,
-	Partial,
-	Full,
-	ItemMismatch
-};
-
-struct StaticWorldRunPacket {
-	StaticWorldPacketMatch match;
-	int packetIndex;
-};
-
 struct StaticWorldPreparedRun {
 	int sourceIndex;
 	GLsizei count;
@@ -580,80 +579,11 @@ struct StaticWorldPreparedRun {
 	qboolean manifestDraw;
 };
 
-enum class StaticWorldDrawPolicy {
-	FullPackets,
-	ContainedPackets,
-	AllRuns
-};
-
-static int GLX_StaticWorld_Stricmp( const char *lhs, const char *rhs )
-{
-	if ( !lhs ) {
-		lhs = "";
-	}
-	if ( !rhs ) {
-		rhs = "";
-	}
-
-	while ( *lhs || *rhs ) {
-		const int l = std::tolower( static_cast<unsigned char>( *lhs ) );
-		const int r = std::tolower( static_cast<unsigned char>( *rhs ) );
-		if ( l != r ) {
-			return l - r;
-		}
-		if ( *lhs ) {
-			lhs++;
-		}
-		if ( *rhs ) {
-			rhs++;
-		}
-	}
-
-	return 0;
-}
-
 static StaticWorldDrawPolicy GLX_StaticWorld_DrawPolicy( const StaticWorldStats &stats )
 {
 	const char *value = stats.r_glxStaticWorldDrawPolicy ? stats.r_glxStaticWorldDrawPolicy->string : nullptr;
 
-	if ( !value || !*value || !GLX_StaticWorld_Stricmp( value, "full" ) ) {
-		return StaticWorldDrawPolicy::FullPackets;
-	}
-	if ( !GLX_StaticWorld_Stricmp( value, "contained" ) || !GLX_StaticWorld_Stricmp( value, "packet" ) ) {
-		return StaticWorldDrawPolicy::ContainedPackets;
-	}
-	if ( !GLX_StaticWorld_Stricmp( value, "all" ) || !GLX_StaticWorld_Stricmp( value, "legacy" ) ) {
-		return StaticWorldDrawPolicy::AllRuns;
-	}
-
-	return StaticWorldDrawPolicy::FullPackets;
-}
-
-static const char *GLX_StaticWorld_DrawPolicyName( StaticWorldDrawPolicy policy )
-{
-	switch ( policy ) {
-	case StaticWorldDrawPolicy::AllRuns:
-		return "all";
-	case StaticWorldDrawPolicy::ContainedPackets:
-		return "contained";
-	case StaticWorldDrawPolicy::FullPackets:
-	default:
-		return "full";
-	}
-}
-
-static qboolean GLX_StaticWorld_DrawPolicyAllows( StaticWorldDrawPolicy policy, StaticWorldPacketMatch match )
-{
-	switch ( policy ) {
-	case StaticWorldDrawPolicy::AllRuns:
-		return qtrue;
-	case StaticWorldDrawPolicy::ContainedPackets:
-		return match == StaticWorldPacketMatch::Full ||
-			match == StaticWorldPacketMatch::Partial ? qtrue : qfalse;
-	case StaticWorldDrawPolicy::FullPackets:
-	default:
-		return match == StaticWorldPacketMatch::Full ? qtrue : qfalse;
-	}
+	return GLX_StaticWorld_DrawPolicyFromString( value );
 }
 
 static qboolean GLX_StaticWorld_WorldRendererEnabled( const StaticWorldStats &stats )
@@ -691,6 +621,11 @@ static qboolean GLX_StaticWorld_MultiDrawEnabled( const StaticWorldStats &stats 
 		( stats.r_glxStaticWorldMultiDraw && stats.r_glxStaticWorldMultiDraw->integer ) ? qtrue : qfalse;
 }
 
+static qboolean GLX_StaticWorld_PacketBatchEnabled( const StaticWorldStats &stats )
+{
+	return stats.r_glxStaticWorldPacketBatch && stats.r_glxStaticWorldPacketBatch->integer ? qtrue : qfalse;
+}
+
 static StaticWorldDrawPolicy GLX_StaticWorld_EffectiveDrawPolicy( const StaticWorldStats &stats )
 {
 	if ( GLX_StaticWorld_WorldRendererEnabled( stats ) ) {
@@ -703,52 +638,17 @@ static StaticWorldDrawPolicy GLX_StaticWorld_EffectiveDrawPolicy( const StaticWo
 static StaticWorldRunPacket GLX_StaticWorld_ClassifyRunAgainstPacket( const StaticWorldPacketStats &packet, int packetIndex,
 	int offsetBytes, int runBytes, int firstItem, int itemCount, const char *shaderName, int sort )
 {
-	StaticWorldRunPacket result { StaticWorldPacketMatch::None, -1 };
-	const long long runStart = offsetBytes;
-	const long long runEnd = runStart + runBytes;
-	const long long packetStart = packet.indexOffset;
-	const long long packetEnd = packetStart + packet.indexBytes;
+	const StaticWorldPacketView view {
+		packet.shaderName,
+		packet.sort,
+		packet.firstItem,
+		packet.itemCount,
+		packet.indexOffset,
+		packet.indexBytes
+	};
 
-	if ( packet.indexBytes <= 0 ) {
-		return result;
-	}
-	if ( runStart < packetStart || runEnd > packetEnd ) {
-		return result;
-	}
-	if ( packet.sort != sort ) {
-		return result;
-	}
-	if ( shaderName && *shaderName && packet.shaderName[0] &&
-		std::strcmp( packet.shaderName, shaderName ) != 0 ) {
-		return result;
-	}
-
-	if ( firstItem > 0 && itemCount > 0 && packet.firstItem > 0 && packet.itemCount > 0 ) {
-		const long long runFirstItem = firstItem;
-		const long long runLastItem = runFirstItem + itemCount - 1;
-		const long long packetFirstItem = packet.firstItem;
-		const long long packetLastItem = packetFirstItem + packet.itemCount - 1;
-
-		if ( runFirstItem < packetFirstItem || runLastItem > packetLastItem ) {
-			result.match = StaticWorldPacketMatch::ItemMismatch;
-			result.packetIndex = packetIndex;
-			return result;
-		}
-		if ( runFirstItem == packetFirstItem && itemCount == packet.itemCount &&
-			runStart == packetStart && runEnd == packetEnd ) {
-			result.match = StaticWorldPacketMatch::Full;
-			result.packetIndex = packetIndex;
-			return result;
-		}
-	} else if ( runStart == packetStart && runEnd == packetEnd ) {
-		result.match = StaticWorldPacketMatch::Full;
-		result.packetIndex = packetIndex;
-		return result;
-	}
-
-	result.match = StaticWorldPacketMatch::Partial;
-	result.packetIndex = packetIndex;
-	return result;
+	return GLX_StaticWorld_ClassifyRunAgainstPacketView( view, packetIndex,
+		offsetBytes, runBytes, firstItem, itemCount, shaderName, sort );
 }
 
 static StaticWorldRunPacket GLX_StaticWorld_ClassifyRunPacketByByteScan( const StaticWorldStats &stats,
@@ -1180,6 +1080,10 @@ void GLX_StaticWorld_RegisterCvars( StaticWorldStats *stats )
 	stats->r_glxStaticWorldMultiDraw = RI().Cvar_Get( "r_glxStaticWorldMultiDraw", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldMultiDraw,
 		"Submit same-state static-world device-index VBO runs with glMultiDrawElements when available. Experimental and off by default." );
+
+	stats->r_glxStaticWorldPacketBatch = RI().Cvar_Get( "r_glxStaticWorldPacketBatch", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( stats->r_glxStaticWorldPacketBatch,
+		"Split static-world GLx batches into ordered manifest-packet spans so full packets submit from packet-owned offsets before falling back to legacy run spans." );
 
 	stats->r_glxStaticWorldIndirectBuffer = RI().Cvar_Get( "r_glxStaticWorldIndirectBuffer", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldIndirectBuffer,
@@ -1932,6 +1836,46 @@ static int GLX_StaticWorld_FlushFilteredMultiDraw( StaticWorldStats *stats,
 	return runCount;
 }
 
+static int GLX_StaticWorld_FlushPacketMultiDraw( StaticWorldStats *stats,
+	StaticWorldPreparedRun *runs, int runCount, int *drawnRuns,
+	GLenum indexType, qboolean arenaBound )
+{
+	GLsizei multiCounts[GLX_STATIC_WORLD_MULTIDRAW_LIMIT];
+	const GLvoid *multiOffsets[GLX_STATIC_WORLD_MULTIDRAW_LIMIT];
+	unsigned int totalIndexes = 0;
+
+	if ( !stats || !runs || runCount <= 1 ) {
+		return 0;
+	}
+
+	for ( int i = 0; i < runCount; i++ ) {
+		if ( !runs[i].manifestDraw || runs[i].count <= 0 ) {
+			return 0;
+		}
+		multiCounts[i] = runs[i].count;
+		multiOffsets[i] = runs[i].offset;
+		GLX_StaticWorld_AddCounter( &totalIndexes, static_cast<unsigned int>( runs[i].count ) );
+	}
+
+	s_fns.MultiDrawElements( GL_TRIANGLES, multiCounts, indexType, multiOffsets,
+		static_cast<GLsizei>( runCount ) );
+
+	GLX_StaticWorld_RecordMultiDrawSubmission( stats, runs, runCount, arenaBound );
+	stats->packetBatchBatches++;
+	GLX_StaticWorld_AddCounter( &stats->packetBatchRuns, static_cast<unsigned int>( runCount ) );
+	GLX_StaticWorld_AddCounter( &stats->packetBatchIndexes, totalIndexes );
+
+	if ( drawnRuns ) {
+		for ( int i = 0; i < runCount; i++ ) {
+			if ( runs[i].sourceIndex >= 0 ) {
+				drawnRuns[runs[i].sourceIndex] = 1;
+			}
+		}
+	}
+
+	return runCount;
+}
+
 static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats *stats,
 	StaticWorldPreparedRun *runs, int runCount, int *drawnRuns,
 	GLenum indexType, qboolean arenaBound )
@@ -2324,6 +2268,93 @@ static int GLX_StaticWorld_FlushManifestCommandSpans( StaticWorldStats *stats,
 	return drawnCount;
 }
 
+static int GLX_StaticWorld_FlushPacketDrawSpans( StaticWorldStats *stats,
+	StaticWorldPreparedRun *runs, int runCount, int *drawnRuns,
+	GLenum indexType, qboolean arenaBound )
+{
+	int manifestRuns = 0;
+	int spanStart = 0;
+	int drawnCount = 0;
+	unsigned int localSegments = 0;
+	unsigned int localPacketRuns = 0;
+	unsigned int localFallbackRuns = 0;
+	unsigned int localSingles = 0;
+
+	if ( !stats || !runs || runCount <= 1 || !GLX_StaticWorld_PacketBatchEnabled( *stats ) ) {
+		return 0;
+	}
+
+	stats->packetBatchAttempts++;
+
+	for ( int i = 0; i < runCount; i++ ) {
+		if ( runs[i].manifestDraw ) {
+			manifestRuns++;
+		}
+	}
+	if ( manifestRuns <= 0 ) {
+		return 0;
+	}
+	if ( !GLX_StaticWorld_ResolveDrawFn() || !GLX_StaticWorld_ResolveMultiDrawFn() ) {
+		return 0;
+	}
+
+	while ( spanStart < runCount ) {
+		const qboolean packetSpan = runs[spanStart].manifestDraw ? qtrue : qfalse;
+		int spanEnd = spanStart + 1;
+		int spanDrawn = 0;
+
+		while ( spanEnd < runCount &&
+			( runs[spanEnd].manifestDraw ? qtrue : qfalse ) == packetSpan ) {
+			spanEnd++;
+		}
+
+		const int spanCount = spanEnd - spanStart;
+		localSegments++;
+
+		if ( spanCount == 1 ) {
+			spanDrawn = GLX_StaticWorld_FlushPreparedSingleDraw( stats,
+				runs[spanStart], drawnRuns, indexType, arenaBound, nullptr );
+			if ( spanDrawn > 0 ) {
+				localSingles += static_cast<unsigned int>( spanDrawn );
+				if ( packetSpan ) {
+					localPacketRuns += static_cast<unsigned int>( spanDrawn );
+				} else {
+					localFallbackRuns += static_cast<unsigned int>( spanDrawn );
+				}
+			}
+		} else if ( packetSpan ) {
+			spanDrawn = GLX_StaticWorld_FlushPacketMultiDraw( stats,
+				&runs[spanStart], spanCount, drawnRuns, indexType, arenaBound );
+			if ( spanDrawn > 0 ) {
+				localPacketRuns += static_cast<unsigned int>( spanDrawn );
+			}
+		} else {
+			spanDrawn = GLX_StaticWorld_FlushFilteredMultiDraw( stats,
+				&runs[spanStart], spanCount, drawnRuns, indexType, arenaBound );
+			if ( spanDrawn > 0 ) {
+				localFallbackRuns += static_cast<unsigned int>( spanDrawn );
+			}
+		}
+
+		drawnCount += spanDrawn;
+		spanStart = spanEnd;
+	}
+
+	if ( drawnCount > 0 ) {
+		GLX_StaticWorld_AddCounter( &stats->packetBatchFallbackRuns, localFallbackRuns );
+		GLX_StaticWorld_AddCounter( &stats->packetBatchSingleRuns, localSingles );
+		stats->packetBatchLastSegments = localSegments;
+		stats->packetBatchLastPacketRuns = localPacketRuns;
+		stats->packetBatchLastFallbackRuns = localFallbackRuns;
+		stats->packetBatchLastSingles = localSingles;
+		if ( localSegments > stats->packetBatchLargestSegments ) {
+			stats->packetBatchLargestSegments = localSegments;
+		}
+	}
+
+	return drawnCount;
+}
+
 static int GLX_StaticWorld_FlushFilteredDrawBatch( StaticWorldStats *stats,
 	StaticWorldPreparedRun *runs, int runCount, int *drawnRuns,
 	GLenum indexType, qboolean arenaBound )
@@ -2433,6 +2464,14 @@ static int GLX_StaticWorld_FlushFilteredDrawBatch( StaticWorldStats *stats,
 				stats->multiDrawIndirectSpanLargestSegments = localSegments;
 			}
 			return drawnCount;
+		}
+	}
+
+	{
+		const int packetDrawn = GLX_StaticWorld_FlushPacketDrawSpans( stats, runs, runCount,
+			drawnRuns, indexType, arenaBound );
+		if ( packetDrawn > 0 ) {
+			return packetDrawn;
 		}
 	}
 
@@ -2861,6 +2900,20 @@ void GLX_StaticWorld_PrintInfo( const StaticWorldStats &stats )
 		stats.multiDrawFilteredPolicyBarriers,
 		GLX_StaticWorld_FilteredBarrierName( stats.multiDrawFilteredLastBarrierReason ),
 		stats.multiDrawFilteredLastBarrierRun );
+	RI().Printf( PRINT_ALL, "  static world GLx packet batches: %s, attempts %u, batches %u, packet runs %u/%u indexes, fallback runs %u, singles %u\n",
+		BoolName( GLX_StaticWorld_PacketBatchEnabled( stats ) ),
+		stats.packetBatchAttempts,
+		stats.packetBatchBatches,
+		stats.packetBatchRuns,
+		stats.packetBatchIndexes,
+		stats.packetBatchFallbackRuns,
+		stats.packetBatchSingleRuns );
+	RI().Printf( PRINT_ALL, "  static world GLx packet batch shape: last %u segments, packet runs %u, fallback runs %u, singles %u, largest %u segments\n",
+		stats.packetBatchLastSegments,
+		stats.packetBatchLastPacketRuns,
+		stats.packetBatchLastFallbackRuns,
+		stats.packetBatchLastSingles,
+		stats.packetBatchLargestSegments );
 	RI().Printf( PRINT_ALL, "  static world GLx multidraw indirect: %s, %u/%u calls, %u runs, %u indexes, fallbacks %u, skips %u, errors %u, largest %u\n",
 		BoolName( stats.r_glxStaticWorldMultiDrawIndirect &&
 			stats.r_glxStaticWorldMultiDrawIndirect->integer ? qtrue : qfalse ),
@@ -3098,8 +3151,9 @@ void GLX_StaticWorld_PrintSpanDiagnostics( const StaticWorldStats &stats, int li
 		BoolName( stats.indirectBufferReady ),
 		stats.indirectBufferCommands,
 		stats.indirectBufferBytes );
-	RI().Printf( PRINT_ALL, "    gates: multidraw %s, indirect %s, compact %s, spans %s, single indirect %s\n",
+	RI().Printf( PRINT_ALL, "    gates: multidraw %s, packet-batch %s, indirect %s, compact %s, spans %s, single indirect %s\n",
 		BoolName( GLX_StaticWorld_MultiDrawEnabled( stats ) ),
+		BoolName( GLX_StaticWorld_PacketBatchEnabled( stats ) ),
 		BoolName( stats.r_glxStaticWorldMultiDrawIndirect &&
 			stats.r_glxStaticWorldMultiDrawIndirect->integer ? qtrue : qfalse ),
 		BoolName( stats.r_glxStaticWorldMultiDrawIndirectCompact &&
@@ -3137,6 +3191,18 @@ void GLX_StaticWorld_PrintSpanDiagnostics( const StaticWorldStats &stats, int li
 		stats.multiDrawFilteredPolicyBarriers,
 		GLX_StaticWorld_FilteredBarrierName( stats.multiDrawFilteredLastBarrierReason ),
 		stats.multiDrawFilteredLastBarrierRun );
+	RI().Printf( PRINT_ALL, "    packet batches: attempts %u, batches %u, packet runs %u/%u indexes, fallback runs %u, singles %u; last %u segments/%u packet/%u fallback/%u singles, largest %u segments\n",
+		stats.packetBatchAttempts,
+		stats.packetBatchBatches,
+		stats.packetBatchRuns,
+		stats.packetBatchIndexes,
+		stats.packetBatchFallbackRuns,
+		stats.packetBatchSingleRuns,
+		stats.packetBatchLastSegments,
+		stats.packetBatchLastPacketRuns,
+		stats.packetBatchLastFallbackRuns,
+		stats.packetBatchLastSingles,
+		stats.packetBatchLargestSegments );
 	RI().Printf( PRINT_ALL, "    outer spans: attempts %u, batches %u, mdi runs %u, fallback runs %u, singles %u, single draws %u/%u indirect; last %u segments/%u mdi/%u fallback/%u singles, largest %u segments\n",
 		stats.multiDrawIndirectSpanAttempts,
 		stats.multiDrawIndirectSpanBatches,

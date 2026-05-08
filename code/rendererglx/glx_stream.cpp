@@ -1,6 +1,6 @@
 #include "glx_stream.h"
+#include "glx_stream_logic.h"
 
-#include <cctype>
 #include <cstdio>
 #include <cstring>
 
@@ -107,26 +107,6 @@ static void *GLX_Stream_GetProc( const char *name, const char *fallbackName = nu
 	return proc;
 }
 
-static int GLX_Stream_Stricmp( const char *lhs, const char *rhs )
-{
-	const unsigned char *a = reinterpret_cast<const unsigned char *>( lhs ? lhs : "" );
-	const unsigned char *b = reinterpret_cast<const unsigned char *>( rhs ? rhs : "" );
-
-	while ( *a && *b ) {
-		const int ca = std::tolower( *a );
-		const int cb = std::tolower( *b );
-
-		if ( ca != cb ) {
-			return ca - cb;
-		}
-
-		a++;
-		b++;
-	}
-
-	return std::tolower( *a ) - std::tolower( *b );
-}
-
 static size_t GLX_Stream_AlignOffset( size_t offset, size_t alignment )
 {
 	if ( alignment <= 1 ) {
@@ -139,20 +119,6 @@ static size_t GLX_Stream_AlignOffset( size_t offset, size_t alignment )
 	}
 
 	return offset + alignment - remainder;
-}
-
-static qboolean GLX_Stream_ModeIs( const StreamState &state, const char *mode )
-{
-	return state.r_glxStreamMode && state.r_glxStreamMode->string &&
-		!GLX_Stream_Stricmp( state.r_glxStreamMode->string, mode ) ? qtrue : qfalse;
-}
-
-static qboolean GLX_Stream_ModeIsKnown( const StreamState &state )
-{
-	return GLX_Stream_ModeIs( state, "auto" ) ||
-		GLX_Stream_ModeIs( state, "persistent" ) ||
-		GLX_Stream_ModeIs( state, "maprange" ) ||
-		GLX_Stream_ModeIs( state, "orphan" ) ? qtrue : qfalse;
 }
 
 static int GLX_Stream_DrawKeyMode( const StreamState &state )
@@ -242,6 +208,21 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	state->streamedDrawMultitextureDraws = 0;
 	state->streamedDrawFogDraws = 0;
 	state->streamedDrawDepthFragmentDraws = 0;
+	state->streamedDrawTexModDraws = 0;
+	state->streamedDrawTexModAccepted = 0;
+	state->streamedDrawTexModRejected = 0;
+	state->streamedDrawEnvironmentDraws = 0;
+	state->streamedDrawEnvironmentAccepted = 0;
+	state->streamedDrawEnvironmentRejected = 0;
+	state->streamedDrawDynamicLightDraws = 0;
+	state->streamedDrawDynamicLightAccepted = 0;
+	state->streamedDrawDynamicLightRejected = 0;
+	state->streamedDrawScreenMapDraws = 0;
+	state->streamedDrawScreenMapAccepted = 0;
+	state->streamedDrawScreenMapRejected = 0;
+	state->streamedDrawVideoMapDraws = 0;
+	state->streamedDrawVideoMapAccepted = 0;
+	state->streamedDrawVideoMapRejected = 0;
 	state->streamedDrawVertexes = 0;
 	state->streamedDrawIndexes = 0;
 	state->largestReservationBytes = 0;
@@ -541,7 +522,7 @@ void GLX_Stream_RegisterCvars( StreamState *state )
 
 	state->r_glxStreamDrawKeyMode = RI().Cvar_Get( "r_glxStreamDrawKeyMode", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawKeyMode,
-		"Filter GLx streamed draw material keys: 0 plain, 1 computed, 2 all eligible." );
+		"Filter GLx streamed draw material keys: 0 plain plus explicit gates, 1 computed, 2 all eligible." );
 
 	state->r_glxStreamDrawMultitexture = RI().Cvar_Get( "r_glxStreamDrawMultitexture", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawMultitexture,
@@ -554,6 +535,26 @@ void GLX_Stream_RegisterCvars( StreamState *state )
 	state->r_glxStreamDrawDepthFragment = RI().Cvar_Get( "r_glxStreamDrawDepthFragment", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawDepthFragment,
 		"Allow GLx streamed draws for eligible depthFragment stages. Experimental and off by default." );
+
+	state->r_glxStreamDrawTexMods = RI().Cvar_Get( "r_glxStreamDrawTexMods", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxStreamDrawTexMods,
+		"Allow GLx streamed draws for stages whose texture coordinates were modified by the legacy CPU texmod path." );
+
+	state->r_glxStreamDrawEnvironment = RI().Cvar_Get( "r_glxStreamDrawEnvironment", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxStreamDrawEnvironment,
+		"Allow GLx streamed draws for stages using legacy CPU-computed environment texture coordinates." );
+
+	state->r_glxStreamDrawDynamicLights = RI().Cvar_Get( "r_glxStreamDrawDynamicLights", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxStreamDrawDynamicLights,
+		"Allow GLx streamed draws for dynamic-light map stages. Experimental and off by default." );
+
+	state->r_glxStreamDrawScreenMaps = RI().Cvar_Get( "r_glxStreamDrawScreenMaps", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxStreamDrawScreenMaps,
+		"Allow GLx streamed draws for screen-map stages. Experimental and off by default." );
+
+	state->r_glxStreamDrawVideoMaps = RI().Cvar_Get( "r_glxStreamDrawVideoMaps", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxStreamDrawVideoMaps,
+		"Allow GLx streamed draws for video-map stages. Experimental and off by default." );
 }
 
 void GLX_Stream_OnOpenGLReady( StreamState *state, const Capabilities &caps )
@@ -575,78 +576,42 @@ void GLX_Stream_OnOpenGLReady( StreamState *state, const Capabilities &caps )
 	}
 	state->ringBytes = static_cast<size_t>( state->ringMegabytes ) * 1024u * 1024u;
 
-	const qboolean autoMode = ( GLX_Stream_ModeIs( *state, "auto" ) || !GLX_Stream_ModeIsKnown( *state ) ) ? qtrue : qfalse;
-	const qboolean forcePersistent = GLX_Stream_ModeIs( *state, "persistent" );
-	const qboolean forceMapRange = GLX_Stream_ModeIs( *state, "maprange" );
-	const qboolean forceOrphan = GLX_Stream_ModeIs( *state, "orphan" );
+	const char *requestedMode = state->r_glxStreamMode && state->r_glxStreamMode->string ?
+		state->r_glxStreamMode->string : "auto";
+	const StreamStrategySelection selection = GLX_Stream_SelectStrategy( requestedMode, caps.features );
 
-	if ( !GLX_Stream_ModeIsKnown( *state ) ) {
+	if ( !selection.knownMode ) {
 		RI().Printf( PRINT_WARNING, "Unknown r_glxStreamMode '%s', using auto.\n",
-			state->r_glxStreamMode && state->r_glxStreamMode->string ? state->r_glxStreamMode->string : "" );
+			requestedMode ? requestedMode : "" );
 	}
 
-	if ( forceOrphan ) {
-		state->strategy = StreamStrategy::OrphanSubData;
-		GLX_Stream_SetReason( state, "forced by r_glxStreamMode" );
-		goto create_stream_buffer;
-	}
+	state->strategy = selection.strategy;
+	state->fallbackCount += selection.fallbackCount;
+	GLX_Stream_SetReason( state, selection.reason );
 
-	if ( ( forcePersistent || autoMode ) &&
-		caps.features.bufferStorage && caps.features.syncObjects ) {
-		state->strategy = StreamStrategy::PersistentMapped;
-		GLX_Stream_SetReason( state, forcePersistent ? "forced by r_glxStreamMode" : "buffer storage and sync objects available" );
-		goto create_stream_buffer;
-	}
-
-	if ( forcePersistent ) {
-		state->fallbackCount++;
-	}
-
-	if ( ( forceMapRange || autoMode || forcePersistent ) && caps.features.mapBufferRange ) {
-		state->strategy = StreamStrategy::MapBufferRange;
-		GLX_Stream_SetReason( state, forcePersistent ? "persistent unavailable, map range available" :
-			( forceMapRange ? "forced by r_glxStreamMode" : "map buffer range available" ) );
-		goto create_stream_buffer;
-	}
-
-	if ( forceMapRange ) {
-		state->fallbackCount++;
-	}
-
-	state->strategy = StreamStrategy::OrphanSubData;
-	GLX_Stream_SetReason( state, forcePersistent || forceMapRange ? "requested strategy unavailable, using orphan/subdata" :
-		"portable orphan/subdata fallback" );
-
-create_stream_buffer:
 	if ( !GLX_Stream_FunctionsReady() ) {
 		GLX_Stream_SetReason( state, "buffer functions unavailable" );
 		state->ready = qfalse;
 		return;
 	}
 
-	if ( caps.features.syncObjects ) {
-		state->syncReady = GLX_Stream_SyncFunctionsReady();
+	const StreamRuntimeSupport runtimeSupport {
+		state->strategy,
+		caps.features.syncObjects,
+		caps.features.syncObjects ? GLX_Stream_SyncFunctionsReady() : qfalse,
+		caps.features.mapBufferRange,
+		s_fns.MapBufferRange ? qtrue : qfalse,
+		s_fns.BufferSubData ? qtrue : qfalse
+	};
+	const StreamRuntimeFallback runtimeFallback =
+		GLX_Stream_ApplyRuntimeFunctionFallbacks( runtimeSupport );
+	state->strategy = runtimeFallback.strategy;
+	state->syncReady = runtimeFallback.syncReady;
+	state->fallbackCount += runtimeFallback.fallbackCount;
+	if ( runtimeFallback.reason ) {
+		GLX_Stream_SetReason( state, runtimeFallback.reason );
 	}
-
-	if ( state->strategy == StreamStrategy::PersistentMapped && !state->syncReady ) {
-		state->fallbackCount++;
-		if ( caps.features.mapBufferRange && s_fns.MapBufferRange ) {
-			state->strategy = StreamStrategy::MapBufferRange;
-			GLX_Stream_SetReason( state, "persistent sync functions unavailable, using map range" );
-		} else {
-			state->strategy = StreamStrategy::OrphanSubData;
-			GLX_Stream_SetReason( state, "persistent sync functions unavailable, using orphan/subdata" );
-		}
-	}
-
-	if ( state->strategy == StreamStrategy::MapBufferRange && !s_fns.MapBufferRange ) {
-		state->fallbackCount++;
-		state->strategy = StreamStrategy::OrphanSubData;
-		GLX_Stream_SetReason( state, "map range function unavailable, using orphan/subdata" );
-	}
-
-	if ( state->strategy == StreamStrategy::OrphanSubData && !s_fns.BufferSubData ) {
-		GLX_Stream_SetReason( state, "buffer subdata function unavailable" );
+	if ( !runtimeFallback.ready ) {
 		state->ready = qfalse;
 		return;
 	}
@@ -857,40 +822,96 @@ qboolean GLX_Stream_DrawDepthFragmentEnabled( const StreamState &state )
 		state.r_glxStreamDrawDepthFragment && state.r_glxStreamDrawDepthFragment->integer ? qtrue : qfalse;
 }
 
-qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned int stateBits,
-	int rgbGen, int alphaGen, int tcGen0, int texMods0 )
+qboolean GLX_Stream_DrawTexModsEnabled( const StreamState &state )
 {
-	qboolean allowed = qtrue;
-	const int mode = state ? GLX_Stream_DrawKeyMode( *state ) : 0;
-	const int specialFlags = GLX_STAGE_VIDEO_MAP | GLX_STAGE_SCREEN_MAP |
-		GLX_STAGE_DLIGHT_MAP | GLX_STAGE_ENVIRONMENT | GLX_STAGE_ST1;
+	return GLX_Stream_DrawEnabled( state ) &&
+		state.r_glxStreamDrawTexMods && state.r_glxStreamDrawTexMods->integer ? qtrue : qfalse;
+}
+
+qboolean GLX_Stream_DrawEnvironmentEnabled( const StreamState &state )
+{
+	return GLX_Stream_DrawEnabled( state ) &&
+		state.r_glxStreamDrawEnvironment && state.r_glxStreamDrawEnvironment->integer ? qtrue : qfalse;
+}
+
+qboolean GLX_Stream_DrawDynamicLightsEnabled( const StreamState &state )
+{
+	return GLX_Stream_DrawEnabled( state ) &&
+		state.r_glxStreamDrawDynamicLights && state.r_glxStreamDrawDynamicLights->integer ? qtrue : qfalse;
+}
+
+qboolean GLX_Stream_DrawScreenMapsEnabled( const StreamState &state )
+{
+	return GLX_Stream_DrawEnabled( state ) &&
+		state.r_glxStreamDrawScreenMaps && state.r_glxStreamDrawScreenMaps->integer ? qtrue : qfalse;
+}
+
+qboolean GLX_Stream_DrawVideoMapsEnabled( const StreamState &state )
+{
+	return GLX_Stream_DrawEnabled( state ) &&
+		state.r_glxStreamDrawVideoMaps && state.r_glxStreamDrawVideoMaps->integer ? qtrue : qfalse;
+}
+
+static void GLX_Stream_RecordMaterialGate( StreamState *state, qboolean present, qboolean allowed,
+	unsigned int *accepted, unsigned int *rejected )
+{
+	if ( !state || !present ) {
+		return;
+	}
+
+	if ( allowed ) {
+		( *accepted )++;
+	} else {
+		( *rejected )++;
+	}
+}
+
+qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned int stateBits,
+	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 )
+{
+	StreamMaterialGateConfig config {};
+	StreamMaterialGateResult result;
 
 	(void)stateBits;
 	(void)rgbGen;
 	(void)alphaGen;
 	(void)tcGen0;
 
-	if ( mode <= 0 && ( ( flags & GLX_STAGE_TEXMOD ) || texMods0 > 0 ) ) {
-		allowed = qfalse;
+	if ( state ) {
+		config.keyMode = GLX_Stream_DrawKeyMode( *state );
+		config.multitexture = GLX_Stream_DrawMultitextureEnabled( *state );
+		config.texMods = GLX_Stream_DrawTexModsEnabled( *state );
+		config.environment = GLX_Stream_DrawEnvironmentEnabled( *state );
+		config.dynamicLights = GLX_Stream_DrawDynamicLightsEnabled( *state );
+		config.screenMaps = GLX_Stream_DrawScreenMapsEnabled( *state );
+		config.videoMaps = GLX_Stream_DrawVideoMapsEnabled( *state );
 	}
-	if ( mode <= 1 && ( flags & specialFlags ) ) {
-		allowed = qfalse;
-	}
+	result = GLX_Stream_EvaluateMaterialGate( flags, texMods0, texMods1, config );
 
 	if ( state ) {
-		if ( allowed ) {
+		GLX_Stream_RecordMaterialGate( state, result.hasTexMods, result.allowed,
+			&state->streamedDrawTexModAccepted, &state->streamedDrawTexModRejected );
+		GLX_Stream_RecordMaterialGate( state, result.hasEnvironment, result.allowed,
+			&state->streamedDrawEnvironmentAccepted, &state->streamedDrawEnvironmentRejected );
+		GLX_Stream_RecordMaterialGate( state, result.hasDynamicLight, result.allowed,
+			&state->streamedDrawDynamicLightAccepted, &state->streamedDrawDynamicLightRejected );
+		GLX_Stream_RecordMaterialGate( state, result.hasScreenMap, result.allowed,
+			&state->streamedDrawScreenMapAccepted, &state->streamedDrawScreenMapRejected );
+		GLX_Stream_RecordMaterialGate( state, result.hasVideoMap, result.allowed,
+			&state->streamedDrawVideoMapAccepted, &state->streamedDrawVideoMapRejected );
+		if ( result.allowed ) {
 			state->streamedDrawMaterialAccepted++;
 		} else {
 			state->streamedDrawMaterialRejected++;
 		}
 	}
 
-	return allowed;
+	return result.allowed;
 }
 
 void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
-	qboolean depthFragment, qboolean success )
+	qboolean depthFragment, int materialFlags, qboolean success )
 {
 	if ( !state ) {
 		return;
@@ -922,6 +943,21 @@ void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIn
 		}
 		if ( depthFragment ) {
 			state->streamedDrawDepthFragmentDraws++;
+		}
+		if ( materialFlags & GLX_STAGE_TEXMOD ) {
+			state->streamedDrawTexModDraws++;
+		}
+		if ( materialFlags & GLX_STAGE_ENVIRONMENT ) {
+			state->streamedDrawEnvironmentDraws++;
+		}
+		if ( materialFlags & GLX_STAGE_DLIGHT_MAP ) {
+			state->streamedDrawDynamicLightDraws++;
+		}
+		if ( materialFlags & GLX_STAGE_SCREEN_MAP ) {
+			state->streamedDrawScreenMapDraws++;
+		}
+		if ( materialFlags & GLX_STAGE_VIDEO_MAP ) {
+			state->streamedDrawVideoMapDraws++;
 		}
 	} else {
 		state->streamedDrawFallbacks++;
@@ -1061,7 +1097,22 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 	RI().Printf( PRINT_ALL, "  dynamic stream draw key mode: %i (%s), accepted %u, rejected %u\n",
 		GLX_Stream_DrawKeyMode( state ), GLX_Stream_DrawKeyModeName( GLX_Stream_DrawKeyMode( state ) ),
 		state.streamedDrawMaterialAccepted, state.streamedDrawMaterialRejected );
-	RI().Printf( PRINT_ALL, "  dynamic stream draws: %u/%u attempts, %u verts, %u indexes, %.2f MB, index %.2f MB, tex1 %.2f MB, mt %u, fog %u, depthfrag %u, fallbacks %u\n",
+	RI().Printf( PRINT_ALL, "  dynamic stream texmod gate: %s, accepted %u, rejected %u\n",
+		BoolName( GLX_Stream_DrawTexModsEnabled( state ) ),
+		state.streamedDrawTexModAccepted, state.streamedDrawTexModRejected );
+	RI().Printf( PRINT_ALL, "  dynamic stream environment gate: %s, accepted %u, rejected %u\n",
+		BoolName( GLX_Stream_DrawEnvironmentEnabled( state ) ),
+		state.streamedDrawEnvironmentAccepted, state.streamedDrawEnvironmentRejected );
+	RI().Printf( PRINT_ALL, "  dynamic stream dynamic-light gate: %s, accepted %u, rejected %u\n",
+		BoolName( GLX_Stream_DrawDynamicLightsEnabled( state ) ),
+		state.streamedDrawDynamicLightAccepted, state.streamedDrawDynamicLightRejected );
+	RI().Printf( PRINT_ALL, "  dynamic stream screen-map gate: %s, accepted %u, rejected %u\n",
+		BoolName( GLX_Stream_DrawScreenMapsEnabled( state ) ),
+		state.streamedDrawScreenMapAccepted, state.streamedDrawScreenMapRejected );
+	RI().Printf( PRINT_ALL, "  dynamic stream video-map gate: %s, accepted %u, rejected %u\n",
+		BoolName( GLX_Stream_DrawVideoMapsEnabled( state ) ),
+		state.streamedDrawVideoMapAccepted, state.streamedDrawVideoMapRejected );
+	RI().Printf( PRINT_ALL, "  dynamic stream draws: %u/%u attempts, %u verts, %u indexes, %.2f MB, index %.2f MB, tex1 %.2f MB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, fallbacks %u\n",
 		state.streamedDraws, state.streamedDrawAttempts,
 		state.streamedDrawVertexes, state.streamedDrawIndexes,
 		static_cast<double>( state.streamedDrawBytes ) / ( 1024.0 * 1024.0 ),
@@ -1070,6 +1121,11 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 		state.streamedDrawMultitextureDraws,
 		state.streamedDrawFogDraws,
 		state.streamedDrawDepthFragmentDraws,
+		state.streamedDrawTexModDraws,
+		state.streamedDrawEnvironmentDraws,
+		state.streamedDrawDynamicLightDraws,
+		state.streamedDrawScreenMapDraws,
+		state.streamedDrawVideoMapDraws,
 		state.streamedDrawFallbacks );
 	RI().Printf( PRINT_ALL, "  dynamic stream draw skips: %u (bind %u, input %u, mt %u, depthfrag %u, texcoord %u, empty %u, key %u, fog %u, program %u)\n",
 		state.streamedDrawSkips,

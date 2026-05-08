@@ -2391,4 +2391,8 @@ void RE_LoadWorldMap( const char *name ) {
 	} else {
 		ri.FS_FreeFile( buffer.v );
 	}
+
+#ifdef USE_VULKAN
+	vk_warm_pipelines( qtrue );
+#endif
 }

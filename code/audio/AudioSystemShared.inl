@@ -2,6 +2,8 @@
 // Shared helpers, cvars, filters, environments, audio zones, and listener probes.
 
 namespace azfmt = fnq3_audiozones;
+namespace azrt = fnq3_audiozones_runtime;
+namespace adr = fnq3_audio_device_recovery;
 
 constexpr int kMaxVoices = MAX_CHANNELS;
 constexpr size_t kMaxRegisteredSamples = 4096;
@@ -9,9 +11,11 @@ constexpr int kReservedLoopFloor = 12;
 constexpr int kInitialStreamBuffers = 48;
 constexpr int kMaxStreamBuffers = 128;
 constexpr int kQueuedStreamChunks = 4;
-constexpr int kStreamRate = 44100;
+constexpr int kFallbackStreamRate = 48000;
 constexpr int kDefaultStreamChannels = 2;
 constexpr int kMaxPCMChannels = 8;
+constexpr int kOpenALDeviceStatePollMs = 1000;
+constexpr int kOpenALDeviceRecoveryRetryMs = 3000;
 constexpr int kEnvironmentProbeIntervalMs = 200;
 constexpr int kVoiceEnvironmentIntervalMs = 75;
 constexpr int kEnvironmentTransitionMs = 650;
@@ -56,6 +60,7 @@ cvar_t *s_alDebugOverlay = nullptr;
 cvar_t *s_alDebugVoice = nullptr;
 cvar_t *s_alAudioZones = nullptr;
 cvar_t *s_alSourceClassDebug = nullptr;
+cvar_t *s_alAutoRecover = nullptr;
 
 struct Vec3f {
 	float v[3];
@@ -175,15 +180,154 @@ static const char *PCMChannelLayoutName( int channels ) {
 	}
 }
 
+enum class AudioSampleEncoding {
+	PCM,
+	UHJ,
+	BFormat2D,
+	BFormat3D
+};
+
+struct AudioSampleFormat {
+	AudioSampleEncoding encoding = AudioSampleEncoding::PCM;
+	int channels = 0;
+};
+
+static bool AudioSampleFormatIsEncodedSoundField( const AudioSampleFormat &format ) {
+	return format.encoding != AudioSampleEncoding::PCM;
+}
+
+static bool AudioSampleFormatCanBeRepresented( const AudioSampleFormat &format ) {
+	switch ( format.encoding ) {
+	case AudioSampleEncoding::PCM:
+		return PCMChannelCountCanBeRepresented( format.channels );
+	case AudioSampleEncoding::UHJ:
+		return format.channels >= 2 && format.channels <= 4;
+	case AudioSampleEncoding::BFormat2D:
+		return format.channels == 3;
+	case AudioSampleEncoding::BFormat3D:
+		return format.channels == 4;
+	default:
+		return false;
+	}
+}
+
+static const char *AudioSampleFormatName( const AudioSampleFormat &format ) {
+	switch ( format.encoding ) {
+	case AudioSampleEncoding::PCM:
+		return PCMChannelLayoutName( format.channels );
+	case AudioSampleEncoding::UHJ:
+		switch ( format.channels ) {
+		case 2:
+			return "UHJ 2-channel";
+		case 3:
+			return "UHJ 3-channel";
+		case 4:
+			return "UHJ 4-channel";
+		default:
+			return "UHJ unsupported";
+		}
+	case AudioSampleEncoding::BFormat2D:
+		return "B-Format 2D";
+	case AudioSampleEncoding::BFormat3D:
+		return "B-Format 3D";
+	default:
+		return "unsupported";
+	}
+}
+
+static bool AudioTagBoundary( char c ) {
+	return c == '\0' || c == '/' || c == '\\' || c == '.' || c == '_' || c == '-' || c == ' ' || c == '+';
+}
+
+static std::string LowercaseString( const std::string &value ) {
+	std::string lower;
+	lower.reserve( value.size() );
+	for ( char c : value ) {
+		lower.push_back( static_cast<char>( std::tolower( static_cast<unsigned char>( c ) ) ) );
+	}
+	return lower;
+}
+
+static bool StringHasDelimitedTag( const std::string &lowerName, const char *tag ) {
+	if ( tag == nullptr || tag[0] == '\0' ) {
+		return false;
+	}
+
+	const std::string needle = tag;
+	size_t pos = lowerName.find( needle );
+	while ( pos != std::string::npos ) {
+		const char before = ( pos == 0 ) ? '\0' : lowerName[pos - 1u];
+		const size_t afterPos = pos + needle.size();
+		const char after = ( afterPos >= lowerName.size() ) ? '\0' : lowerName[afterPos];
+		if ( AudioTagBoundary( before ) && AudioTagBoundary( after ) ) {
+			return true;
+		}
+		pos = lowerName.find( needle, pos + 1u );
+	}
+
+	return false;
+}
+
+static bool NameHasAnyAudioTag( const std::string &lowerName, const char *const *tags, size_t tagCount ) {
+	for ( size_t i = 0; i < tagCount; ++i ) {
+		if ( StringHasDelimitedTag( lowerName, tags[i] ) ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static AudioSampleFormat DetectAudioSampleFormatFromName( const std::string &name, int channels ) {
+	const std::string lowerName = LowercaseString( name );
+	const char *uhjTags[] = { "uhj", "uhj2", "uhj2ch", "uhj2chn", "uhj3", "uhj3ch", "uhj3chn", "uhj4", "uhj4ch", "uhj4chn" };
+	const char *uhj2Tags[] = { "uhj2", "uhj2ch", "uhj2chn" };
+	const char *uhj3Tags[] = { "uhj3", "uhj3ch", "uhj3chn" };
+	const char *uhj4Tags[] = { "uhj4", "uhj4ch", "uhj4chn" };
+	const char *bformat2dTags[] = { "bformat2d", "b-format2d", "bformat-2d", "b-format-2d", "ambi2d", "ambisonic2d" };
+	const char *bformat3dTags[] = { "bformat3d", "b-format3d", "bformat-3d", "b-format-3d", "ambi3d", "ambisonic3d" };
+	const char *bformatTags[] = { "bformat", "b-format", "ambisonic" };
+
+	if ( NameHasAnyAudioTag( lowerName, bformat2dTags, sizeof( bformat2dTags ) / sizeof( bformat2dTags[0] ) ) ) {
+		return { AudioSampleEncoding::BFormat2D, channels };
+	}
+	if ( NameHasAnyAudioTag( lowerName, bformat3dTags, sizeof( bformat3dTags ) / sizeof( bformat3dTags[0] ) ) ) {
+		return { AudioSampleEncoding::BFormat3D, channels };
+	}
+	if ( NameHasAnyAudioTag( lowerName, bformatTags, sizeof( bformatTags ) / sizeof( bformatTags[0] ) ) ) {
+		if ( channels == 3 ) {
+			return { AudioSampleEncoding::BFormat2D, channels };
+		}
+		if ( channels == 4 ) {
+			return { AudioSampleEncoding::BFormat3D, channels };
+		}
+	}
+
+	if ( NameHasAnyAudioTag( lowerName, uhj2Tags, sizeof( uhj2Tags ) / sizeof( uhj2Tags[0] ) ) ) {
+		return { AudioSampleEncoding::UHJ, channels };
+	}
+	if ( NameHasAnyAudioTag( lowerName, uhj3Tags, sizeof( uhj3Tags ) / sizeof( uhj3Tags[0] ) ) ) {
+		return { AudioSampleEncoding::UHJ, channels };
+	}
+	if ( NameHasAnyAudioTag( lowerName, uhj4Tags, sizeof( uhj4Tags ) / sizeof( uhj4Tags[0] ) ) ) {
+		return { AudioSampleEncoding::UHJ, channels };
+	}
+	if ( NameHasAnyAudioTag( lowerName, uhjTags, sizeof( uhjTags ) / sizeof( uhjTags[0] ) ) ) {
+		return { AudioSampleEncoding::UHJ, channels };
+	}
+
+	return { AudioSampleEncoding::PCM, channels };
+}
+
 static short ClampPCM16FromFloat( float sample ) {
 	const int value = static_cast<int>( sample );
 	return static_cast<short>( ClampInt( value, -32768, 32767 ) );
 }
 
-static void DownmixPCM16FrameToStereo( const short *input, int channels, float gain, short &leftOut, short &rightOut ) {
+template<typename SampleType>
+static void DownmixFrameToStereoFloat( const SampleType *input, int channels, float gain, float &leftOut, float &rightOut ) {
 	if ( input == nullptr || channels <= 0 ) {
-		leftOut = 0;
-		rightOut = 0;
+		leftOut = 0.0f;
+		rightOut = 0.0f;
 		return;
 	}
 
@@ -230,8 +374,16 @@ static void DownmixPCM16FrameToStereo( const short *input, int channels, float g
 		break;
 	}
 
-	leftOut = ClampPCM16FromFloat( left * gain );
-	rightOut = ClampPCM16FromFloat( right * gain );
+	leftOut = left * gain;
+	rightOut = right * gain;
+}
+
+static void DownmixPCM16FrameToStereo( const short *input, int channels, float gain, short &leftOut, short &rightOut ) {
+	float left = 0.0f;
+	float right = 0.0f;
+	DownmixFrameToStereoFloat( input, channels, gain, left, right );
+	leftOut = ClampPCM16FromFloat( left );
+	rightOut = ClampPCM16FromFloat( right );
 }
 
 static std::vector<short> DownmixPCM16ToStereo( const std::vector<short> &input, int channels ) {
@@ -252,6 +404,40 @@ static std::vector<short> DownmixPCM16ToStereo( const std::vector<short> &input,
 		output[frame * 2u] = left;
 		output[frame * 2u + 1u] = right;
 	}
+	return output;
+}
+
+static std::vector<short> DownmixEncodedSoundFieldToStereo( const std::vector<short> &input, const AudioSampleFormat &format ) {
+	std::vector<short> output;
+	if ( input.empty() || format.channels <= 0 || input.size() % static_cast<size_t>( format.channels ) != 0 ) {
+		return output;
+	}
+
+	const size_t frames = input.size() / static_cast<size_t>( format.channels );
+	if ( frames > std::numeric_limits<size_t>::max() / 2u ) {
+		return output;
+	}
+	output.resize( frames * 2u );
+
+	for ( size_t frame = 0; frame < frames; ++frame ) {
+		const short *src = input.data() + frame * static_cast<size_t>( format.channels );
+		short left = 0;
+		short right = 0;
+
+		if ( format.encoding == AudioSampleEncoding::BFormat2D || format.encoding == AudioSampleEncoding::BFormat3D ) {
+			left = src[0];
+			right = src[0];
+		} else if ( format.encoding == AudioSampleEncoding::UHJ && format.channels >= 2 ) {
+			left = src[0];
+			right = src[1];
+		} else {
+			DownmixPCM16FrameToStereo( src, format.channels, 1.0f, left, right );
+		}
+
+		output[frame * 2u] = left;
+		output[frame * 2u + 1u] = right;
+	}
+
 	return output;
 }
 
@@ -630,6 +816,28 @@ static const char *HrtfRequestName( ALCint request ) {
 	}
 }
 
+static const char *ALCConnectedName( ALCint connected ) {
+	switch ( connected ) {
+	case ALC_TRUE:
+		return "connected";
+	case ALC_FALSE:
+		return "disconnected";
+	default:
+		return "unknown";
+	}
+}
+
+static const char *ALCEventSupportName( ALCenum support ) {
+	switch ( support ) {
+	case ALC_EVENT_SUPPORTED_SOFT:
+		return "supported";
+	case ALC_EVENT_NOT_SUPPORTED_SOFT:
+		return "not-supported";
+	default:
+		return "not-queried";
+	}
+}
+
 static double NanosecondsToMilliseconds( ALCint64SOFT nanoseconds ) {
 	return static_cast<double>( nanoseconds ) / 1000000.0;
 }
@@ -648,19 +856,31 @@ struct ModernOpenALCapabilities {
 	bool enumerateAll = false;
 	bool hrtf = false;
 	bool deviceClock = false;
+	bool disconnect = false;
+	bool reopenDevice = false;
+	bool systemEvents = false;
 	bool outputLimiter = false;
 	bool outputMode = false;
 	bool loopback = false;
+	bool sourceEvents = false;
 	bool deferredUpdates = false;
 	bool directChannels = false;
 	bool directChannelsRemix = false;
 	bool multiChannelFormats = false;
+	bool bFormat = false;
+	bool uhj = false;
+	bool uhjEx = false;
 	bool sourceSpatialize = false;
 	bool sourceLatency = false;
 	ALCint hrtfStatus = -1;
 	ALCint hrtfCount = 0;
 	ALCint outputLimiterState = -1;
 	ALCint outputModeValue = -1;
+	bool connectedQuery = false;
+	ALCint connectedState = -1;
+	ALCenum defaultPlaybackEventSupport = 0;
+	ALCenum playbackAddedEventSupport = 0;
+	ALCenum playbackRemovedEventSupport = 0;
 	ALint distanceModel = AL_NONE;
 	bool distanceModelValid = false;
 	ALint requestedDistanceModel = AL_INVERSE_DISTANCE_CLAMPED;
@@ -677,12 +897,18 @@ struct ModernOpenALCapabilities {
 	bool deviceClockValuesValid = false;
 	LPALCGETSTRINGISOFT alcGetStringiSOFT = nullptr;
 	LPALCRESETDEVICESOFT alcResetDeviceSOFT = nullptr;
+	LPALCREOPENDEVICESOFT alcReopenDeviceSOFT = nullptr;
+	LPALCEVENTISSUPPORTEDSOFT alcEventIsSupportedSOFT = nullptr;
+	LPALCEVENTCONTROLSOFT alcEventControlSOFT = nullptr;
+	LPALCEVENTCALLBACKSOFT alcEventCallbackSOFT = nullptr;
 	LPALCGETINTEGER64VSOFT alcGetInteger64vSOFT = nullptr;
 	LPALCLOOPBACKOPENDEVICESOFT alcLoopbackOpenDeviceSOFT = nullptr;
 	LPALCISRENDERFORMATSUPPORTEDSOFT alcIsRenderFormatSupportedSOFT = nullptr;
 	LPALCRENDERSAMPLESSOFT alcRenderSamplesSOFT = nullptr;
 	LPALDEFERUPDATESSOFT alDeferUpdatesSOFT = nullptr;
 	LPALPROCESSUPDATESSOFT alProcessUpdatesSOFT = nullptr;
+	LPALEVENTCONTROLSOFT alEventControlSOFT = nullptr;
+	LPALEVENTCALLBACKSOFT alEventCallbackSOFT = nullptr;
 	LPALGETSOURCEDVSOFT alGetSourcedvSOFT = nullptr;
 	std::vector<std::string> hrtfSpecifiers;
 };
@@ -733,7 +959,11 @@ struct EnvironmentState {
 	qboolean outdoors = qfalse;
 	qboolean underwater = qfalse;
 	qboolean audioZone = qfalse;
+	uint8_t zoneMaterialClass = static_cast<uint8_t>( azfmt::MaterialClass::Unknown );
+	uint8_t zoneFlags = 0;
+	float zonePortalBlend = 0.0f;
 	std::string zoneName;
+	std::string zonePortalTargetName;
 };
 
 static float LerpFloat( float from, float to, float blend ) {
@@ -765,7 +995,11 @@ static void SetEnvironmentPreset( EnvironmentState &state, int presetIndex ) {
 	state.outdoors = qfalse;
 	state.underwater = qfalse;
 	state.audioZone = qfalse;
+	state.zoneMaterialClass = static_cast<uint8_t>( azfmt::MaterialClass::Unknown );
+	state.zoneFlags = 0;
+	state.zonePortalBlend = 0.0f;
 	state.zoneName.clear();
+	state.zonePortalTargetName.clear();
 }
 
 static bool EnvironmentStateDiffers( const EnvironmentState &a, const EnvironmentState &b ) {
@@ -773,7 +1007,11 @@ static bool EnvironmentStateDiffers( const EnvironmentState &a, const Environmen
 		a.outdoors != b.outdoors ||
 		a.underwater != b.underwater ||
 		a.audioZone != b.audioZone ||
+		a.zoneMaterialClass != b.zoneMaterialClass ||
+		a.zoneFlags != b.zoneFlags ||
 		a.zoneName != b.zoneName ||
+		a.zonePortalTargetName != b.zonePortalTargetName ||
+		std::fabs( a.zonePortalBlend - b.zonePortalBlend ) > 0.01f ||
 		std::fabs( a.baseWet - b.baseWet ) > 0.01f ||
 		std::fabs( a.directLF - b.directLF ) > 0.01f ||
 		std::fabs( a.directHF - b.directHF ) > 0.01f ||
@@ -803,7 +1041,11 @@ static EnvironmentState BlendEnvironmentStates( const EnvironmentState &from, co
 	state.outdoors = ( blend >= 0.5f ) ? to.outdoors : from.outdoors;
 	state.underwater = ( blend >= 0.5f ) ? to.underwater : from.underwater;
 	state.audioZone = ( blend >= 0.5f ) ? to.audioZone : from.audioZone;
+	state.zoneMaterialClass = ( blend >= 0.5f ) ? to.zoneMaterialClass : from.zoneMaterialClass;
+	state.zoneFlags = ( blend >= 0.5f ) ? to.zoneFlags : from.zoneFlags;
+	state.zonePortalBlend = LerpFloat( from.zonePortalBlend, to.zonePortalBlend, blend );
 	state.zoneName = ( blend >= 0.5f ) ? to.zoneName : from.zoneName;
+	state.zonePortalTargetName = ( blend >= 0.5f ) ? to.zonePortalTargetName : from.zonePortalTargetName;
 	return state;
 }
 
@@ -837,182 +1079,39 @@ static void FormatEnvironmentSummary( const EnvironmentState &state, char *buffe
 	Com_sprintf( buffer, bufferSize, "%s", EnvironmentNameOrDefault( state.targetName ) );
 }
 
-struct AudioZone {
-	Vec3f mins;
-	Vec3f maxs;
-	int presetIndex = 0;
-	float reverbGain = 1.0f;
-	float occlusionMultiplier = 1.0f;
-	float directLF = 1.0f;
-	float directHF = 1.0f;
-	float wetLF = 1.0f;
-	float wetHF = 1.0f;
-	int transitionMs = kEnvironmentTransitionMs;
-	int priority = 0;
-	std::string name;
-
-	bool Contains( const float *origin ) const {
-		return origin != nullptr &&
-			origin[0] >= mins.v[0] && origin[0] <= maxs.v[0] &&
-			origin[1] >= mins.v[1] && origin[1] <= maxs.v[1] &&
-			origin[2] >= mins.v[2] && origin[2] <= maxs.v[2];
+static const char *AudioZoneMaterialClassName( uint8_t materialClass ) {
+	if ( materialClass < static_cast<uint8_t>( azfmt::MaterialClass::Count ) ) {
+		return azfmt::kMaterialClassNames[materialClass];
 	}
-
-	float Volume() const {
-		return ( maxs.v[0] - mins.v[0] ) * ( maxs.v[1] - mins.v[1] ) * ( maxs.v[2] - mins.v[2] );
-	}
-};
-
-static bool ReadAudioZoneU8( const byte *&cursor, const byte *end, uint8_t &out ) {
-	if ( cursor == nullptr || end == nullptr || cursor >= end || cursor > end ) {
-		return false;
-	}
-	out = *cursor++;
-	return true;
+	return "unknown";
 }
 
-static bool ReadAudioZoneU32( const byte *&cursor, const byte *end, uint32_t &out ) {
-	if ( cursor == nullptr || end == nullptr || cursor > end || end - cursor < 4 ) {
-		return false;
+static void FormatAudioZoneSummary( const EnvironmentState &state, char *buffer, int bufferSize ) {
+	if ( buffer == nullptr || bufferSize <= 0 ) {
+		return;
 	}
-	out = static_cast<uint32_t>( cursor[0] ) |
-		( static_cast<uint32_t>( cursor[1] ) << 8u ) |
-		( static_cast<uint32_t>( cursor[2] ) << 16u ) |
-		( static_cast<uint32_t>( cursor[3] ) << 24u );
-	cursor += 4;
-	return true;
+	if ( !state.audioZone || state.zoneName.empty() ) {
+		Com_sprintf( buffer, bufferSize, "%s", "generic" );
+		return;
+	}
+	if ( state.zonePortalBlend > azrt::kAudioZonePortalMinimumBlend && !state.zonePortalTargetName.empty() ) {
+		Com_sprintf( buffer, bufferSize, "%s->%s %.2f",
+			state.zoneName.c_str(),
+			state.zonePortalTargetName.c_str(),
+			ClampFloat( state.zonePortalBlend, 0.0f, azrt::kAudioZonePortalMaxBlend ) );
+		return;
+	}
+	Com_sprintf( buffer, bufferSize, "%s", state.zoneName.c_str() );
 }
 
-static bool ReadAudioZoneI32( const byte *&cursor, const byte *end, int32_t &out ) {
-	uint32_t value = 0;
-	if ( !ReadAudioZoneU32( cursor, end, value ) ) {
-		return false;
-	}
-	out = static_cast<int32_t>( value );
-	return true;
-}
-
-static bool ReadAudioZoneF32( const byte *&cursor, const byte *end, float &out ) {
-	uint32_t bits = 0;
-	if ( !ReadAudioZoneU32( cursor, end, bits ) ) {
-		return false;
-	}
-	std::memcpy( &out, &bits, sizeof( out ) );
-	return std::isfinite( out );
-}
-
-static bool ReadAudioZoneVec3( const byte *&cursor, const byte *end, Vec3f &out ) {
-	return ReadAudioZoneF32( cursor, end, out.v[0] ) &&
-		ReadAudioZoneF32( cursor, end, out.v[1] ) &&
-		ReadAudioZoneF32( cursor, end, out.v[2] );
-}
-
-static void NormalizeAudioZoneBounds( AudioZone &zone ) {
-	for ( int i = 0; i < 3; ++i ) {
-		if ( zone.mins.v[i] > zone.maxs.v[i] ) {
-			std::swap( zone.mins.v[i], zone.maxs.v[i] );
-		}
-	}
-}
-
-static bool ParseAudioZoneBinary( const byte *data, int length, std::vector<AudioZone> &zones, std::string &error ) {
-	if ( data == nullptr || length < 12 ) {
-		error = "truncated header";
-		return false;
-	}
-	if ( static_cast<uint32_t>( length ) > azfmt::kMaxFileBytes ) {
-		error = "file is too large";
-		return false;
-	}
-	if ( std::memcmp( data, azfmt::kMagic, sizeof( azfmt::kMagic ) ) != 0 ) {
-		error = "bad magic";
-		return false;
-	}
-
-	const byte *cursor = data + sizeof( azfmt::kMagic );
-	const byte *end = data + length;
-	uint32_t version = 0;
-	uint32_t zoneCount = 0;
-	if ( !ReadAudioZoneU32( cursor, end, version ) || !ReadAudioZoneU32( cursor, end, zoneCount ) ) {
-		error = "truncated header";
-		return false;
-	}
-	if ( version != azfmt::kVersion ) {
-		error = va( "unsupported version %u", version );
-		return false;
-	}
-	if ( zoneCount > azfmt::kMaxZones ) {
-		error = "too many zones";
-		return false;
-	}
-	if ( zoneCount == 0 ) {
-		error = "no zones";
-		return false;
-	}
-
-	zones.clear();
-	zones.reserve( zoneCount );
-	for ( uint32_t i = 0; i < zoneCount; ++i ) {
-		AudioZone zone;
-		uint32_t presetIndex = 0;
-		uint32_t transitionMs = 0;
-		int32_t priority = 0;
-		uint8_t nameLength = 0;
-		if ( !ReadAudioZoneVec3( cursor, end, zone.mins ) ||
-			!ReadAudioZoneVec3( cursor, end, zone.maxs ) ||
-			!ReadAudioZoneU32( cursor, end, presetIndex ) ||
-			!ReadAudioZoneF32( cursor, end, zone.reverbGain ) ||
-			!ReadAudioZoneF32( cursor, end, zone.occlusionMultiplier ) ||
-			!ReadAudioZoneF32( cursor, end, zone.directLF ) ||
-			!ReadAudioZoneF32( cursor, end, zone.directHF ) ||
-			!ReadAudioZoneF32( cursor, end, zone.wetLF ) ||
-			!ReadAudioZoneF32( cursor, end, zone.wetHF ) ||
-			!ReadAudioZoneU32( cursor, end, transitionMs ) ||
-			!ReadAudioZoneI32( cursor, end, priority ) ||
-			!ReadAudioZoneU8( cursor, end, nameLength ) ) {
-			error = "truncated zone record";
-			return false;
-		}
-		if ( presetIndex >= static_cast<uint32_t>( azfmt::Preset::Count ) ) {
-			error = "unknown environment preset index";
-			return false;
-		}
-		if ( nameLength == 0 || nameLength > azfmt::kMaxNameBytes || cursor > end || end - cursor < nameLength ) {
-			error = "invalid zone name length";
-			return false;
-		}
-
-		NormalizeAudioZoneBounds( zone );
-		if ( zone.mins.v[0] == zone.maxs.v[0] || zone.mins.v[1] == zone.maxs.v[1] || zone.mins.v[2] == zone.maxs.v[2] ) {
-			error = "zero-volume zone bounds";
-			return false;
-		}
-		zone.presetIndex = static_cast<int>( presetIndex );
-		zone.reverbGain = ClampFloat( zone.reverbGain, 0.0f, 4.0f );
-		zone.occlusionMultiplier = ClampFloat( zone.occlusionMultiplier, 0.0f, 4.0f );
-		zone.directLF = ClampFloat( zone.directLF, 0.0f, 1.0f );
-		zone.directHF = ClampFloat( zone.directHF, 0.0f, 1.0f );
-		zone.wetLF = ClampFloat( zone.wetLF, 0.0f, 1.0f );
-		zone.wetHF = ClampFloat( zone.wetHF, 0.0f, 1.0f );
-		zone.transitionMs = transitionMs > 10000u ? 10000 : static_cast<int>( transitionMs );
-		zone.priority = static_cast<int>( priority );
-		zone.name.assign( reinterpret_cast<const char *>( cursor ), nameLength );
-		cursor += nameLength;
-		zones.push_back( zone );
-	}
-
-	if ( cursor != end ) {
-		error = "trailing bytes";
-		return false;
-	}
-	return true;
-}
+static EnvironmentState EnvironmentStateForAudioZone( const azrt::AudioZone &zone );
 
 class AudioZoneSet {
 public:
 	bool Load( const char *qpath );
 	void Clear();
-	const AudioZone *FindZone( const float *origin ) const;
+	const azrt::AudioZone *FindZone( const float *origin ) const;
+	bool EvaluateEnvironment( const float *origin, EnvironmentState &environment ) const;
 	void PrintStatus( const EnvironmentState &environment ) const;
 
 	bool Loaded() const { return loaded_; }
@@ -1020,7 +1119,7 @@ public:
 	size_t ZoneCount() const { return zones_.size(); }
 
 private:
-	std::vector<AudioZone> zones_;
+	std::vector<azrt::AudioZone> zones_;
 	std::string qpath_;
 	bool loaded_ = false;
 };
@@ -1051,8 +1150,8 @@ bool AudioZoneSet::Load( const char *qpath ) {
 	}
 
 	std::string error;
-	std::vector<AudioZone> parsedZones;
-	const bool parsed = ParseAudioZoneBinary( reinterpret_cast<const byte *>( fileData ), length, parsedZones, error );
+	std::vector<azrt::AudioZone> parsedZones;
+	const bool parsed = azrt::ParseAudioZoneBinary( reinterpret_cast<const uint8_t *>( fileData ), static_cast<size_t>( length ), parsedZones, error );
 	FS_FreeFile( fileData );
 	if ( !parsed ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: ignoring audio zone sidecar %s: %s\n", qpath_.c_str(), error.c_str() );
@@ -1065,22 +1164,35 @@ bool AudioZoneSet::Load( const char *qpath ) {
 	return true;
 }
 
-const AudioZone *AudioZoneSet::FindZone( const float *origin ) const {
-	const AudioZone *best = nullptr;
-	float bestVolume = 0.0f;
-	for ( const AudioZone &zone : zones_ ) {
-		if ( !zone.Contains( origin ) ) {
-			continue;
-		}
-		const float volume = zone.Volume();
-		if ( best == nullptr ||
-			zone.priority > best->priority ||
-			( zone.priority == best->priority && volume < bestVolume ) ) {
-			best = &zone;
-			bestVolume = volume;
-		}
+const azrt::AudioZone *AudioZoneSet::FindZone( const float *origin ) const {
+	return azrt::FindAudioZone( zones_, origin );
+}
+
+bool AudioZoneSet::EvaluateEnvironment( const float *origin, EnvironmentState &environment ) const {
+	const azrt::AudioZone *zone = FindZone( origin );
+	if ( zone == nullptr ) {
+		return false;
 	}
-	return best;
+
+	environment = EnvironmentStateForAudioZone( *zone );
+	if ( zone->portals.empty() ) {
+		return true;
+	}
+
+	const azrt::AudioZonePortalBlend portalBlend = azrt::FindAudioZonePortalBlend( zones_, *zone, origin );
+	if ( portalBlend.target != nullptr ) {
+		const float blend = ClampFloat( portalBlend.blend, 0.0f, azrt::kAudioZonePortalMaxBlend );
+		EnvironmentState targetEnvironment = EnvironmentStateForAudioZone( *portalBlend.target );
+		EnvironmentState blendedEnvironment = BlendEnvironmentStates( environment, targetEnvironment, blend );
+		blendedEnvironment.audioZone = qtrue;
+		blendedEnvironment.zoneName = zone->name;
+		blendedEnvironment.zoneMaterialClass = zone->materialClass;
+		blendedEnvironment.zoneFlags = zone->flags;
+		blendedEnvironment.zonePortalBlend = blend;
+		blendedEnvironment.zonePortalTargetName = portalBlend.target->name;
+		environment = blendedEnvironment;
+	}
+	return true;
 }
 
 void AudioZoneSet::PrintStatus( const EnvironmentState &environment ) const {
@@ -1092,10 +1204,14 @@ void AudioZoneSet::PrintStatus( const EnvironmentState &environment ) const {
 		Com_Printf( "Audio zones: none loaded (looked for %s)\n", qpath_.c_str() );
 		return;
 	}
-	Com_Printf( "Audio zones: %lu loaded from %s, active %s\n",
+	char zoneSummary[128];
+	FormatAudioZoneSummary( environment, zoneSummary, sizeof( zoneSummary ) );
+	Com_Printf( "Audio zones: %lu loaded from %s, active %s, material %s, flags 0x%02x\n",
 		static_cast<unsigned long>( zones_.size() ),
 		qpath_.c_str(),
-		environment.audioZone && !environment.zoneName.empty() ? environment.zoneName.c_str() : "generic heuristics" );
+		zoneSummary,
+		environment.audioZone ? AudioZoneMaterialClassName( environment.zoneMaterialClass ) : "none",
+		environment.audioZone ? environment.zoneFlags : 0 );
 }
 
 static std::string AudioZoneQpathForCurrentMap() {
@@ -1113,7 +1229,7 @@ static std::string AudioZoneQpathForCurrentMap() {
 	return zonePath;
 }
 
-static EnvironmentState EnvironmentStateForAudioZone( const AudioZone &zone ) {
+static EnvironmentState EnvironmentStateForAudioZone( const azrt::AudioZone &zone ) {
 	EnvironmentState state;
 	SetEnvironmentPreset( state, zone.presetIndex );
 	state.baseWet = ClampFloat( state.baseWet * zone.reverbGain, 0.0f, 1.0f );
@@ -1123,10 +1239,16 @@ static EnvironmentState EnvironmentStateForAudioZone( const AudioZone &zone ) {
 	state.wetHF = ClampFloat( state.wetHF * zone.wetHF, 0.0f, 1.0f );
 	state.occlusionMultiplier = ClampFloat( zone.occlusionMultiplier, 0.0f, 4.0f );
 	state.transitionMs = ClampInt( zone.transitionMs, 0, 10000 );
-	state.outdoors = ( zone.presetIndex == static_cast<int>( azfmt::Preset::Outdoors ) ) ? qtrue : qfalse;
-	state.underwater = ( zone.presetIndex == static_cast<int>( azfmt::Preset::Underwater ) ) ? qtrue : qfalse;
+	state.outdoors = ( zone.presetIndex == static_cast<int>( azfmt::Preset::Outdoors ) ||
+		( zone.flags & azfmt::ZoneFlagOutdoor ) != 0 ) ? qtrue : qfalse;
+	state.underwater = ( zone.presetIndex == static_cast<int>( azfmt::Preset::Underwater ) ||
+		( zone.flags & azfmt::ZoneFlagUnderwater ) != 0 ) ? qtrue : qfalse;
 	state.audioZone = qtrue;
+	state.zoneMaterialClass = zone.materialClass;
+	state.zoneFlags = zone.flags;
+	state.zonePortalBlend = 0.0f;
 	state.zoneName = zone.name;
+	state.zonePortalTargetName.clear();
 	return state;
 }
 

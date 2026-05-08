@@ -2,19 +2,11 @@
 #define GLX_MATERIAL_H
 
 #include "glx_caps.h"
+#include "glx_material_key.h"
 
 namespace glx {
 
-static constexpr int GLX_MATERIAL_PROGRAM_LIMIT = 16;
-
-enum class MaterialProgramMode {
-	SingleTexture,
-	MultiModulate,
-	MultiAdd,
-	MultiReplace,
-	MultiDecal,
-	Fog
-};
+static constexpr int GLX_MATERIAL_PROGRAM_LIMIT = 32;
 
 typedef GLuint ( APIENTRY *PFNGLXCREATESHADERPROC )( GLenum type );
 typedef void ( APIENTRY *PFNGLXSHADERSOURCEPROC )( GLuint shader, GLsizei count, const GLchar *const *string, const GLint *length );
@@ -53,7 +45,7 @@ struct MaterialFns {
 };
 
 struct MaterialProgram {
-	MaterialProgramMode mode;
+	MaterialProgramKey key;
 	GLuint program;
 	GLuint vertexShader;
 	GLuint fragmentShader;
@@ -107,7 +99,7 @@ struct MaterialState {
 	unsigned int notReadySkips;
 	unsigned int programLimitSkips;
 	MaterialRequest lastRequest;
-	MaterialProgramMode lastMode;
+	MaterialProgramKey lastKey;
 	char lastError[256];
 };
 

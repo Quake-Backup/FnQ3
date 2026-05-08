@@ -84,6 +84,7 @@ void GLX_Renderer_EndBackendTimer( void );
 void GLX_Renderer_FrameComplete( void );
 void GLX_Renderer_PrintCaps_f( void );
 void GLX_Renderer_PrintInfo_f( void );
+void GLX_Renderer_Profile_f( void );
 void GLX_Renderer_Material_f( void );
 void GLX_Renderer_PostProcess_f( void );
 void GLX_Renderer_StaticWorld_f( void );
@@ -106,14 +107,14 @@ qboolean GLX_Renderer_StreamDrawMultitextureEnabled( void );
 qboolean GLX_Renderer_StreamDrawFogEnabled( void );
 qboolean GLX_Renderer_StreamDrawDepthFragmentEnabled( void );
 qboolean GLX_Renderer_StreamDrawAllowsMaterial( int flags, unsigned int stateBits,
-	int rgbGen, int alphaGen, int tcGen0, int texMods0 );
+	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 );
 qboolean GLX_Renderer_StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation );
 qboolean GLX_Renderer_StreamUploadAt( glxStreamReservation_t *reservation, int relativeOffset,
 	const void *data, int bytes );
 void GLX_Renderer_StreamCommit( glxStreamReservation_t *reservation );
 void GLX_Renderer_RecordStreamDrawResult( int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
-	qboolean depthFragment, qboolean success );
+	qboolean depthFragment, int materialFlags, qboolean success );
 void GLX_Renderer_RecordStreamDrawSkip( int reason );
 void GLX_Renderer_RecordFboInit( qboolean requested, qboolean ready,
 	qboolean programReady, qboolean framebufferFnsReady, int vidWidth, int vidHeight,

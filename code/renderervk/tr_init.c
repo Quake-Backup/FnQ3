@@ -91,11 +91,19 @@ cvar_t	*r_vbo;
 #endif
 cvar_t	*r_fbo;
 cvar_t	*r_hdr;
+cvar_t	*r_hdrDisplay;
+cvar_t	*r_hdrDisplayPaperWhite;
+cvar_t	*r_hdrDisplayMaxLuminance;
+cvar_t	*r_hdrDisplayMaxCLL;
+cvar_t	*r_hdrDisplayMaxFALL;
+cvar_t	*r_tonemap;
+cvar_t	*r_tonemapExposure;
 cvar_t	*r_bloom;
 cvar_t	*r_bloom_threshold;
 cvar_t	*r_bloom_intensity;
 cvar_t	*r_bloom_threshold_mode;
 cvar_t	*r_bloom_modulate;
+cvar_t	*r_bloom_soft_knee;
 cvar_t	*r_renderWidth;
 cvar_t	*r_renderHeight;
 cvar_t	*r_renderScale;
@@ -2061,7 +2069,11 @@ static void GfxInfo( void )
 
 	ri.Printf( PRINT_ALL, "\nPIXELFORMAT: color(%d-bits) Z(%d-bit) stencil(%d-bits)\n", glConfig.colorBits, glConfig.depthBits, glConfig.stencilBits );
 #ifdef USE_VULKAN
-	ri.Printf( PRINT_ALL, " presentation: %s\n", vk_format_string( vk.present_format.format ) );
+	ri.Printf( PRINT_ALL, " presentation: %s, %s%s%s\n",
+		vk_format_string( vk.present_format.format ),
+		vk_color_space_string( vk.present_format.colorSpace ),
+		vk.hdrDisplayActive ? ", native HDR" : "",
+		( vk.hdrDisplayActive && vk.hdrMetadata ) ? " + metadata" : "" );
 	if ( vk.color_format != vk.present_format.format ) {
 		ri.Printf( PRINT_ALL, " color: %s\n", vk_format_string( vk.color_format ) );
 	}
@@ -2165,12 +2177,101 @@ static void GfxInfo_f( void )
 #ifdef USE_VULKAN
 static void VkInfo_f( void )
 {
+	VkDeviceSize world_image_reserved;
+	VkDeviceSize world_image_used;
+	VkDeviceSize world_image_waste;
+	VkDeviceSize attachment_transient;
+	VkDeviceSize attachment_lazy;
+#ifdef USE_VBO
+	const vbo_record_stats_t *vbo_stats;
+#endif
+	int i;
+
+	world_image_reserved = 0;
+	world_image_used = 0;
+	attachment_transient = 0;
+	attachment_lazy = 0;
+	for ( i = 0; i < vk_world.num_image_chunks; i++ ) {
+		world_image_reserved += vk_world.image_chunks[i].allocation.size;
+		world_image_used += vk_world.image_chunks[i].used;
+	}
+	for ( i = 0; i < (int)vk.image_memory_count; i++ ) {
+		if ( vk.image_memory[i].transient ) {
+			attachment_transient += vk.image_memory[i].size;
+		}
+		if ( vk.image_memory[i].properties & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT ) {
+			attachment_lazy += vk.image_memory[i].size;
+		}
+	}
+	world_image_waste = ( world_image_reserved > world_image_used ) ? ( world_image_reserved - world_image_used ) : 0;
+#ifdef USE_VBO
+	vbo_stats = VBO_GetRecordStats();
+#endif
+
 	ri.Printf(PRINT_ALL, "max_vertex_usage: %iKb\n", (int)((vk.stats.vertex_buffer_max + 1023) / 1024) );
 	ri.Printf(PRINT_ALL, "max_push_size: %ib\n", vk.stats.push_size_max );
 
 	ri.Printf(PRINT_ALL, "pipeline handles: %i\n", vk.pipeline_create_count );
 	ri.Printf(PRINT_ALL, "pipeline descriptors: %i, base: %i\n", vk.pipelines_count, vk.pipelines_world_base );
-	ri.Printf(PRINT_ALL, "image chunks: %i\n", vk_world.num_image_chunks );
+	ri.Printf(PRINT_ALL, "pipeline cache: %s, loaded: %uKb, saved: %uKb\n",
+		vk.pipelineCachePath[0] ? vk.pipelineCachePath : "none",
+		( vk.pipelineCacheLoaded ? vk.pipelineCacheInitialSize : 0 ) / 1024,
+		vk.pipelineCacheSavedSize / 1024 );
+	ri.Printf(PRINT_ALL, "display HDR: %s, metadata: %s, paper white %.0f nits, max %.0f nits\n",
+		vk.hdrDisplayActive ? "active" : ( r_hdrDisplay->integer ? "requested unavailable" : "disabled" ),
+		( vk.hdrDisplayActive && vk.hdrMetadata ) ? "enabled" : "disabled",
+		r_hdrDisplayPaperWhite->value,
+		r_hdrDisplayMaxLuminance->value );
+	ri.Printf(PRINT_ALL, "tone map: %s, exposure %.2f\n",
+		r_tonemap->integer == 2 ? "ACES" : ( r_tonemap->integer == 1 ? "Reinhard" : "legacy" ),
+		r_tonemapExposure->value );
+	ri.Printf(PRINT_ALL, "bloom: threshold %.2f, soft knee %.2f, intensity %.2f\n",
+		r_bloom_threshold->value, r_bloom_soft_knee->value, r_bloom_intensity->value );
+	ri.Printf(PRINT_ALL, "modern Vulkan: sync2 %s, dynamic rendering %s%s\n",
+		vk.synchronization2 ? "enabled" : "disabled",
+		vk.dynamicRendering ? "feature enabled" : "disabled",
+		vk.dynamicRendering ? ", render-pass backend active" : "" );
+	ri.Printf(PRINT_ALL, "barriers: %u sync2 / %u legacy\n",
+		vk.stats.sync2_barriers, vk.stats.legacy_barriers );
+	ri.Printf(PRINT_ALL, "descriptor writes: %u, binds: %u calls / %u sets, material cache: %u hits / %u misses\n",
+		vk.stats.descriptor_writes, vk.stats.descriptor_bind_calls, vk.stats.descriptor_bind_sets,
+		vk.stats.material_descriptor_hits, vk.stats.material_descriptor_misses );
+	ri.Printf(PRINT_ALL, "command pool resets: %u frame / %u upload\n",
+		vk.stats.command_pool_resets, vk.stats.upload_pool_resets );
+	ri.Printf(PRINT_ALL, "memory: %u allocs (%u peak), %iKb live / %iKb peak\n",
+		vk.stats.memory_allocations, vk.stats.memory_peak_allocations,
+		(int)((vk.stats.memory_allocated + 1023) / 1024),
+		(int)((vk.stats.memory_peak_allocated + 1023) / 1024) );
+	ri.Printf(PRINT_ALL, "memory categories: staging %iKb, geometry %iKb, storage %iKb, vbo %iKb, images %iKb, attachments %iKb, readback %iKb\n",
+		(int)((vk.stats.memory_by_category[ VK_MEMORY_CATEGORY_STAGING ] + 1023) / 1024),
+		(int)((vk.stats.memory_by_category[ VK_MEMORY_CATEGORY_GEOMETRY ] + 1023) / 1024),
+		(int)((vk.stats.memory_by_category[ VK_MEMORY_CATEGORY_STORAGE ] + 1023) / 1024),
+		(int)((vk.stats.memory_by_category[ VK_MEMORY_CATEGORY_STATIC_VBO ] + 1023) / 1024),
+		(int)((vk.stats.memory_by_category[ VK_MEMORY_CATEGORY_WORLD_IMAGE ] + 1023) / 1024),
+		(int)((vk.stats.memory_by_category[ VK_MEMORY_CATEGORY_ATTACHMENTS ] + 1023) / 1024),
+		(int)((vk.stats.memory_by_category[ VK_MEMORY_CATEGORY_READBACK ] + 1023) / 1024) );
+	ri.Printf(PRINT_ALL, "attachment pools: %u chunks, %iKb transient / %iKb lazily allocated\n",
+		vk.image_memory_count,
+		(int)((attachment_transient + 1023) / 1024),
+		(int)((attachment_lazy + 1023) / 1024) );
+	ri.Printf(PRINT_ALL, "image chunks: %i, %iKb used / %iKb reserved (%iKb slack)\n",
+		vk_world.num_image_chunks,
+		(int)((world_image_used + 1023) / 1024),
+		(int)((world_image_reserved + 1023) / 1024),
+		(int)((world_image_waste + 1023) / 1024) );
+#ifdef USE_VBO
+	if ( vbo_stats ) {
+		ri.Printf(PRINT_ALL, "world VBO record plan: %u queued, %u packets (%u opaque-recordable), %u device draws / %u soft draws, %u indexes, max packet %u%s\n",
+			vbo_stats->queued_items,
+			vbo_stats->record_packets,
+			vbo_stats->recordable_packets,
+			vbo_stats->device_local_draws,
+			vbo_stats->soft_draws,
+			vbo_stats->device_local_indexes + vbo_stats->soft_indexes,
+			vbo_stats->max_packet_indexes,
+			vbo_stats->packet_overflows ? " (packet overflow)" : "" );
+	}
+#endif
 }
 #endif
 
@@ -2429,7 +2530,7 @@ static void R_Register( void )
 	r_showcluster = ri.Cvar_Get ("r_showcluster", "0", CVAR_CHEAT);
 	ri.Cvar_SetDescription( r_showcluster, "Shows current cluster index." );
 	r_speeds = ri.Cvar_Get ("r_speeds", "0", CVAR_CHEAT);
-	ri.Cvar_SetDescription( r_speeds, "Prints out various debugging stats from PVS:\n 0: Disabled\n 1: Backend BSP\n 2: Frontend grid culling\n 3: Current view cluster index\n 4: Dynamic lighting\n 5: zFar clipping\n 6: Flares" );
+	ri.Cvar_SetDescription( r_speeds, "Prints out various debugging stats from PVS:\n 0: Disabled\n 1: Backend BSP\n 2: Frontend grid culling\n 3: Current view cluster index\n 4: Dynamic lighting\n 5: zFar clipping\n 6: Flares\n 7: Vulkan GPU pass timings" );
 	r_debugSurface = ri.Cvar_Get ("r_debugSurface", "0", CVAR_CHEAT);
 	ri.Cvar_SetDescription( r_debugSurface, "Backend visual debugging tool for bezier mesh surfaces." );
 	r_nobind = ri.Cvar_Get ("r_nobind", "0", CVAR_CHEAT);
@@ -2481,7 +2582,7 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_levelshotSourceAspect, "Optional centered source crop aspect for levelshots, such as 4:3, 16:9, or 1:1. Blank keeps the full viewport." );
 
 	r_bloom_threshold = ri.Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
-	ri.Cvar_SetDescription( r_bloom_threshold, "Color level to extract to bloom texture, default is 0.6." );
+	ri.Cvar_SetDescription( r_bloom_threshold, "Color level to extract to bloom texture, default is 0.75. With Vulkan tone mapping enabled this threshold is evaluated after tone-map exposure." );
 	ri.Cvar_SetGroup( r_bloom_threshold, CVG_RENDERER );
 
 	r_bloom_threshold_mode = ri.Cvar_Get( "r_bloom_threshold_mode", "0", CVAR_ARCHIVE_ND );
@@ -2495,6 +2596,10 @@ static void R_Register( void )
 	r_bloom_modulate = ri.Cvar_Get( "r_bloom_modulate", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_bloom_modulate, "Modulate extracted color:\n 0: off (color = color, i.e. no changes)\n 1: by itself (color = color * color)\n 2: by intensity (color = color * luma(color))" );
 	ri.Cvar_SetGroup( r_bloom_modulate, CVG_RENDERER );
+	r_bloom_soft_knee = ri.Cvar_Get( "r_bloom_soft_knee", "0.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_bloom_soft_knee, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_bloom_soft_knee, "Softens Vulkan bloom extraction around r_bloom_threshold. 0 keeps the legacy hard cutoff; 1 uses a full threshold-width knee." );
+	ri.Cvar_SetGroup( r_bloom_soft_knee, CVG_RENDERER );
 
 	if ( glConfig.vidWidth )
 		return;
@@ -2541,6 +2646,33 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_fbo, "Use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary video size and screenshot/video capture.\n Required for bloom, HDR rendering, anti-aliasing and greyscale effects." );
 	r_hdr = ri.Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription(r_hdr, "Enables high dynamic range frame buffer texture format. Requires \\r_fbo 1.\n -1: 4-bit, for testing purposes, heavy color banding, might not work on all systems\n  0: 8 bit, default, moderate color banding with multi-stage shaders\n  1: 16 bit, enhanced blending precision, no color banding, might decrease performance on AMD / Intel GPUs\n" );
+	r_hdrDisplay = ri.Cvar_Get( "r_hdrDisplay", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_hdrDisplay, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_hdrDisplay, "Enable native HDR10 swapchain presentation when supported. Requires \\r_fbo 1 and an HDR-capable display path." );
+	r_hdrDisplayPaperWhite = ri.Cvar_Get( "r_hdrDisplayPaperWhite", "203", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_hdrDisplayPaperWhite, "80", "500", CV_FLOAT );
+	ri.Cvar_SetDescription( r_hdrDisplayPaperWhite, "SDR reference white level in nits for native HDR presentation." );
+	ri.Cvar_SetGroup( r_hdrDisplayPaperWhite, CVG_RENDERER );
+	r_hdrDisplayMaxLuminance = ri.Cvar_Get( "r_hdrDisplayMaxLuminance", "1000", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_hdrDisplayMaxLuminance, "200", "10000", CV_FLOAT );
+	ri.Cvar_SetDescription( r_hdrDisplayMaxLuminance, "HDR display maximum luminance in nits for tone scale and HDR metadata." );
+	ri.Cvar_SetGroup( r_hdrDisplayMaxLuminance, CVG_RENDERER );
+	r_hdrDisplayMaxCLL = ri.Cvar_Get( "r_hdrDisplayMaxCLL", "1000", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_hdrDisplayMaxCLL, "200", "10000", CV_FLOAT );
+	ri.Cvar_SetDescription( r_hdrDisplayMaxCLL, "HDR10 metadata maximum content light level in nits." );
+	ri.Cvar_SetGroup( r_hdrDisplayMaxCLL, CVG_RENDERER );
+	r_hdrDisplayMaxFALL = ri.Cvar_Get( "r_hdrDisplayMaxFALL", "400", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_hdrDisplayMaxFALL, "80", "10000", CV_FLOAT );
+	ri.Cvar_SetDescription( r_hdrDisplayMaxFALL, "HDR10 metadata maximum frame-average light level in nits." );
+	ri.Cvar_SetGroup( r_hdrDisplayMaxFALL, CVG_RENDERER );
+	r_tonemap = ri.Cvar_Get( "r_tonemap", "0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_tonemap, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_tonemap, "Vulkan final-pass tone mapper:\n 0: legacy gamma/overbright\n 1: Reinhard\n 2: ACES fitted filmic curve" );
+	ri.Cvar_SetGroup( r_tonemap, CVG_RENDERER );
+	r_tonemapExposure = ri.Cvar_Get( "r_tonemapExposure", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_tonemapExposure, "0.1", "8.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_tonemapExposure, "Exposure multiplier used by Vulkan Reinhard and ACES tone mapping." );
+	ri.Cvar_SetGroup( r_tonemapExposure, CVG_RENDERER );
 	r_bloom = ri.Cvar_Get( "r_bloom", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_bloom, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription(r_bloom, "Enables bloom post-processing effect. Requires \\r_fbo 1.");
@@ -2660,6 +2792,10 @@ void R_Init( void ) {
 #endif
 
 	R_InitShaders();
+
+#ifdef USE_VULKAN
+	vk_warm_pipelines( qtrue );
+#endif
 
 	R_InitSkins();
 

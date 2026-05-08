@@ -44,11 +44,17 @@ So long device-local index runs are rendered via multiple draw calls,
 all remaining short index sequences are grouped together into single
 host-visible index buffer which is finally rendered via single draw call.
 
+The final render list is also packetized into deterministic command-recording
+units. Rendering still happens on the primary command buffer, but opaque world
+packets are now explicit and measurable for a future secondary-command path.
+
 */
 
 #define MAX_VBO_STAGES MAX_SHADER_STAGES
 
 #define MIN_IBO_RUN 320
+#define VBO_RECORD_PACKET_TARGET_DRAWS 8
+#define VBO_RECORD_PACKET_TARGET_INDEXES (MIN_IBO_RUN * 16)
 
 //[ibo]: [index0][index1][index2]
 //[vbo]: [index0][vertex0...][index1][vertex1...][index2][vertex2...]
@@ -65,6 +71,18 @@ typedef struct ibo_item_s {
 	int length;
 } ibo_item_t;
 
+typedef enum {
+	VBO_RECORD_PACKET_DEVICE_LOCAL,
+	VBO_RECORD_PACKET_SOFT_BUFFER
+} vbo_record_packet_source_t;
+
+typedef struct vbo_record_packet_s {
+	vbo_record_packet_source_t source;
+	uint32_t first_draw;
+	uint32_t draw_count;
+	uint32_t index_count;
+} vbo_record_packet_t;
+
 typedef struct vbo_s {
 	byte *vbo_buffer;
 	int vbo_offset;
@@ -79,6 +97,12 @@ typedef struct vbo_s {
 
 	ibo_item_t *ibo_items;
 	int ibo_items_count;
+
+	vbo_record_packet_t *record_packets;
+	uint32_t record_packet_count;
+	uint32_t record_packet_capacity;
+	vbo_record_stats_t record_stats;
+	vbo_record_stats_t frame_record_stats;
 
 	vbo_item_t *items;
 	int items_count;
@@ -588,6 +612,10 @@ void R_BuildWorldVBO( msurface_t *surf, int surfCount )
 	// ibo runs buffer
 	vbo->ibo_items = ri.Hunk_Alloc( ( (numStaticIndexes / MIN_IBO_RUN) + 1 ) * sizeof( ibo_item_t ), h_low );
 	vbo->ibo_items_count = 0;
+	vbo->record_packet_capacity = ( numStaticIndexes / MIN_IBO_RUN ) + 2;
+	vbo->record_packets = ri.Hunk_Alloc( vbo->record_packet_capacity * sizeof( vbo_record_packet_t ), h_low );
+	vbo->record_packet_count = 0;
+	Com_Memset( &vbo->record_stats, 0, sizeof( vbo->record_stats ) );
 
 	surfList = ri.Hunk_AllocateTempMemory( numStaticSurfaces * sizeof( msurface_t* ) );
 
@@ -842,28 +870,167 @@ static void VBO_AddItemRangeToIBOBuffer( int offset, int length )
 }
 
 
+static void VBO_AddRecordPacket( vbo_t *vbo, vbo_record_packet_source_t source, uint32_t first_draw,
+	uint32_t draw_count, uint32_t index_count )
+{
+	vbo_record_packet_t *packet;
+
+	if ( draw_count == 0 || index_count == 0 )
+		return;
+
+	if ( vbo->record_packet_count >= vbo->record_packet_capacity )
+	{
+		if ( vbo->record_packet_count > 0 )
+		{
+			packet = vbo->record_packets + vbo->record_packet_count - 1;
+			if ( packet->source == source )
+			{
+				packet->draw_count += draw_count;
+				packet->index_count += index_count;
+				if ( packet->index_count > vbo->record_stats.max_packet_indexes )
+					vbo->record_stats.max_packet_indexes = packet->index_count;
+			}
+		}
+		vbo->record_stats.packet_overflows++;
+		return;
+	}
+
+	packet = vbo->record_packets + vbo->record_packet_count++;
+	packet->source = source;
+	packet->first_draw = first_draw;
+	packet->draw_count = draw_count;
+	packet->index_count = index_count;
+
+	if ( index_count > vbo->record_stats.max_packet_indexes )
+		vbo->record_stats.max_packet_indexes = index_count;
+}
+
+
+static qboolean VBO_CurrentShaderIsRecordableWorld( void )
+{
+	return vk.renderPassIndex == RENDER_PASS_MAIN && tess.shader && tess.shader->sort <= SS_OPAQUE;
+}
+
+
+static void VBO_AccumulateRecordStats( vbo_t *vbo )
+{
+	vbo_record_stats_t *frame = &vbo->frame_record_stats;
+	const vbo_record_stats_t *stats = &vbo->record_stats;
+
+	frame->queued_items += stats->queued_items;
+	frame->device_local_draws += stats->device_local_draws;
+	frame->device_local_indexes += stats->device_local_indexes;
+	frame->soft_draws += stats->soft_draws;
+	frame->soft_indexes += stats->soft_indexes;
+	frame->record_packets += stats->record_packets;
+	frame->recordable_packets += stats->recordable_packets;
+	frame->recordable_draws += stats->recordable_draws;
+	frame->recordable_indexes += stats->recordable_indexes;
+	frame->packet_overflows += stats->packet_overflows;
+
+	if ( stats->max_packet_indexes > frame->max_packet_indexes )
+		frame->max_packet_indexes = stats->max_packet_indexes;
+}
+
+
+static void VBO_BuildRecordPlan( vbo_t *vbo )
+{
+	uint32_t first_draw;
+	uint32_t draw_count;
+	uint32_t index_count;
+	int i;
+
+	vbo->record_packet_count = 0;
+	Com_Memset( &vbo->record_stats, 0, sizeof( vbo->record_stats ) );
+	vbo->record_stats.queued_items = vbo->items_queue_count;
+	vbo->record_stats.device_local_draws = vbo->ibo_items_count;
+
+	first_draw = 0;
+	draw_count = 0;
+	index_count = 0;
+
+	for ( i = 0; i < vbo->ibo_items_count; i++ )
+	{
+		uint32_t draw_indexes = vbo->ibo_items[ i ].length;
+
+		if ( draw_count > 0
+			&& ( draw_count >= VBO_RECORD_PACKET_TARGET_DRAWS || index_count >= VBO_RECORD_PACKET_TARGET_INDEXES ) )
+		{
+			VBO_AddRecordPacket( vbo, VBO_RECORD_PACKET_DEVICE_LOCAL, first_draw, draw_count, index_count );
+			first_draw = i;
+			draw_count = 0;
+			index_count = 0;
+		}
+
+		draw_count++;
+		index_count += draw_indexes;
+		vbo->record_stats.device_local_indexes += draw_indexes;
+	}
+
+	VBO_AddRecordPacket( vbo, VBO_RECORD_PACKET_DEVICE_LOCAL, first_draw, draw_count, index_count );
+
+	if ( vbo->soft_buffer_indexes )
+	{
+		vbo->record_stats.soft_draws = 1;
+		vbo->record_stats.soft_indexes = vbo->soft_buffer_indexes;
+		VBO_AddRecordPacket( vbo, VBO_RECORD_PACKET_SOFT_BUFFER, 0, 1, vbo->soft_buffer_indexes );
+	}
+
+	vbo->record_stats.record_packets = vbo->record_packet_count;
+
+	if ( VBO_CurrentShaderIsRecordableWorld() )
+	{
+		vbo->record_stats.recordable_packets = vbo->record_packet_count;
+		vbo->record_stats.recordable_draws = vbo->record_stats.device_local_draws + vbo->record_stats.soft_draws;
+		vbo->record_stats.recordable_indexes = vbo->record_stats.device_local_indexes + vbo->record_stats.soft_indexes;
+	}
+
+	VBO_AccumulateRecordStats( vbo );
+}
+
+
+const vbo_record_stats_t *VBO_GetRecordStats( void )
+{
+	return &world_vbo.frame_record_stats;
+}
+
+
+void VBO_ResetRecordStats( void )
+{
+	Com_Memset( &world_vbo.frame_record_stats, 0, sizeof( world_vbo.frame_record_stats ) );
+}
+
+
 void VBO_RenderIBOItems( void )
 {
 	const vbo_t *vbo = &world_vbo;
-	int i;
+	qboolean device_local_bound = qfalse;
+	uint32_t i, j;
 
-	// from device-local memory
-	if ( vbo->ibo_items_count )
+	for ( i = 0; i < vbo->record_packet_count; i++ )
 	{
-		vk_bind_index_buffer( vk.vbo.vertex_buffer, tess.shader->iboOffset );
+		const vbo_record_packet_t *packet = vbo->record_packets + i;
 
-		for ( i = 0; i < vbo->ibo_items_count; i++ )
+		if ( packet->source == VBO_RECORD_PACKET_DEVICE_LOCAL )
 		{
-			vk_draw_indexed( vbo->ibo_items[ i ].length, vbo->ibo_items[ i ].offset );
+			if ( !device_local_bound )
+			{
+				vk_bind_index_buffer( vk.vbo.vertex_buffer, tess.shader->iboOffset );
+				device_local_bound = qtrue;
+			}
+
+			for ( j = 0; j < packet->draw_count; j++ )
+			{
+				const ibo_item_t *item = vbo->ibo_items + packet->first_draw + j;
+				vk_draw_indexed( item->length, item->offset );
+			}
 		}
-	}
-
-	// from host-visible memory
-	if ( vbo->soft_buffer_indexes )
-	{
-		vk_bind_index_buffer( vk.cmd->vertex_buffer, vbo->soft_buffer_offset );
-
-		vk_draw_indexed( vbo->soft_buffer_indexes, 0 );
+		else if ( packet->source == VBO_RECORD_PACKET_SOFT_BUFFER )
+		{
+			vk_bind_index_buffer( vk.cmd->vertex_buffer, vbo->soft_buffer_offset );
+			vk_draw_indexed( vbo->soft_buffer_indexes, 0 );
+			device_local_bound = qfalse;
+		}
 	}
 }
 
@@ -902,6 +1069,8 @@ void VBO_PrepareQueues( void )
 		}
 		i += item_run;
 	}
+
+	VBO_BuildRecordPlan( vbo );
 }
 
 #endif // USE_VBO

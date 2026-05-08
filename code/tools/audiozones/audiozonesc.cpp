@@ -12,9 +12,13 @@ the Free Software Foundation; either version 2 of the License, or
 */
 
 #include "../../audio/AudioZoneFormat.h"
+#include "../../audio/AudioZoneRuntime.h"
+#include "../../qcommon/surfaceflags.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -22,14 +26,17 @@ the Free Software Foundation; either version 2 of the License, or
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace azfmt = fnq3_audiozones;
+namespace azrt = fnq3_audiozones_runtime;
 
 namespace {
 
@@ -37,6 +44,13 @@ struct Vec3 {
 	float x = 0.0f;
 	float y = 0.0f;
 	float z = 0.0f;
+};
+
+struct Portal {
+	std::uint32_t targetZone = 0;
+	Vec3 mins;
+	Vec3 maxs;
+	float openness = 0.0f;
 };
 
 struct Zone {
@@ -54,6 +68,9 @@ struct Zone {
 	float wetHF = 1.0f;
 	std::uint32_t transitionMs = azfmt::kDefaultTransitionMs;
 	std::int32_t priority = 0;
+	std::uint8_t materialClass = static_cast<std::uint8_t>( azfmt::MaterialClass::Unknown );
+	std::uint8_t flags = 0;
+	std::vector<Portal> portals;
 };
 
 enum class TokenKind {
@@ -550,6 +567,11 @@ static void WriteU8( std::vector<std::uint8_t> &out, std::uint8_t value ) {
 	out.push_back( value );
 }
 
+static void WriteU16( std::vector<std::uint8_t> &out, std::uint16_t value ) {
+	out.push_back( static_cast<std::uint8_t>( value & 0xffu ) );
+	out.push_back( static_cast<std::uint8_t>( ( value >> 8u ) & 0xffu ) );
+}
+
 static void WriteU32( std::vector<std::uint8_t> &out, std::uint32_t value ) {
 	out.push_back( static_cast<std::uint8_t>( value & 0xffu ) );
 	out.push_back( static_cast<std::uint8_t>( ( value >> 8u ) & 0xffu ) );
@@ -576,7 +598,7 @@ static void WriteVec3( std::vector<std::uint8_t> &out, const Vec3 &value ) {
 
 static std::vector<std::uint8_t> BuildBinary( const std::vector<Zone> &zones ) {
 	std::vector<std::uint8_t> binary;
-	binary.reserve( 12u + zones.size() * 80u );
+	binary.reserve( 12u + zones.size() * 96u );
 	binary.insert( binary.end(), std::begin( azfmt::kMagic ), std::end( azfmt::kMagic ) );
 	WriteU32( binary, azfmt::kVersion );
 	WriteU32( binary, static_cast<std::uint32_t>( zones.size() ) );
@@ -595,6 +617,15 @@ static std::vector<std::uint8_t> BuildBinary( const std::vector<Zone> &zones ) {
 		WriteI32( binary, zone.priority );
 		WriteU8( binary, static_cast<std::uint8_t>( zone.name.size() ) );
 		binary.insert( binary.end(), zone.name.begin(), zone.name.end() );
+		WriteU8( binary, zone.materialClass );
+		WriteU8( binary, zone.flags );
+		WriteU16( binary, static_cast<std::uint16_t>( zone.portals.size() ) );
+		for ( const Portal &portal : zone.portals ) {
+			WriteU32( binary, portal.targetZone );
+			WriteVec3( binary, portal.mins );
+			WriteVec3( binary, portal.maxs );
+			WriteF32( binary, portal.openness );
+		}
 	}
 
 	return binary;
@@ -659,6 +690,16 @@ static bool ReadU8( const std::vector<std::uint8_t> &data, std::size_t &offset, 
 	return true;
 }
 
+static bool ReadU16( const std::vector<std::uint8_t> &data, std::size_t &offset, std::uint16_t &out ) {
+	if ( offset > data.size() || data.size() - offset < 2u ) {
+		return false;
+	}
+	out = static_cast<std::uint16_t>( data[offset] ) |
+		( static_cast<std::uint16_t>( data[offset + 1u] ) << 8u );
+	offset += 2u;
+	return true;
+}
+
 static bool ReadU32( const std::vector<std::uint8_t> &data, std::size_t &offset, std::uint32_t &out ) {
 	if ( offset > data.size() || data.size() - offset < 4u ) {
 		return false;
@@ -695,7 +736,7 @@ static bool ReadVec3( const std::vector<std::uint8_t> &data, std::size_t &offset
 		ReadF32( data, offset, out.z );
 }
 
-static bool LoadBinary( const std::filesystem::path &path, std::vector<Zone> &zones, std::string &error ) {
+static bool LoadBinary( const std::filesystem::path &path, std::vector<Zone> &zones, std::string &error, std::uint32_t *versionOut = nullptr ) {
 	std::error_code ec;
 	const std::uintmax_t size = std::filesystem::file_size( path, ec );
 	if ( !ec && size > azfmt::kMaxFileBytes ) {
@@ -725,9 +766,12 @@ static bool LoadBinary( const std::filesystem::path &path, std::vector<Zone> &zo
 		error = "truncated audio-zone header";
 		return false;
 	}
-	if ( version != azfmt::kVersion ) {
+	if ( version != azfmt::kLegacyVersion && version != azfmt::kVersion ) {
 		error = "unsupported audio-zone version " + std::to_string( version );
 		return false;
+	}
+	if ( versionOut != nullptr ) {
+		*versionOut = version;
 	}
 	if ( zoneCount > azfmt::kMaxZones ) {
 		error = "too many zones in file";
@@ -769,6 +813,40 @@ static bool LoadBinary( const std::filesystem::path &path, std::vector<Zone> &zo
 		}
 		zone.name.assign( reinterpret_cast<const char *>( data.data() + offset ), nameLength );
 		offset += nameLength;
+
+		if ( version >= azfmt::kVersion ) {
+			std::uint16_t portalCount = 0;
+			if ( !ReadU8( data, offset, zone.materialClass ) ||
+				!ReadU8( data, offset, zone.flags ) ||
+				!ReadU16( data, offset, portalCount ) ) {
+				error = "truncated zone metadata";
+				return false;
+			}
+			if ( zone.materialClass >= static_cast<std::uint8_t>( azfmt::MaterialClass::Count ) ) {
+				error = "zone record has unknown material class";
+				return false;
+			}
+			if ( portalCount > azfmt::kMaxZonePortals ) {
+				error = "zone record has too many portals";
+				return false;
+			}
+			zone.portals.reserve( portalCount );
+			for ( std::uint16_t portalIndex = 0; portalIndex < portalCount; ++portalIndex ) {
+				Portal portal;
+				if ( !ReadU32( data, offset, portal.targetZone ) ||
+					!ReadVec3( data, offset, portal.mins ) ||
+					!ReadVec3( data, offset, portal.maxs ) ||
+					!ReadF32( data, offset, portal.openness ) ) {
+					error = "truncated zone portal";
+					return false;
+				}
+				if ( portal.targetZone >= zoneCount ) {
+					error = "zone portal target is out of range";
+					return false;
+				}
+				zone.portals.push_back( portal );
+			}
+		}
 		zones.push_back( zone );
 	}
 	if ( offset != data.size() ) {
@@ -776,6 +854,972 @@ static bool LoadBinary( const std::filesystem::path &path, std::vector<Zone> &zo
 		return false;
 	}
 	return true;
+}
+
+static bool ReadWholeBinaryFile( const std::filesystem::path &path, std::vector<std::uint8_t> &contents, std::string &error ) {
+	std::error_code ec;
+	const std::uintmax_t size = std::filesystem::file_size( path, ec );
+	if ( ec ) {
+		error = "could not stat " + path.string() + ": " + ec.message();
+		return false;
+	}
+	if ( size > static_cast<std::uintmax_t>( std::numeric_limits<std::size_t>::max() ) ) {
+		error = "file is too large";
+		return false;
+	}
+
+	std::ifstream file( path, std::ios::binary );
+	if ( !file ) {
+		error = "could not open " + path.string();
+		return false;
+	}
+	contents.assign( ( std::istreambuf_iterator<char>( file ) ), std::istreambuf_iterator<char>() );
+	return true;
+}
+
+constexpr std::int32_t kBspIdent = ( 'P' << 24 ) + ( 'S' << 16 ) + ( 'B' << 8 ) + 'I';
+constexpr std::int32_t kBspVersionQ3 = 46;
+constexpr std::int32_t kBspVersionQL = 47;
+constexpr std::size_t kBspHeaderLumps = 17;
+constexpr std::size_t kBspHeaderSize = 8u + kBspHeaderLumps * 8u;
+constexpr std::size_t kBspMaxQpath = 64u;
+constexpr float kMinimumLeafExtent = 4.0f;
+constexpr float kPortalAdjacencyEpsilon = 8.0f;
+constexpr float kPortalMinimumOpenness = 0.04f;
+
+enum BspLumpIndex {
+	BspLumpEntities = 0,
+	BspLumpShaders = 1,
+	BspLumpPlanes = 2,
+	BspLumpNodes = 3,
+	BspLumpLeafs = 4,
+	BspLumpLeafSurfaces = 5,
+	BspLumpLeafBrushes = 6,
+	BspLumpModels = 7,
+	BspLumpBrushes = 8,
+	BspLumpBrushSides = 9,
+	BspLumpDrawVerts = 10,
+	BspLumpDrawIndexes = 11,
+	BspLumpFogs = 12,
+	BspLumpSurfaces = 13,
+	BspLumpLightmaps = 14,
+	BspLumpLightGrid = 15,
+	BspLumpVisibility = 16
+};
+
+struct BspLump {
+	std::size_t offset = 0;
+	std::size_t length = 0;
+};
+
+struct BspShader {
+	std::string name;
+	std::int32_t surfaceFlags = 0;
+	std::int32_t contentFlags = 0;
+};
+
+struct BspLeaf {
+	std::int32_t cluster = -1;
+	std::int32_t area = -1;
+	Vec3 mins;
+	Vec3 maxs;
+	std::int32_t firstLeafSurface = 0;
+	std::int32_t numLeafSurfaces = 0;
+	std::int32_t firstLeafBrush = 0;
+	std::int32_t numLeafBrushes = 0;
+};
+
+struct BspBrush {
+	std::int32_t firstSide = 0;
+	std::int32_t numSides = 0;
+	std::int32_t shaderNum = -1;
+	std::int32_t contentFlags = 0;
+};
+
+struct BspBrushSide {
+	std::int32_t planeNum = 0;
+	std::int32_t shaderNum = -1;
+	std::int32_t surfaceFlags = 0;
+};
+
+struct BspSurface {
+	std::int32_t shaderNum = -1;
+	std::int32_t surfaceType = 0;
+};
+
+struct BspMap {
+	std::int32_t version = 0;
+	std::vector<BspShader> shaders;
+	std::vector<BspLeaf> leafs;
+	std::vector<std::int32_t> leafSurfaces;
+	std::vector<std::int32_t> leafBrushes;
+	std::vector<BspBrush> brushes;
+	std::vector<BspBrushSide> brushSides;
+	std::vector<BspSurface> surfaces;
+};
+
+struct LeafAcoustics {
+	std::int32_t contents = 0;
+	std::int32_t surfaceFlags = 0;
+	int skyVotes = 0;
+	int stoneVotes = 0;
+	int metalVotes = 0;
+	int softVotes = 0;
+};
+
+struct GeneratedZone {
+	Zone zone;
+	int area = -1;
+	int cluster = -1;
+	float weight = 1.0f;
+};
+
+struct GeneratedZoneKey {
+	int area = -1;
+	int cluster = -1;
+	std::uint32_t preset = 0;
+	std::uint8_t material = 0;
+
+	bool operator<( const GeneratedZoneKey &other ) const {
+		if ( area != other.area ) {
+			return area < other.area;
+		}
+		if ( cluster != other.cluster ) {
+			return cluster < other.cluster;
+		}
+		if ( preset != other.preset ) {
+			return preset < other.preset;
+		}
+		return material < other.material;
+	}
+};
+
+static std::int32_t ReadBspI32At( const std::vector<std::uint8_t> &data, std::size_t offset ) {
+	if ( offset > data.size() || data.size() - offset < 4u ) {
+		return 0;
+	}
+	const std::uint32_t value = static_cast<std::uint32_t>( data[offset] ) |
+		( static_cast<std::uint32_t>( data[offset + 1u] ) << 8u ) |
+		( static_cast<std::uint32_t>( data[offset + 2u] ) << 16u ) |
+		( static_cast<std::uint32_t>( data[offset + 3u] ) << 24u );
+	return static_cast<std::int32_t>( value );
+}
+
+static std::string ReadBspStringAt( const std::vector<std::uint8_t> &data, std::size_t offset, std::size_t maxLength ) {
+	std::string text;
+	if ( offset >= data.size() ) {
+		return text;
+	}
+	const std::size_t available = ( std::min )( maxLength, data.size() - offset );
+	for ( std::size_t i = 0; i < available && data[offset + i] != 0; ++i ) {
+		text.push_back( static_cast<char>( data[offset + i] ) );
+	}
+	return text;
+}
+
+static bool ReadBspLumps( const std::vector<std::uint8_t> &data, std::array<BspLump, kBspHeaderLumps> &lumps, std::int32_t &version, std::string &error ) {
+	if ( data.size() < kBspHeaderSize ) {
+		error = "BSP header is truncated";
+		return false;
+	}
+	const std::int32_t ident = ReadBspI32At( data, 0u );
+	version = ReadBspI32At( data, 4u );
+	if ( ident != kBspIdent ) {
+		error = "not an IBSP file";
+		return false;
+	}
+	if ( version != kBspVersionQ3 && version != kBspVersionQL ) {
+		error = "unsupported BSP version " + std::to_string( version ) + "; automatic audio-zone generation supports IBSP 46/47";
+		return false;
+	}
+
+	for ( std::size_t i = 0; i < kBspHeaderLumps; ++i ) {
+		const std::size_t offset = 8u + i * 8u;
+		const std::int32_t fileOffset = ReadBspI32At( data, offset );
+		const std::int32_t fileLength = ReadBspI32At( data, offset + 4u );
+		if ( fileOffset < 0 || fileLength < 0 ) {
+			error = "BSP has a negative lump offset or length";
+			return false;
+		}
+		const std::size_t begin = static_cast<std::size_t>( fileOffset );
+		const std::size_t length = static_cast<std::size_t>( fileLength );
+		if ( begin > data.size() || length > data.size() - begin ) {
+			error = "BSP has an out-of-range lump";
+			return false;
+		}
+		lumps[i].offset = begin;
+		lumps[i].length = length;
+	}
+	return true;
+}
+
+static bool ValidateLumpRecordSize( const BspLump &lump, std::size_t recordSize, const char *name, std::string &error ) {
+	if ( recordSize == 0u || lump.length % recordSize != 0u ) {
+		error = std::string( "BSP " ) + name + " lump has a malformed size";
+		return false;
+	}
+	return true;
+}
+
+static Vec3 ReadBspBoundsVec3I32( const std::vector<std::uint8_t> &data, std::size_t offset ) {
+	Vec3 value;
+	value.x = static_cast<float>( ReadBspI32At( data, offset ) );
+	value.y = static_cast<float>( ReadBspI32At( data, offset + 4u ) );
+	value.z = static_cast<float>( ReadBspI32At( data, offset + 8u ) );
+	return value;
+}
+
+static void NormalizeVecBounds( Vec3 &mins, Vec3 &maxs ) {
+	if ( mins.x > maxs.x ) {
+		std::swap( mins.x, maxs.x );
+	}
+	if ( mins.y > maxs.y ) {
+		std::swap( mins.y, maxs.y );
+	}
+	if ( mins.z > maxs.z ) {
+		std::swap( mins.z, maxs.z );
+	}
+}
+
+static bool LoadBspMap( const std::filesystem::path &path, BspMap &map, std::string &error ) {
+	std::vector<std::uint8_t> data;
+	if ( !ReadWholeBinaryFile( path, data, error ) ) {
+		return false;
+	}
+
+	std::array<BspLump, kBspHeaderLumps> lumps;
+	if ( !ReadBspLumps( data, lumps, map.version, error ) ) {
+		return false;
+	}
+
+	if ( !ValidateLumpRecordSize( lumps[BspLumpShaders], 72u, "shader", error ) ||
+		!ValidateLumpRecordSize( lumps[BspLumpLeafs], 48u, "leaf", error ) ||
+		!ValidateLumpRecordSize( lumps[BspLumpLeafSurfaces], 4u, "leaf-surface", error ) ||
+		!ValidateLumpRecordSize( lumps[BspLumpLeafBrushes], 4u, "leaf-brush", error ) ||
+		!ValidateLumpRecordSize( lumps[BspLumpBrushes], 12u, "brush", error ) ||
+		!ValidateLumpRecordSize( lumps[BspLumpBrushSides], 8u, "brush-side", error ) ||
+		!ValidateLumpRecordSize( lumps[BspLumpSurfaces], 104u, "surface", error ) ) {
+		return false;
+	}
+
+	const BspLump &shaderLump = lumps[BspLumpShaders];
+	map.shaders.reserve( shaderLump.length / 72u );
+	for ( std::size_t offset = shaderLump.offset; offset < shaderLump.offset + shaderLump.length; offset += 72u ) {
+		BspShader shader;
+		shader.name = ReadBspStringAt( data, offset, kBspMaxQpath );
+		shader.surfaceFlags = ReadBspI32At( data, offset + 64u );
+		shader.contentFlags = ReadBspI32At( data, offset + 68u );
+		map.shaders.push_back( shader );
+	}
+
+	const BspLump &leafLump = lumps[BspLumpLeafs];
+	map.leafs.reserve( leafLump.length / 48u );
+	for ( std::size_t offset = leafLump.offset; offset < leafLump.offset + leafLump.length; offset += 48u ) {
+		BspLeaf leaf;
+		leaf.cluster = ReadBspI32At( data, offset );
+		leaf.area = ReadBspI32At( data, offset + 4u );
+		leaf.mins = ReadBspBoundsVec3I32( data, offset + 8u );
+		leaf.maxs = ReadBspBoundsVec3I32( data, offset + 20u );
+		NormalizeVecBounds( leaf.mins, leaf.maxs );
+		leaf.firstLeafSurface = ReadBspI32At( data, offset + 32u );
+		leaf.numLeafSurfaces = ReadBspI32At( data, offset + 36u );
+		leaf.firstLeafBrush = ReadBspI32At( data, offset + 40u );
+		leaf.numLeafBrushes = ReadBspI32At( data, offset + 44u );
+		map.leafs.push_back( leaf );
+	}
+
+	const BspLump &leafSurfaceLump = lumps[BspLumpLeafSurfaces];
+	map.leafSurfaces.reserve( leafSurfaceLump.length / 4u );
+	for ( std::size_t offset = leafSurfaceLump.offset; offset < leafSurfaceLump.offset + leafSurfaceLump.length; offset += 4u ) {
+		map.leafSurfaces.push_back( ReadBspI32At( data, offset ) );
+	}
+
+	const BspLump &leafBrushLump = lumps[BspLumpLeafBrushes];
+	map.leafBrushes.reserve( leafBrushLump.length / 4u );
+	for ( std::size_t offset = leafBrushLump.offset; offset < leafBrushLump.offset + leafBrushLump.length; offset += 4u ) {
+		map.leafBrushes.push_back( ReadBspI32At( data, offset ) );
+	}
+
+	const BspLump &brushLump = lumps[BspLumpBrushes];
+	map.brushes.reserve( brushLump.length / 12u );
+	for ( std::size_t offset = brushLump.offset; offset < brushLump.offset + brushLump.length; offset += 12u ) {
+		BspBrush brush;
+		brush.firstSide = ReadBspI32At( data, offset );
+		brush.numSides = ReadBspI32At( data, offset + 4u );
+		brush.shaderNum = ReadBspI32At( data, offset + 8u );
+		if ( brush.shaderNum >= 0 && static_cast<std::size_t>( brush.shaderNum ) < map.shaders.size() ) {
+			brush.contentFlags = map.shaders[static_cast<std::size_t>( brush.shaderNum )].contentFlags;
+		}
+		map.brushes.push_back( brush );
+	}
+
+	const BspLump &brushSideLump = lumps[BspLumpBrushSides];
+	map.brushSides.reserve( brushSideLump.length / 8u );
+	for ( std::size_t offset = brushSideLump.offset; offset < brushSideLump.offset + brushSideLump.length; offset += 8u ) {
+		BspBrushSide side;
+		side.planeNum = ReadBspI32At( data, offset );
+		side.shaderNum = ReadBspI32At( data, offset + 4u );
+		if ( side.shaderNum >= 0 && static_cast<std::size_t>( side.shaderNum ) < map.shaders.size() ) {
+			side.surfaceFlags = map.shaders[static_cast<std::size_t>( side.shaderNum )].surfaceFlags;
+		}
+		map.brushSides.push_back( side );
+	}
+
+	const BspLump &surfaceLump = lumps[BspLumpSurfaces];
+	map.surfaces.reserve( surfaceLump.length / 104u );
+	for ( std::size_t offset = surfaceLump.offset; offset < surfaceLump.offset + surfaceLump.length; offset += 104u ) {
+		BspSurface surface;
+		surface.shaderNum = ReadBspI32At( data, offset );
+		surface.surfaceType = ReadBspI32At( data, offset + 8u );
+		map.surfaces.push_back( surface );
+	}
+
+	if ( map.leafs.empty() ) {
+		error = "BSP has no leaves";
+		return false;
+	}
+	return true;
+}
+
+static float ExtentX( const Zone &zone ) {
+	return zone.maxs.x - zone.mins.x;
+}
+
+static float ExtentY( const Zone &zone ) {
+	return zone.maxs.y - zone.mins.y;
+}
+
+static float ExtentZ( const Zone &zone ) {
+	return zone.maxs.z - zone.mins.z;
+}
+
+static float ZoneVolume( const Zone &zone ) {
+	return ( std::max )( 1.0f, ExtentX( zone ) ) *
+		( std::max )( 1.0f, ExtentY( zone ) ) *
+		( std::max )( 1.0f, ExtentZ( zone ) );
+}
+
+static void ExpandZoneBounds( Zone &zone, const Vec3 &mins, const Vec3 &maxs ) {
+	if ( !zone.haveMins || !zone.haveMaxs ) {
+		zone.mins = mins;
+		zone.maxs = maxs;
+		zone.haveMins = true;
+		zone.haveMaxs = true;
+		return;
+	}
+	zone.mins.x = ( std::min )( zone.mins.x, mins.x );
+	zone.mins.y = ( std::min )( zone.mins.y, mins.y );
+	zone.mins.z = ( std::min )( zone.mins.z, mins.z );
+	zone.maxs.x = ( std::max )( zone.maxs.x, maxs.x );
+	zone.maxs.y = ( std::max )( zone.maxs.y, maxs.y );
+	zone.maxs.z = ( std::max )( zone.maxs.z, maxs.z );
+}
+
+static std::string LowercasePathToken( std::string value ) {
+	for ( char &ch : value ) {
+		if ( ch == '\\' ) {
+			ch = '/';
+		} else {
+			ch = static_cast<char>( std::tolower( static_cast<unsigned char>( ch ) ) );
+		}
+	}
+	return value;
+}
+
+static bool ContainsAnyToken( const std::string &text, const std::vector<std::string> &tokens ) {
+	for ( const std::string &token : tokens ) {
+		if ( text.find( token ) != std::string::npos ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void AccumulateShaderAcoustics( const BspShader &shader, LeafAcoustics &acoustics ) {
+	acoustics.surfaceFlags |= shader.surfaceFlags;
+	if ( shader.surfaceFlags & SURF_SKY ) {
+		++acoustics.skyVotes;
+	}
+	if ( shader.surfaceFlags & SURF_METALSTEPS ) {
+		++acoustics.metalVotes;
+	}
+	if ( shader.surfaceFlags & SURF_FLESH ) {
+		++acoustics.softVotes;
+	}
+
+	const std::string name = LowercasePathToken( shader.name );
+	if ( ContainsAnyToken( name, { "sky", "skies/" } ) ) {
+		++acoustics.skyVotes;
+	}
+	if ( ContainsAnyToken( name, { "stone", "rock", "gothic", "brick", "concrete", "cement", "base_wall" } ) ) {
+		++acoustics.stoneVotes;
+	}
+	if ( ContainsAnyToken( name, { "metal", "grate", "proto", "base_trim", "clang" } ) ) {
+		++acoustics.metalVotes;
+	}
+	if ( ContainsAnyToken( name, { "flesh", "organic", "cloth", "terrain", "grass", "sand", "dirt" } ) ) {
+		++acoustics.softVotes;
+	}
+}
+
+static LeafAcoustics AnalyzeLeafAcoustics( const BspMap &map, const BspLeaf &leaf ) {
+	LeafAcoustics acoustics;
+	if ( leaf.firstLeafSurface >= 0 && leaf.numLeafSurfaces > 0 &&
+		static_cast<std::size_t>( leaf.firstLeafSurface ) <= map.leafSurfaces.size() ) {
+		const std::size_t begin = static_cast<std::size_t>( leaf.firstLeafSurface );
+		const std::size_t count = ( std::min )( static_cast<std::size_t>( leaf.numLeafSurfaces ), map.leafSurfaces.size() - begin );
+		for ( std::size_t i = 0; i < count; ++i ) {
+			const std::int32_t surfaceIndex = map.leafSurfaces[begin + i];
+			if ( surfaceIndex >= 0 && static_cast<std::size_t>( surfaceIndex ) < map.surfaces.size() ) {
+				const std::int32_t shaderNum = map.surfaces[static_cast<std::size_t>( surfaceIndex )].shaderNum;
+				if ( shaderNum >= 0 && static_cast<std::size_t>( shaderNum ) < map.shaders.size() ) {
+					AccumulateShaderAcoustics( map.shaders[static_cast<std::size_t>( shaderNum )], acoustics );
+				}
+			}
+		}
+	}
+
+	if ( leaf.firstLeafBrush >= 0 && leaf.numLeafBrushes > 0 &&
+		static_cast<std::size_t>( leaf.firstLeafBrush ) <= map.leafBrushes.size() ) {
+		const std::size_t begin = static_cast<std::size_t>( leaf.firstLeafBrush );
+		const std::size_t count = ( std::min )( static_cast<std::size_t>( leaf.numLeafBrushes ), map.leafBrushes.size() - begin );
+		for ( std::size_t i = 0; i < count; ++i ) {
+			const std::int32_t brushIndex = map.leafBrushes[begin + i];
+			if ( brushIndex < 0 || static_cast<std::size_t>( brushIndex ) >= map.brushes.size() ) {
+				continue;
+			}
+			const BspBrush &brush = map.brushes[static_cast<std::size_t>( brushIndex )];
+			acoustics.contents |= brush.contentFlags;
+			if ( brush.shaderNum >= 0 && static_cast<std::size_t>( brush.shaderNum ) < map.shaders.size() ) {
+				AccumulateShaderAcoustics( map.shaders[static_cast<std::size_t>( brush.shaderNum )], acoustics );
+			}
+			if ( brush.firstSide >= 0 && brush.numSides > 0 &&
+				static_cast<std::size_t>( brush.firstSide ) <= map.brushSides.size() ) {
+				const std::size_t sideBegin = static_cast<std::size_t>( brush.firstSide );
+				const std::size_t sideCount = ( std::min )( static_cast<std::size_t>( brush.numSides ), map.brushSides.size() - sideBegin );
+				for ( std::size_t sideIndex = 0; sideIndex < sideCount; ++sideIndex ) {
+					const BspBrushSide &side = map.brushSides[sideBegin + sideIndex];
+					acoustics.surfaceFlags |= side.surfaceFlags;
+					if ( side.shaderNum >= 0 && static_cast<std::size_t>( side.shaderNum ) < map.shaders.size() ) {
+						AccumulateShaderAcoustics( map.shaders[static_cast<std::size_t>( side.shaderNum )], acoustics );
+					}
+				}
+			}
+		}
+	}
+	return acoustics;
+}
+
+static std::uint8_t MaterialFromAcoustics( const LeafAcoustics &acoustics ) {
+	if ( acoustics.contents & ( CONTENTS_WATER | CONTENTS_SLIME | CONTENTS_LAVA ) ) {
+		return static_cast<std::uint8_t>( azfmt::MaterialClass::Liquid );
+	}
+	if ( acoustics.skyVotes > 0 ) {
+		return static_cast<std::uint8_t>( azfmt::MaterialClass::Sky );
+	}
+	if ( acoustics.metalVotes > acoustics.stoneVotes && acoustics.metalVotes >= acoustics.softVotes ) {
+		return static_cast<std::uint8_t>( azfmt::MaterialClass::Metal );
+	}
+	if ( acoustics.stoneVotes > 0 && acoustics.stoneVotes >= acoustics.softVotes ) {
+		return static_cast<std::uint8_t>( azfmt::MaterialClass::Stone );
+	}
+	if ( acoustics.softVotes > 0 ) {
+		return static_cast<std::uint8_t>( azfmt::MaterialClass::Soft );
+	}
+	return static_cast<std::uint8_t>( azfmt::MaterialClass::Neutral );
+}
+
+static std::uint32_t PresetFromLeaf( const BspLeaf &leaf, const LeafAcoustics &acoustics, std::uint8_t material ) {
+	if ( acoustics.contents & ( CONTENTS_WATER | CONTENTS_SLIME | CONTENTS_LAVA ) ) {
+		return static_cast<std::uint32_t>( azfmt::Preset::Underwater );
+	}
+
+	const float x = ( std::max )( kMinimumLeafExtent, leaf.maxs.x - leaf.mins.x );
+	const float y = ( std::max )( kMinimumLeafExtent, leaf.maxs.y - leaf.mins.y );
+	const float z = ( std::max )( kMinimumLeafExtent, leaf.maxs.z - leaf.mins.z );
+	const float horizontalMin = ( std::min )( x, y );
+	const float horizontalMax = ( std::max )( x, y );
+	const float volume = x * y * z;
+	const bool skyLike = material == static_cast<std::uint8_t>( azfmt::MaterialClass::Sky ) || acoustics.skyVotes > 0;
+
+	if ( skyLike && ( z > 192.0f || horizontalMax > 512.0f ) ) {
+		return static_cast<std::uint32_t>( azfmt::Preset::Outdoors );
+	}
+	if ( horizontalMin > 0.0f && horizontalMax / horizontalMin > 2.6f && horizontalMin < 384.0f ) {
+		return static_cast<std::uint32_t>( azfmt::Preset::Hallway );
+	}
+	if ( volume > 96.0f * 1024.0f * 1024.0f || horizontalMax > 1536.0f || z > 768.0f ) {
+		return static_cast<std::uint32_t>( azfmt::Preset::Hall );
+	}
+	if ( material == static_cast<std::uint8_t>( azfmt::MaterialClass::Stone ) ||
+		material == static_cast<std::uint8_t>( azfmt::MaterialClass::Metal ) ) {
+		return static_cast<std::uint32_t>( azfmt::Preset::StoneRoom );
+	}
+	if ( volume > 8.0f * 1024.0f * 1024.0f || horizontalMax > 512.0f || z > 320.0f ) {
+		return static_cast<std::uint32_t>( azfmt::Preset::Room );
+	}
+	return static_cast<std::uint32_t>( azfmt::Preset::SmallRoom );
+}
+
+static void ApplyGeneratedTuning( Zone &zone ) {
+	zone.flags |= azfmt::ZoneFlagGenerated;
+	zone.transitionMs = azfmt::kDefaultTransitionMs;
+	zone.occlusionMultiplier = 1.0f;
+	zone.reverbGain = 1.0f;
+	zone.directLF = 1.0f;
+	zone.directHF = 0.96f;
+	zone.wetLF = 1.0f;
+	zone.wetHF = 0.92f;
+
+	switch ( static_cast<azfmt::Preset>( zone.preset ) ) {
+	case azfmt::Preset::Underwater:
+		zone.flags |= azfmt::ZoneFlagUnderwater;
+		zone.reverbGain = 0.85f;
+		zone.occlusionMultiplier = 1.15f;
+		zone.directLF = 0.86f;
+		zone.directHF = 0.58f;
+		zone.wetLF = 0.82f;
+		zone.wetHF = 0.50f;
+		zone.transitionMs = 500u;
+		break;
+	case azfmt::Preset::Outdoors:
+		zone.flags |= azfmt::ZoneFlagOutdoor;
+		zone.reverbGain = 0.55f;
+		zone.occlusionMultiplier = 0.80f;
+		zone.directHF = 1.0f;
+		zone.wetHF = 0.88f;
+		zone.transitionMs = 900u;
+		break;
+	case azfmt::Preset::Hall:
+		zone.reverbGain = 1.15f;
+		zone.occlusionMultiplier = 0.90f;
+		zone.wetHF = 0.95f;
+		zone.transitionMs = 800u;
+		break;
+	case azfmt::Preset::Hallway:
+		zone.reverbGain = 1.05f;
+		zone.occlusionMultiplier = 1.05f;
+		zone.directHF = 0.94f;
+		zone.wetHF = 0.88f;
+		break;
+	case azfmt::Preset::StoneRoom:
+		zone.reverbGain = 1.08f;
+		zone.directHF = 0.93f;
+		zone.wetHF = 0.86f;
+		break;
+	case azfmt::Preset::Room:
+		zone.reverbGain = 0.96f;
+		break;
+	case azfmt::Preset::SmallRoom:
+	default:
+		zone.reverbGain = 0.82f;
+		zone.transitionMs = 450u;
+		break;
+	}
+
+	if ( zone.materialClass == static_cast<std::uint8_t>( azfmt::MaterialClass::Metal ) ) {
+		zone.reverbGain = ( std::min )( 1.30f, zone.reverbGain + 0.12f );
+		zone.directHF = ( std::min )( zone.directHF, 0.92f );
+		zone.wetHF = ( std::min )( zone.wetHF, 0.82f );
+	} else if ( zone.materialClass == static_cast<std::uint8_t>( azfmt::MaterialClass::Soft ) ) {
+		zone.reverbGain = ( std::max )( 0.45f, zone.reverbGain - 0.18f );
+		zone.occlusionMultiplier = ( std::max )( 0.65f, zone.occlusionMultiplier - 0.10f );
+		zone.wetHF = ( std::min )( zone.wetHF, 0.78f );
+	}
+}
+
+static std::int32_t GeneratedPriority( std::uint32_t preset ) {
+	switch ( static_cast<azfmt::Preset>( preset ) ) {
+	case azfmt::Preset::Underwater:
+		return -40;
+	case azfmt::Preset::SmallRoom:
+		return -55;
+	case azfmt::Preset::Hallway:
+		return -60;
+	case azfmt::Preset::Room:
+	case azfmt::Preset::StoneRoom:
+		return -70;
+	case azfmt::Preset::Hall:
+		return -80;
+	case azfmt::Preset::Outdoors:
+	default:
+		return -90;
+	}
+}
+
+static bool LeafBoundsUsable( const BspLeaf &leaf ) {
+	if ( leaf.cluster < 0 ) {
+		return false;
+	}
+	const float x = leaf.maxs.x - leaf.mins.x;
+	const float y = leaf.maxs.y - leaf.mins.y;
+	const float z = leaf.maxs.z - leaf.mins.z;
+	return std::isfinite( x ) && std::isfinite( y ) && std::isfinite( z ) &&
+		x >= kMinimumLeafExtent && y >= kMinimumLeafExtent && z >= kMinimumLeafExtent;
+}
+
+static void MergeGeneratedZoneInto( GeneratedZone &target, const GeneratedZone &source ) {
+	const float targetWeight = ( std::max )( 1.0f, target.weight );
+	const float sourceWeight = ( std::max )( 1.0f, source.weight );
+	const float totalWeight = targetWeight + sourceWeight;
+	ExpandZoneBounds( target.zone, source.zone.mins, source.zone.maxs );
+	target.zone.reverbGain = ( target.zone.reverbGain * targetWeight + source.zone.reverbGain * sourceWeight ) / totalWeight;
+	target.zone.occlusionMultiplier = ( target.zone.occlusionMultiplier * targetWeight + source.zone.occlusionMultiplier * sourceWeight ) / totalWeight;
+	target.zone.directLF = ( target.zone.directLF * targetWeight + source.zone.directLF * sourceWeight ) / totalWeight;
+	target.zone.directHF = ( target.zone.directHF * targetWeight + source.zone.directHF * sourceWeight ) / totalWeight;
+	target.zone.wetLF = ( target.zone.wetLF * targetWeight + source.zone.wetLF * sourceWeight ) / totalWeight;
+	target.zone.wetHF = ( target.zone.wetHF * targetWeight + source.zone.wetHF * sourceWeight ) / totalWeight;
+	target.zone.transitionMs = ( std::max )( target.zone.transitionMs, source.zone.transitionMs );
+	target.zone.flags |= source.zone.flags;
+	target.weight = totalWeight;
+}
+
+static GeneratedZone CoarsenGroup( const std::vector<GeneratedZone> &zones, const std::vector<std::size_t> &indices ) {
+	GeneratedZone merged = zones[indices.front()];
+	for ( std::size_t i = 1; i < indices.size(); ++i ) {
+		MergeGeneratedZoneInto( merged, zones[indices[i]] );
+	}
+	merged.cluster = -1;
+	return merged;
+}
+
+template<typename KeyFn>
+static std::vector<GeneratedZone> CoarsenGeneratedZonesByKey( const std::vector<GeneratedZone> &zones, KeyFn keyFn ) {
+	std::map<std::string, std::vector<std::size_t>> groups;
+	for ( std::size_t i = 0; i < zones.size(); ++i ) {
+		groups[keyFn( zones[i] )].push_back( i );
+	}
+
+	std::vector<GeneratedZone> coarsened;
+	coarsened.reserve( groups.size() );
+	for ( const auto &entry : groups ) {
+		coarsened.push_back( CoarsenGroup( zones, entry.second ) );
+	}
+	return coarsened;
+}
+
+static void AssignGeneratedZoneNames( std::vector<GeneratedZone> &zones ) {
+	std::sort( zones.begin(), zones.end(), []( const GeneratedZone &a, const GeneratedZone &b ) {
+		if ( a.area != b.area ) {
+			return a.area < b.area;
+		}
+		if ( a.zone.preset != b.zone.preset ) {
+			return a.zone.preset < b.zone.preset;
+		}
+		if ( a.cluster != b.cluster ) {
+			return a.cluster < b.cluster;
+		}
+		return ZoneVolume( a.zone ) < ZoneVolume( b.zone );
+	} );
+
+	for ( std::size_t i = 0; i < zones.size(); ++i ) {
+		const char *presetName = zones[i].zone.preset < static_cast<std::uint32_t>( azfmt::Preset::Count )
+			? azfmt::kPresetNames[zones[i].zone.preset]
+			: "zone";
+		std::ostringstream name;
+		name << "auto-a" << zones[i].area << "-";
+		if ( zones[i].cluster >= 0 ) {
+			name << "c" << zones[i].cluster << "-";
+		}
+		name << presetName << "-" << i;
+		zones[i].zone.name = name.str().substr( 0u, azfmt::kMaxNameBytes );
+		zones[i].zone.priority = GeneratedPriority( zones[i].zone.preset );
+	}
+}
+
+static void CoarsenGeneratedZonesToLimit( std::vector<GeneratedZone> &zones, std::size_t limit ) {
+	if ( zones.size() <= limit ) {
+		return;
+	}
+
+	zones = CoarsenGeneratedZonesByKey( zones, []( const GeneratedZone &zone ) {
+		return std::to_string( zone.area ) + ":" + std::to_string( zone.zone.preset ) + ":" + std::to_string( zone.zone.materialClass );
+	} );
+	if ( zones.size() <= limit ) {
+		return;
+	}
+
+	zones = CoarsenGeneratedZonesByKey( zones, []( const GeneratedZone &zone ) {
+		return std::to_string( zone.area ) + ":" + std::to_string( zone.zone.preset );
+	} );
+	if ( zones.size() <= limit ) {
+		return;
+	}
+
+	zones = CoarsenGeneratedZonesByKey( zones, []( const GeneratedZone &zone ) {
+		return std::to_string( zone.zone.preset );
+	} );
+	if ( zones.size() <= limit ) {
+		return;
+	}
+
+	std::sort( zones.begin(), zones.end(), []( const GeneratedZone &a, const GeneratedZone &b ) {
+		return ZoneVolume( a.zone ) > ZoneVolume( b.zone );
+	} );
+	zones.resize( limit );
+}
+
+static bool BuildGeneratedZonesFromBsp( const BspMap &map, std::size_t limit, std::vector<GeneratedZone> &zones, std::string &error ) {
+	std::map<GeneratedZoneKey, GeneratedZone> accumulators;
+	for ( const BspLeaf &leaf : map.leafs ) {
+		if ( !LeafBoundsUsable( leaf ) ) {
+			continue;
+		}
+		const LeafAcoustics acoustics = AnalyzeLeafAcoustics( map, leaf );
+		const std::uint8_t material = MaterialFromAcoustics( acoustics );
+		const std::uint32_t preset = PresetFromLeaf( leaf, acoustics, material );
+		GeneratedZoneKey key;
+		key.area = leaf.area;
+		key.cluster = leaf.cluster;
+		key.preset = preset;
+		key.material = material;
+
+		GeneratedZone leafZone;
+		leafZone.area = leaf.area;
+		leafZone.cluster = leaf.cluster;
+		leafZone.zone.haveMins = true;
+		leafZone.zone.haveMaxs = true;
+		leafZone.zone.mins = leaf.mins;
+		leafZone.zone.maxs = leaf.maxs;
+		leafZone.zone.preset = preset;
+		leafZone.zone.materialClass = material;
+		ApplyGeneratedTuning( leafZone.zone );
+		leafZone.weight = ZoneVolume( leafZone.zone );
+
+		auto inserted = accumulators.emplace( key, leafZone );
+		if ( !inserted.second ) {
+			MergeGeneratedZoneInto( inserted.first->second, leafZone );
+		}
+	}
+
+	zones.clear();
+	zones.reserve( accumulators.size() );
+	for ( auto &entry : accumulators ) {
+		zones.push_back( entry.second );
+	}
+	if ( zones.empty() ) {
+		error = "BSP did not contain any non-opaque leaf clusters suitable for audio zones";
+		return false;
+	}
+
+	CoarsenGeneratedZonesToLimit( zones, limit );
+	AssignGeneratedZoneNames( zones );
+	return true;
+}
+
+static float AxisOverlap( float aMin, float aMax, float bMin, float bMax ) {
+	return ( std::min )( aMax, bMax ) - ( std::max )( aMin, bMin );
+}
+
+static bool BuildPortalBetweenZones( const Zone &a, const Zone &b, Portal &aToB, Portal &bToA ) {
+	const float gaps[3] = {
+		( a.maxs.x < b.mins.x ) ? b.mins.x - a.maxs.x : ( b.maxs.x < a.mins.x ? a.mins.x - b.maxs.x : 0.0f ),
+		( a.maxs.y < b.mins.y ) ? b.mins.y - a.maxs.y : ( b.maxs.y < a.mins.y ? a.mins.y - b.maxs.y : 0.0f ),
+		( a.maxs.z < b.mins.z ) ? b.mins.z - a.maxs.z : ( b.maxs.z < a.mins.z ? a.mins.z - b.maxs.z : 0.0f )
+	};
+	int portalAxis = 0;
+	if ( gaps[1] < gaps[portalAxis] ) {
+		portalAxis = 1;
+	}
+	if ( gaps[2] < gaps[portalAxis] ) {
+		portalAxis = 2;
+	}
+	if ( gaps[portalAxis] > kPortalAdjacencyEpsilon ) {
+		return false;
+	}
+
+	float overlap[3] = {
+		AxisOverlap( a.mins.x, a.maxs.x, b.mins.x, b.maxs.x ),
+		AxisOverlap( a.mins.y, a.maxs.y, b.mins.y, b.maxs.y ),
+		AxisOverlap( a.mins.z, a.maxs.z, b.mins.z, b.maxs.z )
+	};
+	for ( int axis = 0; axis < 3; ++axis ) {
+		if ( axis != portalAxis && overlap[axis] <= 0.0f ) {
+			return false;
+		}
+	}
+
+	Vec3 mins;
+	Vec3 maxs;
+	mins.x = ( std::max )( a.mins.x, b.mins.x );
+	mins.y = ( std::max )( a.mins.y, b.mins.y );
+	mins.z = ( std::max )( a.mins.z, b.mins.z );
+	maxs.x = ( std::min )( a.maxs.x, b.maxs.x );
+	maxs.y = ( std::min )( a.maxs.y, b.maxs.y );
+	maxs.z = ( std::min )( a.maxs.z, b.maxs.z );
+	if ( portalAxis == 0 ) {
+		const float plane = ( a.maxs.x <= b.mins.x ) ? ( a.maxs.x + b.mins.x ) * 0.5f : ( b.maxs.x + a.mins.x ) * 0.5f;
+		mins.x = maxs.x = plane;
+	} else if ( portalAxis == 1 ) {
+		const float plane = ( a.maxs.y <= b.mins.y ) ? ( a.maxs.y + b.mins.y ) * 0.5f : ( b.maxs.y + a.mins.y ) * 0.5f;
+		mins.y = maxs.y = plane;
+	} else {
+		const float plane = ( a.maxs.z <= b.mins.z ) ? ( a.maxs.z + b.mins.z ) * 0.5f : ( b.maxs.z + a.mins.z ) * 0.5f;
+		mins.z = maxs.z = plane;
+	}
+
+	const int axisA = ( portalAxis + 1 ) % 3;
+	const int axisB = ( portalAxis + 2 ) % 3;
+	const float overlapArea = ( std::max )( 1.0f, overlap[axisA] ) * ( std::max )( 1.0f, overlap[axisB] );
+	const float faceAreaA =
+		( portalAxis == 0 ) ? ( std::max )( 1.0f, ExtentY( a ) ) * ( std::max )( 1.0f, ExtentZ( a ) ) :
+		( portalAxis == 1 ) ? ( std::max )( 1.0f, ExtentX( a ) ) * ( std::max )( 1.0f, ExtentZ( a ) ) :
+			( std::max )( 1.0f, ExtentX( a ) ) * ( std::max )( 1.0f, ExtentY( a ) );
+	const float faceAreaB =
+		( portalAxis == 0 ) ? ( std::max )( 1.0f, ExtentY( b ) ) * ( std::max )( 1.0f, ExtentZ( b ) ) :
+		( portalAxis == 1 ) ? ( std::max )( 1.0f, ExtentX( b ) ) * ( std::max )( 1.0f, ExtentZ( b ) ) :
+			( std::max )( 1.0f, ExtentX( b ) ) * ( std::max )( 1.0f, ExtentY( b ) );
+	const float openness = overlapArea / ( std::max )( 1.0f, ( std::min )( faceAreaA, faceAreaB ) );
+	if ( openness < kPortalMinimumOpenness ) {
+		return false;
+	}
+
+	aToB.mins = mins;
+	aToB.maxs = maxs;
+	aToB.openness = ( std::min )( 1.0f, openness );
+	bToA = aToB;
+	return true;
+}
+
+static void BuildGeneratedPortals( std::vector<Zone> &zones, std::size_t generatedCount ) {
+	for ( std::size_t i = 0; i < generatedCount; ++i ) {
+		zones[i].portals.clear();
+	}
+
+	for ( std::size_t i = 0; i < generatedCount; ++i ) {
+		for ( std::size_t j = i + 1u; j < generatedCount; ++j ) {
+			if ( zones[i].preset != zones[j].preset && zones[i].materialClass != zones[j].materialClass ) {
+				continue;
+			}
+			if ( zones[i].portals.size() >= azfmt::kMaxZonePortals || zones[j].portals.size() >= azfmt::kMaxZonePortals ) {
+				continue;
+			}
+			Portal iToJ;
+			Portal jToI;
+			if ( BuildPortalBetweenZones( zones[i], zones[j], iToJ, jToI ) ) {
+				iToJ.targetZone = static_cast<std::uint32_t>( j );
+				jToI.targetZone = static_cast<std::uint32_t>( i );
+				zones[i].portals.push_back( iToJ );
+				zones[j].portals.push_back( jToI );
+			}
+		}
+	}
+}
+
+static bool LoadTextZones( const std::filesystem::path &path, std::vector<Zone> &zones, std::string &error ) {
+	std::string source;
+	if ( !ReadWholeFile( path, source, error ) ) {
+		return false;
+	}
+	Parser parser( source );
+	return parser.Parse( zones, error );
+}
+
+static int FromBspCommand( int argc, char **argv ) {
+	std::filesystem::path input;
+	std::filesystem::path output;
+	std::filesystem::path overridePath;
+	std::size_t maxZones = azfmt::kMaxZones;
+
+	for ( int i = 2; i < argc; ++i ) {
+		const std::string arg = argv[i];
+		if ( arg == "-o" || arg == "--output" ) {
+			if ( i + 1 >= argc ) {
+				std::cerr << "missing output path after " << arg << "\n";
+				return 2;
+			}
+			output = argv[++i];
+		} else if ( arg == "--merge" || arg == "--override" || arg == "--overrides" ) {
+			if ( i + 1 >= argc ) {
+				std::cerr << "missing .audiozones path after " << arg << "\n";
+				return 2;
+			}
+			overridePath = argv[++i];
+		} else if ( arg == "--max-zones" ) {
+			if ( i + 1 >= argc ) {
+				std::cerr << "missing zone count after " << arg << "\n";
+				return 2;
+			}
+			char *end = nullptr;
+			const long value = std::strtol( argv[++i], &end, 10 );
+			if ( end == argv[i] || *end != '\0' || value < 1 || value > static_cast<long>( azfmt::kMaxZones ) ) {
+				std::cerr << "--max-zones must be in range 1.." << azfmt::kMaxZones << "\n";
+				return 2;
+			}
+			maxZones = static_cast<std::size_t>( value );
+		} else if ( arg == "-h" || arg == "--help" ) {
+			return 2;
+		} else if ( input.empty() ) {
+			input = arg;
+		} else {
+			std::cerr << "unexpected argument: " << arg << "\n";
+			return 2;
+		}
+	}
+
+	if ( input.empty() ) {
+		return 2;
+	}
+	if ( output.empty() ) {
+		output = DefaultOutputPath( input );
+	}
+
+	std::string error;
+	BspMap map;
+	if ( !LoadBspMap( input, map, error ) ) {
+		std::cerr << input.string() << ": " << error << "\n";
+		return 1;
+	}
+
+	std::vector<Zone> overrideZones;
+	if ( !overridePath.empty() ) {
+		if ( !LoadTextZones( overridePath, overrideZones, error ) ) {
+			std::cerr << overridePath.string() << ": " << error << "\n";
+			return 1;
+		}
+		if ( overrideZones.size() >= maxZones ) {
+			std::cerr << overridePath.string() << ": override zones leave no room for generated zones under --max-zones\n";
+			return 1;
+		}
+		for ( Zone &zone : overrideZones ) {
+			zone.materialClass = static_cast<std::uint8_t>( azfmt::MaterialClass::Unknown );
+			zone.flags &= ~azfmt::ZoneFlagGenerated;
+			zone.portals.clear();
+		}
+	}
+
+	std::vector<GeneratedZone> generatedZones;
+	const std::size_t generatedLimit = maxZones - overrideZones.size();
+	if ( !BuildGeneratedZonesFromBsp( map, generatedLimit, generatedZones, error ) ) {
+		std::cerr << input.string() << ": " << error << "\n";
+		return 1;
+	}
+
+	std::vector<Zone> zones;
+	zones.reserve( generatedZones.size() + overrideZones.size() );
+	for ( const GeneratedZone &generated : generatedZones ) {
+		zones.push_back( generated.zone );
+	}
+	const std::size_t generatedCount = zones.size();
+	zones.insert( zones.end(), overrideZones.begin(), overrideZones.end() );
+	BuildGeneratedPortals( zones, generatedCount );
+
+	const std::vector<std::uint8_t> binary = BuildBinary( zones );
+	if ( binary.size() > azfmt::kMaxFileBytes ) {
+		std::cerr << "generated audio-zone file would exceed " << azfmt::kMaxFileBytes << " bytes\n";
+		return 1;
+	}
+	if ( !WriteWholeFile( output, binary, error ) ) {
+		std::cerr << error << "\n";
+		return 1;
+	}
+
+	std::cout << "generated " << generatedCount << " BSP audio zone" << ( generatedCount == 1u ? "" : "s" );
+	if ( !overrideZones.empty() ) {
+		std::cout << " plus " << overrideZones.size() << " override zone" << ( overrideZones.size() == 1u ? "" : "s" );
+	}
+	std::cout << " to " << output.string() << "\n";
+	return 0;
 }
 
 static int CompileCommand( int argc, char **argv ) {
@@ -822,6 +1866,10 @@ static int CompileCommand( int argc, char **argv ) {
 	}
 
 	const std::vector<std::uint8_t> binary = BuildBinary( zones );
+	if ( binary.size() > azfmt::kMaxFileBytes ) {
+		std::cerr << "compiled audio-zone file would exceed " << azfmt::kMaxFileBytes << " bytes\n";
+		return 1;
+	}
 	if ( !WriteWholeFile( output, binary, error ) ) {
 		std::cerr << error << "\n";
 		return 1;
@@ -838,17 +1886,22 @@ static int DumpCommand( int argc, char **argv ) {
 	}
 	std::vector<Zone> zones;
 	std::string error;
-	if ( !LoadBinary( argv[2], zones, error ) ) {
+	std::uint32_t version = 0;
+	if ( !LoadBinary( argv[2], zones, error, &version ) ) {
 		std::cerr << argv[2] << ": " << error << "\n";
 		return 1;
 	}
-	std::cout << "audiozones version " << azfmt::kVersion << ", zones " << zones.size() << "\n";
+	std::cout << "audiozones version " << version << ", zones " << zones.size() << "\n";
 	for ( const Zone &zone : zones ) {
 		const char *presetName = zone.preset < static_cast<std::uint32_t>( azfmt::Preset::Count )
 			? azfmt::kPresetNames[zone.preset]
 			: "unknown";
+		const char *materialName = zone.materialClass < static_cast<std::uint8_t>( azfmt::MaterialClass::Count )
+			? azfmt::kMaterialClassNames[zone.materialClass]
+			: "unknown";
 		std::cout << "zone \"" << zone.name << "\""
 			<< " preset " << presetName
+			<< " material " << materialName
 			<< " bounds " << zone.mins.x << ' ' << zone.mins.y << ' ' << zone.mins.z
 			<< " -> " << zone.maxs.x << ' ' << zone.maxs.y << ' ' << zone.maxs.z
 			<< " priority " << zone.priority
@@ -857,16 +1910,309 @@ static int DumpCommand( int argc, char **argv ) {
 			<< " occlusion " << zone.occlusionMultiplier
 			<< " directLF/HF " << zone.directLF << '/' << zone.directHF
 			<< " wetLF/HF " << zone.wetLF << '/' << zone.wetHF
+			<< " flags " << static_cast<int>( zone.flags )
+			<< " portals " << zone.portals.size()
 			<< "\n";
 	}
 	return 0;
+}
+
+static std::uint32_t SidecarVersionFromBytes( const std::vector<std::uint8_t> &data ) {
+	if ( data.size() < 8u ) {
+		return 0;
+	}
+	return static_cast<std::uint32_t>( data[4] ) |
+		( static_cast<std::uint32_t>( data[5] ) << 8u ) |
+		( static_cast<std::uint32_t>( data[6] ) << 16u ) |
+		( static_cast<std::uint32_t>( data[7] ) << 24u );
+}
+
+static float RuntimeZoneVolume( const azrt::AudioZone &zone ) {
+	return ( zone.maxs.v[0] - zone.mins.v[0] ) *
+		( zone.maxs.v[1] - zone.mins.v[1] ) *
+		( zone.maxs.v[2] - zone.mins.v[2] );
+}
+
+static bool RuntimeZoneBoundsOverlap( const azrt::AudioZone &a, const azrt::AudioZone &b ) {
+	return a.mins.v[0] < b.maxs.v[0] && a.maxs.v[0] > b.mins.v[0] &&
+		a.mins.v[1] < b.maxs.v[1] && a.maxs.v[1] > b.mins.v[1] &&
+		a.mins.v[2] < b.maxs.v[2] && a.maxs.v[2] > b.mins.v[2];
+}
+
+static bool RuntimeZoneHasPortalTo( const std::vector<azrt::AudioZone> &zones, std::size_t from, std::size_t to ) {
+	if ( from >= zones.size() || to >= zones.size() ) {
+		return false;
+	}
+	for ( const azrt::AudioZonePortal &portal : zones[from].portals ) {
+		if ( portal.targetZone == to ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void PrintCountList( const char *label, const char *const *names, const int *counts, int count ) {
+	std::cout << label << ':';
+	bool any = false;
+	for ( int i = 0; i < count; ++i ) {
+		if ( counts[i] <= 0 ) {
+			continue;
+		}
+		std::cout << ' ' << names[i] << '=' << counts[i];
+		any = true;
+	}
+	if ( !any ) {
+		std::cout << " none";
+	}
+	std::cout << "\n";
+}
+
+struct AuditOptions {
+	std::filesystem::path input;
+	int samples = 4096;
+	bool strict = false;
+};
+
+static bool ParseAuditOptions( int argc, char **argv, AuditOptions &options, std::string &error ) {
+	if ( argc < 3 ) {
+		return false;
+	}
+
+	for ( int i = 2; i < argc; ++i ) {
+		const std::string arg = argv[i];
+		if ( arg == "--strict" ) {
+			options.strict = true;
+			continue;
+		}
+		if ( arg == "--samples" ) {
+			if ( i + 1 >= argc ) {
+				error = "missing sample count after --samples";
+				return false;
+			}
+			char *end = nullptr;
+			errno = 0;
+			const long value = std::strtol( argv[++i], &end, 10 );
+			if ( argv[i][0] == '\0' || end == argv[i] || *end != '\0' || errno == ERANGE || value < 1 || value > 1000000 ) {
+				error = "--samples expects an integer from 1 to 1000000";
+				return false;
+			}
+			options.samples = static_cast<int>( value );
+			continue;
+		}
+		if ( !options.input.empty() ) {
+			error = "multiple input files were provided";
+			return false;
+		}
+		options.input = arg;
+	}
+
+	if ( options.input.empty() ) {
+		error = "missing input.azb";
+		return false;
+	}
+	return true;
+}
+
+static int AuditCommand( int argc, char **argv ) {
+	AuditOptions options;
+	std::string error;
+	if ( !ParseAuditOptions( argc, argv, options, error ) ) {
+		if ( !error.empty() ) {
+			std::cerr << error << "\n";
+		}
+		return 2;
+	}
+
+	std::vector<std::uint8_t> data;
+	if ( !ReadWholeBinaryFile( options.input, data, error ) ) {
+		std::cerr << options.input.string() << ": " << error << "\n";
+		return 1;
+	}
+
+	std::vector<azrt::AudioZone> zones;
+	if ( !azrt::ParseAudioZoneBinary( data.data(), data.size(), zones, error ) ) {
+		std::cerr << options.input.string() << ": " << error << "\n";
+		return 1;
+	}
+
+	const std::uint32_t version = SidecarVersionFromBytes( data );
+	std::array<int, static_cast<std::size_t>( azfmt::Preset::Count )> presetCounts = {};
+	std::array<int, static_cast<std::size_t>( azfmt::MaterialClass::Count )> materialCounts = {};
+	int generatedCount = 0;
+	int outdoorFlagCount = 0;
+	int underwaterFlagCount = 0;
+	int totalPortals = 0;
+	int maxPortals = 0;
+	int selfPortals = 0;
+	int oneWayPortals = 0;
+	float minOpenness = 1.0f;
+	float maxOpenness = 0.0f;
+	float sumOpenness = 0.0f;
+	float totalVolume = 0.0f;
+	azrt::Vec3f mins = zones.front().mins;
+	azrt::Vec3f maxs = zones.front().maxs;
+
+	for ( std::size_t i = 0; i < zones.size(); ++i ) {
+		const azrt::AudioZone &zone = zones[i];
+		if ( zone.presetIndex >= 0 && zone.presetIndex < static_cast<int>( presetCounts.size() ) ) {
+			++presetCounts[static_cast<std::size_t>( zone.presetIndex )];
+		}
+		if ( zone.materialClass < materialCounts.size() ) {
+			++materialCounts[zone.materialClass];
+		}
+		if ( ( zone.flags & azfmt::ZoneFlagGenerated ) != 0 ) {
+			++generatedCount;
+		}
+		if ( ( zone.flags & azfmt::ZoneFlagOutdoor ) != 0 ) {
+			++outdoorFlagCount;
+		}
+		if ( ( zone.flags & azfmt::ZoneFlagUnderwater ) != 0 ) {
+			++underwaterFlagCount;
+		}
+		totalVolume += RuntimeZoneVolume( zone );
+		for ( int axis = 0; axis < 3; ++axis ) {
+			mins.v[axis] = ( std::min )( mins.v[axis], zone.mins.v[axis] );
+			maxs.v[axis] = ( std::max )( maxs.v[axis], zone.maxs.v[axis] );
+		}
+
+		totalPortals += static_cast<int>( zone.portals.size() );
+		maxPortals = ( std::max )( maxPortals, static_cast<int>( zone.portals.size() ) );
+		for ( const azrt::AudioZonePortal &portal : zone.portals ) {
+			if ( portal.targetZone == i ) {
+				++selfPortals;
+			}
+			if ( !RuntimeZoneHasPortalTo( zones, portal.targetZone, i ) ) {
+				++oneWayPortals;
+			}
+			minOpenness = ( std::min )( minOpenness, portal.openness );
+			maxOpenness = ( std::max )( maxOpenness, portal.openness );
+			sumOpenness += portal.openness;
+		}
+	}
+
+	int overlapPairs = 0;
+	int equalPriorityOverlapPairs = 0;
+	for ( std::size_t i = 0; i < zones.size(); ++i ) {
+		for ( std::size_t j = i + 1u; j < zones.size(); ++j ) {
+			if ( !RuntimeZoneBoundsOverlap( zones[i], zones[j] ) ) {
+				continue;
+			}
+			++overlapPairs;
+			if ( zones[i].priority == zones[j].priority ) {
+				++equalPriorityOverlapPairs;
+			}
+		}
+	}
+
+	const int axisSamples = ( std::max )( 1, static_cast<int>( std::ceil( std::pow( static_cast<double>( options.samples ), 1.0 / 3.0 ) ) ) );
+	int sampleCount = 0;
+	int zoneHits = 0;
+	int portalBlendHits = 0;
+	double blendSum = 0.0;
+	std::uint64_t checksum = 1469598103934665603ull;
+	const auto profileStart = std::chrono::steady_clock::now();
+	for ( int z = 0; z < axisSamples && sampleCount < options.samples; ++z ) {
+		for ( int y = 0; y < axisSamples && sampleCount < options.samples; ++y ) {
+			for ( int x = 0; x < axisSamples && sampleCount < options.samples; ++x ) {
+				float sample[3];
+				const int coord[3] = { x, y, z };
+				for ( int axis = 0; axis < 3; ++axis ) {
+					const float span = maxs.v[axis] - mins.v[axis];
+					sample[axis] = mins.v[axis] + span * ( static_cast<float>( coord[axis] ) + 0.5f ) / static_cast<float>( axisSamples );
+				}
+				const azrt::AudioZone *zone = azrt::FindAudioZone( zones, sample );
+				if ( zone != nullptr ) {
+					++zoneHits;
+					const std::size_t zoneIndex = static_cast<std::size_t>( zone - zones.data() );
+					const azrt::AudioZonePortalBlend blend = azrt::FindAudioZonePortalBlend( zones, *zone, sample );
+					if ( blend.target != nullptr ) {
+						++portalBlendHits;
+						blendSum += blend.blend;
+					}
+					checksum ^= static_cast<std::uint64_t>( zoneIndex + 1u ) + ( static_cast<std::uint64_t>( sampleCount + 1 ) << 32u );
+					checksum *= 1099511628211ull;
+				}
+				++sampleCount;
+			}
+		}
+	}
+	const auto profileEnd = std::chrono::steady_clock::now();
+	const double elapsedMs = std::chrono::duration<double, std::milli>( profileEnd - profileStart ).count();
+
+	std::vector<std::string> warnings;
+	if ( version == azfmt::kLegacyVersion ) {
+		warnings.push_back( "legacy v1 sidecar has no material or portal metadata" );
+	}
+	if ( zones.size() > azfmt::kMaxZones * 9u / 10u ) {
+		warnings.push_back( "zone count is close to the format limit" );
+	}
+	if ( generatedCount > 1 && totalPortals == 0 ) {
+		warnings.push_back( "generated sidecar has multiple zones but no portal hints" );
+	}
+	if ( selfPortals > 0 ) {
+		warnings.push_back( "self-targeting portals are ignored at runtime" );
+	}
+	if ( oneWayPortals > 0 ) {
+		warnings.push_back( "one-way portal hints were found; generated portals are normally reciprocal" );
+	}
+	if ( equalPriorityOverlapPairs > 0 ) {
+		warnings.push_back( "equal-priority overlapping zones rely on smaller-volume tie-breaks" );
+	}
+	if ( zoneHits == 0 ) {
+		warnings.push_back( "deterministic lookup samples did not hit any zone" );
+	}
+
+	std::cout << std::fixed << std::setprecision( 3 );
+	std::cout << "audio-zone audit " << options.input.string() << "\n";
+	std::cout << "version " << version << ", bytes " << data.size() << ", zones " << zones.size() << "\n";
+	std::cout << "bounds " << mins.v[0] << ' ' << mins.v[1] << ' ' << mins.v[2]
+		<< " -> " << maxs.v[0] << ' ' << maxs.v[1] << ' ' << maxs.v[2]
+		<< ", summed volume " << totalVolume << "\n";
+	PrintCountList( "presets", azfmt::kPresetNames, presetCounts.data(), static_cast<int>( presetCounts.size() ) );
+	PrintCountList( "materials", azfmt::kMaterialClassNames, materialCounts.data(), static_cast<int>( materialCounts.size() ) );
+	std::cout << "flags generated=" << generatedCount
+		<< " outdoor=" << outdoorFlagCount
+		<< " underwater=" << underwaterFlagCount << "\n";
+	if ( totalPortals > 0 ) {
+		std::cout << "portals total=" << totalPortals
+			<< " maxPerZone=" << maxPortals
+			<< " openness min/avg/max=" << minOpenness << '/'
+			<< ( sumOpenness / static_cast<float>( totalPortals ) ) << '/'
+			<< maxOpenness
+			<< " self=" << selfPortals
+			<< " oneWay=" << oneWayPortals << "\n";
+	} else {
+		std::cout << "portals total=0\n";
+	}
+	std::cout << "overlaps total=" << overlapPairs
+		<< " equalPriority=" << equalPriorityOverlapPairs << "\n";
+	std::cout << "lookup profile samples=" << sampleCount
+		<< " hits=" << zoneHits
+		<< " portalBlends=" << portalBlendHits
+		<< " avgBlend=" << ( portalBlendHits > 0 ? blendSum / portalBlendHits : 0.0 )
+		<< " elapsedMs=" << elapsedMs
+		<< " nsPerSample=" << ( elapsedMs * 1000000.0 / static_cast<double>( sampleCount ) )
+		<< " checksum=" << checksum << "\n";
+
+	if ( warnings.empty() ) {
+		std::cout << "warnings none\n";
+		return 0;
+	}
+	for ( const std::string &warning : warnings ) {
+		std::cout << "warning: " << warning << "\n";
+	}
+	return options.strict ? 1 : 0;
 }
 
 static void PrintUsage( const char *argv0 ) {
 	std::cerr
 		<< "Usage:\n"
 		<< "  " << argv0 << " [-o output.azb] input.audiozones\n"
-		<< "  " << argv0 << " --dump input.azb\n\n"
+		<< "  " << argv0 << " --from-bsp [-o output.azb] [--merge overrides.audiozones] [--max-zones N] input.bsp\n"
+		<< "  " << argv0 << " --dump input.azb\n"
+		<< "  " << argv0 << " --audit [--strict] [--samples N] input.azb\n\n"
+		<< "BSP generation reads IBSP v46/v47 leaves, clusters, areas, surfaces, brushes, and shaders.\n"
+		<< "Generated zones use negative priorities, so merged manual override zones win naturally.\n\n"
 		<< "Text format:\n"
 		<< "  audiozones 1\n"
 		<< "  zone \"atrium\" {\n"
@@ -886,6 +2232,20 @@ static void PrintUsage( const char *argv0 ) {
 int main( int argc, char **argv ) {
 	if ( argc >= 2 && std::string( argv[1] ) == "--dump" ) {
 		const int result = DumpCommand( argc, argv );
+		if ( result == 2 ) {
+			PrintUsage( argv[0] );
+		}
+		return result;
+	}
+	if ( argc >= 2 && std::string( argv[1] ) == "--audit" ) {
+		const int result = AuditCommand( argc, argv );
+		if ( result == 2 ) {
+			PrintUsage( argv[0] );
+		}
+		return result;
+	}
+	if ( argc >= 2 && std::string( argv[1] ) == "--from-bsp" ) {
+		const int result = FromBspCommand( argc, argv );
 		if ( result == 2 ) {
 			PrintUsage( argv[0] );
 		}

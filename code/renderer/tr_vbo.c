@@ -20,9 +20,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 #include "tr_local.h"
-#ifdef RENDERER_GLX
-#include "../rendererglx/glx_module.h"
-#endif
+#include "tr_glx_compat.h"
 
 /*
 
@@ -55,69 +53,6 @@ No performance differences from 'Array of Structures' were observed.
 #define MIN_IBO_RUN 320
 
 #ifdef RENDERER_GLX
-static int GLX_MaterialStageFlags( const shaderStage_t *pStage )
-{
-	int flags = 0;
-
-	if ( pStage->mtEnv ) {
-		flags |= GLX_STAGE_MULTITEXTURE;
-	}
-	if ( pStage->depthFragment ) {
-		flags |= GLX_STAGE_DEPTH_FRAGMENT;
-	}
-	if ( pStage->stateBits & GLS_BLEND_BITS ) {
-		flags |= GLX_STAGE_BLEND;
-	}
-	if ( pStage->stateBits & GLS_ATEST_BITS ) {
-		flags |= GLX_STAGE_ALPHA_TEST;
-	}
-	if ( pStage->stateBits & GLS_DEPTHMASK_TRUE ) {
-		flags |= GLX_STAGE_DEPTH_WRITE;
-	}
-	if ( pStage->bundle[0].lightmap != LIGHTMAP_INDEX_NONE ||
-		pStage->bundle[1].lightmap != LIGHTMAP_INDEX_NONE ) {
-		flags |= GLX_STAGE_LIGHTMAP;
-	}
-	if ( pStage->bundle[0].numImageAnimations > 1 ||
-		pStage->bundle[1].numImageAnimations > 1 ) {
-		flags |= GLX_STAGE_ANIMATED_IMAGE;
-	}
-	if ( pStage->bundle[0].isVideoMap || pStage->bundle[1].isVideoMap ) {
-		flags |= GLX_STAGE_VIDEO_MAP;
-	}
-	if ( pStage->bundle[0].isScreenMap || pStage->bundle[1].isScreenMap ) {
-		flags |= GLX_STAGE_SCREEN_MAP;
-	}
-	if ( pStage->bundle[0].dlight || pStage->bundle[1].dlight ) {
-		flags |= GLX_STAGE_DLIGHT_MAP;
-	}
-	if ( pStage->bundle[0].numTexMods || pStage->bundle[1].numTexMods ) {
-		flags |= GLX_STAGE_TEXMOD;
-	}
-	if ( pStage->tessFlags & ( TESS_ENV0 | TESS_ENV1 ) ) {
-		flags |= GLX_STAGE_ENVIRONMENT;
-	}
-	if ( pStage->tessFlags & TESS_ST0 ) {
-		flags |= GLX_STAGE_ST0;
-	}
-	if ( pStage->tessFlags & TESS_ST1 ) {
-		flags |= GLX_STAGE_ST1;
-	}
-
-	return flags;
-}
-
-static void GLX_RecordMaterialStage( const shaderStage_t *pStage, int path, int numVertexes, int numIndexes )
-{
-	if ( !pStage ) {
-		return;
-	}
-
-	GLX_Renderer_RecordMaterialStage( path, GLX_MaterialStageFlags( pStage ), pStage->stateBits,
-		pStage->rgbGen, pStage->alphaGen, pStage->bundle[0].tcGen, pStage->bundle[1].tcGen,
-		pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods, numVertexes, numIndexes );
-}
-
 static void GLX_StaticSurfaceCounts( const msurface_t *surf, int *vertexes, int *indexes )
 {
 	*vertexes = 0;
@@ -201,7 +136,7 @@ static void GLX_RecordStaticWorldPacketGroup( const shader_t *shader, int surfac
 		indexBytes = indexes * (int)sizeof( tess.indexes[0] );
 	}
 
-	GLX_Renderer_RecordStaticWorldPacket( shader ? shader->name : "<unnamed>",
+	GLX_CompatRecordStaticWorldPacket( shader ? shader->name : "<unnamed>",
 		shader ? (int)shader->sort : 0, surfaces, vertexes, indexes, firstItem, itemCount,
 		vertexOffset, vertexBytes, indexOffset, indexBytes,
 		shaderStagePasses, GLX_StaticShaderBatchFlags( shader ) );
@@ -962,7 +897,7 @@ static qboolean VBO_BindData( void )
 
 #ifdef RENDERER_GLX
 	{
-		GLuint glxArenaBuffer = GLX_Renderer_StaticWorldArenaVertexBuffer();
+		GLuint glxArenaBuffer = GLX_CompatStaticWorldArenaVertexBuffer();
 		if ( glxArenaBuffer ) {
 			vertexBuffer = glxArenaBuffer;
 		}
@@ -991,7 +926,7 @@ static void VBO_BindIndex( qboolean enable )
 		{
 			GLuint indexBuffer = VBO_world_indexes;
 #ifdef RENDERER_GLX
-			GLuint glxArenaBuffer = GLX_Renderer_StaticWorldArenaIndexBuffer();
+			GLuint glxArenaBuffer = GLX_CompatStaticWorldArenaIndexBuffer();
 			if ( glxArenaBuffer ) {
 				indexBuffer = glxArenaBuffer;
 			}
@@ -1059,7 +994,7 @@ void R_BuildWorldVBO( msurface_t *surf, int surfCount )
 	int numStaticVertexes = 0;
 
 #ifdef RENDERER_GLX
-	GLX_Renderer_RecordStaticWorldCache( 0, 0, 0, 0, 0 );
+	GLX_CompatRecordStaticWorldCache( 0, 0, 0, 0, 0 );
 #endif
 
 	if ( !qglBindBufferARB || !r_vbo->integer )
@@ -1246,7 +1181,7 @@ void R_BuildWorldVBO( msurface_t *surf, int surfCount )
 			largestBatchSurfaces = currentBatchSurfaces;
 		}
 
-		GLX_Renderer_RecordStaticWorldBatches( staticBatches, largestBatchSurfaces,
+		GLX_CompatRecordStaticWorldBatches( staticBatches, largestBatchSurfaces,
 			faceSurfaces, gridSurfaces, triangleSurfaces, shaderStagePasses, maxShaderStages );
 	}
 #endif
@@ -1339,8 +1274,8 @@ void R_BuildWorldVBO( msurface_t *surf, int surfCount )
 	}
 
 #ifdef RENDERER_GLX
-	GLX_Renderer_UploadStaticWorldArena( vbo->vbo_buffer, vbo->vbo_size, vbo->ibo_buffer, vbo->ibo_size );
-	GLX_Renderer_RecordStaticWorldCache( numStaticSurfaces, numStaticVertexes, numStaticIndexes, vbo_size, ibo_size );
+	GLX_CompatUploadStaticWorldArena( vbo->vbo_buffer, vbo->vbo_size, vbo->ibo_buffer, vbo->ibo_size );
+	GLX_CompatRecordStaticWorldCache( numStaticSurfaces, numStaticVertexes, numStaticIndexes, vbo_size, ibo_size );
 #endif
 
 	VBO_UnBind();
@@ -1572,7 +1507,7 @@ static void VBO_RenderIBOItems( void )
 #ifdef RENDERER_GLX
 		if ( vbo->ibo_drawn ) {
 			memset( vbo->ibo_drawn, 0, vbo->ibo_items_count * sizeof( vbo->ibo_drawn[0] ) );
-			GLX_Renderer_StaticWorldDrawDeviceRunsFiltered( vbo->ibo_items_count,
+			GLX_CompatStaticWorldDrawDeviceRunsFiltered( vbo->ibo_items_count,
 				vbo->ibo_counts, vbo->ibo_offsets, vbo->ibo_first_items, vbo->ibo_item_counts,
 				vbo->ibo_drawn, GL_INDEX_TYPE, (int)sizeof( glIndex_t ),
 				tess.shader ? tess.shader->name : "<unnamed>",
@@ -1586,7 +1521,7 @@ static void VBO_RenderIBOItems( void )
 			if ( vbo->ibo_drawn && vbo->ibo_drawn[ i ] ) {
 				continue;
 			}
-			if ( GLX_Renderer_StaticWorldDrawDeviceRun( vbo->ibo_items[ i ].length,
+			if ( GLX_CompatStaticWorldDrawDeviceRun( vbo->ibo_items[ i ].length,
 				vbo->ibo_items[ i ].offset, vbo->ibo_first_items ? vbo->ibo_first_items[ i ] : 0,
 				vbo->ibo_item_counts ? vbo->ibo_item_counts[ i ] : 0,
 				GL_INDEX_TYPE, (int)sizeof( glIndex_t ),
@@ -1595,7 +1530,7 @@ static void VBO_RenderIBOItems( void )
 				curr_index_bind && curr_index_bind != VBO_world_indexes ? qtrue : qfalse ) ) {
 				continue;
 			}
-			GLX_Renderer_RecordDraw( vbo->ibo_items[ i ].length, GLX_DRAW_VBO_DEVICE );
+			GLX_CompatRecordDraw( vbo->ibo_items[ i ].length, GLX_DRAW_VBO_DEVICE );
 #endif
 			qglDrawElements( GL_TRIANGLES, vbo->ibo_items[ i ].length, GL_INDEX_TYPE, (const GLvoid *)(intptr_t) vbo->ibo_items[ i ].offset );
 		}
@@ -1611,14 +1546,14 @@ static void VBO_RenderSoftItems( void )
 	{
 		VBO_BindIndex( qfalse );
 #ifdef RENDERER_GLX
-		if ( GLX_Renderer_StaticWorldDrawSoftIndexes( (int)vbo->soft_buffer_indexes,
+		if ( GLX_CompatStaticWorldDrawSoftIndexes( (int)vbo->soft_buffer_indexes,
 			vbo->soft_buffer, GL_INDEX_TYPE, (int)sizeof( glIndex_t ),
 			tess.shader ? tess.shader->name : "<unnamed>",
 			tess.shader ? (int)tess.shader->sort : 0,
 			curr_vertex_bind && curr_vertex_bind != VBO_world_data ? qtrue : qfalse ) ) {
 			return;
 		}
-		GLX_Renderer_RecordDraw( vbo->soft_buffer_indexes, GLX_DRAW_VBO_SOFT );
+		GLX_CompatRecordDraw( vbo->soft_buffer_indexes, GLX_DRAW_VBO_SOFT );
 #endif
 		qglDrawElements( GL_TRIANGLES, vbo->soft_buffer_indexes, GL_INDEX_TYPE, vbo->soft_buffer );
 	}
@@ -1697,10 +1632,10 @@ static void VBO_PrepareQueues( void )
 		}
 	}
 
-	GLX_Renderer_RecordStaticWorldQueue( vbo->items_queue_count, vbo->items_queue_vertexes,
+	GLX_CompatRecordStaticWorldQueue( vbo->items_queue_count, vbo->items_queue_vertexes,
 		vbo->items_queue_indexes, vbo->ibo_items_count, deviceRunIndexes,
 		(int)vbo->soft_buffer_indexes, largestDeviceRunIndexes );
-	GLX_Renderer_RecordStaticWorldDeviceRuns( vbo->ibo_items_count,
+	GLX_CompatRecordStaticWorldDeviceRuns( vbo->ibo_items_count,
 		vbo->ibo_counts, vbo->ibo_offsets, vbo->ibo_first_items, vbo->ibo_item_counts,
 		(int)sizeof( glIndex_t ),
 		tess.shader ? tess.shader->name : "<unnamed>",
@@ -1780,7 +1715,7 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 		pStage = input->xstages[i];
 
 #ifdef RENDERER_GLX
-		GLX_RecordMaterialStage( pStage, GLX_STAGE_PATH_VBO,
+		GLX_CompatRecordMaterialStage( pStage, GLX_STAGE_PATH_VBO,
 			world_vbo.items_queue_vertexes, world_vbo.items_queue_indexes );
 #endif
 

@@ -77,6 +77,167 @@ static const char *GLX_Module_MdiSourceName( unsigned int source )
 	}
 }
 
+enum class GlxProfile {
+	Off,
+	Rc,
+	Stress,
+};
+
+struct ProfileCvarSetting {
+	const char *name;
+	const char *offValue;
+	const char *rcValue;
+	const char *stressValue;
+};
+
+static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
+	{ "r_fbo", "0", "1", "1" },
+	{ "r_bloom", "0", "2", "2" },
+	{ "r_bloom_passes", "5", "3", "3" },
+	{ "r_vbo", "0", "1", "1" },
+	{ "r_glxWorldRenderer", "0", "1", "1" },
+	{ "r_glxStreamDraw", "0", "1", "1" },
+	{ "r_glxStreamDrawKeyMode", "0", "0", "0" },
+	{ "r_glxStreamDrawMultitexture", "0", "1", "1" },
+	{ "r_glxStreamDrawFog", "0", "1", "1" },
+	{ "r_glxStreamDrawDepthFragment", "0", "1", "1" },
+	{ "r_glxStreamDrawTexMods", "0", "1", "1" },
+	{ "r_glxStreamDrawEnvironment", "0", "1", "1" },
+	{ "r_glxStreamDrawDynamicLights", "0", "0", "0" },
+	{ "r_glxStreamDrawScreenMaps", "0", "0", "0" },
+	{ "r_glxStreamDrawVideoMaps", "0", "0", "0" },
+	{ "r_glxMaterialRenderer", "0", "1", "1" },
+	{ "r_glxMaterialPrecache", "0", "1", "1" },
+	{ "r_glxGpuTiming", "0", "1", "1" },
+	{ "r_glxStaticWorldArena", "0", "0", "0" },
+	{ "r_glxStaticWorldArenaDraw", "0", "0", "0" },
+	{ "r_glxStaticWorldDraw", "0", "0", "0" },
+	{ "r_glxStaticWorldSoftDraw", "0", "0", "0" },
+	{ "r_glxStaticWorldDrawPolicy", "full", "full", "full" },
+	{ "r_glxStaticWorldMultiDraw", "0", "0", "1" },
+	{ "r_glxStaticWorldPacketBatch", "0", "1", "1" },
+	{ "r_glxStaticWorldIndirectBuffer", "0", "0", "1" },
+	{ "r_glxStaticWorldIndirectDraw", "0", "0", "1" },
+	{ "r_glxStaticWorldMultiDrawIndirect", "0", "0", "1" },
+	{ "r_glxStaticWorldMultiDrawIndirectCompact", "0", "0", "1" },
+	{ "r_glxStaticWorldMultiDrawIndirectSpans", "0", "0", "1" },
+};
+
+static const char *GLX_Module_ProfileName( GlxProfile profile )
+{
+	switch ( profile ) {
+	case GlxProfile::Off:
+		return "off";
+	case GlxProfile::Rc:
+		return "rc";
+	case GlxProfile::Stress:
+		return "stress";
+	default:
+		return "custom";
+	}
+}
+
+static const char *GLX_Module_ProfileValue( const ProfileCvarSetting &setting, GlxProfile profile )
+{
+	switch ( profile ) {
+	case GlxProfile::Off:
+		return setting.offValue;
+	case GlxProfile::Rc:
+		return setting.rcValue;
+	case GlxProfile::Stress:
+		return setting.stressValue;
+	default:
+		return "";
+	}
+}
+
+static qboolean GLX_Module_ParseProfile( const char *name, GlxProfile *profile )
+{
+	if ( !name || !name[0] ) {
+		return qfalse;
+	}
+
+	if ( !GLX_Module_Stricmp( name, "off" ) ||
+		!GLX_Module_Stricmp( name, "baseline" ) ||
+		!GLX_Module_Stricmp( name, "compat" ) ) {
+		if ( profile ) {
+			*profile = GlxProfile::Off;
+		}
+		return qtrue;
+	}
+
+	if ( !GLX_Module_Stricmp( name, "rc" ) ||
+		!GLX_Module_Stricmp( name, "parity" ) ||
+		!GLX_Module_Stricmp( name, "candidate" ) ) {
+		if ( profile ) {
+			*profile = GlxProfile::Rc;
+		}
+		return qtrue;
+	}
+
+	if ( !GLX_Module_Stricmp( name, "stress" ) ) {
+		if ( profile ) {
+			*profile = GlxProfile::Stress;
+		}
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+static void GLX_Module_CurrentCvarValue( const char *name, char *buffer, int bufferSize )
+{
+	if ( !buffer || bufferSize <= 0 ) {
+		return;
+	}
+
+	buffer[0] = '\0';
+	if ( RI().Cvar_VariableStringBuffer ) {
+		RI().Cvar_VariableStringBuffer( name, buffer, bufferSize );
+	}
+}
+
+static qboolean GLX_Module_ProfileMatches( GlxProfile profile )
+{
+	char current[64];
+
+	for ( unsigned int i = 0; i < sizeof( GLX_PROFILE_CVARS ) / sizeof( GLX_PROFILE_CVARS[0] ); i++ ) {
+		const ProfileCvarSetting &setting = GLX_PROFILE_CVARS[i];
+		const char *expected = GLX_Module_ProfileValue( setting, profile );
+
+		GLX_Module_CurrentCvarValue( setting.name, current, sizeof( current ) );
+		if ( GLX_Module_Stricmp( current, expected ) ) {
+			return qfalse;
+		}
+	}
+
+	return qtrue;
+}
+
+static const char *GLX_Module_DetectedProfileName()
+{
+	if ( GLX_Module_ProfileMatches( GlxProfile::Rc ) ) {
+		return "rc";
+	}
+	if ( GLX_Module_ProfileMatches( GlxProfile::Stress ) ) {
+		return "stress";
+	}
+	if ( GLX_Module_ProfileMatches( GlxProfile::Off ) ) {
+		return "off";
+	}
+
+	return "custom";
+}
+
+static void GLX_Module_PrintProfileUsage()
+{
+	RI().Printf( PRINT_ALL, "usage: glxprofile [off|rc|stress|manual|status]\n" );
+	RI().Printf( PRINT_ALL, "  off     restore compatibility defaults for the cvars owned by the GLx profile\n" );
+	RI().Printf( PRINT_ALL, "  rc      conservative release-candidate profile: world, stream, material, bloom, timing\n" );
+	RI().Printf( PRINT_ALL, "  stress  rc profile plus indirect static-world stress paths\n" );
+	RI().Printf( PRINT_ALL, "  manual  clear r_glxProfile without changing the current cvars\n" );
+}
+
 static StreamReservation GLX_Module_FromPublicReservation( const glxStreamReservation_t &reservation )
 {
 	StreamReservation streamReservation {};
@@ -118,6 +279,8 @@ public:
 	void FrameComplete();
 	void PrintCaps() const;
 	void PrintInfo() const;
+	void PrintProfile() const;
+	void ProfileCommand();
 	void PrintMaterial() const;
 	void PrintPostProcess() const;
 	void PrintStaticWorld() const;
@@ -136,12 +299,12 @@ public:
 	qboolean StreamDrawMultitextureEnabled() const;
 	qboolean StreamDrawFogEnabled() const;
 	qboolean StreamDrawDepthFragmentEnabled() const;
-	qboolean StreamDrawAllowsMaterial( int flags, unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0 );
+	qboolean StreamDrawAllowsMaterial( int flags, unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 );
 	qboolean StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation );
 	qboolean StreamUploadAt( glxStreamReservation_t *reservation, int relativeOffset, const void *data, int bytes );
 	void StreamCommit( glxStreamReservation_t *reservation );
 	void RecordStreamDrawResult( int numVertexes, int numIndexes, int totalBytes, int indexBytes,
-		int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, qboolean success );
+		int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, int materialFlags, qboolean success );
 	void RecordStreamDrawSkip( int reason );
 	void RecordFboInit( qboolean requested, qboolean ready, qboolean programReady, qboolean framebufferFnsReady,
 		int vidWidth, int vidHeight, int captureWidth, int captureHeight, int windowWidth, int windowHeight,
@@ -187,11 +350,15 @@ public:
 		const int *firstItems, const int *itemCounts, int indexBytes, const char *shaderName, int sort );
 
 private:
+	void ApplyProfile( GlxProfile profile, qboolean rememberProfile, qboolean startupProfile );
+	void ApplyStartupProfile();
+
 	Capabilities caps_ {};
 	DebugState debug_ {};
 	MaterialState material_ {};
 	PostProcessState postprocess_ {};
 	ProfilerState profiler_ {};
+	cvar_t *profile_ {};
 	StaticWorldStats staticWorld_ {};
 	StreamState stream_ {};
 };
@@ -202,10 +369,15 @@ void RendererModule::RegisterCommands()
 {
 	RI().Cmd_AddCommand( "glxinfo", GLX_Renderer_PrintInfo_f );
 	RI().Cmd_AddCommand( "glxcaps", GLX_Renderer_PrintCaps_f );
+	RI().Cmd_AddCommand( "glxprofile", GLX_Renderer_Profile_f );
 	RI().Cmd_AddCommand( "glxmaterial", GLX_Renderer_Material_f );
 	RI().Cmd_AddCommand( "glxpostprocess", GLX_Renderer_PostProcess_f );
 	RI().Cmd_AddCommand( "glxstaticworld", GLX_Renderer_StaticWorld_f );
 	RI().Cmd_AddCommand( "glxstreamtest", GLX_Renderer_StreamTest_f );
+
+	profile_ = RI().Cvar_Get( "r_glxProfile", "", CVAR_ARCHIVE_ND );
+	RI().Cvar_SetDescription( profile_,
+		"Apply a named GLx startup profile during renderer registration: off, rc, stress, manual, or blank for manual cvars." );
 
 	GLX_Debug_RegisterCvars( &debug_ );
 	GLX_Material_RegisterCvars( &material_ );
@@ -213,12 +385,15 @@ void RendererModule::RegisterCommands()
 	GLX_Profiler_RegisterCvars( &profiler_ );
 	GLX_StaticWorld_RegisterCvars( &staticWorld_ );
 	GLX_Stream_RegisterCvars( &stream_ );
+
+	ApplyStartupProfile();
 }
 
 void RendererModule::RemoveCommands()
 {
 	RI().Cmd_RemoveCommand( "glxcaps" );
 	RI().Cmd_RemoveCommand( "glxinfo" );
+	RI().Cmd_RemoveCommand( "glxprofile" );
 	RI().Cmd_RemoveCommand( "glxmaterial" );
 	RI().Cmd_RemoveCommand( "glxpostprocess" );
 	RI().Cmd_RemoveCommand( "glxstaticworld" );
@@ -257,6 +432,49 @@ void RendererModule::Shutdown( refShutdownCode_t code )
 	GLX_Caps_Reset( &caps_ );
 }
 
+void RendererModule::ApplyProfile( GlxProfile profile, qboolean rememberProfile, qboolean startupProfile )
+{
+	const char *profileName = GLX_Module_ProfileName( profile );
+
+	if ( rememberProfile && profile_ ) {
+		RI().Cvar_Set( profile_->name, profileName );
+	}
+
+	for ( unsigned int i = 0; i < sizeof( GLX_PROFILE_CVARS ) / sizeof( GLX_PROFILE_CVARS[0] ); i++ ) {
+		const ProfileCvarSetting &setting = GLX_PROFILE_CVARS[i];
+		RI().Cvar_Set( setting.name, GLX_Module_ProfileValue( setting, profile ) );
+	}
+
+	if ( startupProfile ) {
+		RI().Printf( PRINT_ALL, "glxprofile: applied %s startup profile\n", profileName );
+	} else {
+		RI().Printf( PRINT_ALL, "glxprofile: applied %s profile\n", profileName );
+		RI().Printf( PRINT_ALL, "glxprofile: reload the map or run vid_restart for VBO/FBO-backed resources to rebuild under the new profile.\n" );
+	}
+}
+
+void RendererModule::ApplyStartupProfile()
+{
+	GlxProfile profile;
+
+	if ( !profile_ || !profile_->string || !profile_->string[0] ) {
+		return;
+	}
+
+	if ( !GLX_Module_Stricmp( profile_->string, "manual" ) ||
+		!GLX_Module_Stricmp( profile_->string, "custom" ) ) {
+		return;
+	}
+
+	if ( !GLX_Module_ParseProfile( profile_->string, &profile ) ) {
+		RI().Printf( PRINT_WARNING, "glxprofile: unknown r_glxProfile '%s'; expected off, rc, stress, manual, or blank\n",
+			profile_->string );
+		return;
+	}
+
+	ApplyProfile( profile, qfalse, qtrue );
+}
+
 void RendererModule::BeginBackendTimer()
 {
 	GLX_Profiler_BeginBackendTimer( &profiler_ );
@@ -282,6 +500,9 @@ void RendererModule::PrintCaps() const
 	}
 
 	RI().Printf( PRINT_ALL, "\nGLx renderer bootstrap\n" );
+	RI().Printf( PRINT_ALL, "  profile: %s (startup %s)\n",
+		GLX_Module_DetectedProfileName(),
+		profile_ && profile_->string && profile_->string[0] ? profile_->string : "manual" );
 	RI().Printf( PRINT_ALL, "  GL vendor: %s\n", caps_.config->vendor_string );
 	RI().Printf( PRINT_ALL, "  GL renderer: %s\n", caps_.config->renderer_string );
 	RI().Printf( PRINT_ALL, "  GL version: %s\n", caps_.config->version_string );
@@ -349,6 +570,12 @@ void RendererModule::PrintCaps() const
 		BoolName( ( staticWorld_.r_glxWorldRenderer && staticWorld_.r_glxWorldRenderer->integer ) ||
 			( staticWorld_.r_glxStaticWorldMultiDraw && staticWorld_.r_glxStaticWorldMultiDraw->integer ) ? qtrue : qfalse ),
 		staticWorld_.multiDrawCalls, staticWorld_.multiDrawRuns );
+	RI().Printf( PRINT_ALL, "  static world GLx packet batch: %s, %u batches, %u packet runs, %u fallback runs\n",
+		BoolName( staticWorld_.r_glxStaticWorldPacketBatch &&
+			staticWorld_.r_glxStaticWorldPacketBatch->integer ? qtrue : qfalse ),
+		staticWorld_.packetBatchBatches,
+		staticWorld_.packetBatchRuns,
+		staticWorld_.packetBatchFallbackRuns );
 	RI().Printf( PRINT_ALL, "  static world GLx multidraw indirect: %s, %u/%u calls\n",
 		BoolName( staticWorld_.r_glxStaticWorldMultiDrawIndirect &&
 			staticWorld_.r_glxStaticWorldMultiDrawIndirect->integer ? qtrue : qfalse ),
@@ -420,16 +647,36 @@ void RendererModule::PrintCaps() const
 		BoolName( GLX_Stream_DrawFogEnabled( stream_ ) ) );
 	RI().Printf( PRINT_ALL, "  dynamic stream draw depthFragment: %s\n",
 		BoolName( GLX_Stream_DrawDepthFragmentEnabled( stream_ ) ) );
-	RI().Printf( PRINT_ALL, "  dynamic stream draws: %u/%u attempts, %.2f MB, index %.2f MB, tex1 %.2f MB, mt %u, fog %u, depthfrag %u\n",
+	RI().Printf( PRINT_ALL, "  dynamic stream draw texmods: %s\n",
+		BoolName( GLX_Stream_DrawTexModsEnabled( stream_ ) ) );
+	RI().Printf( PRINT_ALL, "  dynamic stream draw environment: %s\n",
+		BoolName( GLX_Stream_DrawEnvironmentEnabled( stream_ ) ) );
+	RI().Printf( PRINT_ALL, "  dynamic stream draw dynamic lights: %s\n",
+		BoolName( GLX_Stream_DrawDynamicLightsEnabled( stream_ ) ) );
+	RI().Printf( PRINT_ALL, "  dynamic stream draw screen maps: %s\n",
+		BoolName( GLX_Stream_DrawScreenMapsEnabled( stream_ ) ) );
+	RI().Printf( PRINT_ALL, "  dynamic stream draw video maps: %s\n",
+		BoolName( GLX_Stream_DrawVideoMapsEnabled( stream_ ) ) );
+	RI().Printf( PRINT_ALL, "  dynamic stream draws: %u/%u attempts, %.2f MB, index %.2f MB, tex1 %.2f MB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u\n",
 		stream_.streamedDraws, stream_.streamedDrawAttempts,
 		static_cast<double>( stream_.streamedDrawBytes ) / ( 1024.0 * 1024.0 ),
 		static_cast<double>( stream_.streamedDrawIndexBytes ) / ( 1024.0 * 1024.0 ),
 		static_cast<double>( stream_.streamedDrawTexcoord1Bytes ) / ( 1024.0 * 1024.0 ),
 		stream_.streamedDrawMultitextureDraws,
 		stream_.streamedDrawFogDraws,
-		stream_.streamedDrawDepthFragmentDraws );
-	RI().Printf( PRINT_ALL, "  dynamic stream draw material keys: accepted %u, rejected %u\n",
-		stream_.streamedDrawMaterialAccepted, stream_.streamedDrawMaterialRejected );
+		stream_.streamedDrawDepthFragmentDraws,
+		stream_.streamedDrawTexModDraws,
+		stream_.streamedDrawEnvironmentDraws,
+		stream_.streamedDrawDynamicLightDraws,
+		stream_.streamedDrawScreenMapDraws,
+		stream_.streamedDrawVideoMapDraws );
+	RI().Printf( PRINT_ALL, "  dynamic stream draw material keys: accepted %u, rejected %u, texmod accepted %u, texmod rejected %u, env accepted %u, env rejected %u, dlight accepted %u, dlight rejected %u, screen accepted %u, screen rejected %u, video accepted %u, video rejected %u\n",
+		stream_.streamedDrawMaterialAccepted, stream_.streamedDrawMaterialRejected,
+		stream_.streamedDrawTexModAccepted, stream_.streamedDrawTexModRejected,
+		stream_.streamedDrawEnvironmentAccepted, stream_.streamedDrawEnvironmentRejected,
+		stream_.streamedDrawDynamicLightAccepted, stream_.streamedDrawDynamicLightRejected,
+		stream_.streamedDrawScreenMapAccepted, stream_.streamedDrawScreenMapRejected,
+		stream_.streamedDrawVideoMapAccepted, stream_.streamedDrawVideoMapRejected );
 }
 
 void RendererModule::PrintInfo() const
@@ -440,6 +687,65 @@ void RendererModule::PrintInfo() const
 	GLX_Profiler_PrintInfo( profiler_ );
 	GLX_StaticWorld_PrintInfo( staticWorld_ );
 	GLX_Stream_PrintInfo( stream_ );
+}
+
+void RendererModule::PrintProfile() const
+{
+	char current[64];
+
+	RI().Printf( PRINT_ALL, "glxprofile: active %s, startup %s\n",
+		GLX_Module_DetectedProfileName(),
+		profile_ && profile_->string && profile_->string[0] ? profile_->string : "manual" );
+
+	for ( unsigned int i = 0; i < sizeof( GLX_PROFILE_CVARS ) / sizeof( GLX_PROFILE_CVARS[0] ); i++ ) {
+		const ProfileCvarSetting &setting = GLX_PROFILE_CVARS[i];
+
+		GLX_Module_CurrentCvarValue( setting.name, current, sizeof( current ) );
+		RI().Printf( PRINT_ALL, "  %-42s %s\n", setting.name, current[0] ? current : "<unset>" );
+	}
+}
+
+void RendererModule::ProfileCommand()
+{
+	GlxProfile profile;
+
+	if ( !RI().Cmd_Argc || RI().Cmd_Argc() < 2 ) {
+		PrintProfile();
+		GLX_Module_PrintProfileUsage();
+		return;
+	}
+
+	const char *arg = RI().Cmd_Argv( 1 );
+
+	if ( !GLX_Module_Stricmp( arg, "status" ) ||
+		!GLX_Module_Stricmp( arg, "current" ) ) {
+		PrintProfile();
+		return;
+	}
+
+	if ( !GLX_Module_Stricmp( arg, "list" ) ||
+		!GLX_Module_Stricmp( arg, "help" ) ) {
+		GLX_Module_PrintProfileUsage();
+		return;
+	}
+
+	if ( !GLX_Module_Stricmp( arg, "manual" ) ||
+		!GLX_Module_Stricmp( arg, "custom" ) ||
+		!GLX_Module_Stricmp( arg, "clear" ) ) {
+		if ( profile_ ) {
+			RI().Cvar_Set( profile_->name, "" );
+		}
+		RI().Printf( PRINT_ALL, "glxprofile: startup profile cleared; current cvars unchanged\n" );
+		return;
+	}
+
+	if ( !GLX_Module_ParseProfile( arg, &profile ) ) {
+		RI().Printf( PRINT_WARNING, "glxprofile: unknown profile '%s'\n", arg ? arg : "" );
+		GLX_Module_PrintProfileUsage();
+		return;
+	}
+
+	ApplyProfile( profile, qtrue, qfalse );
 }
 
 void RendererModule::PrintMaterial() const
@@ -566,7 +872,7 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.msaaBlits,
 		postprocess_.ssaaBlits,
 		GLX_PostProcess_ResultName( postprocess_.lastResult ) );
-	RI().Printf( PRINT_ALL, "glx: stream draws %u/%u attempts, %u idx, %.2fMB/index %.2fMB/tex1 %.2fMB, mt %u, fog %u, depthfrag %u, fallbacks %u, skips %u\n",
+	RI().Printf( PRINT_ALL, "glx: stream draws %u/%u attempts, %u idx, %.2fMB/index %.2fMB/tex1 %.2fMB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, fallbacks %u, skips %u\n",
 		stream_.streamedDraws,
 		stream_.streamedDrawAttempts,
 		stream_.streamedDrawIndexes,
@@ -576,6 +882,11 @@ void RendererModule::PrintFrameCounters() const
 		stream_.streamedDrawMultitextureDraws,
 		stream_.streamedDrawFogDraws,
 		stream_.streamedDrawDepthFragmentDraws,
+		stream_.streamedDrawTexModDraws,
+		stream_.streamedDrawEnvironmentDraws,
+		stream_.streamedDrawDynamicLightDraws,
+		stream_.streamedDrawScreenMapDraws,
+		stream_.streamedDrawVideoMapDraws,
 		stream_.streamedDrawFallbacks,
 		stream_.streamedDrawSkips );
 	RI().Printf( PRINT_ALL, "glx: stream reservation last %u bytes at %u using %s, largest %u bytes, same-frame wrap rejects %u\n",
@@ -824,9 +1135,9 @@ qboolean RendererModule::StreamDrawDepthFragmentEnabled() const
 	return GLX_Stream_DrawDepthFragmentEnabled( stream_ );
 }
 
-qboolean RendererModule::StreamDrawAllowsMaterial( int flags, unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0 )
+qboolean RendererModule::StreamDrawAllowsMaterial( int flags, unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 )
 {
-	return GLX_Stream_DrawAllowsMaterial( &stream_, flags, stateBits, rgbGen, alphaGen, tcGen0, texMods0 );
+	return GLX_Stream_DrawAllowsMaterial( &stream_, flags, stateBits, rgbGen, alphaGen, tcGen0, texMods0, texMods1 );
 }
 
 qboolean RendererModule::StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation )
@@ -876,10 +1187,10 @@ void RendererModule::StreamCommit( glxStreamReservation_t *reservation )
 }
 
 void RendererModule::RecordStreamDrawResult( int numVertexes, int numIndexes, int totalBytes, int indexBytes,
-	int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, qboolean success )
+	int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, int materialFlags, qboolean success )
 {
 	GLX_Stream_RecordDrawResult( &stream_, numVertexes, numIndexes, totalBytes, indexBytes,
-		texcoord1Bytes, multitexture, fog, depthFragment, success );
+		texcoord1Bytes, multitexture, fog, depthFragment, materialFlags, success );
 }
 
 void RendererModule::RecordStreamDrawSkip( int reason )
@@ -1145,6 +1456,11 @@ extern "C" void GLX_Renderer_PrintInfo_f( void )
 	glx::g_module.PrintInfo();
 }
 
+extern "C" void GLX_Renderer_Profile_f( void )
+{
+	glx::g_module.ProfileCommand();
+}
+
 extern "C" void GLX_Renderer_Material_f( void )
 {
 	glx::g_module.PrintMaterial();
@@ -1233,9 +1549,9 @@ extern "C" qboolean GLX_Renderer_StreamDrawDepthFragmentEnabled( void )
 }
 
 extern "C" qboolean GLX_Renderer_StreamDrawAllowsMaterial( int flags, unsigned int stateBits,
-	int rgbGen, int alphaGen, int tcGen0, int texMods0 )
+	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 )
 {
-	return glx::g_module.StreamDrawAllowsMaterial( flags, stateBits, rgbGen, alphaGen, tcGen0, texMods0 );
+	return glx::g_module.StreamDrawAllowsMaterial( flags, stateBits, rgbGen, alphaGen, tcGen0, texMods0, texMods1 );
 }
 
 extern "C" qboolean GLX_Renderer_StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation )
@@ -1256,10 +1572,10 @@ extern "C" void GLX_Renderer_StreamCommit( glxStreamReservation_t *reservation )
 
 extern "C" void GLX_Renderer_RecordStreamDrawResult( int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
-	qboolean depthFragment, qboolean success )
+	qboolean depthFragment, int materialFlags, qboolean success )
 {
 	glx::g_module.RecordStreamDrawResult( numVertexes, numIndexes, totalBytes, indexBytes,
-		texcoord1Bytes, multitexture, fog, depthFragment, success );
+		texcoord1Bytes, multitexture, fog, depthFragment, materialFlags, success );
 }
 
 extern "C" void GLX_Renderer_RecordStreamDrawSkip( int reason )

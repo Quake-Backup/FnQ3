@@ -1,13 +1,15 @@
 name: nightly
 
 permissions:
-  contents: write
-  models: read
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
@@ -57,9 +59,9 @@ jobs:
           echo "Previous nightly commit: ${{ steps.meta.outputs.previous_nightly_commit }}"
 
   windows-msys32:
-    if: needs.prepare.outputs.should_build == 'true'
+    if: github.event_name == 'push' || needs.prepare.outputs.should_build == 'true'
     needs: [prepare]
-    name: Release Windows-msys32 ${{ matrix.arch }}
+    name: Build Windows-msys32 ${{ matrix.arch }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -111,9 +113,9 @@ jobs:
           retention-days: 5
 
   windows-msvc:
-    if: needs.prepare.outputs.should_build == 'true'
+    if: github.event_name == 'push' || needs.prepare.outputs.should_build == 'true'
     needs: [prepare]
-    name: Release Windows-MSVC ${{ matrix.arch }}
+    name: Build Windows-MSVC ${{ matrix.arch }}
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -183,9 +185,9 @@ jobs:
           retention-days: 5
 
   ubuntu-x86:
-    if: needs.prepare.outputs.should_build == 'true'
+    if: github.event_name == 'push' || needs.prepare.outputs.should_build == 'true'
     needs: [prepare]
-    name: Release Ubuntu ${{ matrix.arch }}
+    name: Build Ubuntu ${{ matrix.arch }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -230,9 +232,9 @@ jobs:
           retention-days: 5
 
   ubuntu-arm64:
-    if: needs.prepare.outputs.should_build == 'true'
+    if: github.event_name == 'push' || needs.prepare.outputs.should_build == 'true'
     needs: [prepare]
-    name: Release Ubuntu arm64
+    name: Build Ubuntu arm64
     runs-on: ubuntu-22.04-arm
     steps:
       - name: Install tools
@@ -260,9 +262,9 @@ jobs:
           retention-days: 5
 
   macos-x86:
-    if: needs.prepare.outputs.should_build == 'true'
+    if: github.event_name == 'push' || needs.prepare.outputs.should_build == 'true'
     needs: [prepare]
-    name: Release macOS ${{ matrix.arch }}
+    name: Build macOS ${{ matrix.arch }}
     runs-on: macos-14
     strategy:
       fail-fast: false
@@ -290,10 +292,42 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-  publish:
-    if: needs.prepare.outputs.should_build == 'true'
+  push-build-validation:
+    if: github.event_name == 'push' && always()
     needs: [prepare, windows-msys32, windows-msvc, ubuntu-x86, ubuntu-arm64, macos-x86]
     runs-on: ubuntu-latest
+    steps:
+      - name: Check platform build results
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          failed = {
+              name: data["result"]
+              for name, data in needs.items()
+              if data["result"] != "success"
+          }
+
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
+              sys.exit(1)
+
+          print("All push build validations passed.")
+          PY
+
+  publish:
+    if: github.event_name != 'push' && needs.prepare.outputs.should_build == 'true'
+    needs: [prepare, windows-msys32, windows-msvc, ubuntu-x86, ubuntu-arm64, macos-x86]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      models: read
     steps:
       - uses: actions/checkout@v6
         with:

@@ -41,6 +41,8 @@ void GLX_Renderer_RecordMaterialStage( int path, int flags, unsigned int stateBi
 qboolean GLX_Renderer_MaterialRendererActive( void );
 qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stateBits,
 	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
 	int materialCombine, qboolean fogPass );
 qboolean GLX_Renderer_BindFogMaterial( void );
 void GLX_Renderer_UnbindMaterial( void );

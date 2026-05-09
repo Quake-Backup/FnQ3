@@ -18,6 +18,7 @@ PURE_HEADERS = (
 
 MODULE_BRIDGE_HEADERS = (
     "code/renderercommon/tr_glx_api.h",
+    "code/renderercommon/tr_glx_bridge.h",
     "code/rendererglx/glx_module.h",
 )
 

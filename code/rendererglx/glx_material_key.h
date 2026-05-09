@@ -25,13 +25,241 @@ struct MaterialProgramKey {
 	unsigned int features;
 };
 
+struct MaterialStageKey {
+	MaterialProgramKey program;
+	int flags;
+	unsigned int stateBits;
+	int rgbGen;
+	int alphaGen;
+	int tcGen0;
+	int tcGen1;
+	int texMods0;
+	int texMods1;
+	unsigned int texModTypes0;
+	unsigned int texModTypes1;
+	unsigned int texModSequence0;
+	unsigned int texModSequence1;
+	qboolean fogPass;
+};
+
+static constexpr int GLX_MATERIAL_MAX_TEXMODS_PER_BUNDLE =
+	GLX_MATERIAL_TMOD_SEQUENCE_MAX_SLOTS;
+
+static ID_INLINE qboolean GLX_Material_IsKnownRgbGen( int rgbGen )
+{
+	switch ( rgbGen ) {
+	case GLX_MATERIAL_RGBGEN_BAD:
+	case GLX_MATERIAL_RGBGEN_IDENTITY_LIGHTING:
+	case GLX_MATERIAL_RGBGEN_IDENTITY:
+	case GLX_MATERIAL_RGBGEN_ENTITY:
+	case GLX_MATERIAL_RGBGEN_ONE_MINUS_ENTITY:
+	case GLX_MATERIAL_RGBGEN_EXACT_VERTEX:
+	case GLX_MATERIAL_RGBGEN_VERTEX:
+	case GLX_MATERIAL_RGBGEN_ONE_MINUS_VERTEX:
+	case GLX_MATERIAL_RGBGEN_WAVEFORM:
+	case GLX_MATERIAL_RGBGEN_LIGHTING_DIFFUSE:
+	case GLX_MATERIAL_RGBGEN_FOG:
+	case GLX_MATERIAL_RGBGEN_CONST:
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
+static ID_INLINE qboolean GLX_Material_IsKnownAlphaGen( int alphaGen )
+{
+	switch ( alphaGen ) {
+	case GLX_MATERIAL_ALPHAGEN_IDENTITY:
+	case GLX_MATERIAL_ALPHAGEN_SKIP:
+	case GLX_MATERIAL_ALPHAGEN_ENTITY:
+	case GLX_MATERIAL_ALPHAGEN_ONE_MINUS_ENTITY:
+	case GLX_MATERIAL_ALPHAGEN_VERTEX:
+	case GLX_MATERIAL_ALPHAGEN_ONE_MINUS_VERTEX:
+	case GLX_MATERIAL_ALPHAGEN_LIGHTING_SPECULAR:
+	case GLX_MATERIAL_ALPHAGEN_WAVEFORM:
+	case GLX_MATERIAL_ALPHAGEN_PORTAL:
+	case GLX_MATERIAL_ALPHAGEN_CONST:
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
+static ID_INLINE qboolean GLX_Material_IsKnownTcGen( int tcGen )
+{
+	switch ( tcGen ) {
+	case GLX_MATERIAL_TCGEN_BAD:
+	case GLX_MATERIAL_TCGEN_IDENTITY:
+	case GLX_MATERIAL_TCGEN_LIGHTMAP:
+	case GLX_MATERIAL_TCGEN_TEXTURE:
+	case GLX_MATERIAL_TCGEN_ENVIRONMENT_MAPPED:
+	case GLX_MATERIAL_TCGEN_ENVIRONMENT_MAPPED_FP:
+	case GLX_MATERIAL_TCGEN_FOG:
+	case GLX_MATERIAL_TCGEN_VECTOR:
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
+static ID_INLINE qboolean GLX_Material_TexModMaskKnown( unsigned int texModTypes )
+{
+	return ( texModTypes & ~GLX_MATERIAL_TMOD_KNOWN_BITS ) == 0 ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean GLX_Material_TexModCountKnown( int texMods )
+{
+	return texMods >= 0 && texMods <= GLX_MATERIAL_MAX_TEXMODS_PER_BUNDLE ? qtrue : qfalse;
+}
+
+static ID_INLINE unsigned int GLX_Material_TexModOpcodeBit( unsigned int opcode )
+{
+	switch ( opcode ) {
+	case GLX_MATERIAL_TMOD_OPCODE_NONE:
+		return GLX_MATERIAL_TMOD_NONE_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_TRANSFORM:
+		return GLX_MATERIAL_TMOD_TRANSFORM_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_TURBULENT:
+		return GLX_MATERIAL_TMOD_TURBULENT_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_SCROLL:
+		return GLX_MATERIAL_TMOD_SCROLL_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_SCALE:
+		return GLX_MATERIAL_TMOD_SCALE_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_STRETCH:
+		return GLX_MATERIAL_TMOD_STRETCH_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_ROTATE:
+		return GLX_MATERIAL_TMOD_ROTATE_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_ENTITY_TRANSLATE:
+		return GLX_MATERIAL_TMOD_ENTITY_TRANSLATE_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_OFFSET:
+		return GLX_MATERIAL_TMOD_OFFSET_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_SCALE_OFFSET:
+		return GLX_MATERIAL_TMOD_SCALE_OFFSET_BIT;
+	case GLX_MATERIAL_TMOD_OPCODE_OFFSET_SCALE:
+		return GLX_MATERIAL_TMOD_OFFSET_SCALE_BIT;
+	default:
+		return GLX_MATERIAL_TMOD_UNKNOWN_BIT;
+	}
+}
+
+static ID_INLINE unsigned int GLX_Material_TexModSequenceSlot( unsigned int sequence, int slot )
+{
+	return ( sequence >> ( slot * GLX_MATERIAL_TMOD_SEQUENCE_SLOT_BITS ) ) &
+		GLX_MATERIAL_TMOD_SEQUENCE_SLOT_MASK;
+}
+
+static ID_INLINE unsigned int GLX_Material_TexModSequenceSetSlot( unsigned int sequence,
+	int slot, unsigned int opcode )
+{
+	const unsigned int shift = static_cast<unsigned int>( slot * GLX_MATERIAL_TMOD_SEQUENCE_SLOT_BITS );
+	const unsigned int mask = GLX_MATERIAL_TMOD_SEQUENCE_SLOT_MASK << shift;
+
+	return ( sequence & ~mask ) |
+		( ( opcode & GLX_MATERIAL_TMOD_SEQUENCE_SLOT_MASK ) << shift );
+}
+
+static ID_INLINE unsigned int GLX_Material_TexModSequenceMask( int texMods,
+	unsigned int sequence )
+{
+	unsigned int mask = 0;
+
+	if ( !GLX_Material_TexModCountKnown( texMods ) ) {
+		return GLX_MATERIAL_TMOD_UNKNOWN_BIT;
+	}
+
+	for ( int i = 0; i < texMods; ++i ) {
+		mask |= GLX_Material_TexModOpcodeBit( GLX_Material_TexModSequenceSlot( sequence, i ) );
+	}
+
+	return mask;
+}
+
+static ID_INLINE unsigned int GLX_Material_TexModSequenceTailMask( int texMods )
+{
+	unsigned int mask = 0;
+
+	for ( int i = texMods; i < GLX_MATERIAL_MAX_TEXMODS_PER_BUNDLE; ++i ) {
+		mask |= GLX_MATERIAL_TMOD_SEQUENCE_SLOT_MASK <<
+			( i * GLX_MATERIAL_TMOD_SEQUENCE_SLOT_BITS );
+	}
+
+	return mask;
+}
+
+static ID_INLINE unsigned int GLX_Material_DefaultTexModSequence( int texMods,
+	unsigned int texModTypes )
+{
+	unsigned int sequence = 0;
+	int slot = 0;
+	const unsigned int bits[] = {
+		GLX_MATERIAL_TMOD_NONE_BIT,
+		GLX_MATERIAL_TMOD_TRANSFORM_BIT,
+		GLX_MATERIAL_TMOD_TURBULENT_BIT,
+		GLX_MATERIAL_TMOD_SCROLL_BIT,
+		GLX_MATERIAL_TMOD_SCALE_BIT,
+		GLX_MATERIAL_TMOD_STRETCH_BIT,
+		GLX_MATERIAL_TMOD_ROTATE_BIT,
+		GLX_MATERIAL_TMOD_ENTITY_TRANSLATE_BIT,
+		GLX_MATERIAL_TMOD_OFFSET_BIT,
+		GLX_MATERIAL_TMOD_SCALE_OFFSET_BIT,
+		GLX_MATERIAL_TMOD_OFFSET_SCALE_BIT
+	};
+	const unsigned int opcodes[] = {
+		GLX_MATERIAL_TMOD_OPCODE_NONE,
+		GLX_MATERIAL_TMOD_OPCODE_TRANSFORM,
+		GLX_MATERIAL_TMOD_OPCODE_TURBULENT,
+		GLX_MATERIAL_TMOD_OPCODE_SCROLL,
+		GLX_MATERIAL_TMOD_OPCODE_SCALE,
+		GLX_MATERIAL_TMOD_OPCODE_STRETCH,
+		GLX_MATERIAL_TMOD_OPCODE_ROTATE,
+		GLX_MATERIAL_TMOD_OPCODE_ENTITY_TRANSLATE,
+		GLX_MATERIAL_TMOD_OPCODE_OFFSET,
+		GLX_MATERIAL_TMOD_OPCODE_SCALE_OFFSET,
+		GLX_MATERIAL_TMOD_OPCODE_OFFSET_SCALE
+	};
+
+	if ( !GLX_Material_TexModCountKnown( texMods ) || texMods == 0 ) {
+		return 0;
+	}
+
+	for ( size_t i = 0; i < sizeof( bits ) / sizeof( bits[0] ) && slot < texMods; ++i ) {
+		if ( texModTypes & bits[i] ) {
+			sequence = GLX_Material_TexModSequenceSetSlot( sequence, slot, opcodes[i] );
+			slot++;
+		}
+	}
+
+	return sequence;
+}
+
+static ID_INLINE qboolean GLX_Material_TexModSequenceKnown( int texMods,
+	unsigned int texModTypes, unsigned int sequence )
+{
+	if ( !GLX_Material_TexModCountKnown( texMods ) ) {
+		return qfalse;
+	}
+	if ( texMods == 0 ) {
+		return sequence == 0 ? qtrue : qfalse;
+	}
+	if ( sequence & GLX_Material_TexModSequenceTailMask( texMods ) ) {
+		return qfalse;
+	}
+	return GLX_Material_TexModSequenceMask( texMods, sequence ) == texModTypes ?
+		qtrue : qfalse;
+}
+
+static ID_INLINE unsigned int GLX_Material_StateUnknownBits( unsigned int stateBits )
+{
+	return stateBits & ~GLX_MATERIAL_STATE_KNOWN_BITS;
+}
+
 static ID_INLINE qboolean GLX_Material_FeaturesAllowedForMode( MaterialProgramMode mode,
 	unsigned int features )
 {
 	const unsigned int singleTextureFeatures = GLX_MATERIAL_FEATURE_TEXMOD |
 		GLX_MATERIAL_FEATURE_ENVIRONMENT | GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT;
 	const unsigned int multitextureFeatures = GLX_MATERIAL_FEATURE_TEXMOD |
-		GLX_MATERIAL_FEATURE_ENVIRONMENT;
+		GLX_MATERIAL_FEATURE_ENVIRONMENT | GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT;
 
 	switch ( mode ) {
 	case MaterialProgramMode::SingleTexture:
@@ -122,10 +350,89 @@ static ID_INLINE qboolean GLX_Material_KeyForInputs( int flags, int materialComb
 	return qtrue;
 }
 
+static ID_INLINE qboolean GLX_Material_StageKeyForInputsFull( int flags, unsigned int stateBits,
+	int materialCombine, int rgbGen, int alphaGen, int tcGen0, int tcGen1,
+	int texMods0, int texMods1, unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	qboolean fogPass, MaterialStageKey *key )
+{
+	MaterialProgramKey program;
+
+	if ( !key || !GLX_Material_KeyForInputs( flags, materialCombine, texMods0, texMods1,
+		fogPass, &program ) ) {
+		return qfalse;
+	}
+
+	if ( !fogPass ) {
+		if ( !GLX_Material_IsKnownRgbGen( rgbGen ) ||
+			!GLX_Material_IsKnownAlphaGen( alphaGen ) ||
+			!GLX_Material_IsKnownTcGen( tcGen0 ) ||
+			!GLX_Material_IsKnownTcGen( tcGen1 ) ) {
+			return qfalse;
+		}
+		if ( !GLX_Material_TexModCountKnown( texMods0 ) ||
+			!GLX_Material_TexModCountKnown( texMods1 ) ||
+			!GLX_Material_TexModMaskKnown( texModTypes0 ) ||
+			!GLX_Material_TexModMaskKnown( texModTypes1 ) ||
+			( texMods0 > 0 && texModTypes0 == 0 ) ||
+			( texMods1 > 0 && texModTypes1 == 0 ) ||
+			!GLX_Material_TexModSequenceKnown( texMods0, texModTypes0, texModSequence0 ) ||
+			!GLX_Material_TexModSequenceKnown( texMods1, texModTypes1, texModSequence1 ) ) {
+			return qfalse;
+		}
+	}
+
+	key->program = program;
+	key->flags = flags;
+	key->stateBits = stateBits;
+	key->rgbGen = rgbGen;
+	key->alphaGen = alphaGen;
+	key->tcGen0 = tcGen0;
+	key->tcGen1 = tcGen1;
+	key->texMods0 = texMods0;
+	key->texMods1 = texMods1;
+	key->texModTypes0 = texModTypes0;
+	key->texModTypes1 = texModTypes1;
+	key->texModSequence0 = texModSequence0;
+	key->texModSequence1 = texModSequence1;
+	key->fogPass = fogPass;
+	return qtrue;
+}
+
+static ID_INLINE qboolean GLX_Material_StageKeyForInputs( int flags, unsigned int stateBits,
+	int materialCombine, int rgbGen, int alphaGen, int tcGen0, int tcGen1,
+	int texMods0, int texMods1, unsigned int texModTypes0, unsigned int texModTypes1,
+	qboolean fogPass, MaterialStageKey *key )
+{
+	return GLX_Material_StageKeyForInputsFull( flags, stateBits, materialCombine,
+		rgbGen, alphaGen, tcGen0, tcGen1, texMods0, texMods1, texModTypes0,
+		texModTypes1, GLX_Material_DefaultTexModSequence( texMods0, texModTypes0 ),
+		GLX_Material_DefaultTexModSequence( texMods1, texModTypes1 ), fogPass, key );
+}
+
 static ID_INLINE qboolean GLX_Material_KeyEquals( const MaterialProgramKey &lhs,
 	const MaterialProgramKey &rhs )
 {
 	return lhs.mode == rhs.mode && lhs.features == rhs.features ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean GLX_Material_StageKeyEquals( const MaterialStageKey &lhs,
+	const MaterialStageKey &rhs )
+{
+	return GLX_Material_KeyEquals( lhs.program, rhs.program ) &&
+		lhs.flags == rhs.flags &&
+		lhs.stateBits == rhs.stateBits &&
+		lhs.rgbGen == rhs.rgbGen &&
+		lhs.alphaGen == rhs.alphaGen &&
+		lhs.tcGen0 == rhs.tcGen0 &&
+		lhs.tcGen1 == rhs.tcGen1 &&
+		lhs.texMods0 == rhs.texMods0 &&
+		lhs.texMods1 == rhs.texMods1 &&
+		lhs.texModTypes0 == rhs.texModTypes0 &&
+		lhs.texModTypes1 == rhs.texModTypes1 &&
+		lhs.texModSequence0 == rhs.texModSequence0 &&
+		lhs.texModSequence1 == rhs.texModSequence1 &&
+		lhs.fogPass == rhs.fogPass ? qtrue : qfalse;
 }
 
 } // namespace glx

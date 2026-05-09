@@ -6,7 +6,7 @@
 
 namespace glx {
 
-static constexpr int GLX_MATERIAL_PROGRAM_LIMIT = 32;
+static constexpr int GLX_MATERIAL_PROGRAM_LIMIT = 256;
 
 typedef GLuint ( APIENTRY *PFNGLXCREATESHADERPROC )( GLenum type );
 typedef void ( APIENTRY *PFNGLXSHADERSOURCEPROC )( GLuint shader, GLsizei count, const GLchar *const *string, const GLint *length );
@@ -45,6 +45,7 @@ struct MaterialFns {
 };
 
 struct MaterialProgram {
+	MaterialStageKey stageKey;
 	MaterialProgramKey key;
 	GLuint program;
 	GLuint vertexShader;
@@ -64,6 +65,10 @@ struct MaterialRequest {
 	int tcGen1;
 	int texMods0;
 	int texMods1;
+	unsigned int texModTypes0;
+	unsigned int texModTypes1;
+	unsigned int texModSequence0;
+	unsigned int texModSequence1;
 	int materialCombine;
 	qboolean fogPass;
 };
@@ -100,6 +105,7 @@ struct MaterialState {
 	unsigned int programLimitSkips;
 	MaterialRequest lastRequest;
 	MaterialProgramKey lastKey;
+	MaterialStageKey lastStageKey;
 	char lastError[256];
 };
 

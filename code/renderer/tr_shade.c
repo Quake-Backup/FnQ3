@@ -101,7 +101,7 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MULTITEXTURE );
 		return qfalse;
 	}
-	if ( pStage->depthFragment && ( multitexture || !GLX_CompatStreamDrawDepthFragmentEnabled() ) ) {
+	if ( pStage->depthFragment && !GLX_CompatStreamDrawDepthFragmentEnabled() ) {
 		GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags );
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_DEPTH_FRAGMENT );
 		return qfalse;
@@ -168,7 +168,12 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		GL_ProgramDisable();
 		glxMaterialBound = GLX_CompatBindMaterialStage( materialFlags, pStage->stateBits,
 			pStage->rgbGen, pStage->alphaGen, pStage->bundle[0].tcGen, pStage->bundle[1].tcGen,
-			pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods, multitextureEnv, qfalse );
+			pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods,
+			GLX_CompatMaterialTexModMask( &pStage->bundle[0] ),
+			GLX_CompatMaterialTexModMask( &pStage->bundle[1] ),
+			GLX_CompatMaterialTexModSequence( &pStage->bundle[0] ),
+			GLX_CompatMaterialTexModSequence( &pStage->bundle[1] ),
+			multitextureEnv, qfalse );
 		if ( !glxMaterialBound ) {
 			GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_PROGRAM );
 			GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
@@ -722,6 +727,13 @@ static void DrawMultitextured( const shaderCommands_t *input, int stage ) {
 #endif
 	if ( !glxStreamedDraw ) {
 		R_DrawElements( input->numIndexes, input->indexes );
+		if ( pStage->depthFragment )
+		{
+			GL_State( pStage->stateBits | GLS_DEPTHMASK_TRUE );
+			GL_ProgramEnable();
+			R_DrawElements( input->numIndexes, input->indexes );
+			GL_ProgramDisable();
+		}
 	}
 
 	//

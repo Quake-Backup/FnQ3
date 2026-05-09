@@ -237,7 +237,7 @@ static ID_INLINE StreamMaterialGateResult GLX_Stream_EvaluateMaterialGate(
 	result.hasVideoMap = hasVideoMap;
 	result.hasSecondTexcoord = hasSecondTexcoord;
 	result.multitextureGateAllowed = multitextureAllowed;
-	result.depthFragmentGateAllowed = ( depthFragmentAllowed && !hasMultitexture && !hasSecondTexcoord ) ? qtrue : qfalse;
+	result.depthFragmentGateAllowed = depthFragmentAllowed;
 	result.texModsGateAllowed = texModsAllowed;
 	result.environmentGateAllowed = environmentAllowed;
 	result.dynamicLightGateAllowed = dynamicLightAllowed;

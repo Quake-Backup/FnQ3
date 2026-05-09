@@ -758,13 +758,7 @@ def command_to_string(command: list[str]) -> str:
     return " ".join(subprocess.list2cmdline([part]) for part in command)
 
 
-def resolve_exe(explicit: Path | None, allow_missing: bool = False) -> Path:
-    if explicit:
-        exe = explicit.resolve()
-        if not exe.exists() and not allow_missing:
-            raise FileNotFoundError(f"Executable does not exist: {exe}")
-        return exe
-
+def candidate_exe_names() -> list[str]:
     machine = platform.machine().lower()
     if os.name == "nt":
         arch_suffixes = ["x64"] if machine in {"amd64", "x86_64"} else [machine, "x64"]
@@ -773,13 +767,23 @@ def resolve_exe(explicit: Path | None, allow_missing: bool = False) -> Path:
             names.extend(
                 [
                     f"fnquake3.glx.{arch}.exe",
-                    f"fnquake3.opengl.{arch}.exe",
                     f"fnquake3.{arch}.exe",
                 ]
             )
         names.append("fnquake3.exe")
-    else:
-        names = ["fnquake3.glx", "fnquake3.opengl", "fnquake3"]
+        return names
+
+    return ["fnquake3.glx", "fnquake3"]
+
+
+def resolve_exe(explicit: Path | None, allow_missing: bool = False) -> Path:
+    if explicit:
+        exe = explicit.resolve()
+        if not exe.exists() and not allow_missing:
+            raise FileNotFoundError(f"Executable does not exist: {exe}")
+        return exe
+
+    names = candidate_exe_names()
 
     for name in names:
         candidate = DEFAULT_OUTPUT / name

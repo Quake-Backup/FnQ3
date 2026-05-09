@@ -1,5 +1,6 @@
 #include "glx_material.h"
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 
@@ -39,13 +40,6 @@ static constexpr MaterialProgramMode kMaterialPrecacheModes[] = {
 };
 
 static constexpr unsigned int kMaterialPrecacheFeatures[] = {
-	GLX_MATERIAL_FEATURE_NONE,
-	GLX_MATERIAL_FEATURE_TEXMOD,
-	GLX_MATERIAL_FEATURE_ENVIRONMENT,
-	GLX_MATERIAL_FEATURE_TEXMOD | GLX_MATERIAL_FEATURE_ENVIRONMENT
-};
-
-static constexpr unsigned int kMaterialPrecacheSingleTextureFeatures[] = {
 	GLX_MATERIAL_FEATURE_NONE,
 	GLX_MATERIAL_FEATURE_TEXMOD,
 	GLX_MATERIAL_FEATURE_ENVIRONMENT,
@@ -101,20 +95,369 @@ static void GLX_Material_KeyName( const MaterialProgramKey &key, char *out, size
 	out[outSize - 1] = '\0';
 }
 
-static const char *GLX_Material_VertexSource()
+static qboolean GLX_Material_AppendSource( char *out, size_t outSize, size_t *used,
+	const char *format, ... )
 {
-	return
+	va_list args;
+	int written;
+
+	if ( !out || outSize == 0 || !used || !format || *used >= outSize ) {
+		return qfalse;
+	}
+
+	va_start( args, format );
+	written = std::vsnprintf( out + *used, outSize - *used, format, args );
+	va_end( args );
+
+	if ( written < 0 || static_cast<size_t>( written ) >= outSize - *used ) {
+		out[outSize - 1] = '\0';
+		return qfalse;
+	}
+
+	*used += static_cast<size_t>( written );
+	return qtrue;
+}
+
+static void GLX_Material_StageKeyName( const MaterialStageKey &stageKey, char *out, size_t outSize )
+{
+	char compact[64];
+
+	if ( !out || outSize == 0 ) {
+		return;
+	}
+
+	GLX_Material_KeyName( stageKey.program, compact, sizeof( compact ) );
+	std::snprintf( out, outSize,
+		"%s flags%x state%x rgb%i alpha%i tc%i/%i tm%i:%x:%x/%i:%x:%x fog%i",
+		compact, stageKey.flags, stageKey.stateBits, stageKey.rgbGen, stageKey.alphaGen,
+		stageKey.tcGen0, stageKey.tcGen1, stageKey.texMods0, stageKey.texModTypes0,
+		stageKey.texModSequence0, stageKey.texMods1, stageKey.texModTypes1,
+		stageKey.texModSequence1, stageKey.fogPass ? 1 : 0 );
+	out[outSize - 1] = '\0';
+}
+
+static qboolean GLX_Material_StageLanguageDefines( const MaterialStageKey &stageKey,
+	char *out, size_t outSize )
+{
+	size_t used = 0;
+	const unsigned int srcBlend = stageKey.stateBits & GLX_MATERIAL_STATE_SRCBLEND_BITS;
+	const unsigned int dstBlend = stageKey.stateBits & GLX_MATERIAL_STATE_DSTBLEND_BITS;
+	const unsigned int alphaTest = stageKey.stateBits & GLX_MATERIAL_STATE_ATEST_BITS;
+
+	if ( !out || outSize == 0 ) {
+		return qfalse;
+	}
+
+	out[0] = '\0';
+	const bool appended = GLX_Material_AppendSource( out, outSize, &used,
+		"#define GLX_MATERIAL_MODE %i\n"
+		"#define GLX_MATERIAL_FEATURE_TEXMOD %i\n"
+		"#define GLX_MATERIAL_FEATURE_ENVIRONMENT %i\n"
+		"#define GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT %i\n"
+		"#define GLX_MATERIAL_STAGE_FLAGS %i\n"
+		"#define GLX_MATERIAL_STATE_BITS %u\n"
+		"#define GLX_MATERIAL_STATE_UNKNOWN_BITS %u\n"
+		"#define GLX_MATERIAL_STATE_SRCBLEND_BITS %u\n"
+		"#define GLX_MATERIAL_STATE_DSTBLEND_BITS %u\n"
+		"#define GLX_MATERIAL_STATE_ATEST_BITS %u\n"
+		"#define GLX_MATERIAL_STATE_DEPTHMASK_TRUE %i\n"
+		"#define GLX_MATERIAL_STATE_POLYMODE_LINE %i\n"
+		"#define GLX_MATERIAL_STATE_DEPTHTEST_DISABLE %i\n"
+		"#define GLX_MATERIAL_STATE_DEPTHFUNC_EQUAL %i\n"
+		"#define GLX_MATERIAL_SRCBLEND_ZERO %i\n"
+		"#define GLX_MATERIAL_SRCBLEND_ONE %i\n"
+		"#define GLX_MATERIAL_SRCBLEND_DST_COLOR %i\n"
+		"#define GLX_MATERIAL_SRCBLEND_ONE_MINUS_DST_COLOR %i\n"
+		"#define GLX_MATERIAL_SRCBLEND_SRC_ALPHA %i\n"
+		"#define GLX_MATERIAL_SRCBLEND_ONE_MINUS_SRC_ALPHA %i\n"
+		"#define GLX_MATERIAL_SRCBLEND_DST_ALPHA %i\n"
+		"#define GLX_MATERIAL_SRCBLEND_ONE_MINUS_DST_ALPHA %i\n"
+		"#define GLX_MATERIAL_SRCBLEND_ALPHA_SATURATE %i\n"
+		"#define GLX_MATERIAL_DSTBLEND_ZERO %i\n"
+		"#define GLX_MATERIAL_DSTBLEND_ONE %i\n"
+		"#define GLX_MATERIAL_DSTBLEND_SRC_COLOR %i\n"
+		"#define GLX_MATERIAL_DSTBLEND_ONE_MINUS_SRC_COLOR %i\n"
+		"#define GLX_MATERIAL_DSTBLEND_SRC_ALPHA %i\n"
+		"#define GLX_MATERIAL_DSTBLEND_ONE_MINUS_SRC_ALPHA %i\n"
+		"#define GLX_MATERIAL_DSTBLEND_DST_ALPHA %i\n"
+		"#define GLX_MATERIAL_DSTBLEND_ONE_MINUS_DST_ALPHA %i\n"
+		"#define GLX_MATERIAL_ATEST_GT_0 %i\n"
+		"#define GLX_MATERIAL_ATEST_LT_80 %i\n"
+		"#define GLX_MATERIAL_ATEST_GE_80 %i\n"
+		"#define GLX_MATERIAL_RGBGEN %i\n"
+		"#define GLX_MATERIAL_ALPHAGEN %i\n"
+		"#define GLX_MATERIAL_TCGEN0 %i\n"
+		"#define GLX_MATERIAL_TCGEN1 %i\n"
+		"#define GLX_MATERIAL_TEXMODS0 %i\n"
+		"#define GLX_MATERIAL_TEXMODS1 %i\n"
+		"#define GLX_MATERIAL_TEXMOD_TYPES0 %u\n"
+		"#define GLX_MATERIAL_TEXMOD_TYPES1 %u\n",
+		static_cast<int>( stageKey.program.mode ),
+		( stageKey.program.features & GLX_MATERIAL_FEATURE_TEXMOD ) ? 1 : 0,
+		( stageKey.program.features & GLX_MATERIAL_FEATURE_ENVIRONMENT ) ? 1 : 0,
+		( stageKey.program.features & GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT ) ? 1 : 0,
+		stageKey.flags, stageKey.stateBits,
+		GLX_Material_StateUnknownBits( stageKey.stateBits ),
+		srcBlend, dstBlend, alphaTest,
+		( stageKey.stateBits & GLX_MATERIAL_STATE_DEPTHMASK_TRUE ) ? 1 : 0,
+		( stageKey.stateBits & GLX_MATERIAL_STATE_POLYMODE_LINE ) ? 1 : 0,
+		( stageKey.stateBits & GLX_MATERIAL_STATE_DEPTHTEST_DISABLE ) ? 1 : 0,
+		( stageKey.stateBits & GLX_MATERIAL_STATE_DEPTHFUNC_EQUAL ) ? 1 : 0,
+		srcBlend == GLX_MATERIAL_STATE_SRCBLEND_ZERO ? 1 : 0,
+		srcBlend == GLX_MATERIAL_STATE_SRCBLEND_ONE ? 1 : 0,
+		srcBlend == GLX_MATERIAL_STATE_SRCBLEND_DST_COLOR ? 1 : 0,
+		srcBlend == GLX_MATERIAL_STATE_SRCBLEND_ONE_MINUS_DST_COLOR ? 1 : 0,
+		srcBlend == GLX_MATERIAL_STATE_SRCBLEND_SRC_ALPHA ? 1 : 0,
+		srcBlend == GLX_MATERIAL_STATE_SRCBLEND_ONE_MINUS_SRC_ALPHA ? 1 : 0,
+		srcBlend == GLX_MATERIAL_STATE_SRCBLEND_DST_ALPHA ? 1 : 0,
+		srcBlend == GLX_MATERIAL_STATE_SRCBLEND_ONE_MINUS_DST_ALPHA ? 1 : 0,
+		srcBlend == GLX_MATERIAL_STATE_SRCBLEND_ALPHA_SATURATE ? 1 : 0,
+		dstBlend == GLX_MATERIAL_STATE_DSTBLEND_ZERO ? 1 : 0,
+		dstBlend == GLX_MATERIAL_STATE_DSTBLEND_ONE ? 1 : 0,
+		dstBlend == GLX_MATERIAL_STATE_DSTBLEND_SRC_COLOR ? 1 : 0,
+		dstBlend == GLX_MATERIAL_STATE_DSTBLEND_ONE_MINUS_SRC_COLOR ? 1 : 0,
+		dstBlend == GLX_MATERIAL_STATE_DSTBLEND_SRC_ALPHA ? 1 : 0,
+		dstBlend == GLX_MATERIAL_STATE_DSTBLEND_ONE_MINUS_SRC_ALPHA ? 1 : 0,
+		dstBlend == GLX_MATERIAL_STATE_DSTBLEND_DST_ALPHA ? 1 : 0,
+		dstBlend == GLX_MATERIAL_STATE_DSTBLEND_ONE_MINUS_DST_ALPHA ? 1 : 0,
+		alphaTest == GLX_MATERIAL_STATE_ATEST_GT_0 ? 1 : 0,
+		alphaTest == GLX_MATERIAL_STATE_ATEST_LT_80 ? 1 : 0,
+		alphaTest == GLX_MATERIAL_STATE_ATEST_GE_80 ? 1 : 0,
+		stageKey.rgbGen, stageKey.alphaGen, stageKey.tcGen0, stageKey.tcGen1,
+		stageKey.texMods0, stageKey.texMods1,
+		stageKey.texModTypes0, stageKey.texModTypes1 ) &&
+	GLX_Material_AppendSource( out, outSize, &used,
+		"#define GLX_MATERIAL_TMOD_OPCODE_NONE %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_TRANSFORM %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_TURBULENT %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_SCROLL %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_SCALE %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_STRETCH %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_ROTATE %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_ENTITY_TRANSLATE %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_OFFSET %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_SCALE_OFFSET %i\n"
+		"#define GLX_MATERIAL_TMOD_OPCODE_OFFSET_SCALE %i\n"
+		"#define GLX_MATERIAL_TEXMOD_SEQUENCE0 %u\n"
+		"#define GLX_MATERIAL_TEXMOD_SEQUENCE1 %u\n"
+		"#define GLX_MATERIAL_TMOD0_SLOT0 %u\n"
+		"#define GLX_MATERIAL_TMOD0_SLOT1 %u\n"
+		"#define GLX_MATERIAL_TMOD0_SLOT2 %u\n"
+		"#define GLX_MATERIAL_TMOD0_SLOT3 %u\n"
+		"#define GLX_MATERIAL_TMOD0_SLOT4 %u\n"
+		"#define GLX_MATERIAL_TMOD1_SLOT0 %u\n"
+		"#define GLX_MATERIAL_TMOD1_SLOT1 %u\n"
+		"#define GLX_MATERIAL_TMOD1_SLOT2 %u\n"
+		"#define GLX_MATERIAL_TMOD1_SLOT3 %u\n"
+		"#define GLX_MATERIAL_TMOD1_SLOT4 %u\n",
+		GLX_MATERIAL_TMOD_OPCODE_NONE,
+		GLX_MATERIAL_TMOD_OPCODE_TRANSFORM,
+		GLX_MATERIAL_TMOD_OPCODE_TURBULENT,
+		GLX_MATERIAL_TMOD_OPCODE_SCROLL,
+		GLX_MATERIAL_TMOD_OPCODE_SCALE,
+		GLX_MATERIAL_TMOD_OPCODE_STRETCH,
+		GLX_MATERIAL_TMOD_OPCODE_ROTATE,
+		GLX_MATERIAL_TMOD_OPCODE_ENTITY_TRANSLATE,
+		GLX_MATERIAL_TMOD_OPCODE_OFFSET,
+		GLX_MATERIAL_TMOD_OPCODE_SCALE_OFFSET,
+		GLX_MATERIAL_TMOD_OPCODE_OFFSET_SCALE,
+		stageKey.texModSequence0, stageKey.texModSequence1,
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence0, 0 ),
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence0, 1 ),
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence0, 2 ),
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence0, 3 ),
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence0, 4 ),
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence1, 0 ),
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence1, 1 ),
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence1, 2 ),
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence1, 3 ),
+		GLX_Material_TexModSequenceSlot( stageKey.texModSequence1, 4 ) ) &&
+	GLX_Material_AppendSource( out, outSize, &used,
+		"#define GLX_MATERIAL_STAGE_MULTITEXTURE %i\n"
+		"#define GLX_MATERIAL_STAGE_DEPTH_FRAGMENT %i\n"
+		"#define GLX_MATERIAL_STAGE_BLEND %i\n"
+		"#define GLX_MATERIAL_STAGE_ALPHA_TEST %i\n"
+		"#define GLX_MATERIAL_STAGE_DEPTH_WRITE %i\n"
+		"#define GLX_MATERIAL_STAGE_LIGHTMAP %i\n"
+		"#define GLX_MATERIAL_STAGE_ANIMATED_IMAGE %i\n"
+		"#define GLX_MATERIAL_STAGE_VIDEO_MAP %i\n"
+		"#define GLX_MATERIAL_STAGE_SCREEN_MAP %i\n"
+		"#define GLX_MATERIAL_STAGE_DLIGHT_MAP %i\n"
+		"#define GLX_MATERIAL_STAGE_TEXMOD %i\n"
+		"#define GLX_MATERIAL_STAGE_ENVIRONMENT %i\n"
+		"#define GLX_MATERIAL_STAGE_ST0 %i\n"
+		"#define GLX_MATERIAL_STAGE_ST1 %i\n"
+		"#define GLX_MATERIAL_STAGE_SHADOW_PASS %i\n"
+		"#define GLX_MATERIAL_STAGE_BEAM_PASS %i\n"
+		"#define GLX_MATERIAL_STAGE_POSTPROCESS_PASS %i\n",
+		( stageKey.flags & GLX_STAGE_MULTITEXTURE ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_DEPTH_FRAGMENT ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_BLEND ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_ALPHA_TEST ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_DEPTH_WRITE ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_LIGHTMAP ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_ANIMATED_IMAGE ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_VIDEO_MAP ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_SCREEN_MAP ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_DLIGHT_MAP ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_TEXMOD ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_ENVIRONMENT ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_ST0 ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_ST1 ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_SHADOW_PASS ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_BEAM_PASS ) ? 1 : 0,
+		( stageKey.flags & GLX_STAGE_POSTPROCESS_PASS ) ? 1 : 0 ) &&
+	GLX_Material_AppendSource( out, outSize, &used,
+		"#define GLX_MATERIAL_TMOD0_NONE %i\n"
+		"#define GLX_MATERIAL_TMOD0_TRANSFORM %i\n"
+		"#define GLX_MATERIAL_TMOD0_TURBULENT %i\n"
+		"#define GLX_MATERIAL_TMOD0_SCROLL %i\n"
+		"#define GLX_MATERIAL_TMOD0_SCALE %i\n"
+		"#define GLX_MATERIAL_TMOD0_STRETCH %i\n"
+		"#define GLX_MATERIAL_TMOD0_ROTATE %i\n"
+		"#define GLX_MATERIAL_TMOD0_ENTITY_TRANSLATE %i\n"
+		"#define GLX_MATERIAL_TMOD0_OFFSET %i\n"
+		"#define GLX_MATERIAL_TMOD0_SCALE_OFFSET %i\n"
+		"#define GLX_MATERIAL_TMOD0_OFFSET_SCALE %i\n"
+		"#define GLX_MATERIAL_TMOD1_NONE %i\n"
+		"#define GLX_MATERIAL_TMOD1_TRANSFORM %i\n"
+		"#define GLX_MATERIAL_TMOD1_TURBULENT %i\n"
+		"#define GLX_MATERIAL_TMOD1_SCROLL %i\n"
+		"#define GLX_MATERIAL_TMOD1_SCALE %i\n"
+		"#define GLX_MATERIAL_TMOD1_STRETCH %i\n"
+		"#define GLX_MATERIAL_TMOD1_ROTATE %i\n"
+		"#define GLX_MATERIAL_TMOD1_ENTITY_TRANSLATE %i\n"
+		"#define GLX_MATERIAL_TMOD1_OFFSET %i\n"
+		"#define GLX_MATERIAL_TMOD1_SCALE_OFFSET %i\n"
+		"#define GLX_MATERIAL_TMOD1_OFFSET_SCALE %i\n"
+		"#define GLX_MATERIAL_FOG_PASS %i\n",
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_NONE_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_TRANSFORM_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_TURBULENT_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_SCROLL_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_SCALE_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_STRETCH_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_ROTATE_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_ENTITY_TRANSLATE_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_OFFSET_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_SCALE_OFFSET_BIT ) ? 1 : 0,
+		( stageKey.texModTypes0 & GLX_MATERIAL_TMOD_OFFSET_SCALE_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_NONE_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_TRANSFORM_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_TURBULENT_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_SCROLL_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_SCALE_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_STRETCH_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_ROTATE_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_ENTITY_TRANSLATE_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_OFFSET_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_SCALE_OFFSET_BIT ) ? 1 : 0,
+		( stageKey.texModTypes1 & GLX_MATERIAL_TMOD_OFFSET_SCALE_BIT ) ? 1 : 0,
+		stageKey.fogPass ? 1 : 0 );
+	return appended ? qtrue : qfalse;
+}
+
+static qboolean GLX_Material_VertexSource( const MaterialStageKey &stageKey,
+	char *out, size_t outSize )
+{
+	char languageDefines[8192];
+	int written;
+
+	if ( !out || outSize == 0 ||
+		!GLX_Material_StageLanguageDefines( stageKey, languageDefines, sizeof( languageDefines ) ) ) {
+		return qfalse;
+	}
+
+	written = std::snprintf( out, outSize,
 		"#version 120\n"
+		"%s"
 		"varying vec4 v_Color;\n"
 		"varying vec2 v_TexCoord0;\n"
 		"varying vec2 v_TexCoord1;\n"
+		"vec4 GLX_PreparedColor(void)\n"
+		"{\n"
+		"#if GLX_MATERIAL_RGBGEN == 0\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 1\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 2\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 3\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 4\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 5\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 6\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 7\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 8\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 9\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 10\n"
+		"    return gl_Color;\n"
+		"#elif GLX_MATERIAL_RGBGEN == 11\n"
+		"    return gl_Color;\n"
+		"#else\n"
+		"    return gl_Color;\n"
+		"#endif\n"
+		"}\n"
+		"vec2 GLX_PreparedTexCoord0(void)\n"
+		"{\n"
+		"#if GLX_MATERIAL_TCGEN0 == 0\n"
+		"    return gl_MultiTexCoord0.st;\n"
+		"#elif GLX_MATERIAL_TCGEN0 == 1\n"
+		"    return gl_MultiTexCoord0.st;\n"
+		"#elif GLX_MATERIAL_TCGEN0 == 2\n"
+		"    return gl_MultiTexCoord0.st;\n"
+		"#elif GLX_MATERIAL_TCGEN0 == 3\n"
+		"    return gl_MultiTexCoord0.st;\n"
+		"#elif GLX_MATERIAL_TCGEN0 == 4\n"
+		"    return gl_MultiTexCoord0.st;\n"
+		"#elif GLX_MATERIAL_TCGEN0 == 5\n"
+		"    return gl_MultiTexCoord0.st;\n"
+		"#elif GLX_MATERIAL_TCGEN0 == 6\n"
+		"    return gl_MultiTexCoord0.st;\n"
+		"#elif GLX_MATERIAL_TCGEN0 == 7\n"
+		"    return gl_MultiTexCoord0.st;\n"
+		"#else\n"
+		"    return gl_MultiTexCoord0.st;\n"
+		"#endif\n"
+		"}\n"
+		"vec2 GLX_PreparedTexCoord1(void)\n"
+		"{\n"
+		"#if GLX_MATERIAL_TCGEN1 == 0\n"
+		"    return gl_MultiTexCoord1.st;\n"
+		"#elif GLX_MATERIAL_TCGEN1 == 1\n"
+		"    return gl_MultiTexCoord1.st;\n"
+		"#elif GLX_MATERIAL_TCGEN1 == 2\n"
+		"    return gl_MultiTexCoord1.st;\n"
+		"#elif GLX_MATERIAL_TCGEN1 == 3\n"
+		"    return gl_MultiTexCoord1.st;\n"
+		"#elif GLX_MATERIAL_TCGEN1 == 4\n"
+		"    return gl_MultiTexCoord1.st;\n"
+		"#elif GLX_MATERIAL_TCGEN1 == 5\n"
+		"    return gl_MultiTexCoord1.st;\n"
+		"#elif GLX_MATERIAL_TCGEN1 == 6\n"
+		"    return gl_MultiTexCoord1.st;\n"
+		"#elif GLX_MATERIAL_TCGEN1 == 7\n"
+		"    return gl_MultiTexCoord1.st;\n"
+		"#else\n"
+		"    return gl_MultiTexCoord1.st;\n"
+		"#endif\n"
+		"}\n"
 		"void main(void)\n"
 		"{\n"
 		"    gl_Position = ftransform();\n"
-		"    v_Color = gl_Color;\n"
-		"    v_TexCoord0 = gl_MultiTexCoord0.st;\n"
-		"    v_TexCoord1 = gl_MultiTexCoord1.st;\n"
-		"}\n";
+		"    v_Color = GLX_PreparedColor();\n"
+		"    v_TexCoord0 = GLX_PreparedTexCoord0();\n"
+		"    v_TexCoord1 = GLX_PreparedTexCoord1();\n"
+		"}\n",
+		languageDefines );
+	out[outSize - 1] = '\0';
+	return written >= 0 && static_cast<size_t>( written ) < outSize ? qtrue : qfalse;
 }
 
 static void GLX_Material_SetReason( MaterialState *state, const char *reason )
@@ -212,6 +555,7 @@ static void GLX_Material_ResetCounters( MaterialState *state )
 	state->programLimitSkips = 0;
 	state->lastRequest = {};
 	state->lastKey = { MaterialProgramMode::SingleTexture, GLX_MATERIAL_FEATURE_NONE };
+	state->lastStageKey = {};
 	GLX_Material_SetLastError( state, "" );
 }
 
@@ -253,86 +597,298 @@ static void GLX_Material_PrintObjectLog( const MaterialState &state, GLuint obje
 	}
 }
 
-static qboolean GLX_Material_ModeForRequest( const MaterialRequest &request, MaterialProgramMode *mode )
+static qboolean GLX_Material_StageKeyForRequest( const MaterialRequest &request, MaterialStageKey *key )
 {
-	return GLX_Material_ModeForInputs( request.flags, request.materialCombine, request.fogPass, mode );
+	return GLX_Material_StageKeyForInputsFull( request.flags, request.stateBits,
+		request.materialCombine, request.rgbGen, request.alphaGen,
+		request.tcGen0, request.tcGen1, request.texMods0, request.texMods1,
+		request.texModTypes0, request.texModTypes1,
+		request.texModSequence0, request.texModSequence1, request.fogPass, key );
 }
 
-static unsigned int GLX_Material_FeaturesForRequest( const MaterialRequest &request )
+static qboolean GLX_Material_FragmentSource( const MaterialStageKey &stageKey,
+	char *out, size_t outSize )
 {
-	return GLX_Material_FeaturesForInputs( request.flags, request.texMods0, request.texMods1, request.fogPass );
-}
-
-static qboolean GLX_Material_KeyForRequest( const MaterialRequest &request, MaterialProgramKey *key )
-{
-	MaterialProgramMode mode;
-
-	if ( !key || !GLX_Material_ModeForRequest( request, &mode ) ) {
-		return qfalse;
-	}
-
-	key->mode = mode;
-	key->features = GLX_Material_FeaturesForRequest( request );
-	if ( !GLX_Material_FeaturesAllowedForMode( key->mode, key->features ) ) {
-		return qfalse;
-	}
-	return qtrue;
-}
-
-static void GLX_Material_FragmentSource( const MaterialProgramKey &key, char *out, size_t outSize )
-{
+	const MaterialProgramKey &key = stageKey.program;
+	char languageDefines[8192];
 	const char *body = "";
+	int written;
 
 	switch ( key.mode ) {
 	case MaterialProgramMode::SingleTexture:
 	case MaterialProgramMode::Fog:
 		body =
 			"    vec4 base = texture2D(u_Texture0, v_TexCoord0);\n"
-			"    gl_FragColor = base * v_Color;\n";
+			"    gl_FragColor = GLX_ApplyPreparedStageLanguage(base * v_Color);\n";
 		break;
 	case MaterialProgramMode::MultiModulate:
 		body =
 			"    vec4 base = texture2D(u_Texture0, v_TexCoord0) * v_Color;\n"
 			"    vec4 layer = texture2D(u_Texture1, v_TexCoord1);\n"
-			"    gl_FragColor = base * layer;\n";
+			"    gl_FragColor = GLX_ApplyPreparedStageLanguage(base * layer);\n";
 		break;
 	case MaterialProgramMode::MultiAdd:
 		body =
 			"    vec4 base = texture2D(u_Texture0, v_TexCoord0) * v_Color;\n"
 			"    vec4 layer = texture2D(u_Texture1, v_TexCoord1);\n"
-			"    gl_FragColor = min(base + layer, vec4(1.0));\n";
+			"    gl_FragColor = GLX_ApplyPreparedStageLanguage(min(base + layer, vec4(1.0)));\n";
 		break;
 	case MaterialProgramMode::MultiReplace:
 		body =
-			"    gl_FragColor = texture2D(u_Texture1, v_TexCoord1);\n";
+			"    gl_FragColor = GLX_ApplyPreparedStageLanguage(texture2D(u_Texture1, v_TexCoord1));\n";
 		break;
 	case MaterialProgramMode::MultiDecal:
 		body =
 			"    vec4 base = texture2D(u_Texture0, v_TexCoord0) * v_Color;\n"
 			"    vec4 layer = texture2D(u_Texture1, v_TexCoord1);\n"
-			"    gl_FragColor = vec4(mix(base.rgb, layer.rgb, layer.a), base.a);\n";
+			"    gl_FragColor = GLX_ApplyPreparedStageLanguage(vec4(mix(base.rgb, layer.rgb, layer.a), base.a));\n";
 		break;
 	}
 
-	std::snprintf( out, outSize,
+	if ( !out || outSize == 0 ||
+		!GLX_Material_StageLanguageDefines( stageKey, languageDefines, sizeof( languageDefines ) ) ) {
+		return qfalse;
+	}
+
+	written = std::snprintf( out, outSize,
 		"#version 120\n"
-		"#define GLX_MATERIAL_FEATURE_TEXMOD %u\n"
-		"#define GLX_MATERIAL_FEATURE_ENVIRONMENT %u\n"
-		"#define GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT %u\n"
+		"%s"
 		"uniform sampler2D u_Texture0;\n"
 		"uniform sampler2D u_Texture1;\n"
 		"varying vec4 v_Color;\n"
 		"varying vec2 v_TexCoord0;\n"
 		"varying vec2 v_TexCoord1;\n"
+		"vec4 GLX_ApplyPreparedStageLanguage(vec4 color)\n"
+		"{\n"
+		"    vec4 prepared = color;\n"
+		"#if GLX_MATERIAL_ALPHAGEN == 0\n"
+		"    prepared.a = color.a;\n"
+		"#elif GLX_MATERIAL_ALPHAGEN == 1\n"
+		"    prepared.a = color.a;\n"
+		"#elif GLX_MATERIAL_ALPHAGEN == 2\n"
+		"    prepared.a = color.a;\n"
+		"#elif GLX_MATERIAL_ALPHAGEN == 3\n"
+		"    prepared.a = color.a;\n"
+		"#elif GLX_MATERIAL_ALPHAGEN == 4\n"
+		"    prepared.a = color.a;\n"
+		"#elif GLX_MATERIAL_ALPHAGEN == 5\n"
+		"    prepared.a = color.a;\n"
+		"#elif GLX_MATERIAL_ALPHAGEN == 6\n"
+		"    prepared.a = color.a;\n"
+		"#elif GLX_MATERIAL_ALPHAGEN == 7\n"
+		"    prepared.a = color.a;\n"
+		"#elif GLX_MATERIAL_ALPHAGEN == 8\n"
+		"    prepared.a = color.a;\n"
+		"#elif GLX_MATERIAL_ALPHAGEN == 9\n"
+		"    prepared.a = color.a;\n"
+		"#else\n"
+		"    prepared.a = color.a;\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_SRCBLEND_ZERO\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_SRCBLEND_ONE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_SRCBLEND_DST_COLOR\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_SRCBLEND_ONE_MINUS_DST_COLOR\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_SRCBLEND_SRC_ALPHA\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_SRCBLEND_ONE_MINUS_SRC_ALPHA\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_SRCBLEND_DST_ALPHA\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_SRCBLEND_ONE_MINUS_DST_ALPHA\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_SRCBLEND_ALPHA_SATURATE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_DSTBLEND_ZERO\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_DSTBLEND_ONE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_DSTBLEND_SRC_COLOR\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_DSTBLEND_ONE_MINUS_SRC_COLOR\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_DSTBLEND_SRC_ALPHA\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_DSTBLEND_ONE_MINUS_SRC_ALPHA\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_DSTBLEND_DST_ALPHA\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_DSTBLEND_ONE_MINUS_DST_ALPHA\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_ATEST_GT_0\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_ATEST_LT_80\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_ATEST_GE_80\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STATE_DEPTHMASK_TRUE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STATE_POLYMODE_LINE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STATE_DEPTHTEST_DISABLE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STATE_DEPTHFUNC_EQUAL\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STATE_UNKNOWN_BITS != 0\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_MULTITEXTURE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_DEPTH_FRAGMENT\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_BLEND\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_ALPHA_TEST\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_DEPTH_WRITE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_LIGHTMAP\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_ANIMATED_IMAGE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_VIDEO_MAP\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_SCREEN_MAP\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_DLIGHT_MAP\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_ENVIRONMENT\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_TEXMOD\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_ST0\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_ST1\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_NONE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_TRANSFORM\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_TURBULENT\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_SCROLL\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_SCALE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_STRETCH\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_ROTATE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_ENTITY_TRANSLATE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_OFFSET\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_SCALE_OFFSET\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD0_OFFSET_SCALE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_NONE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_TRANSFORM\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_TURBULENT\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_SCROLL\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_SCALE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_STRETCH\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_ROTATE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_ENTITY_TRANSLATE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_OFFSET\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_SCALE_OFFSET\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_TMOD1_OFFSET_SCALE\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_SHADOW_PASS\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_BEAM_PASS\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_STAGE_POSTPROCESS_PASS\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"#if GLX_MATERIAL_FOG_PASS\n"
+		"    prepared += vec4(0.0);\n"
+		"#endif\n"
+		"    return prepared;\n"
+		"}\n"
 		"void main(void)\n"
 		"{\n"
 		"%s"
 		"}\n",
-		( key.features & GLX_MATERIAL_FEATURE_TEXMOD ) ? 1u : 0u,
-		( key.features & GLX_MATERIAL_FEATURE_ENVIRONMENT ) ? 1u : 0u,
-		( key.features & GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT ) ? 1u : 0u,
+		languageDefines,
 		body );
 	out[outSize - 1] = '\0';
+	return written >= 0 && static_cast<size_t>( written ) < outSize ? qtrue : qfalse;
 }
 
 static GLuint GLX_Material_CompileShader( MaterialState *state, GLenum shaderType, const char *source )
@@ -431,14 +987,16 @@ static void GLX_Material_ResetRuntime( MaterialState *state, qboolean deleteProg
 	GLX_Material_SetReason( state, "not initialized" );
 }
 
-static MaterialProgram *GLX_Material_FindProgram( MaterialState *state, const MaterialProgramKey &key )
+static MaterialProgram *GLX_Material_FindProgram( MaterialState *state,
+	const MaterialStageKey &stageKey )
 {
 	if ( !state ) {
 		return nullptr;
 	}
 
 	for ( int i = 0; i < state->programCount; i++ ) {
-		if ( state->programs[i].valid && GLX_Material_KeyEquals( state->programs[i].key, key ) ) {
+		if ( state->programs[i].valid &&
+			GLX_Material_StageKeyEquals( state->programs[i].stageKey, stageKey ) ) {
 			state->cacheHits++;
 			return &state->programs[i];
 		}
@@ -450,24 +1008,26 @@ static MaterialProgram *GLX_Material_FindProgram( MaterialState *state, const Ma
 
 static void GLX_Material_LabelProgram( MaterialState *state, MaterialProgram *program )
 {
-	char label[64];
-	char keyName[64];
+	char label[160];
+	char keyName[128];
 
 	if ( !state || !program || !program->program || !state->fns.ObjectLabel ) {
 		return;
 	}
 
-	GLX_Material_KeyName( program->key, keyName, sizeof( keyName ) );
+	GLX_Material_StageKeyName( program->stageKey, keyName, sizeof( keyName ) );
 	std::snprintf( label, sizeof( label ), "GLx material %s", keyName );
 	label[sizeof( label ) - 1] = '\0';
 	state->fns.ObjectLabel( GL_PROGRAM, program->program, static_cast<GLsizei>( -1 ), label );
 	state->debugLabels++;
 }
 
-static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state, const MaterialProgramKey &key )
+static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state,
+	const MaterialStageKey &stageKey )
 {
-	char fragmentSource[2048];
-	char keyName[64];
+	char vertexSource[16384];
+	char fragmentSource[16384];
+	char keyName[128];
 	MaterialProgram *program;
 	GLint ok = 0;
 
@@ -484,11 +1044,17 @@ static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state, const 
 	state->compileAttempts++;
 	program = &state->programs[state->programCount];
 	*program = {};
-	program->key = key;
-	GLX_Material_KeyName( key, keyName, sizeof( keyName ) );
+	program->stageKey = stageKey;
+	program->key = stageKey.program;
+	GLX_Material_StageKeyName( stageKey, keyName, sizeof( keyName ) );
 
-	GLX_Material_FragmentSource( key, fragmentSource, sizeof( fragmentSource ) );
-	program->vertexShader = GLX_Material_CompileShader( state, GL_VERTEX_SHADER, GLX_Material_VertexSource() );
+	if ( !GLX_Material_VertexSource( stageKey, vertexSource, sizeof( vertexSource ) ) ||
+		!GLX_Material_FragmentSource( stageKey, fragmentSource, sizeof( fragmentSource ) ) ) {
+		GLX_Material_SetLastError( state, "material shader source exceeded generator buffer" );
+		GLX_Material_DeleteProgram( state, program );
+		return nullptr;
+	}
+	program->vertexShader = GLX_Material_CompileShader( state, GL_VERTEX_SHADER, vertexSource );
 	program->fragmentShader = GLX_Material_CompileShader( state, GL_FRAGMENT_SHADER, fragmentSource );
 	if ( !program->vertexShader || !program->fragmentShader ) {
 		GLX_Material_DeleteProgram( state, program );
@@ -541,6 +1107,366 @@ static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state, const 
 	return program;
 }
 
+static qboolean GLX_Material_CombineForMode( MaterialProgramMode mode, int *combine )
+{
+	if ( !combine ) {
+		return qfalse;
+	}
+
+	switch ( mode ) {
+	case MaterialProgramMode::SingleTexture:
+	case MaterialProgramMode::Fog:
+		*combine = 0;
+		return qtrue;
+	case MaterialProgramMode::MultiModulate:
+		*combine = GLX_MATERIAL_COMBINE_MODULATE;
+		return qtrue;
+	case MaterialProgramMode::MultiAdd:
+		*combine = GLX_MATERIAL_COMBINE_ADD;
+		return qtrue;
+	case MaterialProgramMode::MultiReplace:
+		*combine = GLX_MATERIAL_COMBINE_REPLACE;
+		return qtrue;
+	case MaterialProgramMode::MultiDecal:
+		*combine = GLX_MATERIAL_COMBINE_DECAL;
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
+static qboolean GLX_Material_StageKeySupported( const MaterialStageKey &stageKey )
+{
+	MaterialStageKey normalized {};
+	int combine = 0;
+
+	if ( !GLX_Material_CombineForMode( stageKey.program.mode, &combine ) ) {
+		return qfalse;
+	}
+	if ( !GLX_Material_StageKeyForInputsFull( stageKey.flags, stageKey.stateBits,
+		combine, stageKey.rgbGen, stageKey.alphaGen, stageKey.tcGen0, stageKey.tcGen1,
+		stageKey.texMods0, stageKey.texMods1, stageKey.texModTypes0, stageKey.texModTypes1,
+		stageKey.texModSequence0, stageKey.texModSequence1,
+		stageKey.fogPass, &normalized ) ) {
+		return qfalse;
+	}
+
+	return GLX_Material_StageKeyEquals( normalized, stageKey );
+}
+
+static qboolean GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode mode,
+	unsigned int features, MaterialStageKey *stageKey )
+{
+	if ( !stageKey || !GLX_Material_FeaturesAllowedForMode( mode, features ) ) {
+		return qfalse;
+	}
+
+	*stageKey = {};
+	stageKey->program = { mode, features };
+	stageKey->rgbGen = GLX_MATERIAL_RGBGEN_IDENTITY;
+	stageKey->alphaGen = GLX_MATERIAL_ALPHAGEN_SKIP;
+	stageKey->tcGen0 = GLX_MATERIAL_TCGEN_TEXTURE;
+	stageKey->tcGen1 = GLX_MATERIAL_TCGEN_BAD;
+	stageKey->fogPass = mode == MaterialProgramMode::Fog ? qtrue : qfalse;
+
+	if ( mode == MaterialProgramMode::Fog ) {
+		stageKey->rgbGen = GLX_MATERIAL_RGBGEN_FOG;
+		stageKey->alphaGen = GLX_MATERIAL_ALPHAGEN_IDENTITY;
+		stageKey->tcGen0 = GLX_MATERIAL_TCGEN_FOG;
+		return qtrue;
+	}
+
+	if ( mode != MaterialProgramMode::SingleTexture ) {
+		stageKey->flags |= GLX_STAGE_MULTITEXTURE | GLX_STAGE_ST0 | GLX_STAGE_ST1;
+		stageKey->tcGen1 = GLX_MATERIAL_TCGEN_LIGHTMAP;
+	}
+
+	if ( features & GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT ) {
+		stageKey->flags |= GLX_STAGE_DEPTH_FRAGMENT;
+	}
+	if ( features & GLX_MATERIAL_FEATURE_ENVIRONMENT ) {
+		stageKey->flags |= GLX_STAGE_ENVIRONMENT;
+		stageKey->tcGen0 = GLX_MATERIAL_TCGEN_ENVIRONMENT_MAPPED;
+	}
+	if ( features & GLX_MATERIAL_FEATURE_TEXMOD ) {
+		stageKey->flags |= GLX_STAGE_TEXMOD;
+		stageKey->texMods0 = 1;
+		stageKey->texModTypes0 = GLX_MATERIAL_TMOD_SCROLL_BIT;
+		stageKey->texModSequence0 = GLX_Material_TexModSequenceSetSlot( 0, 0,
+			GLX_MATERIAL_TMOD_OPCODE_SCROLL );
+	}
+
+	return GLX_Material_StageKeySupported( *stageKey );
+}
+
+static qboolean GLX_Material_PrecacheStageKey( MaterialState *state,
+	const MaterialStageKey &stageKey )
+{
+	MaterialProgram *program;
+
+	if ( !state || !GLX_Material_StageKeySupported( stageKey ) ) {
+		if ( state ) {
+			GLX_Material_SetLastError( state, "unsupported precache material stage language" );
+		}
+		return qfalse;
+	}
+
+	program = GLX_Material_FindProgram( state, stageKey );
+	if ( !program ) {
+		program = GLX_Material_CreateProgram( state, stageKey );
+	}
+	return program && program->valid ? qtrue : qfalse;
+}
+
+static void GLX_Material_ApplyFlagsForStateBits( MaterialStageKey *stageKey )
+{
+	if ( !stageKey ) {
+		return;
+	}
+
+	if ( stageKey->stateBits & GLX_MATERIAL_STATE_BLEND_BITS ) {
+		stageKey->flags |= GLX_STAGE_BLEND;
+	}
+	if ( stageKey->stateBits & GLX_MATERIAL_STATE_ATEST_BITS ) {
+		stageKey->flags |= GLX_STAGE_ALPHA_TEST;
+	}
+	if ( stageKey->stateBits & GLX_MATERIAL_STATE_DEPTHMASK_TRUE ) {
+		stageKey->flags |= GLX_STAGE_DEPTH_WRITE;
+	}
+}
+
+static qboolean GLX_Material_PrecacheLanguageCoverage( MaterialState *state )
+{
+	qboolean ok = qtrue;
+	const int rgbGens[] = {
+		GLX_MATERIAL_RGBGEN_BAD,
+		GLX_MATERIAL_RGBGEN_IDENTITY_LIGHTING,
+		GLX_MATERIAL_RGBGEN_IDENTITY,
+		GLX_MATERIAL_RGBGEN_ENTITY,
+		GLX_MATERIAL_RGBGEN_ONE_MINUS_ENTITY,
+		GLX_MATERIAL_RGBGEN_EXACT_VERTEX,
+		GLX_MATERIAL_RGBGEN_VERTEX,
+		GLX_MATERIAL_RGBGEN_ONE_MINUS_VERTEX,
+		GLX_MATERIAL_RGBGEN_WAVEFORM,
+		GLX_MATERIAL_RGBGEN_LIGHTING_DIFFUSE,
+		GLX_MATERIAL_RGBGEN_FOG,
+		GLX_MATERIAL_RGBGEN_CONST
+	};
+	const int alphaGens[] = {
+		GLX_MATERIAL_ALPHAGEN_IDENTITY,
+		GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_ALPHAGEN_ENTITY,
+		GLX_MATERIAL_ALPHAGEN_ONE_MINUS_ENTITY,
+		GLX_MATERIAL_ALPHAGEN_VERTEX,
+		GLX_MATERIAL_ALPHAGEN_ONE_MINUS_VERTEX,
+		GLX_MATERIAL_ALPHAGEN_LIGHTING_SPECULAR,
+		GLX_MATERIAL_ALPHAGEN_WAVEFORM,
+		GLX_MATERIAL_ALPHAGEN_PORTAL,
+		GLX_MATERIAL_ALPHAGEN_CONST
+	};
+	const int tcGens[] = {
+		GLX_MATERIAL_TCGEN_BAD,
+		GLX_MATERIAL_TCGEN_IDENTITY,
+		GLX_MATERIAL_TCGEN_LIGHTMAP,
+		GLX_MATERIAL_TCGEN_TEXTURE,
+		GLX_MATERIAL_TCGEN_ENVIRONMENT_MAPPED,
+		GLX_MATERIAL_TCGEN_ENVIRONMENT_MAPPED_FP,
+		GLX_MATERIAL_TCGEN_FOG,
+		GLX_MATERIAL_TCGEN_VECTOR
+	};
+	const unsigned int texModTypes[] = {
+		GLX_MATERIAL_TMOD_NONE_BIT,
+		GLX_MATERIAL_TMOD_TRANSFORM_BIT,
+		GLX_MATERIAL_TMOD_TURBULENT_BIT,
+		GLX_MATERIAL_TMOD_SCROLL_BIT,
+		GLX_MATERIAL_TMOD_SCALE_BIT,
+		GLX_MATERIAL_TMOD_STRETCH_BIT,
+		GLX_MATERIAL_TMOD_ROTATE_BIT,
+		GLX_MATERIAL_TMOD_ENTITY_TRANSLATE_BIT,
+		GLX_MATERIAL_TMOD_OFFSET_BIT,
+		GLX_MATERIAL_TMOD_SCALE_OFFSET_BIT,
+		GLX_MATERIAL_TMOD_OFFSET_SCALE_BIT
+	};
+	const int sceneFlags[] = {
+		GLX_STAGE_BLEND,
+		GLX_STAGE_ALPHA_TEST,
+		GLX_STAGE_DEPTH_WRITE,
+		GLX_STAGE_LIGHTMAP,
+		GLX_STAGE_ANIMATED_IMAGE,
+		GLX_STAGE_VIDEO_MAP,
+		GLX_STAGE_SCREEN_MAP,
+		GLX_STAGE_DLIGHT_MAP,
+		GLX_STAGE_SHADOW_PASS,
+		GLX_STAGE_BEAM_PASS,
+		GLX_STAGE_POSTPROCESS_PASS
+	};
+	const unsigned int stateBits[] = {
+		GLX_MATERIAL_STATE_SRCBLEND_ZERO | GLX_MATERIAL_STATE_DSTBLEND_ONE,
+		GLX_MATERIAL_STATE_SRCBLEND_ONE | GLX_MATERIAL_STATE_DSTBLEND_ZERO,
+		GLX_MATERIAL_STATE_SRCBLEND_DST_COLOR | GLX_MATERIAL_STATE_DSTBLEND_SRC_COLOR,
+		GLX_MATERIAL_STATE_SRCBLEND_ONE_MINUS_DST_COLOR |
+			GLX_MATERIAL_STATE_DSTBLEND_ONE_MINUS_SRC_COLOR,
+		GLX_MATERIAL_STATE_SRCBLEND_SRC_ALPHA | GLX_MATERIAL_STATE_DSTBLEND_SRC_ALPHA,
+		GLX_MATERIAL_STATE_SRCBLEND_ONE_MINUS_SRC_ALPHA |
+			GLX_MATERIAL_STATE_DSTBLEND_ONE_MINUS_SRC_ALPHA,
+		GLX_MATERIAL_STATE_SRCBLEND_DST_ALPHA | GLX_MATERIAL_STATE_DSTBLEND_DST_ALPHA,
+		GLX_MATERIAL_STATE_SRCBLEND_ONE_MINUS_DST_ALPHA |
+			GLX_MATERIAL_STATE_DSTBLEND_ONE_MINUS_DST_ALPHA,
+		GLX_MATERIAL_STATE_SRCBLEND_ALPHA_SATURATE | GLX_MATERIAL_STATE_DSTBLEND_ONE,
+		GLX_MATERIAL_STATE_ATEST_GT_0,
+		GLX_MATERIAL_STATE_ATEST_LT_80,
+		GLX_MATERIAL_STATE_ATEST_GE_80,
+		GLX_MATERIAL_STATE_DEPTHMASK_TRUE,
+		GLX_MATERIAL_STATE_POLYMODE_LINE,
+		GLX_MATERIAL_STATE_DEPTHTEST_DISABLE,
+		GLX_MATERIAL_STATE_DEPTHFUNC_EQUAL
+	};
+
+	for ( int rgbGen : rgbGens ) {
+		MaterialStageKey stageKey {};
+
+		if ( !GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode::SingleTexture,
+			GLX_MATERIAL_FEATURE_NONE, &stageKey ) ) {
+			ok = qfalse;
+			continue;
+		}
+		stageKey.rgbGen = rgbGen;
+		if ( !GLX_Material_PrecacheStageKey( state, stageKey ) ) {
+			ok = qfalse;
+		}
+	}
+
+	for ( int alphaGen : alphaGens ) {
+		MaterialStageKey stageKey {};
+
+		if ( !GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode::SingleTexture,
+			GLX_MATERIAL_FEATURE_NONE, &stageKey ) ) {
+			ok = qfalse;
+			continue;
+		}
+		stageKey.alphaGen = alphaGen;
+		if ( !GLX_Material_PrecacheStageKey( state, stageKey ) ) {
+			ok = qfalse;
+		}
+	}
+
+	for ( int tcGen : tcGens ) {
+		MaterialStageKey stageKey {};
+
+		if ( !GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode::SingleTexture,
+			GLX_MATERIAL_FEATURE_NONE, &stageKey ) ) {
+			ok = qfalse;
+			continue;
+		}
+		stageKey.tcGen0 = tcGen;
+		if ( !GLX_Material_PrecacheStageKey( state, stageKey ) ) {
+			ok = qfalse;
+		}
+	}
+
+	for ( unsigned int texModType : texModTypes ) {
+		MaterialStageKey stageKey {};
+
+		if ( !GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode::SingleTexture,
+			GLX_MATERIAL_FEATURE_TEXMOD, &stageKey ) ) {
+			ok = qfalse;
+			continue;
+		}
+		stageKey.texModTypes0 = texModType;
+		stageKey.texModSequence0 = GLX_Material_DefaultTexModSequence( stageKey.texMods0,
+			stageKey.texModTypes0 );
+		if ( !GLX_Material_PrecacheStageKey( state, stageKey ) ) {
+			ok = qfalse;
+		}
+	}
+
+	for ( unsigned int texModType : texModTypes ) {
+		MaterialStageKey stageKey {};
+
+		if ( !GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode::MultiModulate,
+			GLX_MATERIAL_FEATURE_TEXMOD, &stageKey ) ) {
+			ok = qfalse;
+			continue;
+		}
+		stageKey.texMods0 = 0;
+		stageKey.texModTypes0 = 0;
+		stageKey.texModSequence0 = 0;
+		stageKey.texMods1 = 1;
+		stageKey.texModTypes1 = texModType;
+		stageKey.texModSequence1 = GLX_Material_DefaultTexModSequence( stageKey.texMods1,
+			stageKey.texModTypes1 );
+		if ( !GLX_Material_PrecacheStageKey( state, stageKey ) ) {
+			ok = qfalse;
+		}
+	}
+
+	{
+		MaterialStageKey scrollScale {};
+		MaterialStageKey scaleScroll {};
+		const unsigned int mask = GLX_MATERIAL_TMOD_SCROLL_BIT | GLX_MATERIAL_TMOD_SCALE_BIT;
+
+		if ( !GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode::SingleTexture,
+			GLX_MATERIAL_FEATURE_TEXMOD, &scrollScale ) ||
+			!GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode::SingleTexture,
+			GLX_MATERIAL_FEATURE_TEXMOD, &scaleScroll ) ) {
+			ok = qfalse;
+		} else {
+			scrollScale.texMods0 = 2;
+			scrollScale.texModTypes0 = mask;
+			scrollScale.texModSequence0 = GLX_Material_TexModSequenceSetSlot( 0, 0,
+				GLX_MATERIAL_TMOD_OPCODE_SCROLL );
+			scrollScale.texModSequence0 = GLX_Material_TexModSequenceSetSlot(
+				scrollScale.texModSequence0, 1, GLX_MATERIAL_TMOD_OPCODE_SCALE );
+
+			scaleScroll.texMods0 = 2;
+			scaleScroll.texModTypes0 = mask;
+			scaleScroll.texModSequence0 = GLX_Material_TexModSequenceSetSlot( 0, 0,
+				GLX_MATERIAL_TMOD_OPCODE_SCALE );
+			scaleScroll.texModSequence0 = GLX_Material_TexModSequenceSetSlot(
+				scaleScroll.texModSequence0, 1, GLX_MATERIAL_TMOD_OPCODE_SCROLL );
+
+			if ( !GLX_Material_PrecacheStageKey( state, scrollScale ) ||
+				!GLX_Material_PrecacheStageKey( state, scaleScroll ) ) {
+				ok = qfalse;
+			}
+		}
+	}
+
+	for ( int flag : sceneFlags ) {
+		MaterialStageKey stageKey {};
+
+		if ( !GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode::SingleTexture,
+			GLX_MATERIAL_FEATURE_NONE, &stageKey ) ) {
+			ok = qfalse;
+			continue;
+		}
+		stageKey.flags |= flag;
+		if ( flag == GLX_STAGE_LIGHTMAP ) {
+			stageKey.tcGen0 = GLX_MATERIAL_TCGEN_LIGHTMAP;
+		}
+		if ( !GLX_Material_PrecacheStageKey( state, stageKey ) ) {
+			ok = qfalse;
+		}
+	}
+
+	for ( unsigned int stateBitsValue : stateBits ) {
+		MaterialStageKey stageKey {};
+
+		if ( !GLX_Material_DefaultStageKeyForProgram( MaterialProgramMode::SingleTexture,
+			GLX_MATERIAL_FEATURE_NONE, &stageKey ) ) {
+			ok = qfalse;
+			continue;
+		}
+		stageKey.stateBits = stateBitsValue;
+		GLX_Material_ApplyFlagsForStateBits( &stageKey );
+		if ( !GLX_Material_PrecacheStageKey( state, stageKey ) ) {
+			ok = qfalse;
+		}
+	}
+
+	return ok;
+}
+
 static qboolean GLX_Material_PrecachePrograms( MaterialState *state )
 {
 	qboolean ok = qtrue;
@@ -556,25 +1482,23 @@ static qboolean GLX_Material_PrecachePrograms( MaterialState *state )
 		const unsigned int *features = kMaterialPrecacheFeatures;
 		size_t featureCount = sizeof( kMaterialPrecacheFeatures ) / sizeof( kMaterialPrecacheFeatures[0] );
 
-		if ( mode == MaterialProgramMode::SingleTexture ) {
-			features = kMaterialPrecacheSingleTextureFeatures;
-			featureCount = sizeof( kMaterialPrecacheSingleTextureFeatures ) /
-				sizeof( kMaterialPrecacheSingleTextureFeatures[0] );
-		} else if ( mode == MaterialProgramMode::Fog ) {
+		if ( mode == MaterialProgramMode::Fog ) {
 			featureCount = 1u;
 		}
 
 		for ( size_t featureIndex = 0; featureIndex < featureCount; featureIndex++ ) {
-			MaterialProgramKey key { mode, features[featureIndex] };
-			MaterialProgram *program = GLX_Material_FindProgram( state, key );
+			MaterialStageKey stageKey {};
 
-			if ( !program ) {
-				program = GLX_Material_CreateProgram( state, key );
-			}
-			if ( !program || !program->valid ) {
+			if ( !GLX_Material_DefaultStageKeyForProgram( mode, features[featureIndex],
+				&stageKey ) ||
+				!GLX_Material_PrecacheStageKey( state, stageKey ) ) {
 				ok = qfalse;
 			}
 		}
+	}
+
+	if ( !GLX_Material_PrecacheLanguageCoverage( state ) ) {
+		ok = qfalse;
 	}
 
 	if ( !ok ) {
@@ -600,7 +1524,7 @@ void GLX_Material_RegisterCvars( MaterialState *state )
 
 	state->r_glxMaterialPrecache = RI().Cvar_Get( "r_glxMaterialPrecache", "1", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxMaterialPrecache,
-		"Compile all GLx GLSL material programs during OpenGL startup so the material path fails closed." );
+		"Compile the built-in GLx GLSL material stage-language coverage during OpenGL startup." );
 }
 
 void GLX_Material_OnOpenGLReady( MaterialState *state, const Capabilities &caps )
@@ -616,6 +1540,7 @@ void GLX_Material_OnOpenGLReady( MaterialState *state, const Capabilities &caps 
 	GLX_Material_ResetCounters( state );
 	GLX_Material_SetReason( state, "not initialized" );
 	state->lastKey = { MaterialProgramMode::SingleTexture, GLX_MATERIAL_FEATURE_NONE };
+	state->lastStageKey = {};
 
 	GetString = reinterpret_cast<PFNGLXGETSTRINGPROC>( GLX_Material_GetProc( "glGetString" ) );
 	version = GetString ? GetString( GL_SHADING_LANGUAGE_VERSION ) : nullptr;
@@ -667,7 +1592,7 @@ qboolean GLX_Material_Active( const MaterialState &state )
 
 qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &request )
 {
-	MaterialProgramKey key;
+	MaterialStageKey stageKey;
 	MaterialProgram *program;
 
 	if ( !state ) {
@@ -676,6 +1601,7 @@ qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &re
 
 	state->bindAttempts++;
 	state->lastRequest = request;
+	state->lastStageKey = {};
 
 	if ( !state->r_glxMaterialRenderer || !state->r_glxMaterialRenderer->integer ) {
 		state->disabledSkips++;
@@ -685,16 +1611,17 @@ qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &re
 		state->notReadySkips++;
 		return qfalse;
 	}
-	if ( !GLX_Material_KeyForRequest( request, &key ) ) {
+	if ( !GLX_Material_StageKeyForRequest( request, &stageKey ) ) {
 		state->unsupportedRequests++;
-		GLX_Material_SetLastError( state, "unsupported material request" );
+		GLX_Material_SetLastError( state, "unsupported material stage language" );
 		return qfalse;
 	}
 
-	state->lastKey = key;
-	program = GLX_Material_FindProgram( state, key );
+	state->lastKey = stageKey.program;
+	state->lastStageKey = stageKey;
+	program = GLX_Material_FindProgram( state, stageKey );
 	if ( !program ) {
-		program = GLX_Material_CreateProgram( state, key );
+		program = GLX_Material_CreateProgram( state, stageKey );
 	}
 	if ( !program || !program->valid ) {
 		state->bindFailures++;
@@ -720,6 +1647,10 @@ qboolean GLX_Material_BindFog( MaterialState *state )
 {
 	MaterialRequest request {};
 
+	request.rgbGen = GLX_MATERIAL_RGBGEN_FOG;
+	request.alphaGen = GLX_MATERIAL_ALPHAGEN_IDENTITY;
+	request.tcGen0 = GLX_MATERIAL_TCGEN_FOG;
+	request.tcGen1 = GLX_MATERIAL_TCGEN_BAD;
 	request.fogPass = qtrue;
 	return GLX_Material_BindStage( state, request );
 }
@@ -779,18 +1710,22 @@ void GLX_Material_PrintInfo( const MaterialState &state )
 		state.lastRequest.rgbGen, state.lastRequest.alphaGen, state.lastRequest.tcGen0,
 		state.lastRequest.tcGen1, state.lastRequest.texMods0, state.lastRequest.texMods1,
 		state.lastRequest.materialCombine, BoolName( state.lastRequest.fogPass ) );
+	RI().Printf( PRINT_ALL, "  material last language: flags 0x%x, state 0x%x, tmasks 0x%x/0x%x, tseq 0x%x/0x%x\n",
+		state.lastStageKey.flags, state.lastStageKey.stateBits,
+		state.lastStageKey.texModTypes0, state.lastStageKey.texModTypes1,
+		state.lastStageKey.texModSequence0, state.lastStageKey.texModSequence1 );
 	if ( state.lastError[0] ) {
 		RI().Printf( PRINT_ALL, "  material last error: %s\n", state.lastError );
 	}
 
 	for ( int i = 0; i < state.programCount; i++ ) {
 		const MaterialProgram &program = state.programs[i];
-		char keyName[64];
+		char keyName[128];
 
 		if ( !program.valid ) {
 			continue;
 		}
-		GLX_Material_KeyName( program.key, keyName, sizeof( keyName ) );
+		GLX_Material_StageKeyName( program.stageKey, keyName, sizeof( keyName ) );
 		RI().Printf( PRINT_ALL, "    program %u: %s, binds %u\n",
 			program.program, keyName, program.binds );
 	}

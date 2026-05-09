@@ -44,6 +44,67 @@ def parse_runtime_glx_profiles() -> dict[str, dict[str, str]]:
     return profiles
 
 
+class GlxRuntimeSweepExecutableTests(unittest.TestCase):
+    def test_default_executable_candidates_do_not_include_opengl_wrappers(self) -> None:
+        names = glx_runtime_sweep.candidate_exe_names()
+
+        self.assertTrue(any(name.startswith("fnquake3.glx") for name in names))
+        self.assertTrue(any(not name.startswith("fnquake3.glx") for name in names))
+        self.assertFalse(any("opengl" in name for name in names))
+
+    def test_default_executable_resolution_does_not_pick_opengl_wrapper(self) -> None:
+        old_output = glx_runtime_sweep.DEFAULT_OUTPUT
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            names = glx_runtime_sweep.candidate_exe_names()
+            neutral_name = next(name for name in names if not name.startswith("fnquake3.glx"))
+            opengl_name = (
+                "fnquake3.opengl.x64.exe"
+                if glx_runtime_sweep.os.name == "nt"
+                else "fnquake3.opengl"
+            )
+
+            glx_runtime_sweep.DEFAULT_OUTPUT = root
+            try:
+                (root / opengl_name).touch()
+                with self.assertRaises(FileNotFoundError):
+                    glx_runtime_sweep.resolve_exe(None)
+
+                (root / neutral_name).touch()
+                self.assertEqual(
+                    glx_runtime_sweep.resolve_exe(None),
+                    (root / neutral_name).resolve(),
+                )
+            finally:
+                glx_runtime_sweep.DEFAULT_OUTPUT = old_output
+
+
+class GlxRendererSourceCoverageTests(unittest.TestCase):
+    def test_requested_glx_renderer_load_failure_is_fatal(self) -> None:
+        client_source = (ROOT / "code" / "client" / "cl_main.c").read_text(encoding="utf-8")
+        start = client_source.index("static void CL_InitRef")
+        failure_start = client_source.index("if ( !rendererLib )", start)
+        failure_end = client_source.index("rendererLib = Sys_LoadLibrary( ospath );", failure_start)
+        load_failure_body = client_source[failure_start:failure_end]
+
+        self.assertIn("CL_RendererLoadFailureIsFatal", client_source)
+        self.assertIn('!Q_stricmp( rendererName, "glx" )', client_source)
+        self.assertIn("requestedRenderer = cl_renderer->string", client_source)
+        self.assertIn("CL_RendererLoadFailureIsFatal( requestedRenderer )", load_failure_body)
+        self.assertIn("Com_Error( ERR_FATAL", load_failure_body)
+        self.assertNotIn("OpenGL " + "fallback", load_failure_body)
+
+    def test_depth_fragment_does_not_block_multitexture_collapse(self) -> None:
+        shader_source = (ROOT / "code" / "renderer" / "tr_shader.c").read_text(encoding="utf-8")
+        start = shader_source.index("static qboolean CollapseMultitexture")
+        end = shader_source.index("#ifdef USE_PMLIGHT", start)
+        collapse_body = shader_source[start:end]
+
+        self.assertNotIn("st0->depthFragment", collapse_body)
+        self.assertNotRegex(collapse_body, r"depthFragment[\s\S]{0,120}return\s+qfalse")
+
+
 class GlxRuntimeSweepImageTests(unittest.TestCase):
     def test_png_round_trip_and_exact_compare(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

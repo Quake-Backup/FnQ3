@@ -3575,6 +3575,17 @@ static void CL_SetScaling( float factor, int captureWidth, int captureHeight ) {
 	cls.captureHeight = captureHeight;
 }
 
+#ifdef USE_RENDERER_DLOPEN
+static qboolean CL_RendererLoadFailureIsFatal( const char *rendererName )
+{
+	if ( rendererName && !Q_stricmp( rendererName, "glx" ) ) {
+		return qtrue;
+	}
+
+	return qfalse;
+}
+#endif
+
 
 /*
 ============
@@ -3587,6 +3598,7 @@ static void CL_InitRef( void ) {
 #ifdef USE_RENDERER_DLOPEN
 	GetRefAPI_t		GetRefAPI;
 	char			dllName[ MAX_OSPATH ], *ospath;
+	const char		*requestedRenderer;
 #endif
 
 	CL_InitGLimp_Cvars();
@@ -3601,11 +3613,17 @@ static void CL_InitRef( void ) {
 #define REND_ARCH_STRING ARCH_STRING
 #endif
 
-	Com_sprintf( dllName, sizeof( dllName ), RENDERER_PREFIX "_%s_" REND_ARCH_STRING DLL_EXT, cl_renderer->string );
+	requestedRenderer = cl_renderer->string;
+	Com_sprintf( dllName, sizeof( dllName ), RENDERER_PREFIX "_%s_" REND_ARCH_STRING DLL_EXT, requestedRenderer );
 	ospath = FS_BuildOSPath( Sys_DefaultBasePath(), dllName, NULL );
 	rendererLib = Sys_LoadLibrary( ospath );
 	if ( !rendererLib )
 	{
+		if ( CL_RendererLoadFailureIsFatal( requestedRenderer ) ) {
+			Com_Error( ERR_FATAL, "Failed to load requested GLx renderer %s; GLx load is fail-closed", dllName );
+		}
+
+		Com_Printf( S_COLOR_YELLOW "WARNING: failed to load renderer %s; trying default renderer\n", dllName );
 		Cvar_ForceReset( "cl_renderer" );
 		Com_sprintf( dllName, sizeof( dllName ), RENDERER_PREFIX "_%s_" REND_ARCH_STRING DLL_EXT, cl_renderer->string );
 		ospath = FS_BuildOSPath( Sys_DefaultBasePath(), dllName, NULL );

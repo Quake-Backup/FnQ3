@@ -296,7 +296,10 @@ public:
 		int tcGen0, int tcGen1, int texMods0, int texMods1, int numVertexes, int numIndexes );
 	qboolean MaterialRendererActive() const;
 	qboolean BindMaterialStage( int flags, unsigned int stateBits, int rgbGen, int alphaGen,
-		int tcGen0, int tcGen1, int texMods0, int texMods1, int materialCombine, qboolean fogPass );
+		int tcGen0, int tcGen1, int texMods0, int texMods1,
+		unsigned int texModTypes0, unsigned int texModTypes1,
+		unsigned int texModSequence0, unsigned int texModSequence1,
+		int materialCombine, qboolean fogPass );
 	qboolean BindFogMaterial();
 	void UnbindMaterial();
 	qboolean StreamDrawEnabled() const;
@@ -1108,7 +1111,10 @@ qboolean RendererModule::MaterialRendererActive() const
 }
 
 qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, int rgbGen, int alphaGen,
-	int tcGen0, int tcGen1, int texMods0, int texMods1, int materialCombine, qboolean fogPass )
+	int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	int materialCombine, qboolean fogPass )
 {
 	MaterialRequest request {};
 
@@ -1120,6 +1126,10 @@ qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, i
 	request.tcGen1 = tcGen1;
 	request.texMods0 = texMods0;
 	request.texMods1 = texMods1;
+	request.texModTypes0 = texModTypes0;
+	request.texModTypes1 = texModTypes1;
+	request.texModSequence0 = texModSequence0;
+	request.texModSequence1 = texModSequence1;
 	request.materialCombine = materialCombine;
 	request.fogPass = fogPass;
 
@@ -1548,10 +1558,14 @@ extern "C" qboolean GLX_Renderer_MaterialRendererActive( void )
 
 extern "C" qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stateBits,
 	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
 	int materialCombine, qboolean fogPass )
 {
 	return glx::g_module.BindMaterialStage( flags, stateBits, rgbGen, alphaGen,
-		tcGen0, tcGen1, texMods0, texMods1, materialCombine, fogPass );
+		tcGen0, tcGen1, texMods0, texMods1, texModTypes0, texModTypes1,
+		texModSequence0, texModSequence1,
+		materialCombine, fogPass );
 }
 
 extern "C" qboolean GLX_Renderer_BindFogMaterial( void )

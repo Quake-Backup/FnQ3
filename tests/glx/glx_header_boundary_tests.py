@@ -12,6 +12,7 @@ PURE_HEADERS = (
     "code/rendererglx/glx_types.h",
     "code/rendererglx/glx_caps_logic.h",
     "code/rendererglx/glx_material_key.h",
+    "code/rendererglx/glx_render_ir.h",
     "code/rendererglx/glx_stream_logic.h",
     "code/rendererglx/glx_static_world_logic.h",
 )
@@ -25,6 +26,9 @@ MODULE_BRIDGE_HEADERS = (
 RENDERER_FACADE_HEADERS = (
     "code/renderer/tr_glx_compat.h",
 )
+
+DRAW_OWNERSHIP_SOURCE_GLOB = "code/renderer/*.c"
+DRAW_CALL_RE = re.compile(r"\bqglDraw(?:Elements|Arrays)\s*\(")
 
 PURE_BANNED_INCLUDE_FRAGMENTS = (
     "../renderer/",
@@ -130,6 +134,47 @@ def scan_includes_only(path: Path, banned_include_fragments: tuple[str, ...]) ->
     return failures
 
 
+def scan_glx_draw_ownership(path: Path) -> list[str]:
+    failures: list[str] = []
+    renderer_glx_stack: list[bool | None] = []
+    text = path.read_text(encoding="utf-8")
+
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if re.match(r"#\s*ifdef\s+RENDERER_GLX\b", stripped):
+            renderer_glx_stack.append(True)
+            continue
+        if re.match(r"#\s*ifndef\s+RENDERER_GLX\b", stripped):
+            renderer_glx_stack.append(False)
+            continue
+        if stripped.startswith("#if"):
+            renderer_glx_stack.append(None)
+            continue
+        if stripped.startswith("#else") and renderer_glx_stack:
+            if renderer_glx_stack[-1] is True:
+                renderer_glx_stack[-1] = False
+            elif renderer_glx_stack[-1] is False:
+                renderer_glx_stack[-1] = True
+            continue
+        if stripped.startswith("#endif") and renderer_glx_stack:
+            renderer_glx_stack.pop()
+            continue
+
+        if not DRAW_CALL_RE.search(line):
+            continue
+
+        renderer_glx_state = next(
+            (state for state in reversed(renderer_glx_stack) if state is not None),
+            None,
+        )
+        if renderer_glx_state is not False:
+            failures.append(
+                f"{path}:{line_no}: direct qgl draw is reachable in RENDERER_GLX: {stripped}"
+            )
+
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -154,8 +199,13 @@ def main() -> int:
             continue
         failures.extend(scan_includes_only(path, FACADE_BANNED_INCLUDE_FRAGMENTS))
 
+    draw_source_count = 0
+    for path in sorted(ROOT.glob(DRAW_OWNERSHIP_SOURCE_GLOB)):
+        draw_source_count += 1
+        failures.extend(scan_glx_draw_ownership(path))
+
     if failures:
-        print("Pure GLx header boundary violations:", file=sys.stderr)
+        print("GLx boundary violations:", file=sys.stderr)
         for failure in failures:
             print(f"  {failure}", file=sys.stderr)
         return 1
@@ -163,7 +213,8 @@ def main() -> int:
     print(
         f"Checked {len(PURE_HEADERS)} pure GLx headers and "
         f"{len(MODULE_BRIDGE_HEADERS)} module bridge headers; "
-        f"{len(RENDERER_FACADE_HEADERS)} renderer facade header no longer includes rendererglx."
+        f"{len(RENDERER_FACADE_HEADERS)} renderer facade header no longer includes rendererglx; "
+        f"{draw_source_count} renderer sources keep raw qgl draws out of RENDERER_GLX."
     )
     return 0
 

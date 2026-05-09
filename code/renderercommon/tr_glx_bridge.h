@@ -106,6 +106,37 @@ static ID_INLINE void GLX_CompatPrintFrameCounters( void )
 #endif
 }
 
+static ID_INLINE qboolean GLX_CompatDrawElements( unsigned int mode, int count,
+	unsigned int type, const void *indices, int legacyReason, int profilerPath )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_DrawElements( mode, count, type, indices, legacyReason, profilerPath );
+#else
+	(void)mode;
+	(void)count;
+	(void)type;
+	(void)indices;
+	(void)legacyReason;
+	(void)profilerPath;
+	return qfalse;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatDrawArrays( unsigned int mode, int first, int count,
+	int legacyReason, int profilerPath )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_DrawArrays( mode, first, count, legacyReason, profilerPath );
+#else
+	(void)mode;
+	(void)first;
+	(void)count;
+	(void)legacyReason;
+	(void)profilerPath;
+	return qfalse;
+#endif
+}
+
 static ID_INLINE void GLX_CompatRecordDraw( int indexes, int path )
 {
 #ifdef RENDERER_GLX
@@ -342,14 +373,14 @@ static ID_INLINE void GLX_CompatRecordFboInit( qboolean requested, qboolean read
 	qboolean programReady, qboolean framebufferFnsReady, int vidWidth, int vidHeight,
 	int captureWidth, int captureHeight, int windowWidth, int windowHeight,
 	int internalFormat, int textureFormat, int textureType, qboolean multiSampled,
-	qboolean superSampled, qboolean windowAdjusted, int blitFilter, int hdrMode,
+	qboolean fboSuperSampled, qboolean fboWindowAdjusted, int blitFilter, int hdrMode,
 	int renderScaleMode, int bloomMode )
 {
 #ifdef RENDERER_GLX
 	GLX_Renderer_RecordFboInit( requested, ready, programReady, framebufferFnsReady,
 		vidWidth, vidHeight, captureWidth, captureHeight, windowWidth, windowHeight,
-		internalFormat, textureFormat, textureType, multiSampled, superSampled,
-		windowAdjusted, blitFilter, hdrMode, renderScaleMode, bloomMode );
+		internalFormat, textureFormat, textureType, multiSampled, fboSuperSampled,
+		fboWindowAdjusted, blitFilter, hdrMode, renderScaleMode, bloomMode );
 #else
 	(void)requested;
 	(void)ready;
@@ -365,8 +396,8 @@ static ID_INLINE void GLX_CompatRecordFboInit( qboolean requested, qboolean read
 	(void)textureFormat;
 	(void)textureType;
 	(void)multiSampled;
-	(void)superSampled;
-	(void)windowAdjusted;
+	(void)fboSuperSampled;
+	(void)fboWindowAdjusted;
 	(void)blitFilter;
 	(void)hdrMode;
 	(void)renderScaleMode;
@@ -383,18 +414,18 @@ static ID_INLINE void GLX_CompatRecordFboShutdown( void )
 
 static ID_INLINE void GLX_CompatRecordPostProcessFrame( qboolean minimized,
 	qboolean bloomAvailable, qboolean programReady, int screenshotMask,
-	qboolean windowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
+	qboolean postWindowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
 	float greyscale )
 {
 #ifdef RENDERER_GLX
 	GLX_Renderer_RecordPostProcessFrame( minimized, bloomAvailable, programReady,
-		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
+		screenshotMask, postWindowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
 #else
 	(void)minimized;
 	(void)bloomAvailable;
 	(void)programReady;
 	(void)screenshotMask;
-	(void)windowAdjusted;
+	(void)postWindowAdjusted;
 	(void)fboReadIndex;
 	(void)hdrMode;
 	(void)renderScaleMode;

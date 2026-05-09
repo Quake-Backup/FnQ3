@@ -19,6 +19,13 @@ DEFAULT_OUTPUT = ROOT / "code" / "win32" / "msvc2017" / "output"
 DEFAULT_SWEEP_ROOT = ROOT / ".tmp" / "runtime-sweeps"
 RENDERER_NAME_RE = re.compile(r"^[A-Za-z1-9]+$")
 DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO = 0.20
+GLX_EXPECTED_PASS_SCHEDULE = (
+    "frame-setup>sky-opaque-world>opaque-entities>dynamic-scene>transparent-layers>"
+    "first-person-weapon>hud-2d>postprocess>output-export"
+)
+GLX_EXPECTED_PASS_SCHEDULE_COUNT = 9
+GLX_EXPECTED_PASS_SCHEDULE_HASH = "0c6d7632"
+GLX_PRODUCT_TIERS = {"GL12", "GL2X", "GL3X", "GL41", "GL46"}
 PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "batches",
     "draws",
@@ -45,6 +52,32 @@ PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "staticDrawFallbacks",
     "staticMdiAttempts",
     "staticMdiErrors",
+    "gl3xDraws",
+    "gl3xSyncUploads",
+    "gl3xStaticBuffers",
+    "gl3xDynamicBuffers",
+    "gl3xMaterials",
+    "gl3xFboPost",
+    "gl3xUnsupportedPersistentUploads",
+    "gl41Draws",
+    "gl41SyncUploads",
+    "gl41StaticBuffers",
+    "gl41DynamicBuffers",
+    "gl41Materials",
+    "gl41Post",
+    "gl41UnsupportedPersistentUploads",
+    "gl46Draws",
+    "gl46PersistentUploads",
+    "gl46SyncUploads",
+    "gl46DsaProducts",
+    "gl46MdiProducts",
+    "gl46AggressiveStatic",
+    "gl46Materials",
+    "gl46Post",
+    "gl46GpuCounters",
+    "gl46StaticMdiCalls",
+    "gl46StaticMdiAttempts",
+    "gl46StaticMdiIndexes",
 )
 DEFAULT_PERFORMANCE_BUDGET = {
     "max": {
@@ -59,6 +92,8 @@ DEFAULT_PERFORMANCE_BUDGET = {
         "streamDrawVideoMaps": 0,
         "staticDrawFallbacks": 0,
         "staticMdiErrors": 0,
+        "gl3xUnsupportedPersistentUploads": 0,
+        "gl41UnsupportedPersistentUploads": 0,
     },
 }
 TIMEDEMO_FPS_RE = re.compile(
@@ -83,6 +118,141 @@ MATERIAL_FALLBACKS_RE = re.compile(
     r"material fallbacks:\s*unsupported\s+(?P<unsupported>\d+),\s*"
     r"disabled\s+(?P<disabled>\d+),\s*not-ready\s+(?P<notReady>\d+),\s*"
     r"full\s+(?P<full>\d+),\s*discarded without GL delete\s+(?P<discarded>\d+)",
+    re.IGNORECASE,
+)
+OWNERSHIP_RE = re.compile(
+    r"ownership legacy delegation\s+(?P<calls>\d+)\s+calls/(?P<items>\d+)\s+items,\s*"
+    r"generic\s+(?P<generic>\d+),\s*vbo-device\s+(?P<vboDevice>\d+),\s*"
+    r"vbo-soft\s+(?P<vboSoft>\d+),\s*arrays\s+(?P<arrays>\d+)",
+    re.IGNORECASE,
+)
+OWNERSHIP_INFO_RE = re.compile(
+    r"ownership legacy delegation:\s*(?P<calls>\d+)\s+calls,\s*(?P<items>\d+)\s+items",
+    re.IGNORECASE,
+)
+GLX_TIER_INFO_RE = re.compile(
+    r"(?:product|capability)\s+tier(?::|\s)\s*(?P<tier>[^\s,]+)",
+    re.IGNORECASE,
+)
+GLX_GL12_EXECUTOR_RE = re.compile(
+    r"GL12 fixed-function executor:\s*active\s+(?P<active>\w+),\s*"
+    r"client-memory draws\s+(?P<clientMemoryDraws>\w+),\s*"
+    r"stream uploads\s+(?P<streamUploads>\w+),\s*"
+    r"material compiler\s+(?P<materialCompiler>\w+),\s*"
+    r"modern post chain\s+(?P<modernPostChain>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL12_SUPPORT_RE = re.compile(
+    r"GL12 fixed-function support:\s*lightmaps\s+(?P<lightmaps>\w+),\s*"
+    r"multitexture\s+(?P<multitexture>\w+),\s*fog\s+(?P<fog>\w+),\s*"
+    r"sprites\s+(?P<sprites>\w+),\s*beams\s+(?P<beams>\w+),\s*"
+    r"dynamic lights\s+(?P<dynamicLights>\w+),\s*"
+    r"stencil shadows if available\s+(?P<stencilShadows>\w+),\s*"
+    r"screenshots\s+(?P<screenshots>\w+),\s*demos\s+(?P<demos>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL2X_EXECUTOR_RE = re.compile(
+    r"GL2X programmable executor:\s*active\s+(?P<active>\w+),\s*"
+    r"client-memory fallback\s+(?P<clientMemoryFallback>\w+),\s*"
+    r"stream uploads\s+(?P<streamUploads>\w+),\s*"
+    r"material compiler\s+(?P<materialCompiler>\w+),\s*"
+    r"postprocess-lite\s+(?P<postprocessLite>\w+),\s*"
+    r"modern post chain\s+(?P<modernPostChain>\w+),\s*"
+    r"scene-linear output\s+(?P<sceneLinearOutput>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL2X_SUPPORT_RE = re.compile(
+    r"GL2X programmable support:\s*common materials\s+(?P<commonMaterials>\w+),\s*"
+    r"dynamic entities\s+(?P<dynamicEntities>\w+),\s*"
+    r"lightmaps\s+(?P<lightmaps>\w+),\s*multitexture\s+(?P<multitexture>\w+),\s*"
+    r"fog\s+(?P<fog>\w+),\s*sprites\s+(?P<sprites>\w+),\s*"
+    r"beams\s+(?P<beams>\w+),\s*screenshots\s+(?P<screenshots>\w+),\s*"
+    r"demos\s+(?P<demos>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL3X_EXECUTOR_RE = re.compile(
+    r"GL3X performance executor:\s*active\s+(?P<active>\w+),\s*"
+    r"FBO postprocess\s+(?P<fboPostProcess>\w+),\s*"
+    r"UBO frame/object constants\s+(?P<uboFrameObjectConstants>\w+),\s*"
+    r"timer queries\s+(?P<timerQueries>\w+),\s*"
+    r"sync-aware uploads\s+(?P<syncAwareUploads>\w+),\s*"
+    r"static buffer ownership\s+(?P<staticBufferOwnership>\w+),\s*"
+    r"dynamic buffer ownership\s+(?P<dynamicBufferOwnership>\w+),\s*"
+    r"persistent uploads\s+(?P<persistentUploads>\w+),\s*"
+    r"indirect submission\s+(?P<indirectSubmission>\w+),\s*"
+    r"direct state access\s+(?P<directStateAccess>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL3X_SUPPORT_RE = re.compile(
+    r"GL3X performance support:\s*material compiler\s+(?P<materialCompiler>\w+),\s*"
+    r"common materials\s+(?P<commonMaterials>\w+),\s*"
+    r"dynamic entities\s+(?P<dynamicEntities>\w+),\s*"
+    r"modern post chain\s+(?P<modernPostChain>\w+),\s*"
+    r"scene-linear output\s+(?P<sceneLinearOutput>\w+),\s*"
+    r"screenshots\s+(?P<screenshots>\w+),\s*demos\s+(?P<demos>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL41_EXECUTOR_RE = re.compile(
+    r"GL41 mac-modern executor:\s*active\s+(?P<active>\w+),\s*"
+    r"FBO postprocess\s+(?P<fboPostProcess>\w+),\s*"
+    r"UBO frame/object constants\s+(?P<uboFrameObjectConstants>\w+),\s*"
+    r"timer queries\s+(?P<timerQueries>\w+),\s*"
+    r"sync-aware uploads\s+(?P<syncAwareUploads>\w+),\s*"
+    r"static buffer ownership\s+(?P<staticBufferOwnership>\w+),\s*"
+    r"dynamic buffer ownership\s+(?P<dynamicBufferOwnership>\w+),\s*"
+    r"macOS 4\.1 ceiling\s+(?P<macOS41Ceiling>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL41_SUPPORT_RE = re.compile(
+    r"GL41 mac-modern support:\s*material compiler\s+(?P<materialCompiler>\w+),\s*"
+    r"common materials\s+(?P<commonMaterials>\w+),\s*"
+    r"dynamic entities\s+(?P<dynamicEntities>\w+),\s*"
+    r"modern post chain\s+(?P<modernPostChain>\w+),\s*"
+    r"scene-linear output\s+(?P<sceneLinearOutput>\w+),\s*"
+    r"high-quality SDR\s+(?P<highQualitySdr>\w+),\s*"
+    r"optional hardware HDR\s+(?P<optionalHardwareHdr>\w+),\s*"
+    r"screenshots\s+(?P<screenshots>\w+),\s*demos\s+(?P<demos>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL41_LIMITS_RE = re.compile(
+    r"GL41 mac-modern GL4\+ requirements:\s*debug output\s+(?P<debugOutputRequired>\w+),\s*"
+    r"buffer storage\s+(?P<bufferStorageRequired>\w+),\s*"
+    r"direct state access\s+(?P<directStateAccessRequired>\w+),\s*"
+    r"multi-draw indirect\s+(?P<multiDrawIndirectRequired>\w+),\s*"
+    r"persistent uploads\s+(?P<persistentUploadsRequired>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL46_EXECUTOR_RE = re.compile(
+    r"GL46 high-end executor:\s*active\s+(?P<active>\w+),\s*"
+    r"persistent uploads\s+(?P<persistentUploads>\w+),\s*"
+    r"buffer storage uploads\s+(?P<bufferStorageUploads>\w+),\s*"
+    r"sync-heavy streaming\s+(?P<syncHeavyStreaming>\w+),\s*"
+    r"direct state access\s+(?P<directStateAccess>\w+),\s*"
+    r"multi-draw indirect\s+(?P<multiDrawIndirect>\w+),\s*"
+    r"aggressive static-world submission\s+(?P<aggressiveStaticWorldSubmission>\w+),\s*"
+    r"detailed GPU counters\s+(?P<detailedGpuCounters>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL46_SUPPORT_RE = re.compile(
+    r"GL46 high-end support:\s*material compiler\s+(?P<materialCompiler>\w+),\s*"
+    r"common materials\s+(?P<commonMaterials>\w+),\s*"
+    r"dynamic entities\s+(?P<dynamicEntities>\w+),\s*"
+    r"modern post chain\s+(?P<modernPostChain>\w+),\s*"
+    r"scene-linear output\s+(?P<sceneLinearOutput>\w+),\s*"
+    r"hardware HDR output\s+(?P<hardwareHdrOutput>\w+),\s*"
+    r"screenshots\s+(?P<screenshots>\w+),\s*demos\s+(?P<demos>\w+)",
+    re.IGNORECASE,
+)
+GLX_GL46_REQUIREMENTS_RE = re.compile(
+    r"GL46 high-end requirements:\s*debug output\s+(?P<debugOutputRequired>\w+),\s*"
+    r"buffer storage\s+(?P<bufferStorageRequired>\w+),\s*"
+    r"direct state access\s+(?P<directStateAccessRequired>\w+),\s*"
+    r"multi-draw indirect\s+(?P<multiDrawIndirectRequired>\w+)",
+    re.IGNORECASE,
+)
+GLX_PASS_SCHEDULE_RE = re.compile(
+    r"(?:glx:\s*)?pass schedule:?\s*(?P<valid>valid|invalid)\s+"
+    r"(?P<count>\d+)/(?P<hash>[0-9a-fA-F]+)\s+(?P<order>[A-Za-z0-9_>\-]+)",
     re.IGNORECASE,
 )
 POSTPROCESS_FBO_RE = re.compile(
@@ -252,6 +422,43 @@ GLX_STATIC_MDI_SUMMARY_RE = re.compile(
     r"skips\s+(?P<skips>\d+),\s*errors\s+(?P<errors>\d+),\s*largest\s+(?P<largest>\d+)",
     re.IGNORECASE,
 )
+GLX_GL3X_PERFORMANCE_SUMMARY_RE = re.compile(
+    r"glx:\s*GL3X performance draws\s+(?P<draws>\d+)\s+"
+    r"sync-uploads\s+(?P<syncUploads>\d+)\s+"
+    r"static-buffers\s+(?P<staticBuffers>\d+)\s+"
+    r"dynamic-buffers\s+(?P<dynamicBuffers>\d+)\s+"
+    r"materials\s+(?P<materials>\d+)\s+"
+    r"fbo-post\s+(?P<fboPost>\d+)\s+"
+    r"unsupported persistent-upload\s+(?P<unsupportedPersistentUploads>\d+)",
+    re.IGNORECASE,
+)
+GLX_GL41_MAC_MODERN_SUMMARY_RE = re.compile(
+    r"glx:\s*GL41 mac-modern draws\s+(?P<draws>\d+)\s+"
+    r"sync-uploads\s+(?P<syncUploads>\d+)\s+"
+    r"static-buffers\s+(?P<staticBuffers>\d+)\s+"
+    r"dynamic-buffers\s+(?P<dynamicBuffers>\d+)\s+"
+    r"materials\s+(?P<materials>\d+)\s+"
+    r"post\s+(?P<post>\d+)\s+"
+    r"unsupported persistent-upload\s+(?P<unsupportedPersistentUploads>\d+)\s+"
+    r"gl43-required\s+(?P<gl43Required>\d+)\s+"
+    r"gl44-required\s+(?P<gl44Required>\d+)\s+"
+    r"gl45-required\s+(?P<gl45Required>\d+)",
+    re.IGNORECASE,
+)
+GLX_GL46_HIGH_END_SUMMARY_RE = re.compile(
+    r"glx:\s*GL46 high-end draws\s+(?P<draws>\d+)\s+"
+    r"persistent-uploads\s+(?P<persistentUploads>\d+)\s+"
+    r"sync-uploads\s+(?P<syncUploads>\d+)\s+"
+    r"dsa-products\s+(?P<dsaProducts>\d+)\s+"
+    r"mdi-products\s+(?P<mdiProducts>\d+)\s+"
+    r"aggressive-static\s+(?P<aggressiveStatic>\d+)\s+"
+    r"materials\s+(?P<materials>\d+)\s+"
+    r"post\s+(?P<post>\d+)\s+"
+    r"gpu-counters\s+(?P<gpuCounters>\d+)\s+"
+    r"static-mdi\s+(?P<staticMdiCalls>\d+)/(?P<staticMdiAttempts>\d+)\s+"
+    r"calls/(?P<staticMdiIndexes>\d+)\s+idx",
+    re.IGNORECASE,
+)
 
 DEFAULT_OPTIONS = {
     "renderers": "opengl,glx",
@@ -361,6 +568,11 @@ PROFILE_CVARS = {
         "r_glxProfile": "rc",
         **GLX_RC_PROFILE_CVARS,
     },
+    "glx-ownership": {
+        "r_glxProfile": "rc",
+        **GLX_RC_PROFILE_CVARS,
+        "r_glxRequireOwnership": "1",
+    },
     "glx-stress": {
         "r_glxProfile": "stress",
         **GLX_STRESS_PROFILE_CVARS,
@@ -373,6 +585,7 @@ PROFILE_MAPS = {
     "glx-material": "q3dm1",
     "glx-bloom": "q3dm1",
     "glx-parity": "q3dm1",
+    "glx-ownership": "q3dm1,q3dm17",
     "glx-stress": "q3dm1,q3dm17",
 }
 
@@ -387,13 +600,14 @@ STARTUP_CVARS = {
     "r_bloom_passes",
     "r_vbo",
     "r_glxProfile",
+    "r_glxRequireOwnership",
 }
 
 GLX_PROFILE_FORCED_CVARS = {
     name
-    for profile in ("glx-parity", "glx-stress")
+    for profile in ("glx-parity", "glx-ownership", "glx-stress")
     for name in PROFILE_CVARS[profile]
-    if name.startswith("r_glx") and name != "r_glxProfile"
+    if name.startswith("r_glx") and name not in {"r_glxProfile", "r_glxRequireOwnership"}
 }
 
 RC_GATE_PRESETS = {
@@ -1472,7 +1686,11 @@ def q3_bool(value: object) -> bool:
 
 
 def rc_profile_requires_glx_paths(profile: str) -> bool:
-    return profile in {"glx-parity", "glx-stress", "glx-material"}
+    return profile in {"glx-parity", "glx-ownership", "glx-stress", "glx-material"}
+
+
+def profile_requires_glx_ownership(profile: str) -> bool:
+    return profile in {"glx-ownership", "glx-final"}
 
 
 def metric_section(metrics: dict[str, object], name: str) -> dict[str, object]:
@@ -1501,6 +1719,35 @@ def int_group(match: re.Match[str], name: str) -> int:
     return int(match.group(name))
 
 
+def pass_schedule_valid_from_match(match: re.Match[str]) -> bool:
+    return (
+        match.group("valid").lower() == "valid"
+        and int_group(match, "count") == GLX_EXPECTED_PASS_SCHEDULE_COUNT
+        and match.group("hash").lower() == GLX_EXPECTED_PASS_SCHEDULE_HASH
+        and match.group("order") == GLX_EXPECTED_PASS_SCHEDULE
+    )
+
+
+def pass_schedule_failure_from_values(valid: object, count: object, schedule_hash: object, order: object) -> str | None:
+    if (
+        valid == 1
+        and count == GLX_EXPECTED_PASS_SCHEDULE_COUNT
+        and schedule_hash == GLX_EXPECTED_PASS_SCHEDULE_HASH
+        and order == GLX_EXPECTED_PASS_SCHEDULE
+    ):
+        return None
+    return (
+        "GLx pass schedule is not locked to the final contract: "
+        f"valid {valid}, count {count}, hash {schedule_hash!r}, order {order!r}."
+    )
+
+
+def product_tier_failure(tier: object) -> str | None:
+    if isinstance(tier, str) and tier in GLX_PRODUCT_TIERS:
+        return None
+    return f"GLx product tier is not one of the final five tiers: {tier!r}."
+
+
 def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
     diagnostics: dict[str, object] = {
         "log": str(log_path),
@@ -1517,13 +1764,28 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
 
     text = log_path.read_text(encoding="utf-8", errors="replace")
     requires_glx_paths = rc_profile_requires_glx_paths(profile)
+    requires_glx_ownership = profile_requires_glx_ownership(profile)
+    saw_ownership = False
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
 
-        if line.startswith("GLx ") or line.startswith("glx: ") or line.startswith("dynamic stream ") or line.startswith("static world ") or line.startswith("material "):
+        if (
+            line.startswith("GLx ")
+            or line.startswith("glx: ")
+            or line.startswith("dynamic stream ")
+            or line.startswith("static world ")
+            or line.startswith("material ")
+            or line.startswith("product tier ")
+            or line.startswith("capability hint ")
+            or line.startswith("GL12 fixed-function ")
+            or line.startswith("GL2X programmable ")
+            or line.startswith("GL3X performance ")
+            or line.startswith("GL41 mac-modern ")
+            or line.startswith("GL46 high-end ")
+        ):
             diagnostics["found"] = True
 
         match = MATERIAL_RENDERER_RE.search(line)
@@ -1558,6 +1820,281 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 failures.append(f"GLx material not-ready fallbacks: {int_group(match, 'notReady')}.")
             if int_group(match, "full") > 0:
                 failures.append(f"GLx material program-limit fallbacks: {int_group(match, 'full')}.")
+            continue
+
+        match = OWNERSHIP_RE.search(line)
+        if match:
+            saw_ownership = True
+            for key in ("calls", "items", "generic", "vboDevice", "vboSoft", "arrays"):
+                record_metric_max(metrics, "ownership", key, int_group(match, key))
+            if requires_glx_ownership and int_group(match, "calls") > 0:
+                failures.append(
+                    f"GLx legacy draw delegation is still active: "
+                    f"{int_group(match, 'calls')} calls / {int_group(match, 'items')} items."
+                )
+            continue
+
+        match = OWNERSHIP_INFO_RE.search(line)
+        if match:
+            saw_ownership = True
+            for key in ("calls", "items"):
+                record_metric_max(metrics, "ownership", key, int_group(match, key))
+            if requires_glx_ownership and int_group(match, "calls") > 0:
+                failures.append(
+                    f"GLx legacy draw delegation is still active: "
+                    f"{int_group(match, 'calls')} calls / {int_group(match, 'items')} items."
+                )
+            continue
+
+        match = GLX_TIER_INFO_RE.search(line)
+        if match:
+            tier = match.group("tier")
+            record_metric_max(metrics, "productTier", "tier", tier)
+            failure = product_tier_failure(tier)
+            if failure:
+                failures.append(failure)
+            continue
+
+        match = GLX_GL12_EXECUTOR_RE.search(line)
+        if match:
+            for key in ("active", "clientMemoryDraws", "streamUploads", "materialCompiler", "modernPostChain"):
+                record_metric_max(
+                    metrics,
+                    "gl12Executor",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL12_SUPPORT_RE.search(line)
+        if match:
+            for key in (
+                "lightmaps",
+                "multitexture",
+                "fog",
+                "sprites",
+                "beams",
+                "dynamicLights",
+                "stencilShadows",
+                "screenshots",
+                "demos",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl12Support",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL2X_EXECUTOR_RE.search(line)
+        if match:
+            for key in (
+                "active",
+                "clientMemoryFallback",
+                "streamUploads",
+                "materialCompiler",
+                "postprocessLite",
+                "modernPostChain",
+                "sceneLinearOutput",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl2xExecutor",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL2X_SUPPORT_RE.search(line)
+        if match:
+            for key in (
+                "commonMaterials",
+                "dynamicEntities",
+                "lightmaps",
+                "multitexture",
+                "fog",
+                "sprites",
+                "beams",
+                "screenshots",
+                "demos",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl2xSupport",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL3X_EXECUTOR_RE.search(line)
+        if match:
+            for key in (
+                "active",
+                "fboPostProcess",
+                "uboFrameObjectConstants",
+                "timerQueries",
+                "syncAwareUploads",
+                "staticBufferOwnership",
+                "dynamicBufferOwnership",
+                "persistentUploads",
+                "indirectSubmission",
+                "directStateAccess",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl3xExecutor",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL3X_SUPPORT_RE.search(line)
+        if match:
+            for key in (
+                "materialCompiler",
+                "commonMaterials",
+                "dynamicEntities",
+                "modernPostChain",
+                "sceneLinearOutput",
+                "screenshots",
+                "demos",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl3xSupport",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL41_EXECUTOR_RE.search(line)
+        if match:
+            for key in (
+                "active",
+                "fboPostProcess",
+                "uboFrameObjectConstants",
+                "timerQueries",
+                "syncAwareUploads",
+                "staticBufferOwnership",
+                "dynamicBufferOwnership",
+                "macOS41Ceiling",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl41Executor",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL41_SUPPORT_RE.search(line)
+        if match:
+            for key in (
+                "materialCompiler",
+                "commonMaterials",
+                "dynamicEntities",
+                "modernPostChain",
+                "sceneLinearOutput",
+                "highQualitySdr",
+                "optionalHardwareHdr",
+                "screenshots",
+                "demos",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl41Support",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL41_LIMITS_RE.search(line)
+        if match:
+            for key in (
+                "debugOutputRequired",
+                "bufferStorageRequired",
+                "directStateAccessRequired",
+                "multiDrawIndirectRequired",
+                "persistentUploadsRequired",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl41Limits",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL46_EXECUTOR_RE.search(line)
+        if match:
+            for key in (
+                "active",
+                "persistentUploads",
+                "bufferStorageUploads",
+                "syncHeavyStreaming",
+                "directStateAccess",
+                "multiDrawIndirect",
+                "aggressiveStaticWorldSubmission",
+                "detailedGpuCounters",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl46Executor",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL46_SUPPORT_RE.search(line)
+        if match:
+            for key in (
+                "materialCompiler",
+                "commonMaterials",
+                "dynamicEntities",
+                "modernPostChain",
+                "sceneLinearOutput",
+                "hardwareHdrOutput",
+                "screenshots",
+                "demos",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl46Support",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_GL46_REQUIREMENTS_RE.search(line)
+        if match:
+            for key in (
+                "debugOutputRequired",
+                "bufferStorageRequired",
+                "directStateAccessRequired",
+                "multiDrawIndirectRequired",
+            ):
+                record_metric_max(
+                    metrics,
+                    "gl46Requirements",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            continue
+
+        match = GLX_PASS_SCHEDULE_RE.search(line)
+        if match:
+            valid = 1 if match.group("valid").lower() == "valid" else 0
+            record_metric_max(metrics, "passSchedule", "valid", valid)
+            record_metric_max(metrics, "passSchedule", "count", int_group(match, "count"))
+            record_metric_max(metrics, "passSchedule", "hash", match.group("hash").lower())
+            record_metric_max(metrics, "passSchedule", "order", match.group("order"))
+            if not pass_schedule_valid_from_match(match):
+                failures.append(
+                    "GLx pass schedule is not locked to the final contract: "
+                    f"{match.group('valid')} {match.group('count')}/{match.group('hash')} "
+                    f"{match.group('order')}."
+                )
             continue
 
         match = POSTPROCESS_FBO_RE.search(line)
@@ -1711,7 +2248,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         match = STATIC_RENDERER_RE.search(line)
         if match:
             renderer_enabled = q3_bool(match.group("renderer"))
-            packet_profile = profile in {"glx-parity", "glx-stress"}
+            packet_profile = profile in {"glx-parity", "glx-ownership", "glx-stress"}
             record_metric_max(metrics, "staticWorld", "rendererEnabled", 1 if renderer_enabled else 0)
             if packet_profile and not renderer_enabled:
                 failures.append("GLx static world renderer is not enabled under the RC profile.")
@@ -1741,7 +2278,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             record_metric_max(metrics, "staticWorld", "packetBatchEnabled", 1 if enabled else 0)
             for key in ("attempts", "batches", "fallbackRuns"):
                 record_metric_max(metrics, "staticWorld", f"packetBatch{key[0].upper()}{key[1:]}", int_group(match, key))
-            if profile in {"glx-parity", "glx-stress"} and not enabled:
+            if profile in {"glx-parity", "glx-ownership", "glx-stress"} and not enabled:
                 failures.append("GLx static world packet batching is not enabled under the RC profile.")
             continue
 
@@ -1763,6 +2300,162 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
 
     if requires_glx_paths and not diagnostics.get("found"):
         failures.append("No GLx diagnostic output was found in the run log.")
+    if requires_glx_ownership and not saw_ownership:
+        failures.append("No GLx ownership diagnostic output was found in the run log.")
+
+    product_tier = metric_section(metrics, "productTier").get("tier")
+    if product_tier == "GL12":
+        gl12_executor = metric_section(metrics, "gl12Executor")
+        gl12_support = metric_section(metrics, "gl12Support")
+        if gl12_executor.get("active") != 1:
+            failures.append("GL12 product tier did not report the fixed-function executor contract.")
+        for key in ("clientMemoryDraws",):
+            if gl12_executor.get(key) != 1:
+                failures.append("GL12 fixed-function executor did not report required client-memory draw support.")
+        for key in ("streamUploads", "materialCompiler", "modernPostChain"):
+            if gl12_executor.get(key) not in (0, None):
+                failures.append(f"GL12 fixed-function executor incorrectly reports {key} support.")
+        for key in (
+            "lightmaps",
+            "multitexture",
+            "fog",
+            "sprites",
+            "beams",
+            "dynamicLights",
+            "stencilShadows",
+            "screenshots",
+            "demos",
+        ):
+            if gl12_support.get(key) != 1:
+                failures.append(f"GL12 fixed-function support is missing required {key} coverage.")
+    if product_tier == "GL2X":
+        gl2x_executor = metric_section(metrics, "gl2xExecutor")
+        gl2x_support = metric_section(metrics, "gl2xSupport")
+        if gl2x_executor.get("active") != 1:
+            failures.append("GL2X product tier did not report the programmable executor contract.")
+        for key in ("clientMemoryFallback", "streamUploads", "materialCompiler", "postprocessLite"):
+            if gl2x_executor.get(key) != 1:
+                failures.append(f"GL2X programmable executor did not report required {key} support.")
+        for key in ("modernPostChain", "sceneLinearOutput"):
+            if gl2x_executor.get(key) not in (0, None):
+                failures.append(f"GL2X programmable executor incorrectly reports {key} support.")
+        for key in (
+            "commonMaterials",
+            "dynamicEntities",
+            "lightmaps",
+            "multitexture",
+            "fog",
+            "sprites",
+            "beams",
+            "screenshots",
+            "demos",
+        ):
+            if gl2x_support.get(key) != 1:
+                failures.append(f"GL2X programmable support is missing required {key} coverage.")
+    if product_tier == "GL3X":
+        gl3x_executor = metric_section(metrics, "gl3xExecutor")
+        gl3x_support = metric_section(metrics, "gl3xSupport")
+        if gl3x_executor.get("active") != 1:
+            failures.append("GL3X product tier did not report the performance executor contract.")
+        for key in (
+            "fboPostProcess",
+            "uboFrameObjectConstants",
+            "timerQueries",
+            "syncAwareUploads",
+            "staticBufferOwnership",
+            "dynamicBufferOwnership",
+        ):
+            if gl3x_executor.get(key) != 1:
+                failures.append(f"GL3X performance executor did not report required {key} support.")
+        for key in ("persistentUploads", "indirectSubmission", "directStateAccess"):
+            if gl3x_executor.get(key) not in (0, None):
+                failures.append(f"GL3X performance executor incorrectly reports {key} as required.")
+        for key in (
+            "materialCompiler",
+            "commonMaterials",
+            "dynamicEntities",
+            "modernPostChain",
+            "sceneLinearOutput",
+            "screenshots",
+            "demos",
+        ):
+            if gl3x_support.get(key) != 1:
+                failures.append(f"GL3X performance support is missing required {key} coverage.")
+    if product_tier == "GL41":
+        gl41_executor = metric_section(metrics, "gl41Executor")
+        gl41_support = metric_section(metrics, "gl41Support")
+        gl41_limits = metric_section(metrics, "gl41Limits")
+        if gl41_executor.get("active") != 1:
+            failures.append("GL41 product tier did not report the mac-modern executor contract.")
+        for key in (
+            "fboPostProcess",
+            "uboFrameObjectConstants",
+            "timerQueries",
+            "syncAwareUploads",
+            "staticBufferOwnership",
+            "dynamicBufferOwnership",
+            "macOS41Ceiling",
+        ):
+            if gl41_executor.get(key) != 1:
+                failures.append(f"GL41 mac-modern executor did not report required {key} support.")
+        for key in (
+            "materialCompiler",
+            "commonMaterials",
+            "dynamicEntities",
+            "modernPostChain",
+            "sceneLinearOutput",
+            "highQualitySdr",
+            "screenshots",
+            "demos",
+        ):
+            if gl41_support.get(key) != 1:
+                failures.append(f"GL41 mac-modern support is missing required {key} coverage.")
+        for key in (
+            "debugOutputRequired",
+            "bufferStorageRequired",
+            "directStateAccessRequired",
+            "multiDrawIndirectRequired",
+            "persistentUploadsRequired",
+        ):
+            if gl41_limits.get(key) not in (0, None):
+                failures.append(f"GL41 mac-modern executor incorrectly requires {key}.")
+    if product_tier == "GL46":
+        gl46_executor = metric_section(metrics, "gl46Executor")
+        gl46_support = metric_section(metrics, "gl46Support")
+        gl46_requirements = metric_section(metrics, "gl46Requirements")
+        if gl46_executor.get("active") != 1:
+            failures.append("GL46 product tier did not report the high-end executor contract.")
+        for key in (
+            "persistentUploads",
+            "bufferStorageUploads",
+            "syncHeavyStreaming",
+            "directStateAccess",
+            "multiDrawIndirect",
+            "aggressiveStaticWorldSubmission",
+            "detailedGpuCounters",
+        ):
+            if gl46_executor.get(key) != 1:
+                failures.append(f"GL46 high-end executor did not report required {key} support.")
+        for key in (
+            "materialCompiler",
+            "commonMaterials",
+            "dynamicEntities",
+            "modernPostChain",
+            "sceneLinearOutput",
+            "hardwareHdrOutput",
+            "screenshots",
+            "demos",
+        ):
+            if gl46_support.get(key) != 1:
+                failures.append(f"GL46 high-end support is missing required {key} coverage.")
+        for key in (
+            "debugOutputRequired",
+            "bufferStorageRequired",
+            "directStateAccessRequired",
+            "multiDrawIndirectRequired",
+        ):
+            if gl46_requirements.get(key) != 1:
+                failures.append(f"GL46 high-end executor did not report required {key}.")
 
     diagnostics["failures"] = list(dict.fromkeys(failures))
     return diagnostics
@@ -1839,6 +2532,7 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
         if match:
             performance["sampleCount"] = int(performance["sampleCount"]) + 1
             perf_record_string(performance, "tier", match.group("tier"))
+            perf_record_string(performance, "productTier", match.group("tier"))
             perf_record_string(performance, "streamStrategy", match.group("streamStrategy"))
             perf_record_string(performance, "streamReady", match.group("streamReady"))
             perf_record_string(performance, "gpu", match.group("gpu").strip())
@@ -1861,6 +2555,15 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 perf_record_numeric(performance, key, int_group(match, key))
             for key in ("streamMegabytes", "staticMegabytes", "arenaMegabytes"):
                 perf_record_numeric(performance, key, float(match.group(key)))
+            continue
+
+        match = GLX_PASS_SCHEDULE_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "passScheduleValid",
+                1 if match.group("valid").lower() == "valid" else 0)
+            perf_record_numeric(performance, "passScheduleCount", int_group(match, "count"))
+            perf_record_string(performance, "passScheduleHash", match.group("hash").lower())
+            perf_record_string(performance, "passScheduleOrder", match.group("order"))
             continue
 
         match = GLX_MATERIAL_RENDERER_SUMMARY_RE.search(line)
@@ -1959,6 +2662,68 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 match,
                 "staticMdi",
                 ("calls", "attempts", "runs", "indexes", "fallbacks", "skips", "errors", "largest"),
+            )
+            continue
+
+        match = GLX_GL3X_PERFORMANCE_SUMMARY_RE.search(line)
+        if match:
+            perf_record_match_numbers_prefixed(
+                performance,
+                match,
+                "gl3x",
+                (
+                    "draws",
+                    "syncUploads",
+                    "staticBuffers",
+                    "dynamicBuffers",
+                    "materials",
+                    "fboPost",
+                    "unsupportedPersistentUploads",
+                ),
+            )
+            continue
+
+        match = GLX_GL41_MAC_MODERN_SUMMARY_RE.search(line)
+        if match:
+            perf_record_match_numbers_prefixed(
+                performance,
+                match,
+                "gl41",
+                (
+                    "draws",
+                    "syncUploads",
+                    "staticBuffers",
+                    "dynamicBuffers",
+                    "materials",
+                    "post",
+                    "unsupportedPersistentUploads",
+                    "gl43Required",
+                    "gl44Required",
+                    "gl45Required",
+                ),
+            )
+            continue
+
+        match = GLX_GL46_HIGH_END_SUMMARY_RE.search(line)
+        if match:
+            perf_record_match_numbers_prefixed(
+                performance,
+                match,
+                "gl46",
+                (
+                    "draws",
+                    "persistentUploads",
+                    "syncUploads",
+                    "dsaProducts",
+                    "mdiProducts",
+                    "aggressiveStatic",
+                    "materials",
+                    "post",
+                    "gpuCounters",
+                    "staticMdiCalls",
+                    "staticMdiAttempts",
+                    "staticMdiIndexes",
+                ),
             )
             continue
 
@@ -2304,6 +3069,38 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
             failures.append("No GLx performance samples were collected for a performance gate.")
         elif not any(int(sample.get("sampleCount", 0)) > 0 for sample in performance_samples):
             failures.append("No r_speeds 7 GLx frame-counter samples were found in collected logs.")
+        else:
+            saw_locked_schedule = False
+            schedule_failures: list[str] = []
+            for sample in performance_samples:
+                if int(sample.get("sampleCount", 0)) <= 0:
+                    continue
+                latest = sample.get("latest", {})
+                if not isinstance(latest, dict):
+                    continue
+                failure = pass_schedule_failure_from_values(
+                    latest.get("passScheduleValid"),
+                    latest.get("passScheduleCount"),
+                    latest.get("passScheduleHash"),
+                    latest.get("passScheduleOrder"),
+                )
+                if failure is None:
+                    saw_locked_schedule = True
+                else:
+                    schedule_failures.append(failure)
+            if not saw_locked_schedule:
+                failures.append("No valid GLx pass schedule was found in r_speeds 7 capture logs.")
+                failures.extend(schedule_failures)
+            tier_failures = [
+                failure
+                for sample in performance_samples
+                if int(sample.get("sampleCount", 0)) > 0
+                for latest in [sample.get("latest", {})]
+                if isinstance(latest, dict)
+                for failure in [product_tier_failure(latest.get("productTier", latest.get("tier")))]
+                if failure
+            ]
+            failures.extend(tier_failures)
 
     performance_failures = [
         str(failure)
@@ -2643,7 +3440,8 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
                 maxima = {}
             lines.append(
                 f"- Log {index}: samples `{sample.get('sampleCount', 0)}`, "
-                f"tier `{latest.get('tier', '-')}`, gpu `{latest.get('gpu', '-')}`, "
+                f"product tier `{latest.get('productTier', latest.get('tier', '-'))}`, "
+                f"gpu `{latest.get('gpu', '-')}`, "
                 f"draws/indexes `{latest.get('draws', '-')}/{latest.get('drawIndexes', '-')}`, "
                 f"stream `{latest.get('streamStrategy', '-')}/{latest.get('streamReady', '-')}`, "
                 f"stream draw attempts `{latest.get('streamDrawDraws', '-')}/"

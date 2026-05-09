@@ -109,6 +109,7 @@ Expected behavior:
 
 Renderer-focused verification lives beside the nightly packaging flow:
 
+- [`docs/fnquake3/GLX_FINAL_CONTRACT.md`](./GLX_FINAL_CONTRACT.md) is the accepted target ADR for the final GLx replacement renderer: stable C ABI, GLx-owned draw behavior, five product tiers, deterministic pass order, and a scene-linear color pipeline.
 - [`.github/workflows/glx-verification.yml`](../../.github/workflows/glx-verification.yml) builds deterministic GLx logic tests, generates dry-run GLx RC gate artifacts, and exposes a manual self-hosted GLx runtime sweep.
 - [`.github/workflows/vulkan-verification.yml`](../../.github/workflows/vulkan-verification.yml) builds the Vulkan renderer, generates dry-run Vulkan RC gate artifacts from [`scripts/vk_runtime_sweep.py`](../../scripts/vk_runtime_sweep.py), and exposes a manual self-hosted Vulkan runtime sweep.
 

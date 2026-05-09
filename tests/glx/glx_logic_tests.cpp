@@ -13,10 +13,13 @@ the Free Software Foundation; either version 2 of the License, or
 
 #include "glx_material_key.h"
 #include "glx_caps_logic.h"
+#include "glx_render_ir.h"
 #include "glx_static_world_logic.h"
 #include "glx_stream_logic.h"
 
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -766,24 +769,37 @@ bool CapabilityLogicClassifiesTiersAndExtensions()
 	CHECK( glx::GLX_Caps_ExtensionListHas( "GL_ARB_sync GL_ARB_timer_query", "GL_ARB_sync" ) == qtrue );
 	CHECK( glx::GLX_Caps_ExtensionListHas( "GL_ARB_sync2 GL_ARB_timer_query", "GL_ARB_sync" ) == qfalse );
 
-	glx::FeatureSet compat = glx::GLX_Caps_FeaturesForVersionAndExtensions( 2, 1, "" );
-	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 2, 1, compat ) == glx::CapabilityTier::Compat );
+	glx::FeatureSet gl12 = glx::GLX_Caps_FeaturesForVersionAndExtensions( 1, 2, "" );
+	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 1, 2, gl12 ) == glx::RenderProductTier::GL12 );
+	CHECK( glx::GLX_Caps_HintForTierAndFeatures( glx::RenderProductTier::GL12, gl12 ) == glx::CapabilityHint::FixedFunction );
 
-	glx::FeatureSet core = glx::GLX_Caps_FeaturesForVersionAndExtensions( 3, 3, "" );
-	CHECK( core.mapBufferRange == qtrue );
-	CHECK( core.timerQuery == qtrue );
-	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 3, 3, core ) == glx::CapabilityTier::Core );
+	glx::FeatureSet gl2x = glx::GLX_Caps_FeaturesForVersionAndExtensions( 2, 1, "" );
+	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 2, 1, gl2x ) == glx::RenderProductTier::GL2X );
+	CHECK( glx::GLX_Caps_HintForTierAndFeatures( glx::RenderProductTier::GL2X, gl2x ) == glx::CapabilityHint::Programmable );
+
+	glx::FeatureSet gl3x = glx::GLX_Caps_FeaturesForVersionAndExtensions( 3, 3, "" );
+	CHECK( gl3x.mapBufferRange == qtrue );
+	CHECK( gl3x.timerQuery == qtrue );
+	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 3, 3, gl3x ) == glx::RenderProductTier::GL3X );
+	CHECK( glx::GLX_Caps_HintForTierAndFeatures( glx::RenderProductTier::GL3X, gl3x ) == glx::CapabilityHint::Modern );
 
 	glx::FeatureSet extensionCore = glx::GLX_Caps_FeaturesForVersionAndExtensions( 2, 1,
 		"GL_ARB_map_buffer_range GL_ARB_uniform_buffer_object GL_ARB_instanced_arrays" );
-	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 2, 1, extensionCore ) == glx::CapabilityTier::Core );
+	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 2, 1, extensionCore ) == glx::RenderProductTier::GL2X );
+	CHECK( glx::GLX_Caps_HintForTierAndFeatures( glx::RenderProductTier::GL2X, extensionCore ) == glx::CapabilityHint::Modern );
 
-	glx::FeatureSet advanced = glx::GLX_Caps_FeaturesForVersionAndExtensions( 2, 1,
-		"GL_ARB_buffer_storage GL_ARB_sync GL_ARB_multi_draw_indirect" );
-	CHECK( advanced.drawIndirect == qtrue );
-	CHECK( advanced.multiDrawIndirect == qtrue );
-	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 2, 1, advanced ) == glx::CapabilityTier::Advanced );
-	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 2, 0, advanced ) == glx::CapabilityTier::BelowFloor );
+	glx::FeatureSet gl41 = glx::GLX_Caps_FeaturesForVersionAndExtensions( 4, 1, "" );
+	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 4, 1, gl41 ) == glx::RenderProductTier::GL41 );
+	CHECK( glx::GLX_Caps_HintForTierAndFeatures( glx::RenderProductTier::GL41, gl41 ) == glx::CapabilityHint::Modern );
+
+	glx::FeatureSet gl46 = glx::GLX_Caps_FeaturesForVersionAndExtensions( 4, 6, "" );
+	CHECK( gl46.drawIndirect == qtrue );
+	CHECK( gl46.multiDrawIndirect == qtrue );
+	CHECK( gl46.bufferStorage == qtrue );
+	CHECK( glx::GLX_Caps_TierForVersionAndFeatures( 4, 6, gl46 ) == glx::RenderProductTier::GL46 );
+	CHECK( glx::GLX_Caps_HintForTierAndFeatures( glx::RenderProductTier::GL46, gl46 ) == glx::CapabilityHint::HighEnd );
+	CHECK( std::strcmp( glx::GLX_RenderProductTierName( glx::RenderProductTier::GL46 ), "GL46" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_CapabilityHintName( glx::CapabilityHint::HighEnd ), "high-end" ) == 0 );
 
 	return true;
 }
@@ -912,6 +928,646 @@ bool StaticWorldPacketLogicClassifiesRunsAndPolicies()
 	return true;
 }
 
+bool RenderIRDefaultPassScheduleIsDeterministic()
+{
+	glx::FramePass passes[glx::GLX_RENDER_IR_PASS_COUNT];
+	char schedule[glx::GLX_RENDER_IR_PASS_SCHEDULE_TEXT_BYTES];
+	int count = 0;
+
+	CHECK( glx::GLX_RenderIR_DefaultPassSchedule( passes, glx::GLX_RENDER_IR_PASS_COUNT, &count ) == qtrue );
+	CHECK( count == glx::GLX_RENDER_IR_PASS_COUNT );
+	CHECK( glx::GLX_RenderIR_ValidatePassSchedule( passes, count ) == qtrue );
+	CHECK( glx::GLX_RenderIR_FormatPassSchedule( passes, count, schedule,
+		glx::GLX_RENDER_IR_PASS_SCHEDULE_TEXT_BYTES ) > 0 );
+	CHECK( std::strcmp( schedule,
+		"frame-setup>sky-opaque-world>opaque-entities>dynamic-scene>transparent-layers>"
+		"first-person-weapon>hud-2d>postprocess>output-export" ) == 0 );
+	CHECK( glx::GLX_RenderIR_PassScheduleHash( passes, count ) != 0 );
+	CHECK( passes[0].kind == glx::FramePassKind::FrameSetup );
+	CHECK( passes[1].kind == glx::FramePassKind::SkyAndOpaqueWorld );
+	CHECK( passes[3].kind == glx::FramePassKind::DynamicScene );
+	CHECK( passes[7].kind == glx::FramePassKind::PostProcess );
+	CHECK( passes[8].kind == glx::FramePassKind::OutputExport );
+
+	CHECK( glx::GLX_RenderIR_DefaultPassSchedule( nullptr, 0, &count ) == qfalse );
+	CHECK( count == glx::GLX_RENDER_IR_PASS_COUNT );
+
+	passes[3].sequence = 4;
+	CHECK( glx::GLX_RenderIR_ValidatePassSchedule( passes, glx::GLX_RENDER_IR_PASS_COUNT ) == qfalse );
+
+	return true;
+}
+
+bool RenderIRProductsValidate()
+{
+	glx::UploadPlan upload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::TransientStream, 1, 128, 64, 32 );
+	upload.texcoordBytes = 16;
+	upload.alignment = 64;
+	upload.sync = glx::UploadSyncPolicy::FrameFence;
+
+	glx::MaterialIR material = glx::GLX_RenderIR_MakeMaterial(
+		7, GLX_STAGE_ST0 | GLX_STAGE_TEXMOD, GLX_MATERIAL_STATE_DEPTHMASK_TRUE, 2 );
+	material.rgbGen = GLX_MATERIAL_RGBGEN_VERTEX;
+	material.alphaGen = GLX_MATERIAL_ALPHAGEN_VERTEX;
+	material.tcGen0 = GLX_MATERIAL_TCGEN_TEXTURE;
+	material.texMods0 = 1;
+
+	glx::WorldPacket packet {};
+	packet.packetIndex = 3;
+	packet.pass = glx::FramePassKind::SkyAndOpaqueWorld;
+	packet.surfaces = 4;
+	packet.vertexes = 64;
+	packet.indexes = 96;
+	packet.firstItem = 10;
+	packet.itemCount = 4;
+	packet.vertexOffset = 128;
+	packet.indexOffset = 256;
+	packet.material = material;
+	packet.upload = upload;
+
+	glx::DynamicDraw draw {};
+	draw.kind = glx::DynamicDrawKind::Indexed;
+	draw.pass = glx::FramePassKind::DynamicScene;
+	draw.primitive = 0x0004;
+	draw.count = 96;
+	draw.indexType = 0x1403;
+	draw.indices = reinterpret_cast<const void *>( static_cast<uintptr_t>( 0x40 ) );
+	draw.legacyReason = GLX_LEGACY_DELEGATION_NONE;
+	draw.profilerPath = GLX_DRAW_STREAM_GENERIC;
+	draw.material = material;
+	draw.upload = upload;
+
+	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
+
+	glx::PostNode post {};
+	post.kind = glx::PostNodeKind::BloomFinal;
+	post.pass = glx::FramePassKind::PostProcess;
+	post.sequence = 1;
+	post.output = output;
+
+	CHECK( glx::GLX_RenderIR_ValidateUploadPlan( upload ) == qtrue );
+	CHECK( glx::GLX_RenderIR_ValidateMaterial( material ) == qtrue );
+	CHECK( glx::GLX_RenderIR_ValidateWorldPacket( packet ) == qtrue );
+	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qtrue );
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qtrue );
+	CHECK( glx::GLX_RenderIR_ValidatePostNode( post ) == qtrue );
+
+	CHECK( glx::GLX_RenderIR_ValidateUploadPlan(
+		glx::GLX_RenderIR_MakeUploadPlan( glx::UploadPlanKind::ClientMemory, -1, 0, 0, 0 ) ) == qtrue );
+	upload.bytes = 0;
+	CHECK( glx::GLX_RenderIR_ValidateUploadPlan( upload ) == qfalse );
+	draw.count = 0;
+	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qfalse );
+	output.exposure = -1.0f;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+
+	return true;
+}
+
+bool RenderIRTierMappingKeepsSingleProductContract()
+{
+	glx::FeatureSet features {};
+
+	CHECK( glx::GLX_RenderIR_TierForVersionAndFeatures( 1, 2, features ) == glx::RenderProductTier::GL12 );
+	CHECK( glx::GLX_RenderIR_TierForVersionAndFeatures( 2, 1, features ) == glx::RenderProductTier::GL2X );
+	CHECK( glx::GLX_RenderIR_TierForVersionAndFeatures( 3, 3, features ) == glx::RenderProductTier::GL3X );
+	CHECK( glx::GLX_RenderIR_TierForVersionAndFeatures( 4, 1, features ) == glx::RenderProductTier::GL41 );
+	CHECK( glx::GLX_RenderIR_TierForVersionAndFeatures( 4, 6, features ) == glx::RenderProductTier::GL46 );
+
+	features.bufferStorage = qtrue;
+	features.syncObjects = qtrue;
+	features.directStateAccess = qtrue;
+	CHECK( glx::GLX_RenderIR_TierForVersionAndFeatures( 4, 6, features ) == glx::RenderProductTier::GL46 );
+
+	const glx::RenderProductTier tiers[] = {
+		glx::RenderProductTier::GL12,
+		glx::RenderProductTier::GL2X,
+		glx::RenderProductTier::GL3X,
+		glx::RenderProductTier::GL41,
+		glx::RenderProductTier::GL46
+	};
+	const glx::RenderProductKind products[] = {
+		glx::RenderProductKind::FramePass,
+		glx::RenderProductKind::WorldPacket,
+		glx::RenderProductKind::DynamicDraw,
+		glx::RenderProductKind::MaterialIR,
+		glx::RenderProductKind::UploadPlan,
+		glx::RenderProductKind::PostNode,
+		glx::RenderProductKind::OutputTransform
+	};
+
+	for ( const glx::RenderProductTier tier : tiers ) {
+		for ( const glx::RenderProductKind product : products ) {
+			CHECK( glx::GLX_RenderIR_TierConsumesProduct( tier, product ) == qtrue );
+		}
+	}
+	CHECK( glx::GLX_RenderIR_TierName( glx::RenderProductTier::GL46 )[0] == 'G' );
+
+	return true;
+}
+
+bool GL12ExecutorPolicyIsFixedFunctionAndSdrOnly()
+{
+	const glx::TierExecutionPolicy policy =
+		glx::GLX_RenderIR_TierExecutionPolicy( glx::RenderProductTier::GL12 );
+
+	CHECK( std::strcmp( policy.executorName, "fixed-function" ) == 0 );
+	CHECK( policy.fixedFunction == qtrue );
+	CHECK( policy.clientMemoryDraws == qtrue );
+	CHECK( policy.streamUploads == qfalse );
+	CHECK( policy.materialCompiler == qfalse );
+	CHECK( policy.modernPostChain == qfalse );
+	CHECK( policy.sceneLinearOutput == qfalse );
+	CHECK( policy.fboPostProcess == qfalse );
+	CHECK( policy.uboFrameObjectConstants == qfalse );
+	CHECK( policy.timerQueries == qfalse );
+	CHECK( policy.syncAwareUploads == qfalse );
+	CHECK( policy.staticBufferOwnership == qfalse );
+	CHECK( policy.dynamicBufferOwnership == qfalse );
+	CHECK( policy.persistentUploads == qfalse );
+	CHECK( policy.indirectSubmission == qfalse );
+	CHECK( policy.directStateAccess == qfalse );
+	CHECK( policy.lightmaps == qtrue );
+	CHECK( policy.multitexture == qtrue );
+	CHECK( policy.fog == qtrue );
+	CHECK( policy.sprites == qtrue );
+	CHECK( policy.beams == qtrue );
+	CHECK( policy.dynamicLights == qtrue );
+	CHECK( policy.stencilShadowsIfAvailable == qtrue );
+	CHECK( policy.screenshots == qtrue );
+	CHECK( policy.demos == qtrue );
+	CHECK( std::strstr( policy.unavailable, "GLSL material compiler" ) != nullptr );
+
+	glx::UploadPlan clientUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::ClientMemory, -1, 0, 0, 0 );
+	glx::UploadPlan streamUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::TransientStream, 1, 128, 64, 32 );
+	glx::UploadPlan staticUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::StaticWorld, -1, 128, 64, 32 );
+
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL12, clientUpload ) == qtrue );
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL12, staticUpload ) == qtrue );
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL12, streamUpload ) == qfalse );
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL2X, streamUpload ) == qtrue );
+
+	glx::MaterialIR material = glx::GLX_RenderIR_MakeMaterial(
+		0, GLX_STAGE_LIGHTMAP | GLX_STAGE_MULTITEXTURE |
+			GLX_STAGE_SHADOW_PASS | GLX_STAGE_BEAM_PASS,
+		GLX_MATERIAL_STATE_DEPTHMASK_TRUE, 2 );
+	material.fogPass = qtrue;
+
+	glx::DynamicDraw draw {};
+	draw.kind = glx::DynamicDrawKind::Indexed;
+	draw.pass = glx::FramePassKind::DynamicScene;
+	draw.primitive = 0x0004;
+	draw.count = 6;
+	draw.indexType = 0x1403;
+	draw.indices = reinterpret_cast<const void *>( static_cast<uintptr_t>( 0x20 ) );
+	draw.legacyReason = GLX_LEGACY_DELEGATION_GENERIC;
+	draw.profilerPath = GLX_DRAW_GENERIC;
+	draw.material = material;
+	draw.upload = clientUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsDynamicDraw( glx::RenderProductTier::GL12, draw ) == qtrue );
+	draw.upload = streamUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsDynamicDraw( glx::RenderProductTier::GL12, draw ) == qfalse );
+
+	glx::WorldPacket packet {};
+	packet.pass = glx::FramePassKind::SkyAndOpaqueWorld;
+	packet.surfaces = 1;
+	packet.vertexes = 4;
+	packet.indexes = 6;
+	packet.itemCount = 1;
+	packet.material = material;
+	packet.upload = staticUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsWorldPacket( glx::RenderProductTier::GL12, packet ) == qtrue );
+
+	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL12, output ) == qtrue );
+	output.transfer = glx::OutputTransfer::Hdr10Pq;
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL12, output ) == qfalse );
+
+	glx::PostNode post {};
+	post.kind = glx::PostNodeKind::GammaDirect;
+	post.pass = glx::FramePassKind::PostProcess;
+	post.sequence = 0;
+	post.output = glx::GLX_RenderIR_DefaultOutputTransform();
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL12, post ) == qtrue );
+	post.kind = glx::PostNodeKind::BloomFinal;
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL12, post ) == qfalse );
+
+	return true;
+}
+
+bool GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements()
+{
+	const glx::TierExecutionPolicy policy =
+		glx::GLX_RenderIR_TierExecutionPolicy( glx::RenderProductTier::GL2X );
+
+	CHECK( std::strcmp( policy.executorName, "programmable" ) == 0 );
+	CHECK( policy.fixedFunction == qfalse );
+	CHECK( policy.clientMemoryDraws == qtrue );
+	CHECK( policy.streamUploads == qtrue );
+	CHECK( policy.materialCompiler == qtrue );
+	CHECK( policy.commonMaterials == qtrue );
+	CHECK( policy.dynamicEntities == qtrue );
+	CHECK( policy.postProcessLite == qtrue );
+	CHECK( policy.modernPostChain == qfalse );
+	CHECK( policy.sceneLinearOutput == qfalse );
+	CHECK( policy.fboPostProcess == qfalse );
+	CHECK( policy.uboFrameObjectConstants == qfalse );
+	CHECK( policy.timerQueries == qfalse );
+	CHECK( policy.syncAwareUploads == qfalse );
+	CHECK( policy.staticBufferOwnership == qfalse );
+	CHECK( policy.dynamicBufferOwnership == qfalse );
+	CHECK( policy.persistentUploads == qfalse );
+	CHECK( policy.indirectSubmission == qfalse );
+	CHECK( policy.directStateAccess == qfalse );
+	CHECK( policy.lightmaps == qtrue );
+	CHECK( policy.multitexture == qtrue );
+	CHECK( policy.fog == qtrue );
+	CHECK( policy.sprites == qtrue );
+	CHECK( policy.beams == qtrue );
+	CHECK( policy.dynamicLights == qtrue );
+	CHECK( policy.screenshots == qtrue );
+	CHECK( policy.demos == qtrue );
+	CHECK( std::strstr( policy.unavailable, "persistent uploads" ) != nullptr );
+
+	glx::UploadPlan streamUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::TransientStream, static_cast<int>( glx::StreamStrategy::MapBufferRange ),
+		192, 96, 48 );
+	streamUpload.texcoordBytes = 24;
+	streamUpload.sync = glx::UploadSyncPolicy::FrameFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL2X, streamUpload ) == qtrue );
+
+	glx::UploadPlan persistentUpload = streamUpload;
+	persistentUpload.strategy = static_cast<int>( glx::StreamStrategy::PersistentMapped );
+	persistentUpload.sync = glx::UploadSyncPolicy::PersistentFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL2X, persistentUpload ) == qfalse );
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL46, persistentUpload ) == qtrue );
+
+	glx::MaterialIR material = glx::GLX_RenderIR_MakeMaterial(
+		0, GLX_STAGE_LIGHTMAP | GLX_STAGE_MULTITEXTURE | GLX_STAGE_TEXMOD |
+			GLX_STAGE_DEPTH_FRAGMENT | GLX_STAGE_ENVIRONMENT,
+		GLX_MATERIAL_STATE_DEPTHMASK_TRUE | GLX_MATERIAL_STATE_ATEST_GE_80, 2 );
+	material.rgbGen = GLX_MATERIAL_RGBGEN_VERTEX;
+	material.alphaGen = GLX_MATERIAL_ALPHAGEN_VERTEX;
+	material.tcGen0 = GLX_MATERIAL_TCGEN_TEXTURE;
+	material.tcGen1 = GLX_MATERIAL_TCGEN_LIGHTMAP;
+	material.texMods0 = 1;
+	material.materialCombine = GLX_MATERIAL_COMBINE_MODULATE;
+	CHECK( glx::GLX_RenderIR_TierSupportsMaterial( glx::RenderProductTier::GL2X, material ) == qtrue );
+
+	glx::DynamicDraw draw {};
+	draw.kind = glx::DynamicDrawKind::Indexed;
+	draw.pass = glx::FramePassKind::DynamicScene;
+	draw.primitive = 0x0004;
+	draw.count = 96;
+	draw.indexType = 0x1403;
+	draw.indices = reinterpret_cast<const void *>( static_cast<uintptr_t>( 0x40 ) );
+	draw.legacyReason = GLX_LEGACY_DELEGATION_NONE;
+	draw.profilerPath = GLX_DRAW_STREAM_GENERIC;
+	draw.material = material;
+	draw.upload = streamUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsDynamicDraw( glx::RenderProductTier::GL2X, draw ) == qtrue );
+	draw.upload = persistentUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsDynamicDraw( glx::RenderProductTier::GL2X, draw ) == qfalse );
+
+	glx::PostNode post {};
+	post.kind = glx::PostNodeKind::BloomFinal;
+	post.pass = glx::FramePassKind::PostProcess;
+	post.sequence = 1;
+	post.output = glx::GLX_RenderIR_DefaultOutputTransform();
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL2X, post ) == qtrue );
+	post.kind = glx::PostNodeKind::ToneMap;
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL2X, post ) == qfalse );
+
+	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL2X, output ) == qtrue );
+	output.transfer = glx::OutputTransfer::Hdr10Pq;
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL2X, output ) == qfalse );
+
+	return true;
+}
+
+bool GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements()
+{
+	const glx::TierExecutionPolicy policy =
+		glx::GLX_RenderIR_TierExecutionPolicy( glx::RenderProductTier::GL3X );
+
+	CHECK( std::strcmp( policy.executorName, "performance" ) == 0 );
+	CHECK( policy.fixedFunction == qfalse );
+	CHECK( policy.streamUploads == qtrue );
+	CHECK( policy.materialCompiler == qtrue );
+	CHECK( policy.commonMaterials == qtrue );
+	CHECK( policy.dynamicEntities == qtrue );
+	CHECK( policy.modernPostChain == qtrue );
+	CHECK( policy.sceneLinearOutput == qtrue );
+	CHECK( policy.fboPostProcess == qtrue );
+	CHECK( policy.uboFrameObjectConstants == qtrue );
+	CHECK( policy.timerQueries == qtrue );
+	CHECK( policy.syncAwareUploads == qtrue );
+	CHECK( policy.staticBufferOwnership == qtrue );
+	CHECK( policy.dynamicBufferOwnership == qtrue );
+	CHECK( policy.highQualitySdrOutput == qtrue );
+	CHECK( policy.optionalHardwareHdrOutput == qtrue );
+	CHECK( policy.persistentUploads == qfalse );
+	CHECK( policy.indirectSubmission == qfalse );
+	CHECK( policy.directStateAccess == qfalse );
+	CHECK( policy.screenshots == qtrue );
+	CHECK( policy.demos == qtrue );
+	CHECK( std::strstr( policy.unavailable, "persistent" ) != nullptr );
+	CHECK( std::strstr( policy.unavailable, "direct-state access" ) != nullptr );
+
+	glx::UploadPlan staticUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::StaticWorld, static_cast<int>( glx::StreamStrategy::MapBufferRange ),
+		4096, 3072, 1024 );
+	staticUpload.sync = glx::UploadSyncPolicy::FrameFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL3X, staticUpload ) == qtrue );
+
+	glx::UploadPlan streamUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::TransientStream, static_cast<int>( glx::StreamStrategy::MapBufferRange ),
+		512, 256, 128 );
+	streamUpload.texcoordBytes = 64;
+	streamUpload.sync = glx::UploadSyncPolicy::FrameFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL3X, streamUpload ) == qtrue );
+
+	glx::UploadPlan postUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::PostProcess, static_cast<int>( glx::StreamStrategy::MapBufferRange ),
+		128, 64, 32 );
+	postUpload.sync = glx::UploadSyncPolicy::FrameFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL3X, postUpload ) == qtrue );
+
+	glx::UploadPlan persistentUpload = streamUpload;
+	persistentUpload.strategy = static_cast<int>( glx::StreamStrategy::PersistentMapped );
+	persistentUpload.sync = glx::UploadSyncPolicy::PersistentFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL3X, persistentUpload ) == qfalse );
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL46, persistentUpload ) == qtrue );
+
+	glx::MaterialIR material = glx::GLX_RenderIR_MakeMaterial(
+		0, GLX_STAGE_LIGHTMAP | GLX_STAGE_MULTITEXTURE | GLX_STAGE_TEXMOD |
+			GLX_STAGE_DEPTH_FRAGMENT | GLX_STAGE_ENVIRONMENT,
+		GLX_MATERIAL_STATE_DEPTHMASK_TRUE | GLX_MATERIAL_STATE_ATEST_GE_80, 2 );
+	material.rgbGen = GLX_MATERIAL_RGBGEN_VERTEX;
+	material.alphaGen = GLX_MATERIAL_ALPHAGEN_VERTEX;
+	CHECK( glx::GLX_RenderIR_TierSupportsMaterial( glx::RenderProductTier::GL3X, material ) == qtrue );
+
+	glx::WorldPacket packet {};
+	packet.pass = glx::FramePassKind::SkyAndOpaqueWorld;
+	packet.surfaces = 4;
+	packet.vertexes = 128;
+	packet.indexes = 192;
+	packet.itemCount = 4;
+	packet.material = material;
+	packet.upload = staticUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsWorldPacket( glx::RenderProductTier::GL3X, packet ) == qtrue );
+	packet.upload = persistentUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsWorldPacket( glx::RenderProductTier::GL3X, packet ) == qfalse );
+
+	glx::DynamicDraw draw {};
+	draw.kind = glx::DynamicDrawKind::Indexed;
+	draw.pass = glx::FramePassKind::DynamicScene;
+	draw.primitive = 0x0004;
+	draw.count = 96;
+	draw.indexType = 0x1403;
+	draw.indices = reinterpret_cast<const void *>( static_cast<uintptr_t>( 0x80 ) );
+	draw.legacyReason = GLX_LEGACY_DELEGATION_NONE;
+	draw.profilerPath = GLX_DRAW_STREAM_GENERIC;
+	draw.material = material;
+	draw.upload = streamUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsDynamicDraw( glx::RenderProductTier::GL3X, draw ) == qtrue );
+	draw.upload = persistentUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsDynamicDraw( glx::RenderProductTier::GL3X, draw ) == qfalse );
+
+	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.transfer = glx::OutputTransfer::LinearSrgb;
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL3X, output ) == qtrue );
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL2X, output ) == qfalse );
+
+	glx::PostNode post {};
+	post.kind = glx::PostNodeKind::ToneMap;
+	post.pass = glx::FramePassKind::PostProcess;
+	post.sequence = 2;
+	post.output = output;
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL3X, post ) == qtrue );
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL2X, post ) == qfalse );
+	post.kind = glx::PostNodeKind::Grade;
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL3X, post ) == qtrue );
+
+	return true;
+}
+
+bool GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures()
+{
+	const glx::TierExecutionPolicy policy =
+		glx::GLX_RenderIR_TierExecutionPolicy( glx::RenderProductTier::GL41 );
+
+	CHECK( std::strcmp( policy.executorName, "mac-modern" ) == 0 );
+	CHECK( policy.fixedFunction == qfalse );
+	CHECK( policy.streamUploads == qtrue );
+	CHECK( policy.materialCompiler == qtrue );
+	CHECK( policy.commonMaterials == qtrue );
+	CHECK( policy.dynamicEntities == qtrue );
+	CHECK( policy.modernPostChain == qtrue );
+	CHECK( policy.sceneLinearOutput == qtrue );
+	CHECK( policy.fboPostProcess == qtrue );
+	CHECK( policy.uboFrameObjectConstants == qtrue );
+	CHECK( policy.timerQueries == qtrue );
+	CHECK( policy.syncAwareUploads == qtrue );
+	CHECK( policy.staticBufferOwnership == qtrue );
+	CHECK( policy.dynamicBufferOwnership == qtrue );
+	CHECK( policy.macOS41Ceiling == qtrue );
+	CHECK( policy.highQualitySdrOutput == qtrue );
+	CHECK( policy.optionalHardwareHdrOutput == qtrue );
+	CHECK( policy.persistentUploads == qfalse );
+	CHECK( policy.indirectSubmission == qfalse );
+	CHECK( policy.directStateAccess == qfalse );
+	CHECK( policy.debugOutputRequired == qfalse );
+	CHECK( policy.bufferStorageRequired == qfalse );
+	CHECK( policy.directStateAccessRequired == qfalse );
+	CHECK( policy.multiDrawIndirectRequired == qfalse );
+	CHECK( policy.screenshots == qtrue );
+	CHECK( policy.demos == qtrue );
+	CHECK( std::strstr( policy.unavailable, "GL4.3" ) != nullptr );
+	CHECK( std::strstr( policy.unavailable, "GL4.4" ) != nullptr );
+	CHECK( std::strstr( policy.unavailable, "GL4.5" ) != nullptr );
+
+	glx::UploadPlan staticUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::StaticWorld, static_cast<int>( glx::StreamStrategy::MapBufferRange ),
+		8192, 6144, 2048 );
+	staticUpload.sync = glx::UploadSyncPolicy::FrameFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL41, staticUpload ) == qtrue );
+
+	glx::UploadPlan streamUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::TransientStream, static_cast<int>( glx::StreamStrategy::MapBufferRange ),
+		1024, 512, 256 );
+	streamUpload.texcoordBytes = 128;
+	streamUpload.sync = glx::UploadSyncPolicy::FrameFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL41, streamUpload ) == qtrue );
+
+	glx::UploadPlan persistentUpload = streamUpload;
+	persistentUpload.strategy = static_cast<int>( glx::StreamStrategy::PersistentMapped );
+	persistentUpload.sync = glx::UploadSyncPolicy::PersistentFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL41, persistentUpload ) == qfalse );
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL46, persistentUpload ) == qtrue );
+
+	glx::MaterialIR material = glx::GLX_RenderIR_MakeMaterial(
+		0, GLX_STAGE_LIGHTMAP | GLX_STAGE_MULTITEXTURE | GLX_STAGE_TEXMOD |
+			GLX_STAGE_DEPTH_FRAGMENT | GLX_STAGE_ENVIRONMENT,
+		GLX_MATERIAL_STATE_DEPTHMASK_TRUE | GLX_MATERIAL_STATE_ATEST_GE_80, 3 );
+	material.rgbGen = GLX_MATERIAL_RGBGEN_VERTEX;
+	material.alphaGen = GLX_MATERIAL_ALPHAGEN_VERTEX;
+	material.tcGen0 = GLX_MATERIAL_TCGEN_TEXTURE;
+	material.tcGen1 = GLX_MATERIAL_TCGEN_LIGHTMAP;
+	CHECK( glx::GLX_RenderIR_TierSupportsMaterial( glx::RenderProductTier::GL41, material ) == qtrue );
+
+	glx::WorldPacket packet {};
+	packet.pass = glx::FramePassKind::SkyAndOpaqueWorld;
+	packet.surfaces = 8;
+	packet.vertexes = 256;
+	packet.indexes = 384;
+	packet.itemCount = 8;
+	packet.material = material;
+	packet.upload = staticUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsWorldPacket( glx::RenderProductTier::GL41, packet ) == qtrue );
+	packet.upload = persistentUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsWorldPacket( glx::RenderProductTier::GL41, packet ) == qfalse );
+
+	glx::DynamicDraw draw {};
+	draw.kind = glx::DynamicDrawKind::Indexed;
+	draw.pass = glx::FramePassKind::DynamicScene;
+	draw.primitive = 0x0004;
+	draw.count = 192;
+	draw.indexType = 0x1403;
+	draw.indices = reinterpret_cast<const void *>( static_cast<uintptr_t>( 0x100 ) );
+	draw.legacyReason = GLX_LEGACY_DELEGATION_NONE;
+	draw.profilerPath = GLX_DRAW_STREAM_GENERIC;
+	draw.material = material;
+	draw.upload = streamUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsDynamicDraw( glx::RenderProductTier::GL41, draw ) == qtrue );
+	draw.upload = persistentUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsDynamicDraw( glx::RenderProductTier::GL41, draw ) == qfalse );
+
+	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.transfer = glx::OutputTransfer::MacEdr;
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL41, output ) == qtrue );
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL2X, output ) == qfalse );
+
+	glx::PostNode post {};
+	post.kind = glx::PostNodeKind::ToneMap;
+	post.pass = glx::FramePassKind::PostProcess;
+	post.sequence = 3;
+	post.output = output;
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL41, post ) == qtrue );
+	post.kind = glx::PostNodeKind::Grade;
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL41, post ) == qtrue );
+
+	return true;
+}
+
+bool GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures()
+{
+	const glx::TierExecutionPolicy policy =
+		glx::GLX_RenderIR_TierExecutionPolicy( glx::RenderProductTier::GL46 );
+
+	CHECK( std::strcmp( policy.executorName, "high-end" ) == 0 );
+	CHECK( policy.fixedFunction == qfalse );
+	CHECK( policy.streamUploads == qtrue );
+	CHECK( policy.materialCompiler == qtrue );
+	CHECK( policy.commonMaterials == qtrue );
+	CHECK( policy.dynamicEntities == qtrue );
+	CHECK( policy.modernPostChain == qtrue );
+	CHECK( policy.sceneLinearOutput == qtrue );
+	CHECK( policy.fboPostProcess == qtrue );
+	CHECK( policy.uboFrameObjectConstants == qtrue );
+	CHECK( policy.timerQueries == qtrue );
+	CHECK( policy.syncAwareUploads == qtrue );
+	CHECK( policy.staticBufferOwnership == qtrue );
+	CHECK( policy.dynamicBufferOwnership == qtrue );
+	CHECK( policy.persistentUploads == qtrue );
+	CHECK( policy.indirectSubmission == qtrue );
+	CHECK( policy.directStateAccess == qtrue );
+	CHECK( policy.debugOutputRequired == qtrue );
+	CHECK( policy.bufferStorageRequired == qtrue );
+	CHECK( policy.directStateAccessRequired == qtrue );
+	CHECK( policy.multiDrawIndirectRequired == qtrue );
+	CHECK( policy.bufferStorageUploads == qtrue );
+	CHECK( policy.syncHeavyStreaming == qtrue );
+	CHECK( policy.multiDrawIndirectSubmission == qtrue );
+	CHECK( policy.aggressiveStaticWorldSubmission == qtrue );
+	CHECK( policy.detailedGpuCounters == qtrue );
+	CHECK( policy.optionalHardwareHdrOutput == qtrue );
+	CHECK( std::strcmp( policy.unavailable, "none" ) == 0 );
+
+	glx::UploadPlan persistentUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::TransientStream, static_cast<int>( glx::StreamStrategy::PersistentMapped ),
+		2048, 1024, 512 );
+	persistentUpload.texcoordBytes = 256;
+	persistentUpload.sync = glx::UploadSyncPolicy::PersistentFence;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL46, persistentUpload ) == qtrue );
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL41, persistentUpload ) == qfalse );
+
+	glx::UploadPlan staticPersistentUpload = persistentUpload;
+	staticPersistentUpload.kind = glx::UploadPlanKind::StaticWorld;
+	staticPersistentUpload.bytes = 16384;
+	staticPersistentUpload.vertexBytes = 12288;
+	staticPersistentUpload.indexBytes = 4096;
+	staticPersistentUpload.texcoordBytes = 0;
+	CHECK( glx::GLX_RenderIR_TierSupportsUploadPlan( glx::RenderProductTier::GL46, staticPersistentUpload ) == qtrue );
+
+	glx::MaterialIR material = glx::GLX_RenderIR_MakeMaterial(
+		0, GLX_STAGE_LIGHTMAP | GLX_STAGE_MULTITEXTURE | GLX_STAGE_TEXMOD |
+			GLX_STAGE_DEPTH_FRAGMENT | GLX_STAGE_ENVIRONMENT | GLX_STAGE_SCREEN_MAP |
+			GLX_STAGE_DLIGHT_MAP,
+		GLX_MATERIAL_STATE_DEPTHMASK_TRUE | GLX_MATERIAL_STATE_ATEST_GE_80, 4 );
+	material.rgbGen = GLX_MATERIAL_RGBGEN_VERTEX;
+	material.alphaGen = GLX_MATERIAL_ALPHAGEN_VERTEX;
+	material.tcGen0 = GLX_MATERIAL_TCGEN_TEXTURE;
+	material.tcGen1 = GLX_MATERIAL_TCGEN_LIGHTMAP;
+	material.texMods0 = 2;
+	material.texMods1 = 1;
+	CHECK( glx::GLX_RenderIR_TierSupportsMaterial( glx::RenderProductTier::GL46, material ) == qtrue );
+
+	glx::WorldPacket packet {};
+	packet.pass = glx::FramePassKind::SkyAndOpaqueWorld;
+	packet.surfaces = 16;
+	packet.vertexes = 512;
+	packet.indexes = 768;
+	packet.itemCount = 16;
+	packet.material = material;
+	packet.upload = staticPersistentUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsWorldPacket( glx::RenderProductTier::GL46, packet ) == qtrue );
+
+	glx::DynamicDraw draw {};
+	draw.kind = glx::DynamicDrawKind::Indexed;
+	draw.pass = glx::FramePassKind::DynamicScene;
+	draw.primitive = 0x0004;
+	draw.count = 384;
+	draw.indexType = 0x1403;
+	draw.indices = reinterpret_cast<const void *>( static_cast<uintptr_t>( 0x200 ) );
+	draw.legacyReason = GLX_LEGACY_DELEGATION_NONE;
+	draw.profilerPath = GLX_DRAW_STREAM_GENERIC;
+	draw.material = material;
+	draw.upload = persistentUpload;
+	CHECK( glx::GLX_RenderIR_TierSupportsDynamicDraw( glx::RenderProductTier::GL46, draw ) == qtrue );
+
+	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.transfer = glx::OutputTransfer::Hdr10Pq;
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL46, output ) == qtrue );
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL2X, output ) == qfalse );
+
+	glx::PostNode post {};
+	post.kind = glx::PostNodeKind::Grade;
+	post.pass = glx::FramePassKind::PostProcess;
+	post.sequence = 4;
+	post.output = output;
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL46, post ) == qtrue );
+	post.kind = glx::PostNodeKind::ToneMap;
+	CHECK( glx::GLX_RenderIR_TierSupportsPostNode( glx::RenderProductTier::GL46, post ) == qtrue );
+
+	return true;
+}
+
 } // namespace
 
 int main()
@@ -935,6 +1591,14 @@ int main()
 		{ "CapabilityLogicClassifiesTiersAndExtensions", CapabilityLogicClassifiesTiersAndExtensions },
 		{ "StreamStrategySelectionFollowsFallbackLadder", StreamStrategySelectionFollowsFallbackLadder },
 		{ "StaticWorldPacketLogicClassifiesRunsAndPolicies", StaticWorldPacketLogicClassifiesRunsAndPolicies },
+		{ "RenderIRDefaultPassScheduleIsDeterministic", RenderIRDefaultPassScheduleIsDeterministic },
+		{ "RenderIRProductsValidate", RenderIRProductsValidate },
+		{ "RenderIRTierMappingKeepsSingleProductContract", RenderIRTierMappingKeepsSingleProductContract },
+		{ "GL12ExecutorPolicyIsFixedFunctionAndSdrOnly", GL12ExecutorPolicyIsFixedFunctionAndSdrOnly },
+		{ "GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements", GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements },
+		{ "GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements", GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements },
+		{ "GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures", GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures },
+		{ "GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures", GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures },
 	};
 
 	for ( const Test &test : tests ) {

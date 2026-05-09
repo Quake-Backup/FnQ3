@@ -595,6 +595,12 @@ void GLX_Stream_OnOpenGLReady( StreamState *state, const Capabilities &caps )
 	}
 	state->ringBytes = static_cast<size_t>( state->ringMegabytes ) * 1024u * 1024u;
 
+	if ( caps.tier == RenderProductTier::GL12 ) {
+		GLX_Stream_SetReason( state, "GL12 fixed-function tier uses client-memory draw submission" );
+		state->ready = qfalse;
+		return;
+	}
+
 	const char *requestedMode = state->r_glxStreamMode && state->r_glxStreamMode->string ?
 		state->r_glxStreamMode->string : "auto";
 	const StreamStrategySelection selection = GLX_Stream_SelectStrategy( requestedMode, caps.features );

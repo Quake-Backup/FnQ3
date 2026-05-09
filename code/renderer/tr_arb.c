@@ -267,9 +267,11 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 	qglNormalPointer( GL_FLOAT, sizeof( input->normal[0] ), (const GLvoid *)(intptr_t)( reservation.offset + normalOffset ) );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
 
-	GLX_CompatRecordDraw( numIndexes, GLX_DRAW_STREAM_GENERIC );
-	qglDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
-		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+	if ( !GLX_CompatDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		ok = qfalse;
+	}
 
 	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
@@ -281,8 +283,8 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
-		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
-	return qtrue;
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+	return ok;
 }
 #endif
 
@@ -1027,7 +1029,12 @@ static void RenderQuad( int w, int h )
 			(int)sizeof( v[0] ), t, 0, GL_TRIANGLE_STRIP, GLX_STAGE_POSTPROCESS_PASS );
 	}
 	if ( !glxStreamedDraw ) {
+#ifdef RENDERER_GLX
+		GLX_CompatDrawArrays( GL_TRIANGLE_STRIP, 0, 4,
+			GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_NONE );
+#else
 		qglDrawArrays( GL_TRIANGLE_STRIP, 0, 4 );
+#endif
 	}
 }
 
@@ -1985,7 +1992,12 @@ static void R_Bloom_LensEffect( float alpha )
 			colors, 4, GL_FLOAT, 0, GL_TRIANGLES, GLX_STAGE_POSTPROCESS_PASS );
 	}
 	if ( !glxStreamedDraw ) {
+#ifdef RENDERER_GLX
+		GLX_CompatDrawArrays( GL_TRIANGLES, 0, (int)ARRAY_LEN( verts ),
+			GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_NONE );
+#else
 		qglDrawArrays( GL_TRIANGLES, 0, ARRAY_LEN( verts ) );
+#endif
 	}
 }
 

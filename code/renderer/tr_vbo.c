@@ -1530,9 +1530,12 @@ static void VBO_RenderIBOItems( void )
 				curr_index_bind && curr_index_bind != VBO_world_indexes ? qtrue : qfalse ) ) {
 				continue;
 			}
-			GLX_CompatRecordDraw( vbo->ibo_items[ i ].length, GLX_DRAW_VBO_DEVICE );
-#endif
+			GLX_CompatDrawElements( GL_TRIANGLES, vbo->ibo_items[ i ].length, GL_INDEX_TYPE,
+				(const GLvoid *)(intptr_t) vbo->ibo_items[ i ].offset,
+				GLX_LEGACY_DELEGATION_VBO_DEVICE, GLX_DRAW_VBO_DEVICE );
+#else
 			qglDrawElements( GL_TRIANGLES, vbo->ibo_items[ i ].length, GL_INDEX_TYPE, (const GLvoid *)(intptr_t) vbo->ibo_items[ i ].offset );
+#endif
 		}
 	}
 }
@@ -1553,9 +1556,11 @@ static void VBO_RenderSoftItems( void )
 			curr_vertex_bind && curr_vertex_bind != VBO_world_data ? qtrue : qfalse ) ) {
 			return;
 		}
-		GLX_CompatRecordDraw( vbo->soft_buffer_indexes, GLX_DRAW_VBO_SOFT );
-#endif
+		GLX_CompatDrawElements( GL_TRIANGLES, (int)vbo->soft_buffer_indexes, GL_INDEX_TYPE,
+			vbo->soft_buffer, GLX_LEGACY_DELEGATION_VBO_SOFT, GLX_DRAW_VBO_SOFT );
+#else
 		qglDrawElements( GL_TRIANGLES, vbo->soft_buffer_indexes, GL_INDEX_TYPE, vbo->soft_buffer );
+#endif
 	}
 }
 

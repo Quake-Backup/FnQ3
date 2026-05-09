@@ -39,9 +39,11 @@ R_DrawElements
 */
 void R_DrawElements( int numIndexes, const glIndex_t *indexes ) {
 #ifdef RENDERER_GLX
-	GLX_CompatRecordDraw( numIndexes, GLX_DRAW_GENERIC );
-#endif
+	GLX_CompatDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE, indexes,
+		GLX_LEGACY_DELEGATION_GENERIC, GLX_DRAW_GENERIC );
+#else
 	qglDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE, indexes );
+#endif
 }
 
 
@@ -206,9 +208,11 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		GL_ClientState( 1, CLS_NONE );
 	}
 
-	GLX_CompatRecordDraw( input->numIndexes, GLX_DRAW_STREAM_GENERIC );
-	qglDrawElements( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
-		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+	if ( !GLX_CompatDrawElements( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		ok = qfalse;
+	}
 
 	if ( glxMaterialBound && pStage->depthFragment ) {
 		GLX_CompatUnbindMaterial();
@@ -218,9 +222,11 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 	if ( pStage->depthFragment ) {
 		GL_State( pStage->stateBits | GLS_DEPTHMASK_TRUE );
 		GL_ProgramEnable();
-		GLX_CompatRecordDraw( input->numIndexes, GLX_DRAW_STREAM_GENERIC );
-		qglDrawElements( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
-			(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+		if ( !GLX_CompatDrawElements( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
+			(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
+			GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+			ok = qfalse;
+		}
 		GL_ProgramDisable();
 	}
 
@@ -244,8 +250,8 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-		totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, materialFlags, qtrue );
-	return qtrue;
+		totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, materialFlags, ok );
+	return ok;
 }
 
 static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
@@ -342,9 +348,11 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, (const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
 
-	GLX_CompatRecordDraw( input->numIndexes, GLX_DRAW_STREAM_GENERIC );
-	qglDrawElements( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
-		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+	if ( !GLX_CompatDrawElements( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		ok = qfalse;
+	}
 
 	if ( glxMaterialBound ) {
 		GLX_CompatUnbindMaterial();
@@ -360,8 +368,8 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-		totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, qtrue );
-	return qtrue;
+		totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, ok );
+	return ok;
 }
 
 static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input,
@@ -450,9 +458,11 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 	qglColorPointer( 4, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
 
-	GLX_CompatRecordDraw( numIndexes, GLX_DRAW_STREAM_GENERIC );
-	qglDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
-		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+	if ( !GLX_CompatDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		ok = qfalse;
+	}
 
 	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
@@ -464,8 +474,8 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
-		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
-	return qtrue;
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+	return ok;
 }
 #endif
 
@@ -596,7 +606,12 @@ static void DrawNormals( const shaderCommands_t *input ) {
 		qglLockArraysEXT( 0, tess.numVertexes * 2 );
 	}
 
+#ifdef RENDERER_GLX
+	GLX_CompatDrawArrays( GL_LINES, 0, tess.numVertexes * 2,
+		GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_DEBUG );
+#else
 	qglDrawArrays( GL_LINES, 0, tess.numVertexes * 2 );
+#endif
 
 	if ( qglUnlockArraysEXT ) {
 		qglUnlockArraysEXT();

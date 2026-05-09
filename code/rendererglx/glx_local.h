@@ -15,7 +15,8 @@ struct Capabilities {
 	const char *extensions;
 	int major;
 	int minor;
-	CapabilityTier tier;
+	RenderProductTier tier;
+	CapabilityHint hint;
 	FeatureSet features;
 };
 

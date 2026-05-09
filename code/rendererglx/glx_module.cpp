@@ -2,6 +2,7 @@
 #include "glx_module.h"
 #include "glx_caps.h"
 #include "glx_debug.h"
+#include "glx_executor.h"
 #include "glx_material.h"
 #include "glx_postprocess.h"
 #include "glx_profiler.h"
@@ -272,6 +273,105 @@ static void GLX_Module_ToPublicReservation( const StreamReservation &streamReser
 	reservation->committed = streamReservation.committed;
 }
 
+static UploadPlan GLX_Module_ClientMemoryUploadPlan()
+{
+	return GLX_RenderIR_MakeUploadPlan( UploadPlanKind::ClientMemory, -1, 0, 0, 0 );
+}
+
+static UploadPlan GLX_Module_StreamUploadPlan( int totalBytes, int vertexBytes, int indexBytes )
+{
+	UploadPlan plan = GLX_RenderIR_MakeUploadPlan( UploadPlanKind::TransientStream,
+		-1, totalBytes > 0 ? static_cast<unsigned int>( totalBytes ) : 0,
+		vertexBytes > 0 ? static_cast<unsigned int>( vertexBytes ) : 0,
+		indexBytes > 0 ? static_cast<unsigned int>( indexBytes ) : 0 );
+	plan.alignment = 64;
+	plan.sync = UploadSyncPolicy::FrameFence;
+	return plan;
+}
+
+static MaterialIR GLX_Module_DrawMaterialIR( int profilerPath )
+{
+	MaterialIR material = GLX_RenderIR_MakeMaterial( 0, 0, 0, 0 );
+	if ( profilerPath == GLX_DRAW_DEBUG ) {
+		material.flags = GLX_STAGE_DETAIL;
+	}
+	return material;
+}
+
+static DynamicDraw GLX_Module_IndexedDrawIR( unsigned int mode, int count, unsigned int type,
+	const void *indices, int legacyReason, int profilerPath )
+{
+	DynamicDraw draw {};
+	draw.kind = DynamicDrawKind::Indexed;
+	draw.pass = FramePassKind::DynamicScene;
+	draw.primitive = mode;
+	draw.count = count;
+	draw.indexType = type;
+	draw.indices = indices;
+	draw.legacyReason = legacyReason;
+	draw.profilerPath = profilerPath;
+	draw.material = GLX_Module_DrawMaterialIR( profilerPath );
+	draw.upload = legacyReason >= 0 ? GLX_Module_ClientMemoryUploadPlan() :
+		GLX_Module_StreamUploadPlan( count > 0 ? count : 0, 0, count > 0 ? count : 0 );
+	return draw;
+}
+
+static DynamicDraw GLX_Module_ArrayDrawIR( unsigned int mode, int first, int count,
+	int legacyReason, int profilerPath )
+{
+	DynamicDraw draw {};
+	draw.kind = DynamicDrawKind::Arrays;
+	draw.pass = FramePassKind::DynamicScene;
+	draw.primitive = mode;
+	draw.first = first;
+	draw.count = count;
+	draw.legacyReason = legacyReason;
+	draw.profilerPath = profilerPath;
+	draw.material = GLX_Module_DrawMaterialIR( profilerPath );
+	draw.upload = legacyReason >= 0 ? GLX_Module_ClientMemoryUploadPlan() :
+		GLX_Module_StreamUploadPlan( count > 0 ? count : 0, count > 0 ? count : 0, 0 );
+	return draw;
+}
+
+static WorldPacket GLX_Module_WorldPacketIR( int packetIndex, int sort,
+	int surfaces, int vertexes, int indexes, int firstItem, int itemCount,
+	int vertexOffset, int vertexBytes, int indexOffset, int indexBytes,
+	int shaderStagePasses, int flags )
+{
+	WorldPacket packet {};
+	packet.packetIndex = packetIndex;
+	packet.pass = FramePassKind::SkyAndOpaqueWorld;
+	packet.surfaces = surfaces;
+	packet.vertexes = vertexes;
+	packet.indexes = indexes;
+	packet.firstItem = firstItem;
+	packet.itemCount = itemCount;
+	packet.vertexOffset = vertexOffset;
+	packet.indexOffset = indexOffset;
+	packet.material = GLX_RenderIR_MakeMaterial( sort, flags, 0, shaderStagePasses );
+	packet.upload = GLX_RenderIR_MakeUploadPlan( UploadPlanKind::StaticWorld, -1,
+		static_cast<unsigned int>( ( vertexBytes > 0 ? vertexBytes : 0 ) +
+			( indexBytes > 0 ? indexBytes : 0 ) ),
+		vertexBytes > 0 ? static_cast<unsigned int>( vertexBytes ) : 0,
+		indexBytes > 0 ? static_cast<unsigned int>( indexBytes ) : 0 );
+	return packet;
+}
+
+static OutputTransform GLX_Module_OutputTransformIR( int hdrMode, int renderScaleMode,
+	float greyscale )
+{
+	OutputTransform output = GLX_RenderIR_DefaultOutputTransform();
+	output.hdrMode = hdrMode;
+	output.renderScaleMode = renderScaleMode;
+	output.greyscale = greyscale;
+	return output;
+}
+
+static qboolean GLX_Module_EmitFrameSchedule( FramePass *passes, int capacity, int *count )
+{
+	return GLX_RenderIR_DefaultPassSchedule( passes, capacity, count );
+}
+
 class RendererModule {
 public:
 	void RegisterCommands();
@@ -290,6 +390,10 @@ public:
 	void PrintStaticWorld() const;
 	void PrintFrameCounters() const;
 	void StreamTest();
+	qboolean DrawElements( unsigned int mode, int count, unsigned int type,
+		const void *indices, int legacyReason, int profilerPath );
+	qboolean DrawArrays( unsigned int mode, int first, int count,
+		int legacyReason, int profilerPath );
 	void RecordDraw( int indexes, int path );
 	void RecordShaderBatch( const char *shaderName, int sort, int numPasses, int numVertexes, int numIndexes, int flags );
 	void RecordMaterialStage( int path, int flags, unsigned int stateBits, int rgbGen, int alphaGen,
@@ -367,10 +471,12 @@ private:
 
 	Capabilities caps_ {};
 	DebugState debug_ {};
+	ExecutorState executor_ {};
 	MaterialState material_ {};
 	PostProcessState postprocess_ {};
 	ProfilerState profiler_ {};
 	cvar_t *profile_ {};
+	cvar_t *requireOwnership_ {};
 	StaticWorldStats staticWorld_ {};
 	StreamState stream_ {};
 };
@@ -390,6 +496,9 @@ void RendererModule::RegisterCommands()
 	profile_ = RI().Cvar_Get( "r_glxProfile", "", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( profile_,
 		"Apply a named GLx startup profile during renderer registration: off, rc, stress, manual, or blank for manual cvars." );
+	requireOwnership_ = RI().Cvar_Get( "r_glxRequireOwnership", "0", CVAR_ARCHIVE_ND );
+	RI().Cvar_SetDescription( requireOwnership_,
+		"Reject GLx legacy-delegation draw submissions so ownership-proof runs cannot pass through compatibility draw paths." );
 
 	GLX_Debug_RegisterCvars( &debug_ );
 	GLX_Material_RegisterCvars( &material_ );
@@ -414,7 +523,15 @@ void RendererModule::RemoveCommands()
 
 void RendererModule::OnOpenGLReady( const glconfig_t *config, const char *extensions )
 {
+	FramePass frameSchedule[GLX_RENDER_IR_PASS_COUNT];
+	int frameScheduleCount = 0;
+
 	GLX_Caps_Init( &caps_, config, extensions );
+	GLX_Executor_Init( &executor_, caps_ );
+	if ( !GLX_Module_EmitFrameSchedule( frameSchedule, GLX_RENDER_IR_PASS_COUNT, &frameScheduleCount ) ||
+		!GLX_Executor_ConsumeFrameSchedule( &executor_, frameSchedule, frameScheduleCount ) ) {
+		RI().Error( ERR_DROP, "GLx front-end pass schedule is invalid" );
+	}
 	GLX_Debug_OnOpenGLReady( &debug_, caps_ );
 	GLX_Material_OnOpenGLReady( &material_, caps_ );
 	GLX_PostProcess_OnOpenGLReady( &postprocess_, caps_ );
@@ -423,12 +540,19 @@ void RendererModule::OnOpenGLReady( const glconfig_t *config, const char *extens
 	GLX_Debug_LabelObject( debug_, GL_BUFFER, stream_.buffer, "GLx dynamic stream ring" );
 	GLX_Profiler_OnOpenGLReady( &profiler_, caps_ );
 
-	RI().Printf( PRINT_ALL, "GLx renderer bootstrap: tier %s, GL %i.%i, material %s, stream %s, timer query %s, debug output %s\n",
-		GLX_Caps_TierName( caps_.tier ), caps_.major, caps_.minor,
+	RI().Printf( PRINT_ALL, "GLx renderer bootstrap: product tier %s, hint %s, executor %s/%s, GL %i.%i, material %s, stream %s, timer query %s, debug output %s\n",
+		GLX_Caps_TierName( caps_.tier ), GLX_Caps_HintName( caps_.hint ),
+		GLX_Executor_TierName( executor_ ), GLX_Executor_ModeName( executor_ ),
+		caps_.major, caps_.minor,
 		BoolName( GLX_Material_Active( material_ ) ),
 		GLX_Stream_StrategyName( stream_.strategy ),
 		BoolName( GLX_Profiler_TimerReady( profiler_ ) ),
 		BoolName( GLX_Debug_CallbackInstalled( debug_ ) ) );
+	RI().Printf( PRINT_ALL, "GLx pass schedule: %s %i/%08x %s\n",
+		executor_.frameScheduleValid ? "valid" : "invalid",
+		executor_.frameScheduleCount,
+		executor_.frameScheduleHash,
+		executor_.frameScheduleText[0] ? executor_.frameScheduleText : "none" );
 }
 
 void RendererModule::Shutdown( int code )
@@ -439,6 +563,7 @@ void RendererModule::Shutdown( int code )
 	GLX_PostProcess_Shutdown( &postprocess_ );
 	GLX_Profiler_Shutdown( &profiler_ );
 	GLX_Debug_Shutdown( &debug_ );
+	GLX_Executor_Shutdown( &executor_ );
 	GLX_Stream_Shutdown( &stream_ );
 	GLX_StaticWorld_Clear( &staticWorld_ );
 	GLX_Caps_Reset( &caps_ );
@@ -518,7 +643,10 @@ void RendererModule::PrintCaps() const
 	RI().Printf( PRINT_ALL, "  GL vendor: %s\n", caps_.config->vendor_string );
 	RI().Printf( PRINT_ALL, "  GL renderer: %s\n", caps_.config->renderer_string );
 	RI().Printf( PRINT_ALL, "  GL version: %s\n", caps_.config->version_string );
-	RI().Printf( PRINT_ALL, "  capability tier: %s\n", GLX_Caps_TierName( caps_.tier ) );
+	RI().Printf( PRINT_ALL, "  product tier: %s\n", GLX_Caps_TierName( caps_.tier ) );
+	RI().Printf( PRINT_ALL, "  capability hint: %s\n", GLX_Caps_HintName( caps_.hint ) );
+	RI().Printf( PRINT_ALL, "  render IR executor tier: %s\n", GLX_Executor_TierName( executor_ ) );
+	RI().Printf( PRINT_ALL, "  render IR executor mode: %s\n", GLX_Executor_ModeName( executor_ ) );
 	RI().Printf( PRINT_ALL, "  map buffer range: %s\n", BoolName( caps_.features.mapBufferRange ) );
 	RI().Printf( PRINT_ALL, "  uniform buffers: %s\n", BoolName( caps_.features.uniformBufferObject ) );
 	RI().Printf( PRINT_ALL, "  instanced arrays: %s\n", BoolName( caps_.features.instancedArrays ) );
@@ -707,6 +835,7 @@ void RendererModule::PrintInfo() const
 	PrintCaps();
 	GLX_Material_PrintInfo( material_ );
 	GLX_PostProcess_PrintInfo( postprocess_ );
+	GLX_Executor_PrintInfo( executor_ );
 	GLX_Profiler_PrintInfo( profiler_ );
 	GLX_StaticWorld_PrintInfo( staticWorld_ );
 	GLX_Stream_PrintInfo( stream_ );
@@ -865,6 +994,84 @@ void RendererModule::PrintFrameCounters() const
 		profiler_.blendMaterialStages,
 		profiler_.texmodMaterialStages,
 		profiler_.environmentMaterialStages );
+	RI().Printf( PRINT_ALL, "glx: render IR executor %s/%s passes %u world %u dynamic %u idx/%u verts materials %u uploads %u post %u outputs %u rejects %u\n",
+		GLX_Executor_TierName( executor_ ),
+		GLX_Executor_ModeName( executor_ ),
+		executor_.framePasses,
+		executor_.worldPackets,
+		executor_.dynamicDraws,
+		executor_.dynamicIndexes,
+		executor_.dynamicVertices,
+		executor_.materialPlans,
+		executor_.uploadPlans,
+		executor_.postNodes,
+		executor_.outputTransforms,
+		executor_.rejectedProducts );
+	if ( caps_.tier == RenderProductTier::GL12 ) {
+		RI().Printf( PRINT_ALL, "glx: GL12 fixed-function draws %u client-memory %u unsupported stream %u post %u output %u\n",
+			executor_.fixedFunctionDraws,
+			executor_.clientMemoryDraws,
+			executor_.unsupportedStreamUploads,
+			executor_.unsupportedPostNodes,
+			executor_.unsupportedOutputTransforms );
+	}
+	if ( caps_.tier == RenderProductTier::GL2X ) {
+		RI().Printf( PRINT_ALL, "glx: GL2X programmable draws %u stream %u materials %u post-lite %u unsupported advanced-upload %u post %u output %u\n",
+			executor_.programmableDraws,
+			executor_.streamUploadDraws,
+			executor_.programmableMaterialPlans,
+			executor_.postprocessLiteNodes,
+			executor_.unsupportedAdvancedUploads,
+			executor_.unsupportedPostNodes,
+			executor_.unsupportedOutputTransforms );
+	}
+	if ( caps_.tier == RenderProductTier::GL3X ) {
+		RI().Printf( PRINT_ALL, "glx: GL3X performance draws %u sync-uploads %u static-buffers %u dynamic-buffers %u materials %u fbo-post %u unsupported persistent-upload %u\n",
+			executor_.performanceDraws,
+			executor_.syncUploadPlans,
+			executor_.staticBufferProducts,
+			executor_.dynamicBufferProducts,
+			executor_.performanceMaterialPlans,
+			executor_.fboPostNodes,
+			executor_.unsupportedPersistentUploads );
+	}
+	if ( caps_.tier == RenderProductTier::GL41 ) {
+		RI().Printf( PRINT_ALL, "glx: GL41 mac-modern draws %u sync-uploads %u static-buffers %u dynamic-buffers %u materials %u post %u unsupported persistent-upload %u gl43-required 0 gl44-required 0 gl45-required 0\n",
+			executor_.macModernDraws,
+			executor_.macModernSyncUploadPlans,
+			executor_.macModernStaticBufferProducts,
+			executor_.macModernDynamicBufferProducts,
+			executor_.macModernMaterialPlans,
+			executor_.macModernPostNodes,
+			executor_.unsupportedPersistentUploads );
+	}
+	if ( caps_.tier == RenderProductTier::GL46 ) {
+		RI().Printf( PRINT_ALL, "glx: GL46 high-end draws %u persistent-uploads %u sync-uploads %u dsa-products %u mdi-products %u aggressive-static %u materials %u post %u gpu-counters %u static-mdi %u/%u calls/%u idx\n",
+			executor_.highEndDraws,
+			executor_.highEndPersistentUploads,
+			executor_.highEndSyncUploads,
+			executor_.highEndDsaProducts,
+			executor_.highEndMdiProducts,
+			executor_.highEndAggressiveStaticProducts,
+			executor_.highEndMaterialPlans,
+			executor_.highEndPostNodes,
+			profiler_.backendQueries,
+			staticWorld_.multiDrawIndirectCalls,
+			staticWorld_.multiDrawIndirectAttempts,
+			staticWorld_.multiDrawIndirectIndexes );
+	}
+	RI().Printf( PRINT_ALL, "glx: pass schedule %s %i/%08x %s\n",
+		executor_.frameScheduleValid ? "valid" : "invalid",
+		executor_.frameScheduleCount,
+		executor_.frameScheduleHash,
+		executor_.frameScheduleText[0] ? executor_.frameScheduleText : "none" );
+	RI().Printf( PRINT_ALL, "glx: ownership legacy delegation %u calls/%u items, generic %u, vbo-device %u, vbo-soft %u, arrays %u\n",
+		profiler_.legacyDelegationCalls,
+		profiler_.legacyDelegationItems,
+		profiler_.legacyDelegationReasonCalls[GLX_LEGACY_DELEGATION_GENERIC],
+		profiler_.legacyDelegationReasonCalls[GLX_LEGACY_DELEGATION_VBO_DEVICE],
+		profiler_.legacyDelegationReasonCalls[GLX_LEGACY_DELEGATION_VBO_SOFT],
+		profiler_.legacyDelegationReasonCalls[GLX_LEGACY_DELEGATION_DRAW_ARRAY] );
 	RI().Printf( PRINT_ALL, "glx: material renderer %s/%s programs %i, binds %u/%u attempts, switches %u, cache %u/%u, failures %u compile/%u link/%u precache/%u bind, labels %u\n",
 		material_.r_glxMaterialRenderer && material_.r_glxMaterialRenderer->integer ? "on" : "off",
 		material_.ready ? "ready" : "not-ready",
@@ -1090,6 +1297,48 @@ void RendererModule::StreamTest()
 	GLX_Stream_RunSelfTest( &stream_ );
 }
 
+qboolean RendererModule::DrawElements( unsigned int mode, int count, unsigned int type,
+	const void *indices, int legacyReason, int profilerPath )
+{
+	DynamicDraw draw = GLX_Module_IndexedDrawIR( mode, count, type, indices, legacyReason, profilerPath );
+
+	if ( legacyReason >= 0 ) {
+		GLX_Profiler_RecordLegacyDelegation( &profiler_, legacyReason, count );
+		if ( requireOwnership_ && requireOwnership_->integer ) {
+			return qfalse;
+		}
+	}
+
+	if ( !GLX_Executor_ExecuteDynamicDraw( &executor_, draw ) ) {
+		return qfalse;
+	}
+	if ( profilerPath >= 0 ) {
+		GLX_Profiler_RecordDraw( &profiler_, count, profilerPath );
+	}
+	return qtrue;
+}
+
+qboolean RendererModule::DrawArrays( unsigned int mode, int first, int count,
+	int legacyReason, int profilerPath )
+{
+	DynamicDraw draw = GLX_Module_ArrayDrawIR( mode, first, count, legacyReason, profilerPath );
+
+	if ( legacyReason >= 0 ) {
+		GLX_Profiler_RecordLegacyDelegation( &profiler_, legacyReason, count );
+		if ( requireOwnership_ && requireOwnership_->integer ) {
+			return qfalse;
+		}
+	}
+
+	if ( !GLX_Executor_ExecuteDynamicDraw( &executor_, draw ) ) {
+		return qfalse;
+	}
+	if ( profilerPath >= 0 ) {
+		GLX_Profiler_RecordDraw( &profiler_, count, profilerPath );
+	}
+	return qtrue;
+}
+
 void RendererModule::RecordDraw( int indexes, int path )
 {
 	GLX_Profiler_RecordDraw( &profiler_, indexes, path );
@@ -1103,8 +1352,17 @@ void RendererModule::RecordShaderBatch( const char *shaderName, int sort, int nu
 void RendererModule::RecordMaterialStage( int path, int flags, unsigned int stateBits, int rgbGen, int alphaGen,
 	int tcGen0, int tcGen1, int texMods0, int texMods1, int numVertexes, int numIndexes )
 {
+	MaterialIR material = GLX_RenderIR_MakeMaterial( 0, flags, stateBits, 1 );
+	material.rgbGen = rgbGen;
+	material.alphaGen = alphaGen;
+	material.tcGen0 = tcGen0;
+	material.tcGen1 = tcGen1;
+	material.texMods0 = texMods0;
+	material.texMods1 = texMods1;
+
 	GLX_Profiler_RecordMaterialStage( &profiler_, path, flags, stateBits, rgbGen, alphaGen,
 		tcGen0, tcGen1, texMods0, texMods1, numVertexes, numIndexes );
+	GLX_Executor_ConsumeMaterial( &executor_, material );
 }
 
 qboolean RendererModule::MaterialRendererActive() const
@@ -1244,8 +1502,14 @@ void RendererModule::StreamCommit( glxStreamReservation_t *reservation )
 void RendererModule::RecordStreamDrawResult( int numVertexes, int numIndexes, int totalBytes, int indexBytes,
 	int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, int materialFlags, qboolean success )
 {
+	UploadPlan upload = GLX_Module_StreamUploadPlan( totalBytes,
+		totalBytes > indexBytes + texcoord1Bytes ? totalBytes - indexBytes - texcoord1Bytes : 0,
+		indexBytes );
+	upload.texcoordBytes = texcoord1Bytes > 0 ? static_cast<unsigned int>( texcoord1Bytes ) : 0;
+
 	GLX_Stream_RecordDrawResult( &stream_, numVertexes, numIndexes, totalBytes, indexBytes,
 		texcoord1Bytes, multitexture, fog, depthFragment, materialFlags, success );
+	GLX_Executor_ConsumeUploadPlan( &executor_, upload );
 }
 
 void RendererModule::RecordStreamDrawSkip( int reason )
@@ -1273,13 +1537,47 @@ void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomA
 	int screenshotMask, qboolean windowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
 	float greyscale )
 {
+	OutputTransform output = GLX_Module_OutputTransformIR( hdrMode, renderScaleMode, greyscale );
+	PostNode node {};
+	node.kind = bloomAvailable ? PostNodeKind::BloomFinal : PostNodeKind::Resolve;
+	node.pass = FramePassKind::PostProcess;
+	node.sequence = static_cast<int>( postprocess_.frames );
+	node.inputTarget = fboReadIndex;
+	node.outputTarget = 0;
+	node.flags = ( minimized ? 0x1u : 0u ) | ( programReady ? 0x2u : 0u ) |
+		( windowAdjusted ? 0x4u : 0u ) | ( screenshotMask ? 0x8u : 0u );
+	node.output = output;
+
 	GLX_PostProcess_RecordFrame( &postprocess_, minimized, bloomAvailable, programReady,
 		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
+	GLX_Executor_ConsumePostNode( &executor_, node );
+	GLX_Executor_ConsumeOutputTransform( &executor_, output );
 }
 
 void RendererModule::RecordPostProcessResult( int result )
 {
+	PostNode node {};
+	node.pass = FramePassKind::PostProcess;
+	node.sequence = static_cast<int>( postprocess_.frames );
+	node.output = GLX_Module_OutputTransformIR( postprocess_.hdrMode, postprocess_.renderScaleMode, postprocess_.lastGreyscale );
+
+	switch ( result ) {
+	case GLX_POSTPROCESS_RESULT_BLOOM_FINAL:
+		node.kind = PostNodeKind::BloomFinal;
+		break;
+	case GLX_POSTPROCESS_RESULT_GAMMA_DIRECT:
+		node.kind = PostNodeKind::GammaDirect;
+		break;
+	case GLX_POSTPROCESS_RESULT_GAMMA_BLIT:
+		node.kind = PostNodeKind::GammaBlit;
+		break;
+	default:
+		node.kind = PostNodeKind::Resolve;
+		break;
+	}
+
 	GLX_PostProcess_RecordFrameResult( &postprocess_, result );
+	GLX_Executor_ConsumePostNode( &executor_, node );
 }
 
 void RendererModule::RecordBloomCreate( int result, int requestedPasses, int effectivePasses, int textureUnits )
@@ -1350,9 +1648,14 @@ void RendererModule::RecordStaticWorldPacket( const char *shaderName, int sort,
 	int surfaces, int vertexes, int indexes, int firstItem, int itemCount, int vertexOffset, int vertexBytes,
 	int indexOffset, int indexBytes, int shaderStagePasses, int flags )
 {
+	WorldPacket packet = GLX_Module_WorldPacketIR( staticWorld_.packetCount, sort,
+		surfaces, vertexes, indexes, firstItem, itemCount, vertexOffset, vertexBytes,
+		indexOffset, indexBytes, shaderStagePasses, flags );
+
 	GLX_StaticWorld_RecordPacket( &staticWorld_, shaderName, sort,
 		surfaces, vertexes, indexes, firstItem, itemCount, vertexOffset, vertexBytes,
 		indexOffset, indexBytes, shaderStagePasses, flags );
+	GLX_Executor_ConsumeWorldPacket( &executor_, packet );
 }
 
 void RendererModule::UploadStaticWorldArena( const void *vertexData, int vertexBytes, const void *indexData, int indexBytes )
@@ -1539,6 +1842,18 @@ extern "C" void GLX_Renderer_StreamTest_f( void )
 extern "C" void GLX_Renderer_PrintFrameCounters( void )
 {
 	glx::g_module.PrintFrameCounters();
+}
+
+extern "C" qboolean GLX_Renderer_DrawElements( unsigned int mode, int count,
+	unsigned int type, const void *indices, int legacyReason, int profilerPath )
+{
+	return glx::g_module.DrawElements( mode, count, type, indices, legacyReason, profilerPath );
+}
+
+extern "C" qboolean GLX_Renderer_DrawArrays( unsigned int mode, int first, int count,
+	int legacyReason, int profilerPath )
+{
+	return glx::g_module.DrawArrays( mode, first, count, legacyReason, profilerPath );
 }
 
 extern "C" void GLX_Renderer_RecordDraw( int indexes, int path )

@@ -558,15 +558,19 @@ static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
 
 	GL_Cull( CT_BACK_SIDED );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_INCR );
-	GLX_CompatRecordDraw( tess.numIndexes, GLX_DRAW_STREAM_GENERIC );
-	qglDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
-		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+	if ( !GLX_CompatDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		ok = qfalse;
+	}
 
 	GL_Cull( CT_FRONT_SIDED );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_DECR );
-	GLX_CompatRecordDraw( tess.numIndexes, GLX_DRAW_STREAM_GENERIC );
-	qglDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
-		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ) );
+	if ( !GLX_CompatDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
+		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		ok = qfalse;
+	}
 
 	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
@@ -576,8 +580,8 @@ static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( numVertexes, tess.numIndexes,
-		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS, qtrue );
-	return qtrue;
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS, ok );
+	return ok;
 }
 #endif
 
@@ -769,7 +773,12 @@ void RB_ShadowFinish( void ) {
 	}
 #endif
 	if ( !glxStreamedDraw ) {
+#ifdef RENDERER_GLX
+		GLX_CompatDrawArrays( GL_TRIANGLE_STRIP, 0, 4,
+			GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_NONE );
+#else
 		qglDrawArrays( GL_TRIANGLE_STRIP, 0, 4 );
+#endif
 	}
 
 	qglColor4f( 1, 1, 1, 1 );

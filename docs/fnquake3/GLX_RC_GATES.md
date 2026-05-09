@@ -6,6 +6,8 @@ This document freezes the initial GLx release-candidate target. GLx remains expe
 
 The gates are intentionally conservative. They prove that GLx can load through the existing renderer ABI, survive renderer switching and `vid_restart`-equivalent paths, preserve the current OpenGL display surface, and stay close enough to the legacy OpenGL renderer to justify the next ownership work. They are not permission to remove `opengl` or `opengl2`.
 
+The final renderer replacement contract is [GLX_FINAL_CONTRACT.md](GLX_FINAL_CONTRACT.md). The gates in this document validate the transitional RC surface; they do not satisfy the final five-tier, GLx-owned draw, scene-linear color, and full feature-closure requirements by themselves.
+
 ## Blocking Runtime Matrix
 
 The first GLx RC requires runtime evidence on:
@@ -13,7 +15,15 @@ The first GLx RC requires runtime evidence on:
 - Windows 10 or newer, x64, dynamic renderer build, retail `baseq3` assets.
 - Linux x86_64, Mesa or vendor OpenGL driver, dynamic renderer build, retail `baseq3` assets.
 
-Every blocking run must expose at least the GLx compatibility floor: OpenGL 2.1 with GLSL 1.20. Core-tier and advanced-tier features are optional accelerators. Missing persistent mapping, sync objects, multidraw, indirect draw, or debug-output support must select a fallback path rather than fail renderer initialization.
+Every blocking RC run must expose at least the `GL2X` product tier: OpenGL 2.x with GLSL-era program support. `GL12` exists as the final fixed-function compatibility floor, but the current conservative RC profile still exercises the programmable migration surface. `GL3X`, `GL41`, and `GL46` features are optional accelerators for this RC gate. Missing persistent mapping, sync objects, multidraw, indirect draw, direct-state-access, or debug-output support must select a fallback path rather than fail renderer initialization. A `GL2X` run must report the `GL2X programmable executor` contract: stream uploads, the GLSL material compiler, postprocess-lite behavior, common material coverage, dynamic entities, lightmaps, multitexture, fog, sprites, beams, screenshots, and demos are supported, while modern post-chain and scene-linear output are not required.
+
+`GL12` is not a blocking RC profile target, but its diagnostics are still structured. A GL12 run must report the `GL12 fixed-function executor` contract, client-memory draw support, and the fixed-function coverage line for lightmaps, multitexture, fog, sprites, beams, dynamic lights, stencil shadows when available, screenshots, and demos. It must also report stream uploads, the GLSL material compiler, and the modern post chain as unavailable on that tier.
+
+`GL3X` is likewise structured even though it is an accelerator for the conservative RC gate. A GL3X run must report the `GL3X performance executor` contract: FBO postprocess, UBO-style frame/object constants, timer queries, sync-aware uploads, static buffer ownership, dynamic buffer ownership, modern post-chain, scene-linear output, screenshots, and demos are supported, while persistent mapped uploads, indirect submission requirements, and direct state access requirements are not mandatory on that tier.
+
+`GL41` runs must report the `GL41 mac-modern executor` contract. That line proves the macOS ceiling tier is treated as a supported modern product target, with FBO postprocess, UBO-style constants, timer queries, sync-aware uploads, static/dynamic buffer ownership, scene-linear post, high-quality SDR, optional hardware HDR output, screenshots, and demos. The paired GL4+ requirements line must keep debug output, buffer storage, direct state access, multi-draw indirect, and persistent uploads marked as non-required.
+
+`GL46` runs must report the `GL46 high-end executor` contract. That line proves persistent uploads, buffer-storage upload policy, sync-heavy streaming, DSA, MDI, aggressive static-world submission, detailed GPU counters, hardware HDR output, screenshots, and demos are all part of the high-end tier. The compact `glx: GL46 high-end ...` line records persistent-upload, DSA-product, MDI-product, aggressive-static, backend GPU query, and static-world MDI counters so the tier can be compared against lower paths.
 
 Nightly packaging should continue to build GLx wherever the repository already enables `USE_GLX`, including Windows x86, macOS, Linux aarch64, and other packaged targets. Those platforms need at least manual smoke coverage before GLx becomes the default or `opengl` becomes an alias, but they are not blockers for the first conservative RC unless maintainers add stable GPU runners for them.
 
@@ -30,7 +40,7 @@ Nightly packaging should continue to build GLx wherever the repository already e
 
 The initial scene set is deliberately small and stock-data friendly. It may grow as bugs are found, but it should not shrink during an RC cycle.
 
-The profile names are not just documentation labels. `glx-parity` launches GLx with `r_glxProfile rc`, and `glx-stress` launches GLx with `r_glxProfile stress`, so startup-sensitive resources are built under the same profile that `glxprofile status` reports in the renderer.
+The profile names are not just documentation labels. `glx-parity` and `glx-ownership` launch GLx with `r_glxProfile rc`, and `glx-stress` launches GLx with `r_glxProfile stress`, so startup-sensitive resources are built under the same profile that `glxprofile status` reports in the renderer. `glx-ownership` uses the RC cvar surface plus `r_glxRequireOwnership 1`, rejecting legacy-delegation draw submissions and turning any attempted delegation into a blocking diagnostic failure.
 
 ## Frozen RC Profile
 
@@ -96,12 +106,19 @@ Non-dry-run gate manifests now include structured analysis of the GLx diagnostic
 - requested FBO output that is not ready, FBO init failures, bloom create failures, bloom pass failures, or minimized final output;
 - dynamic stream readiness loss under the RC/stress profiles, sync/upload/reservation failures, same-frame wrap rejects, streamed draw fallbacks, material-program stream skips, or high-risk dynamic-light/screen-map/video-map material stream draws;
 - static-world renderer or packet batching disabled under the RC/stress profiles, static arena/indirect-buffer failures, or static-world GL errors.
+- a `GL12` diagnostic that does not expose the fixed-function executor contract or that claims stream uploads, the GLSL material compiler, or the modern post chain are supported on the GL12 tier.
+- a `GL2X` diagnostic that does not expose the programmable executor contract or that treats persistent/modern post/HDR requirements as mandatory on the GL2X tier.
+- a `GL3X` diagnostic that does not expose the performance executor contract, omits FBO/UBO/timer/sync/static-buffer/dynamic-buffer ownership, or treats GL4-only persistent upload, indirect submission, or DSA requirements as mandatory on the GL3X tier.
+- a `GL41` diagnostic that does not expose the mac-modern executor contract, omits the modern macOS ceiling feature surface, or treats GL4.3 debug output, GL4.4 buffer storage, GL4.5 DSA, MDI, or persistent uploads as mandatory on the GL41 tier.
+- a `GL46` diagnostic that does not expose the high-end executor contract or omits persistent uploads, buffer storage uploads, sync-heavy streaming, DSA, MDI, aggressive static-world submission, detailed GPU counters, hardware HDR output, or the required high-end driver feature requirements.
+
+The analyzer also records `glx: ownership legacy delegation ...` diagnostics. Transitional RC gates keep those counters as review evidence, while the ownership-proof `glx-ownership` profile fails when any legacy draw delegation remains.
 
 Ordinary compatibility counters, unsupported capability fallbacks, packet-shape data, skipped material keys, and other tuning metrics remain in the manifest and Markdown summary for review, but they are not treated as blocking failures by themselves.
 
 ## Performance Samples
 
-During GLx screenshot captures the sweep briefly enables `r_speeds 7`, waits a small number of frames, captures the screenshot, and disables `r_speeds` again. The compact `glx:` frame-counter lines are parsed into the manifest and Markdown summary as performance samples. They include tier, draw/index pressure, stream strategy/readiness, backend GPU timer text, material renderer failure counts, postprocess output state, stream draw pressure, material-shape stream draw counts, state-only dynamic stream draw counts, and static-world draw/MDI counters.
+During GLx screenshot captures the sweep briefly enables `r_speeds 7`, waits a small number of frames, captures the screenshot, and disables `r_speeds` again. The compact `glx:` frame-counter lines are parsed into the manifest and Markdown summary as performance samples. They include the five-value product tier, locked pass-schedule text/hash, draw/index pressure, stream strategy/readiness, backend GPU timer text, material renderer failure counts, postprocess output state, stream draw pressure, material-shape stream draw counts, state-only dynamic stream draw counts, and static-world draw/MDI counters.
 
 Named RC gates require at least one GLx frame-counter sample in a non-dry-run screenshot sweep. `--perf-sample-wait` controls the number of frames sampled around each GLx capture, and `--no-perf-samples` is available only for focused local experiments that should not count as RC gate evidence.
 

@@ -445,7 +445,12 @@ static void RB_SurfaceBeam( void )
 	}
 #endif
 	if ( !glxStreamedDraw ) {
+#ifdef RENDERER_GLX
+		GLX_CompatDrawArrays( GL_TRIANGLE_STRIP, 0, (NUM_BEAM_SEGS+1)*2,
+			GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_NONE );
+#else
 		qglDrawArrays( GL_TRIANGLE_STRIP, 0, (NUM_BEAM_SEGS+1)*2 );
+#endif
 	}
 
 	qglEnable( GL_TEXTURE_2D );
@@ -1312,7 +1317,12 @@ static void RB_SurfaceAxis( void ) {
 	qglVertexPointer( 3, GL_FLOAT, 0, xyz );
 	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, colors[0].rgba );
 
+#ifdef RENDERER_GLX
+	GLX_CompatDrawArrays( GL_LINES, 0, 6,
+		GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_DEBUG );
+#else
 	qglDrawArrays( GL_LINES, 0, 6 );
+#endif
 
 	qglLineWidth( 1 );
 

@@ -92,8 +92,10 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, xyzStride, (const GLvoid *)(intptr_t)( reservation.offset ) );
 
-	GLX_CompatRecordDraw( vertexCount, GLX_DRAW_STREAM_GENERIC );
-	qglDrawArrays( primitive, 0, vertexCount );
+	if ( !GLX_CompatDrawArrays( primitive, 0, vertexCount,
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		ok = qfalse;
+	}
 
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
 	GL_ClientState( 1, CLS_NONE );
@@ -102,8 +104,8 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
-	return qtrue;
+		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+	return ok;
 #else
 	(void)vertexCount;
 	(void)xyz;
@@ -175,8 +177,10 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 	qglTexCoordPointer( 2, GL_FLOAT, texcoordStride,
 		(const GLvoid *)(intptr_t)( reservation.offset + texcoordOffset ) );
 
-	GLX_CompatRecordDraw( vertexCount, GLX_DRAW_STREAM_GENERIC );
-	qglDrawArrays( primitive, 0, vertexCount );
+	if ( !GLX_CompatDrawArrays( primitive, 0, vertexCount,
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		ok = qfalse;
+	}
 
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
 	GL_ClientState( 1, CLS_NONE );
@@ -186,8 +190,8 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
-	return qtrue;
+		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+	return ok;
 #else
 	(void)vertexCount;
 	(void)xyz;
@@ -293,8 +297,10 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 	qglColorPointer( colorComponents, colorType, colorStride,
 		(const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
 
-	GLX_CompatRecordDraw( vertexCount, GLX_DRAW_STREAM_GENERIC );
-	qglDrawArrays( primitive, 0, vertexCount );
+	if ( !GLX_CompatDrawArrays( primitive, 0, vertexCount,
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		ok = qfalse;
+	}
 
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
 	GL_ClientState( 1, CLS_NONE );
@@ -305,8 +311,8 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qtrue );
-	return qtrue;
+		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+	return ok;
 #else
 	(void)vertexCount;
 	(void)xyz;

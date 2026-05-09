@@ -22,7 +22,8 @@ void GLX_Caps_Reset( Capabilities *caps )
 	caps->extensions = "";
 	caps->major = 0;
 	caps->minor = 0;
-	caps->tier = CapabilityTier::BelowFloor;
+	caps->tier = RenderProductTier::GL12;
+	caps->hint = CapabilityHint::FixedFunction;
 	caps->features = {};
 }
 
@@ -52,6 +53,7 @@ void GLX_Caps_Init( Capabilities *caps, const glconfig_t *config, const char *ex
 	}
 
 	caps->tier = GLX_Caps_TierForVersionAndFeatures( caps->major, caps->minor, caps->features );
+	caps->hint = GLX_Caps_HintForTierAndFeatures( caps->tier, caps->features );
 }
 
 qboolean GLX_Caps_HasExtension( const Capabilities &caps, const char *name )
@@ -64,20 +66,14 @@ qboolean GLX_Caps_VersionAtLeast( const Capabilities &caps, int major, int minor
 	return ( caps.major > major || ( caps.major == major && caps.minor >= minor ) ) ? qtrue : qfalse;
 }
 
-const char *GLX_Caps_TierName( CapabilityTier tier )
+const char *GLX_Caps_TierName( RenderProductTier tier )
 {
-	switch ( tier ) {
-	case CapabilityTier::BelowFloor:
-		return "below-floor";
-	case CapabilityTier::Compat:
-		return "compat";
-	case CapabilityTier::Core:
-		return "core";
-	case CapabilityTier::Advanced:
-		return "advanced";
-	default:
-		return "unknown";
-	}
+	return GLX_RenderProductTierName( tier );
+}
+
+const char *GLX_Caps_HintName( CapabilityHint hint )
+{
+	return GLX_CapabilityHintName( hint );
 }
 
 } // namespace glx

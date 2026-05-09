@@ -113,6 +113,12 @@
     <ClCompile Include="..\..\rendererglx\glx_debug.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\rendererglx\glx_draw.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\rendererglx\glx_executor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\rendererglx\glx_material.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -172,7 +178,16 @@
     <ClInclude Include="..\..\rendererglx\glx_caps.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_caps_logic.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\rendererglx\glx_debug.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_draw.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_executor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\rendererglx\glx_local.h">
@@ -188,6 +203,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\rendererglx\glx_profiler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_render_ir.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\rendererglx\glx_static_world.h">

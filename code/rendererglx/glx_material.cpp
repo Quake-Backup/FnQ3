@@ -1703,8 +1703,8 @@ void GLX_Material_OnOpenGLReady( MaterialState *state, const Capabilities &caps 
 	std::snprintf( state->glslVersion, sizeof( state->glslVersion ), "%s", version ? reinterpret_cast<const char *>( version ) : "unknown" );
 	state->glslVersion[sizeof( state->glslVersion ) - 1] = '\0';
 
-	if ( caps.tier == CapabilityTier::BelowFloor ) {
-		GLX_Material_SetReason( state, "OpenGL version is below GLx shader floor" );
+	if ( caps.tier == RenderProductTier::GL12 ) {
+		GLX_Material_SetReason( state, "GL12 fixed-function tier has no GLSL material compiler" );
 		return;
 	}
 

@@ -83,6 +83,22 @@ static const char *GLX_Profiler_StagePathName( int path )
 	}
 }
 
+static const char *GLX_Profiler_LegacyDelegationName( int reason )
+{
+	switch ( reason ) {
+	case GLX_LEGACY_DELEGATION_GENERIC:
+		return "generic";
+	case GLX_LEGACY_DELEGATION_VBO_DEVICE:
+		return "vbo-device";
+	case GLX_LEGACY_DELEGATION_VBO_SOFT:
+		return "vbo-soft";
+	case GLX_LEGACY_DELEGATION_DRAW_ARRAY:
+		return "draw-array";
+	default:
+		return "unknown";
+	}
+}
+
 static int GLX_Profiler_ClampedBucket( int value, int buckets )
 {
 	if ( value < 0 ) {
@@ -402,6 +418,21 @@ void GLX_Profiler_RecordDraw( ProfilerState *state, int indexes, int path )
 	}
 }
 
+void GLX_Profiler_RecordLegacyDelegation( ProfilerState *state, int reason, int items )
+{
+	if ( !state || items <= 0 ) {
+		return;
+	}
+
+	state->legacyDelegationCalls++;
+	state->legacyDelegationItems += static_cast<unsigned int>( items );
+
+	if ( reason >= 0 && reason < GLX_LEGACY_DELEGATION_REASON_COUNT ) {
+		state->legacyDelegationReasonCalls[reason]++;
+		state->legacyDelegationReasonItems[reason] += static_cast<unsigned int>( items );
+	}
+}
+
 void GLX_Profiler_RecordShaderBatch( ProfilerState *state, const char *shaderName, int sort,
 	int numPasses, int numVertexes, int numIndexes, int flags )
 {
@@ -555,6 +586,16 @@ void GLX_Profiler_PrintInfo( const ProfilerState &state )
 	RI().Printf( PRINT_ALL, "  draw calls debug: %u calls, %u indexes\n", state.debugDrawCalls, state.debugDrawIndexes );
 	RI().Printf( PRINT_ALL, "  draw calls stream-generic: %u calls, %u indexes\n",
 		state.streamGenericDrawCalls, state.streamGenericDrawIndexes );
+	RI().Printf( PRINT_ALL, "  ownership legacy delegation: %u calls, %u items\n",
+		state.legacyDelegationCalls, state.legacyDelegationItems );
+	for ( int i = 0; i < GLX_LEGACY_DELEGATION_REASON_COUNT; i++ ) {
+		if ( state.legacyDelegationReasonCalls[i] ) {
+			RI().Printf( PRINT_ALL, "    %s: %u calls, %u items\n",
+				GLX_Profiler_LegacyDelegationName( i ),
+				state.legacyDelegationReasonCalls[i],
+				state.legacyDelegationReasonItems[i] );
+		}
+	}
 	RI().Printf( PRINT_ALL, "  shader batches: %u, verts %u, indexes %u, stage passes %u\n",
 		state.shaderBatches, state.shaderBatchVertexes, state.shaderBatchIndexes, state.shaderStagePasses );
 	RI().Printf( PRINT_ALL, "  shader batches generic/vbo: %u/%u\n",

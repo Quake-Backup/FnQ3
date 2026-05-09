@@ -80,6 +80,10 @@ struct ProfilerState {
 	unsigned int debugDrawIndexes;
 	unsigned int streamGenericDrawCalls;
 	unsigned int streamGenericDrawIndexes;
+	unsigned int legacyDelegationCalls;
+	unsigned int legacyDelegationItems;
+	unsigned int legacyDelegationReasonCalls[GLX_LEGACY_DELEGATION_REASON_COUNT];
+	unsigned int legacyDelegationReasonItems[GLX_LEGACY_DELEGATION_REASON_COUNT];
 	unsigned int shaderBatches;
 	unsigned int shaderBatchIndexes;
 	unsigned int shaderBatchVertexes;
@@ -129,6 +133,7 @@ void GLX_Profiler_BeginBackendTimer( ProfilerState *state );
 void GLX_Profiler_EndBackendTimer( ProfilerState *state );
 void GLX_Profiler_FrameComplete( ProfilerState *state );
 void GLX_Profiler_RecordDraw( ProfilerState *state, int indexes, int path );
+void GLX_Profiler_RecordLegacyDelegation( ProfilerState *state, int reason, int items );
 void GLX_Profiler_RecordShaderBatch( ProfilerState *state, const char *shaderName, int sort,
 	int numPasses, int numVertexes, int numIndexes, int flags );
 void GLX_Profiler_RecordMaterialStage( ProfilerState *state, int path, int flags, unsigned int stateBits,

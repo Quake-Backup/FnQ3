@@ -32,6 +32,10 @@ void GLX_Renderer_PostProcess_f( void );
 void GLX_Renderer_StaticWorld_f( void );
 void GLX_Renderer_StreamTest_f( void );
 void GLX_Renderer_PrintFrameCounters( void );
+qboolean GLX_Renderer_DrawElements( unsigned int mode, int count,
+	unsigned int type, const void *indices, int legacyReason, int profilerPath );
+qboolean GLX_Renderer_DrawArrays( unsigned int mode, int first, int count,
+	int legacyReason, int profilerPath );
 void GLX_Renderer_RecordDraw( int indexes, int path );
 void GLX_Renderer_RecordShaderBatch( const char *shaderName, int sort, int numPasses,
 	int numVertexes, int numIndexes, int flags );

@@ -247,6 +247,8 @@
     <ClCompile Include="..\..\renderer\tr_world.c" />
     <ClCompile Include="..\..\rendererglx\glx_caps.cpp" />
     <ClCompile Include="..\..\rendererglx\glx_debug.cpp" />
+    <ClCompile Include="..\..\rendererglx\glx_draw.cpp" />
+    <ClCompile Include="..\..\rendererglx\glx_executor.cpp" />
     <ClCompile Include="..\..\rendererglx\glx_material.cpp" />
     <ClCompile Include="..\..\rendererglx\glx_module.cpp" />
     <ClCompile Include="..\..\rendererglx\glx_postprocess.cpp" />
@@ -271,12 +273,16 @@
     <ClInclude Include="..\..\renderercommon\tr_public.h" />
     <ClInclude Include="..\..\renderercommon\tr_types.h" />
     <ClInclude Include="..\..\rendererglx\glx_caps.h" />
+    <ClInclude Include="..\..\rendererglx\glx_caps_logic.h" />
     <ClInclude Include="..\..\rendererglx\glx_debug.h" />
+    <ClInclude Include="..\..\rendererglx\glx_draw.h" />
+    <ClInclude Include="..\..\rendererglx\glx_executor.h" />
     <ClInclude Include="..\..\rendererglx\glx_local.h" />
     <ClInclude Include="..\..\rendererglx\glx_material.h" />
     <ClInclude Include="..\..\rendererglx\glx_module.h" />
     <ClInclude Include="..\..\rendererglx\glx_postprocess.h" />
     <ClInclude Include="..\..\rendererglx\glx_profiler.h" />
+    <ClInclude Include="..\..\rendererglx\glx_render_ir.h" />
     <ClInclude Include="..\..\rendererglx\glx_static_world.h" />
     <ClInclude Include="..\..\rendererglx\glx_stream.h" />
     <ClInclude Include="..\..\rendererglx\glx_types.h" />

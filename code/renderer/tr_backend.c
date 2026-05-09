@@ -20,6 +20,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 #include "tr_local.h"
+#include "tr_glx_compat.h"
 
 backEndData_t	*backEndData;
 backEndState_t	backEnd;
@@ -1197,12 +1198,22 @@ static void RB_DebugPolygon( int color, int numPoints, float *points ) {
 	// draw solid shade
 	GL_State( GLS_DEPTHMASK_TRUE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE );
 	qglColor4f( color&1, (color>>1)&1, (color>>2)&1, 1 );
+#ifdef RENDERER_GLX
+	GLX_CompatDrawArrays( GL_TRIANGLE_FAN, 0, numPoints,
+		GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_DEBUG );
+#else
 	qglDrawArrays( GL_TRIANGLE_FAN, 0, numPoints );
+#endif
 
 	// draw wireframe outline
 	qglDepthRange( 0, 0 );
 	qglColor4f( 1, 1, 1, 1 );
+#ifdef RENDERER_GLX
+	GLX_CompatDrawArrays( GL_LINE_LOOP, 0, numPoints,
+		GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_DEBUG );
+#else
 	qglDrawArrays( GL_LINE_LOOP, 0, numPoints );
+#endif
 	qglDepthRange( 0, 1 );
 
 	qglEnable( GL_TEXTURE_2D );
@@ -1376,7 +1387,12 @@ void RB_ShowImages( void ) {
 		VectorSet(v[3],x+w,y+h,0);
 
 		qglVertexPointer( 3, GL_FLOAT, 0, v );
+#ifdef RENDERER_GLX
+		GLX_CompatDrawArrays( GL_TRIANGLE_STRIP, 0, 4,
+			GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_DEBUG );
+#else
 		qglDrawArrays( GL_TRIANGLE_STRIP, 0, 4 );
+#endif
 	}
 
 	qglFinish();

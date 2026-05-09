@@ -115,20 +115,16 @@ static ID_INLINE FeatureSet GLX_Caps_FeaturesForVersionAndExtensions( int major,
 	return features;
 }
 
-static ID_INLINE CapabilityTier GLX_Caps_TierForVersionAndFeatures( int major, int minor,
+static ID_INLINE RenderProductTier GLX_Caps_TierForVersionAndFeatures( int major, int minor,
 	const FeatureSet &features )
 {
-	if ( !GLX_Caps_LogicVersionAtLeast( major, minor, 2, 1 ) ) {
-		return CapabilityTier::BelowFloor;
-	}
-	if ( features.bufferStorage && features.syncObjects && features.multiDrawIndirect ) {
-		return CapabilityTier::Advanced;
-	}
-	if ( GLX_Caps_LogicVersionAtLeast( major, minor, 3, 3 ) ||
-		( features.mapBufferRange && features.uniformBufferObject && features.instancedArrays ) ) {
-		return CapabilityTier::Core;
-	}
-	return CapabilityTier::Compat;
+	return GLX_RenderProductTierForVersionAndFeatures( major, minor, features );
+}
+
+static ID_INLINE CapabilityHint GLX_Caps_HintForTierAndFeatures( RenderProductTier tier,
+	const FeatureSet &features )
+{
+	return GLX_CapabilityHintForTierAndFeatures( tier, features );
 }
 
 } // namespace glx

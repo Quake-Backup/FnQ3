@@ -1855,6 +1855,34 @@ static qboolean GLW_StartOpenGL( void )
 	return qtrue;
 }
 
+void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
+{
+	if ( !output ) {
+		return;
+	}
+
+	Com_Memset( output, 0, sizeof( *output ) );
+	output->displayIndex = scrnum;
+	output->nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	output->sdrWhiteNits = 203.0f;
+	output->hdrHeadroom = 1.0f;
+	output->maxLuminanceNits = 203.0f;
+	output->maxFullFrameLuminanceNits = 203.0f;
+	Q_strncpyz( output->videoDriver, "x11", sizeof( output->videoDriver ) );
+	Q_strncpyz( output->reason,
+		"X11 path has no explicit HDR compositor protocol; Linux HDR is only enabled through SDL3 Wayland output checks",
+		sizeof( output->reason ) );
+
+	if ( !dpy || !win ) {
+		return;
+	}
+
+	output->valid = qtrue;
+	if ( DisplayString( dpy ) ) {
+		Q_strncpyz( output->displayName, DisplayString( dpy ), sizeof( output->displayName ) );
+	}
+}
+
 
 /*
 ** GLimp_Init

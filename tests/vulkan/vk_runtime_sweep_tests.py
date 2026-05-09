@@ -22,6 +22,7 @@ class VkRuntimeSweepParseTests(unittest.TestCase):
             [
                 "pipeline cache: cache/vkpc_123.bin, loaded: 64Kb, saved: 96Kb",
                 "display HDR: requested unavailable, metadata: disabled, paper white 203 nits, max 1000 nits",
+                "output backend: request hdr10-pq, selected sdr-srgb, native windows-scrgb, display HDR enabled, headroom 4.00, SDR white 203 nits, display max 812 nits, ICC yes/2048, driver windows, display HDR Panel, reason: test",
                 "tone map: ACES, exposure 1.00",
                 "bloom: threshold 0.75, soft knee 0.50, intensity 0.50",
                 "modern Vulkan: sync2 enabled, dynamic rendering feature enabled, render-pass backend active",
@@ -40,6 +41,9 @@ class VkRuntimeSweepParseTests(unittest.TestCase):
         self.assertEqual(info["modernVulkan"]["sync2"], "enabled")
         self.assertEqual(info["barriers"]["sync2"], 12)
         self.assertEqual(info["displayHdr"]["state"], "requested unavailable")
+        self.assertEqual(info["outputBackend"]["request"], "hdr10-pq")
+        self.assertEqual(info["outputBackend"]["native"], "windows-scrgb")
+        self.assertEqual(info["outputBackend"]["displayMax"], 812.0)
         self.assertEqual(info["toneMap"]["mode"], "ACES")
         self.assertEqual(info["bloom"]["softKnee"], 0.5)
         self.assertEqual(len(info["gpuTimings"]), 1)
@@ -52,6 +56,7 @@ class VkRuntimeSweepParseTests(unittest.TestCase):
                     [
                         "pipeline cache: cache/vkpc_123.bin, loaded: 1Kb, saved: 1Kb",
                         "display HDR: disabled, metadata: disabled, paper white 203 nits, max 1000 nits",
+                        "output backend: request auto, selected sdr-srgb, native sdr-srgb, display HDR disabled, headroom 1.00, SDR white 203 nits, display max 203 nits, ICC no/0, driver windows, display SDR Panel, reason: test",
                         "tone map: legacy, exposure 1.00",
                         "bloom: threshold 0.75, soft knee 0.00, intensity 0.50",
                         "modern Vulkan: sync2 enabled, dynamic rendering disabled",
@@ -78,6 +83,7 @@ class VkRuntimeSweepParseTests(unittest.TestCase):
                     [
                         "pipeline cache: cache/vkpc_123.bin, loaded: 1Kb, saved: 1Kb",
                         "display HDR: disabled, metadata: disabled, paper white 203 nits, max 1000 nits",
+                        "output backend: request hdr10-pq, selected sdr-srgb, native sdr-srgb, display HDR disabled, headroom 1.00, SDR white 203 nits, display max 203 nits, ICC no/0, driver windows, display SDR Panel, reason: test",
                         "tone map: ACES, exposure 1.00",
                         "bloom: threshold 0.75, soft knee 0.50, intensity 0.50",
                         "modern Vulkan: sync2 disabled, dynamic rendering disabled",

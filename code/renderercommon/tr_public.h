@@ -214,6 +214,7 @@ typedef struct refimport_s {
 	// platform-dependent functions
 	void(*GLimp_InitGamma)(glconfig_t *config);
 	void(*GLimp_SetGamma)(unsigned char red[256], unsigned char green[256], unsigned char blue[256]);
+	void(*GLimp_QueryDisplayOutput)(rendererDisplayOutput_t *output);
 
 	// OpenGL
 	void	(*GLimp_Init)( glconfig_t *config );

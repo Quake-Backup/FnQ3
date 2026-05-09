@@ -28,6 +28,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifdef USE_VULKAN_API
 #	include <SDL3/SDL_vulkan.h>
 #endif
+#include <limits.h>
 
 #include "../client/client.h"
 #ifdef _WIN32
@@ -68,6 +69,41 @@ static qboolean GLW_ShouldRequestGLxDebugContext( void )
 	}
 
 	return Cvar_VariableIntegerValue( "r_glxDebug" ) ? qtrue : qfalse;
+}
+
+static qboolean GLW_ShouldRequestFloatFramebuffer( void )
+{
+	const int outputBackend = Cvar_VariableIntegerValue( "r_outputBackend" );
+
+	return ( outputBackend == ROUTPUT_REQUEST_WINDOWS_SCRGB ||
+		outputBackend == ROUTPUT_REQUEST_MACOS_EDR ) ? qtrue : qfalse;
+}
+
+static void GLW_InitDisplayOutput( rendererDisplayOutput_t *output )
+{
+	if ( !output ) {
+		return;
+	}
+
+	Com_Memset( output, 0, sizeof( *output ) );
+	output->displayIndex = -1;
+	output->nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	output->sdrWhiteNits = 203.0f;
+	output->hdrHeadroom = 1.0f;
+	output->maxLuminanceNits = 203.0f;
+	output->maxFullFrameLuminanceNits = 203.0f;
+	Q_strncpyz( output->reason, "SDR sRGB default", sizeof( output->reason ) );
+}
+
+static void GLW_SetDisplayOutputReason( rendererDisplayOutput_t *output, const char *reason )
+{
+	if ( !output ) {
+		return;
+	}
+	if ( !reason ) {
+		reason = "";
+	}
+	Q_strncpyz( output->reason, reason, sizeof( output->reason ) );
 }
 
 static void GLW_ShowCursor( qboolean show )
@@ -368,6 +404,7 @@ static int GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qbool
 	int x;
 	int y;
 	SDL_WindowFlags flags = 0;
+	qboolean requestFloatFramebuffer = qfalse;
 
 #ifdef USE_VULKAN_API
 	if ( vulkan ) {
@@ -378,6 +415,7 @@ static int GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qbool
 	{
 		flags |= SDL_WINDOW_OPENGL;
 		Com_Printf( "Initializing OpenGL display\n");
+		requestFloatFramebuffer = GLW_ShouldRequestFloatFramebuffer();
 	}
 
 	// If a window exists, note its display index
@@ -552,6 +590,8 @@ static int GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qbool
 			SDL_GL_SetAttribute( SDL_GL_BLUE_SIZE, perChannelColorBits );
 			SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, testDepthBits );
 			SDL_GL_SetAttribute( SDL_GL_STENCIL_SIZE, testStencilBits );
+			SDL_GL_SetAttribute( SDL_GL_FLOATBUFFERS,
+				( requestFloatFramebuffer && i < 4 ) ? 1 : 0 );
 
 			SDL_GL_SetAttribute( SDL_GL_MULTISAMPLEBUFFERS, 0 );
 			SDL_GL_SetAttribute( SDL_GL_MULTISAMPLESAMPLES, 0 );
@@ -884,6 +924,146 @@ Used by opengl renderers to resolve all qgl* function pointers
 void *GL_GetProcAddress( const char *symbol )
 {
 	return SDL_GL_GetProcAddress( symbol );
+}
+
+/*
+===============
+GLimp_QueryDisplayOutput
+
+Returns the current window/display color-management and HDR hints exposed by
+SDL. The renderer still owns policy: this is capability/state reporting only.
+===============
+*/
+void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
+{
+	SDL_DisplayID display = 0;
+	SDL_PropertiesID displayProps = 0;
+	SDL_PropertiesID windowProps = 0;
+	const char *driver;
+	const char *displayName;
+	size_t iccSize = 0;
+	void *iccProfile = NULL;
+	float sdrWhite;
+	float hdrHeadroom;
+	qboolean windowHdr;
+	qboolean displayHdr;
+
+	GLW_InitDisplayOutput( output );
+	if ( !output ) {
+		return;
+	}
+
+	driver = SDL_GetCurrentVideoDriver();
+	if ( driver && driver[0] ) {
+		Q_strncpyz( output->videoDriver, driver, sizeof( output->videoDriver ) );
+	}
+
+	if ( !SDL_window ) {
+		GLW_SetDisplayOutputReason( output, "No SDL window is active" );
+		return;
+	}
+
+	output->valid = qtrue;
+
+	display = SDL_GetDisplayForWindow( SDL_window );
+	if ( !display ) {
+		display = SDL_GetPrimaryDisplay();
+	}
+	output->displayIndex = (int)display;
+
+	displayName = display ? SDL_GetDisplayName( display ) : NULL;
+	if ( displayName && displayName[0] ) {
+		Q_strncpyz( output->displayName, displayName, sizeof( output->displayName ) );
+	} else if ( display ) {
+		Com_sprintf( output->displayName, sizeof( output->displayName ), "SDL display %u", (unsigned)display );
+	}
+
+	if ( display ) {
+		displayProps = SDL_GetDisplayProperties( display );
+	}
+	if ( displayProps ) {
+		displayHdr = SDL_GetBooleanProperty( displayProps, SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false ) ? qtrue : qfalse;
+		if ( displayHdr ) {
+			output->hdrEnabled = qtrue;
+		}
+#ifdef _WIN32
+		if ( SDL_GetPointerProperty( displayProps, SDL_PROP_DISPLAY_WINDOWS_HMONITOR_POINTER, NULL ) ) {
+			output->windowsScRgbSupported = qtrue;
+			output->windowsHdr10Supported = qtrue;
+		}
+#endif
+#if !defined(_WIN32)
+		if ( SDL_GetPointerProperty( displayProps, SDL_PROP_DISPLAY_WAYLAND_WL_OUTPUT_POINTER, NULL ) ) {
+			output->waylandColorProtocol = qtrue;
+		}
+#endif
+	}
+
+	windowProps = SDL_GetWindowProperties( SDL_window );
+	if ( windowProps ) {
+		windowHdr = SDL_GetBooleanProperty( windowProps, SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN, false ) ? qtrue : qfalse;
+		if ( windowHdr ) {
+			output->hdrEnabled = qtrue;
+		}
+
+		sdrWhite = SDL_GetFloatProperty( windowProps, SDL_PROP_WINDOW_SDR_WHITE_LEVEL_FLOAT, 0.0f );
+		if ( sdrWhite >= 80.0f ) {
+			output->sdrWhiteNits = sdrWhite;
+		}
+
+		hdrHeadroom = SDL_GetFloatProperty( windowProps, SDL_PROP_WINDOW_HDR_HEADROOM_FLOAT, 1.0f );
+		if ( hdrHeadroom > 1.0f ) {
+			output->hdrHeadroomValid = qtrue;
+			output->hdrHeadroom = hdrHeadroom;
+			output->hdrEnabled = qtrue;
+		}
+	}
+
+	iccProfile = SDL_GetWindowICCProfile( SDL_window, &iccSize );
+	if ( iccProfile ) {
+		output->iccProfileAvailable = qtrue;
+		output->iccProfileBytes = ( iccSize > INT_MAX ) ? INT_MAX : (int)iccSize;
+		SDL_free( iccProfile );
+	}
+
+	if ( output->hdrHeadroomValid ) {
+		output->maxLuminanceNits = output->sdrWhiteNits * output->hdrHeadroom;
+		output->maxFullFrameLuminanceNits = output->maxLuminanceNits;
+	} else if ( output->hdrEnabled ) {
+		output->maxLuminanceNits = 1000.0f;
+		output->maxFullFrameLuminanceNits = 400.0f;
+	}
+
+#if defined(_WIN32)
+	if ( output->hdrEnabled ) {
+		output->windowsAdvancedColor = qtrue;
+		output->windowsScRgbSupported = qtrue;
+		output->windowsHdr10Supported = qtrue;
+		output->nativeBackend = ROUTPUT_BACKEND_WINDOWS_SCRGB;
+		GLW_SetDisplayOutputReason( output, "Windows HDR/Advanced Color headroom reported by SDL" );
+	} else {
+		GLW_SetDisplayOutputReason( output, "Windows display is SDR or SDL did not report HDR headroom" );
+	}
+#elif defined(MACOS_X) || defined(__APPLE__)
+	if ( output->hdrEnabled || output->hdrHeadroomValid ) {
+		output->macosEdrSupported = qtrue;
+		output->nativeBackend = ROUTPUT_BACKEND_MACOS_EDR;
+		GLW_SetDisplayOutputReason( output, "Apple EDR headroom reported by SDL" );
+	} else {
+		GLW_SetDisplayOutputReason( output, "Apple display is SDR or SDL did not report EDR headroom" );
+	}
+#else
+	if ( output->hdrEnabled && output->waylandColorProtocol ) {
+		output->linuxHdrExperimental = qtrue;
+		output->explicitLinuxHdrProtocol = qtrue;
+		output->nativeBackend = ROUTPUT_BACKEND_LINUX_EXPERIMENTAL_HDR;
+		GLW_SetDisplayOutputReason( output, "Linux Wayland display reports HDR headroom; compositor HDR remains experimental" );
+	} else if ( output->hdrEnabled ) {
+		GLW_SetDisplayOutputReason( output, "Linux display reports HDR headroom without a validated compositor protocol" );
+	} else {
+		GLW_SetDisplayOutputReason( output, "Linux display is SDR or SDL did not report HDR headroom" );
+	}
+#endif
 }
 
 

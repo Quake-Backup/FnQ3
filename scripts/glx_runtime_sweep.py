@@ -449,6 +449,56 @@ GLX_POSTPROCESS_SUMMARY_RE = re.compile(
     r"msaa\s+(?P<msaa>\d+),\s*ssaa\s+(?P<ssaa>\d+),\s*last\s+(?P<last>\S+)",
     re.IGNORECASE,
 )
+GLX_COLOR_PIPELINE_RE = re.compile(
+    r"(?:glx:\s*)?color pipeline:?\s*"
+    r"(?:space\s+)?(?P<space>[A-Za-z0-9_-]+),?\s+"
+    r"(?:precision\s+(?P<precision>-?\d+)\s+)?"
+    r"transfer\s+(?P<transfer>[A-Za-z0-9_-]+),?\s+"
+    r"tone-map\s+(?P<toneMap>[A-Za-z0-9_-]+),?\s+"
+    r"exposure\s+(?P<exposure>-?\d+(?:\.\d+)?),?\s+"
+    r"(?:bloom-threshold\s+(?P<bloomThreshold>-?\d+(?:\.\d+)?)/(?P<bloomThresholdMode>\d+),?\s+"
+    r"knee\s+(?P<bloomSoftKnee>-?\d+(?:\.\d+)?),?\s+)?"
+    r"grade\s+(?P<grade>[A-Za-z0-9_-]+),?\s+"
+    r"(?:paper-white\s+(?P<paperWhite>-?\d+(?:\.\d+)?)\s*(?:nits)?,?\s+)?"
+    r"max\s+(?P<maxOutput>-?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+GLX_COLOR_GRADE_RE = re.compile(
+    r"(?:glx:\s*)?color grade(?: stage)?:?\s*"
+    r"mode\s+(?P<mode>[A-Za-z0-9_-]+),?\s+"
+    r"lift\s+(?P<liftR>-?\d+(?:\.\d+)?)/(?P<liftG>-?\d+(?:\.\d+)?)/(?P<liftB>-?\d+(?:\.\d+)?),?\s+"
+    r"gamma\s+(?P<gammaR>-?\d+(?:\.\d+)?)/(?P<gammaG>-?\d+(?:\.\d+)?)/(?P<gammaB>-?\d+(?:\.\d+)?),?\s+"
+    r"gain\s+(?P<gainR>-?\d+(?:\.\d+)?)/(?P<gainG>-?\d+(?:\.\d+)?)/(?P<gainB>-?\d+(?:\.\d+)?),?\s+"
+    r"white-point\s+(?P<whiteSource>-?\d+(?:\.\d+)?)->(?P<whiteTarget>-?\d+(?:\.\d+)?)\s*(?:K)?,?\s+"
+    r"lut-size\s+(?P<lutSize>-?\d+(?:\.\d+)?),?\s+"
+    r"lut-scale\s+(?P<lutScale>-?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+GLX_COLOR_AUDIT_RE = re.compile(
+    r"(?:glx:\s*)?color audit:?\s*"
+    r"srgb-decode\s+(?P<srgbDecode>\w+)\s+"
+    r"requested\s+(?P<srgbRequested>\w+)\s+"
+    r"available\s+(?P<srgbAvailable>\w+),?\s+"
+    r"framebuffer-srgb\s+(?P<framebufferSrgb>\w+)\s+"
+    r"requested\s+(?P<framebufferRequested>\w+)\s+"
+    r"available\s+(?P<framebufferAvailable>\w+),?\s+"
+    r"capture\s+(?P<capture>[A-Za-z0-9_-]+)",
+    re.IGNORECASE,
+)
+GLX_OUTPUT_BACKEND_RE = re.compile(
+    r"(?:glx:\s*)?output backend:?\s*"
+    r"request\s+(?P<request>[A-Za-z0-9_-]+),?\s+"
+    r"selected\s+(?P<selected>[A-Za-z0-9_-]+),?\s+"
+    r"native\s+(?P<native>[A-Za-z0-9_-]+),?\s+"
+    r"hardware\s+(?P<hardware>\w+),?\s+"
+    r"experimental\s+(?P<experimental>\w+),?\s+"
+    r"display-hdr\s+(?P<displayHdr>\w+),?\s+"
+    r"headroom\s+(?P<headroom>-?\d+(?:\.\d+)?),?\s+"
+    r"sdr-white\s+(?P<sdrWhite>-?\d+(?:\.\d+)?)(?:\s+nits)?,?\s+"
+    r"display-max\s+(?P<displayMax>-?\d+(?:\.\d+)?)(?:\s+nits)?,?\s+"
+    r"icc\s+(?P<icc>\w+)/(?P<iccBytes>\d+)",
+    re.IGNORECASE,
+)
 GLX_STREAM_DRAW_SUMMARY_RE = re.compile(
     r"glx:\s*stream draws\s+(?P<draws>\d+)/(?P<attempts>\d+)\s+attempts,\s*"
     r"(?P<indexes>\d+)\s+idx,\s*(?P<megabytes>\d+(?:\.\d+)?)MB/index\s+"
@@ -595,6 +645,20 @@ GLX_STRESS_PROFILE_CVARS = {
     "r_glxStaticWorldMultiDrawIndirectCompact": "1",
 }
 
+GLX_COLOR_PROFILE_CVARS = {
+    "r_fbo": "1",
+    "r_hdr": "1",
+    "r_tonemap": "2",
+    "r_tonemapExposure": "1.0",
+    "r_colorGrade": "3",
+    "r_colorGradeLift": "0 0 0",
+    "r_colorGradeGamma": "1 1 1",
+    "r_colorGradeGain": "1 1 1",
+    "r_colorGradeWhitePoint": "6504",
+    "r_colorGradeAdaptWhitePoint": "6504",
+    "r_colorGradeLUTScale": "4.0",
+}
+
 PROFILE_CVARS = {
     "baseline": {},
     "glx-world": {
@@ -624,6 +688,7 @@ PROFILE_CVARS = {
         "r_bloom_passes": "3",
         "r_glxGpuTiming": "1",
     },
+    "glx-color": GLX_COLOR_PROFILE_CVARS,
     "glx-parity": {
         "r_glxProfile": "rc",
         **GLX_RC_PROFILE_CVARS,
@@ -639,7 +704,7 @@ PROFILE_CVARS = {
     },
 }
 
-GLX_PROOF_CORPUS_VERSION = "2026-05-09-task-o"
+GLX_PROOF_CORPUS_VERSION = "2026-05-09-task-r"
 GLX_PROOF_CORPUS_DOC = "docs/fnquake3/GLX_PROOF_CORPUS.md"
 
 GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
@@ -664,6 +729,7 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "open-map",
             "shader-heavy",
             "sky",
+            "tone-map-proof",
         ),
         "description": "Open retail arena that keeps sky, portal-culling, and broad visibility paths in the RC set.",
     },
@@ -687,6 +753,8 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "stock-map",
             "shader-heavy",
             "material-stage",
+            "color-grade-proof",
+            "tone-map-proof",
         ),
         "description": "Retail shader-stage probe for material ordering, blend, texmod, and environment paths.",
     },
@@ -698,6 +766,7 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "stock-map",
             "fog-heavy",
             "visibility",
+            "color-grade-proof",
         ),
         "description": "Retail fog/visibility probe that keeps fog-sensitive world and stream paths represented.",
     },
@@ -794,6 +863,7 @@ GLX_PROFILE_CORPUS_SCENES = {
     "glx-world": ("stock-q3dm1-hud",),
     "glx-material": ("stock-q3dm1-hud",),
     "glx-bloom": ("stock-q3dm1-hud",),
+    "glx-color": ("stock-q3dm17-open", "stock-q3dm11-shader", "stock-q3dm15-fog"),
     "glx-parity": ("stock-q3dm1-hud",),
     "glx-ownership": ("stock-q3dm1-hud", "stock-q3dm17-open"),
     "glx-stress": GLX_GATE_CORPUS_SCENES["rc-stress"],
@@ -1006,6 +1076,8 @@ RC_GATE_PRESETS = {
                 "high-geometry",
                 "shader-heavy",
                 "fog-heavy",
+                "color-grade-proof",
+                "tone-map-proof",
                 "ui-hud-sensitive",
                 "performance-comparison",
             ),
@@ -1042,6 +1114,8 @@ RC_GATE_PRESETS = {
                 "high-geometry",
                 "shader-heavy",
                 "fog-heavy",
+                "color-grade-proof",
+                "tone-map-proof",
                 "particle-heavy-demo",
                 "ui-hud-sensitive",
                 "performance-comparison",
@@ -2179,6 +2253,10 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             or line.startswith("dynamic stream ")
             or line.startswith("static world ")
             or line.startswith("material ")
+            or line.startswith("color pipeline")
+            or line.startswith("color grade")
+            or line.startswith("color audit")
+            or line.startswith("output backend")
             or line.startswith("product tier ")
             or line.startswith("capability hint ")
             or line.startswith("GL12 fixed-function ")
@@ -2565,6 +2643,77 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             record_metric_max(metrics, "postprocess", "lastOutput", output)
             if output == "minimized":
                 failures.append("GLx postprocess last output was minimized.")
+            continue
+
+        match = GLX_COLOR_PIPELINE_RE.search(line)
+        if match:
+            record_metric_max(metrics, "colorPipeline", "space", match.group("space").lower())
+            record_metric_max(metrics, "colorPipeline", "transfer", match.group("transfer").lower())
+            record_metric_max(metrics, "colorPipeline", "toneMap", match.group("toneMap").lower())
+            record_metric_max(metrics, "colorPipeline", "grade", match.group("grade").lower())
+            record_metric_max(metrics, "colorPipeline", "exposure", float(match.group("exposure")))
+            if match.group("precision") is not None:
+                record_metric_max(metrics, "colorPipeline", "precision", int_group(match, "precision"))
+            if match.group("bloomThreshold") is not None:
+                record_metric_max(metrics, "colorPipeline", "bloomThreshold", float(match.group("bloomThreshold")))
+            if match.group("bloomThresholdMode") is not None:
+                record_metric_max(metrics, "colorPipeline", "bloomThresholdMode", int_group(match, "bloomThresholdMode"))
+            if match.group("bloomSoftKnee") is not None:
+                record_metric_max(metrics, "colorPipeline", "bloomSoftKnee", float(match.group("bloomSoftKnee")))
+            if match.group("paperWhite") is not None:
+                record_metric_max(metrics, "colorPipeline", "paperWhite", float(match.group("paperWhite")))
+            record_metric_max(metrics, "colorPipeline", "maxOutput", float(match.group("maxOutput")))
+            if float(match.group("exposure")) <= 0.0:
+                failures.append("GLx color pipeline exposure must be positive.")
+            continue
+
+        match = GLX_COLOR_GRADE_RE.search(line)
+        if match:
+            record_metric_max(metrics, "colorGrade", "mode", match.group("mode").lower())
+            for key in ("liftR", "liftG", "liftB", "gammaR", "gammaG", "gammaB", "gainR", "gainG", "gainB"):
+                record_metric_max(metrics, "colorGrade", key, float(match.group(key)))
+            record_metric_max(metrics, "colorGrade", "whiteSource", float(match.group("whiteSource")))
+            record_metric_max(metrics, "colorGrade", "whiteTarget", float(match.group("whiteTarget")))
+            record_metric_max(metrics, "colorGrade", "lutSize", float(match.group("lutSize")))
+            record_metric_max(metrics, "colorGrade", "lutScale", float(match.group("lutScale")))
+            if float(match.group("gammaR")) <= 0.0 or float(match.group("gammaG")) <= 0.0 or float(match.group("gammaB")) <= 0.0:
+                failures.append("GLx color-grade gamma values must be positive.")
+            if float(match.group("lutScale")) <= 0.0:
+                failures.append("GLx color-grade LUT scale must be positive.")
+            continue
+
+        match = GLX_COLOR_AUDIT_RE.search(line)
+        if match:
+            record_metric_max(metrics, "colorAudit", "srgbDecode", 1 if q3_bool(match.group("srgbDecode")) else 0)
+            record_metric_max(metrics, "colorAudit", "srgbRequested", 1 if q3_bool(match.group("srgbRequested")) else 0)
+            record_metric_max(metrics, "colorAudit", "srgbAvailable", 1 if q3_bool(match.group("srgbAvailable")) else 0)
+            record_metric_max(metrics, "colorAudit", "framebufferSrgb", 1 if q3_bool(match.group("framebufferSrgb")) else 0)
+            record_metric_max(metrics, "colorAudit", "framebufferRequested", 1 if q3_bool(match.group("framebufferRequested")) else 0)
+            record_metric_max(metrics, "colorAudit", "framebufferAvailable", 1 if q3_bool(match.group("framebufferAvailable")) else 0)
+            record_metric_max(metrics, "colorAudit", "capture", match.group("capture").lower())
+            if q3_bool(match.group("framebufferSrgb")):
+                failures.append("GLx framebuffer sRGB state is active on the shader-encoded SDR output path.")
+            continue
+
+        match = GLX_OUTPUT_BACKEND_RE.search(line)
+        if match:
+            record_metric_max(metrics, "outputBackend", "request", match.group("request").lower())
+            record_metric_max(metrics, "outputBackend", "selected", match.group("selected").lower())
+            record_metric_max(metrics, "outputBackend", "native", match.group("native").lower())
+            record_metric_max(metrics, "outputBackend", "hardware", 1 if q3_bool(match.group("hardware")) else 0)
+            record_metric_max(metrics, "outputBackend", "experimental", 1 if q3_bool(match.group("experimental")) else 0)
+            record_metric_max(metrics, "outputBackend", "displayHdr", 1 if q3_bool(match.group("displayHdr")) else 0)
+            record_metric_max(metrics, "outputBackend", "headroom", float(match.group("headroom")))
+            record_metric_max(metrics, "outputBackend", "sdrWhite", float(match.group("sdrWhite")))
+            record_metric_max(metrics, "outputBackend", "displayMax", float(match.group("displayMax")))
+            record_metric_max(metrics, "outputBackend", "icc", 1 if q3_bool(match.group("icc")) else 0)
+            record_metric_max(metrics, "outputBackend", "iccBytes", int_group(match, "iccBytes"))
+            if float(match.group("headroom")) <= 0.0:
+                failures.append("GLx output backend headroom must be positive.")
+            if float(match.group("sdrWhite")) <= 0.0 or float(match.group("displayMax")) <= 0.0:
+                failures.append("GLx output backend luminance values must be positive.")
+            if q3_bool(match.group("experimental")) and match.group("selected").lower() != "linux-experimental-hdr":
+                failures.append("GLx output backend reported experimental state without selecting the Linux experimental backend.")
             continue
 
         match = STREAM_BUFFER_RE.search(line)
@@ -3092,6 +3241,61 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                     "ssaa",
                 ),
             )
+            continue
+
+        match = GLX_COLOR_PIPELINE_RE.search(line)
+        if match:
+            perf_record_string(performance, "colorSpace", match.group("space").lower())
+            perf_record_string(performance, "outputTransfer", match.group("transfer").lower())
+            perf_record_string(performance, "toneMap", match.group("toneMap").lower())
+            perf_record_string(performance, "colorGrade", match.group("grade").lower())
+            perf_record_numeric(performance, "toneMapExposure", float(match.group("exposure")))
+            if match.group("precision") is not None:
+                perf_record_numeric(performance, "hdrPrecision", int_group(match, "precision"))
+            if match.group("bloomThreshold") is not None:
+                perf_record_numeric(performance, "bloomThreshold", float(match.group("bloomThreshold")))
+            if match.group("bloomThresholdMode") is not None:
+                perf_record_numeric(performance, "bloomThresholdMode", int_group(match, "bloomThresholdMode"))
+            if match.group("bloomSoftKnee") is not None:
+                perf_record_numeric(performance, "bloomSoftKnee", float(match.group("bloomSoftKnee")))
+            if match.group("paperWhite") is not None:
+                perf_record_numeric(performance, "paperWhiteNits", float(match.group("paperWhite")))
+            perf_record_numeric(performance, "maxOutputNits", float(match.group("maxOutput")))
+            continue
+
+        match = GLX_COLOR_GRADE_RE.search(line)
+        if match:
+            perf_record_string(performance, "colorGradeMode", match.group("mode").lower())
+            for key in ("liftR", "liftG", "liftB", "gammaR", "gammaG", "gammaB", "gainR", "gainG", "gainB"):
+                perf_record_numeric(performance, f"colorGrade{key[0].upper()}{key[1:]}", float(match.group(key)))
+            perf_record_numeric(performance, "colorGradeWhiteSource", float(match.group("whiteSource")))
+            perf_record_numeric(performance, "colorGradeWhiteTarget", float(match.group("whiteTarget")))
+            perf_record_numeric(performance, "colorGradeLutSize", float(match.group("lutSize")))
+            perf_record_numeric(performance, "colorGradeLutScale", float(match.group("lutScale")))
+            continue
+
+        match = GLX_COLOR_AUDIT_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "colorSrgbDecode", 1 if q3_bool(match.group("srgbDecode")) else 0)
+            perf_record_numeric(performance, "colorSrgbAvailable", 1 if q3_bool(match.group("srgbAvailable")) else 0)
+            perf_record_numeric(performance, "colorFramebufferSrgb", 1 if q3_bool(match.group("framebufferSrgb")) else 0)
+            perf_record_numeric(performance, "colorFramebufferSrgbAvailable", 1 if q3_bool(match.group("framebufferAvailable")) else 0)
+            perf_record_string(performance, "captureColorSpace", match.group("capture").lower())
+            continue
+
+        match = GLX_OUTPUT_BACKEND_RE.search(line)
+        if match:
+            perf_record_string(performance, "outputBackendRequest", match.group("request").lower())
+            perf_record_string(performance, "outputBackendSelected", match.group("selected").lower())
+            perf_record_string(performance, "outputBackendNative", match.group("native").lower())
+            perf_record_numeric(performance, "outputBackendHardware", 1 if q3_bool(match.group("hardware")) else 0)
+            perf_record_numeric(performance, "outputBackendExperimental", 1 if q3_bool(match.group("experimental")) else 0)
+            perf_record_numeric(performance, "outputDisplayHdr", 1 if q3_bool(match.group("displayHdr")) else 0)
+            perf_record_numeric(performance, "outputHeadroom", float(match.group("headroom")))
+            perf_record_numeric(performance, "outputSdrWhiteNits", float(match.group("sdrWhite")))
+            perf_record_numeric(performance, "outputDisplayMaxNits", float(match.group("displayMax")))
+            perf_record_numeric(performance, "outputIccProfile", 1 if q3_bool(match.group("icc")) else 0)
+            perf_record_numeric(performance, "outputIccProfileBytes", int_group(match, "iccBytes"))
             continue
 
         match = GLX_STREAM_DRAW_SUMMARY_RE.search(line)

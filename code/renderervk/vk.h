@@ -673,6 +673,9 @@ typedef struct {
 	qboolean swapchainColorspace;
 	qboolean hdrMetadata;
 	qboolean hdrDisplayActive;
+	rendererDisplayOutput_t displayOutput;
+	rendererOutputRequest_t outputRequest;
+	rendererOutputBackend_t outputBackend;
 	qboolean synchronization2;
 	qboolean dynamicRendering;
 	qboolean timestamps;

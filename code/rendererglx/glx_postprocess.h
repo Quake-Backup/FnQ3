@@ -2,11 +2,33 @@
 #define GLX_POSTPROCESS_H
 
 #include "glx_local.h"
+#include "glx_render_ir.h"
 
 namespace glx {
 
 struct PostProcessState {
 	cvar_t *r_glxPostProcessDebug;
+	cvar_t *r_hdr;
+	cvar_t *r_hdrPrecision;
+	cvar_t *r_srgbTextures;
+	cvar_t *r_framebufferSRGB;
+	cvar_t *r_tonemap;
+	cvar_t *r_tonemapExposure;
+	cvar_t *r_colorGrade;
+	cvar_t *r_colorGradeLift;
+	cvar_t *r_colorGradeGamma;
+	cvar_t *r_colorGradeGain;
+	cvar_t *r_colorGradeWhitePoint;
+	cvar_t *r_colorGradeAdaptWhitePoint;
+	cvar_t *r_colorGradeLUT;
+	cvar_t *r_colorGradeLUTScale;
+	cvar_t *r_hdrDisplayPaperWhite;
+	cvar_t *r_hdrDisplayMaxLuminance;
+	cvar_t *r_outputBackend;
+	cvar_t *r_outputAllowExperimentalLinuxHDR;
+	cvar_t *r_bloom_threshold;
+	cvar_t *r_bloom_threshold_mode;
+	cvar_t *r_bloom_soft_knee;
 	qboolean glReady;
 	qboolean fboRequested;
 	qboolean fboReady;
@@ -26,14 +48,46 @@ struct PostProcessState {
 	int textureType;
 	int blitFilter;
 	int hdrMode;
+	int hdrPrecisionMode;
+	int toneMapMode;
 	int renderScaleMode;
 	int bloomMode;
+	int bloomThresholdMode;
 	int lastFboReadIndex;
 	int lastScreenshotMask;
 	int lastResult;
+	qboolean textureSrgbAvailable;
+	qboolean textureSrgbDecode;
+	qboolean framebufferSrgbAvailable;
+	qboolean framebufferSrgbEnabled;
+	rendererDisplayOutput_t displayOutput;
+	OutputTransform lastOutput;
 	qboolean lastBloomAvailable;
 	qboolean lastBloomFinalStage;
 	float lastGreyscale;
+	float lastExposure;
+	float lastBloomSoftKnee;
+	float lastPaperWhiteNits;
+	float lastMaxOutputNits;
+	float lastGradeLift[3];
+	float lastGradeGamma[3];
+	float lastGradeGain[3];
+	float lastWhitePointSourceKelvin;
+	float lastWhitePointTargetKelvin;
+	float lastColorGradeLutSize;
+	float lastColorGradeLutScale;
+	rendererOutputRequest_t lastRequestedBackend;
+	rendererOutputBackend_t lastSelectedBackend;
+	rendererOutputBackend_t lastNativeBackend;
+	qboolean lastOutputHardwareActive;
+	qboolean lastOutputExperimental;
+	qboolean lastDisplayHdrEnabled;
+	qboolean lastDisplayHdrHeadroomValid;
+	qboolean lastDisplayIccProfileAvailable;
+	int lastDisplayIccProfileBytes;
+	float lastDisplayHdrHeadroom;
+	float lastDisplaySdrWhiteNits;
+	float lastDisplayMaxNits;
 	int lastBloomMode;
 	int lastBloomRequestedPasses;
 	int lastBloomEffectivePasses;
@@ -57,6 +111,9 @@ struct PostProcessState {
 	unsigned int minimizedFrames;
 	unsigned int renderScaleFrames;
 	unsigned int hdrFrames;
+	unsigned int sceneLinearFrames;
+	unsigned int toneMappedFrames;
+	unsigned int gradedFrames;
 	unsigned int greyscaleFrames;
 	unsigned int windowAdjustedFrames;
 	unsigned int screenshotFrames;
@@ -92,7 +149,8 @@ void GLX_PostProcess_RecordFboInit( PostProcessState *state, qboolean requested,
 	int captureWidth, int captureHeight, int windowWidth, int windowHeight,
 	int internalFormat, int textureFormat, int textureType, qboolean multiSampled,
 	qboolean superSampled, qboolean windowAdjusted, int blitFilter, int hdrMode,
-	int renderScaleMode, int bloomMode );
+	int renderScaleMode, int bloomMode, qboolean textureSrgbAvailable,
+	qboolean framebufferSrgbAvailable, qboolean framebufferSrgbEnabled );
 void GLX_PostProcess_RecordFboShutdown( PostProcessState *state );
 void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, qboolean bloomAvailable,
 	qboolean programReady, int screenshotMask, qboolean windowAdjusted, int fboReadIndex,

@@ -2,6 +2,7 @@
 #define GLX_RENDER_IR_H
 
 #include "glx_types.h"
+#include "../renderercommon/tr_types.h"
 #include "../renderercommon/tr_glx_public.h"
 
 namespace glx {
@@ -135,14 +136,57 @@ enum class OutputTransfer {
 	ScreenshotSrgb
 };
 
+enum class SceneColorSpace {
+	DisplayReferredSdr,
+	SceneLinear
+};
+
+enum class ToneMapOperator {
+	Legacy,
+	Reinhard,
+	Aces
+};
+
+enum class ColorGradeMode {
+	None,
+	LiftGammaGain,
+	Lut3D,
+	LiftGammaGainLut3D
+};
+
 struct OutputTransform {
 	OutputTransfer transfer;
+	SceneColorSpace sceneColorSpace;
+	ToneMapOperator toneMap;
+	ColorGradeMode grade;
+	rendererOutputRequest_t requestedBackend;
+	rendererOutputBackend_t selectedBackend;
+	rendererOutputBackend_t nativeBackend;
+	qboolean outputHardwareActive;
+	qboolean outputExperimental;
+	qboolean displayHdrEnabled;
+	qboolean displayHdrHeadroomValid;
+	qboolean displayIccProfileAvailable;
+	int displayIccProfileBytes;
 	int hdrMode;
+	int precisionMode;
 	int renderScaleMode;
 	float exposure;
+	float bloomThreshold;
+	float bloomSoftKnee;
 	float paperWhiteNits;
 	float maxOutputNits;
+	float displayHdrHeadroom;
+	float displaySdrWhiteNits;
+	float displayMaxNits;
 	float greyscale;
+	float gradeLift[3];
+	float gradeGamma[3];
+	float gradeGain[3];
+	float whitePointSourceKelvin;
+	float whitePointTargetKelvin;
+	float lutSize;
+	float lutScale;
 };
 
 enum class PostNodeKind {
@@ -406,6 +450,68 @@ static ID_INLINE const char *GLX_RenderIR_PassName( FramePassKind pass )
 	}
 }
 
+static ID_INLINE const char *GLX_RenderIR_OutputTransferName( OutputTransfer transfer )
+{
+	switch ( transfer ) {
+	case OutputTransfer::SdrSrgb:
+		return "sdr-srgb";
+	case OutputTransfer::LinearSrgb:
+		return "linear-srgb";
+	case OutputTransfer::ScRgb:
+		return "scrgb";
+	case OutputTransfer::Hdr10Pq:
+		return "hdr10-pq";
+	case OutputTransfer::MacEdr:
+		return "mac-edr";
+	case OutputTransfer::ScreenshotSrgb:
+		return "screenshot-srgb";
+	default:
+		return "unknown";
+	}
+}
+
+static ID_INLINE const char *GLX_RenderIR_SceneColorSpaceName( SceneColorSpace space )
+{
+	switch ( space ) {
+	case SceneColorSpace::DisplayReferredSdr:
+		return "display-referred-sdr";
+	case SceneColorSpace::SceneLinear:
+		return "scene-linear";
+	default:
+		return "unknown";
+	}
+}
+
+static ID_INLINE const char *GLX_RenderIR_ToneMapName( ToneMapOperator toneMap )
+{
+	switch ( toneMap ) {
+	case ToneMapOperator::Legacy:
+		return "legacy";
+	case ToneMapOperator::Reinhard:
+		return "reinhard";
+	case ToneMapOperator::Aces:
+		return "aces";
+	default:
+		return "unknown";
+	}
+}
+
+static ID_INLINE const char *GLX_RenderIR_ColorGradeName( ColorGradeMode grade )
+{
+	switch ( grade ) {
+	case ColorGradeMode::None:
+		return "none";
+	case ColorGradeMode::LiftGammaGain:
+		return "lift-gamma-gain";
+	case ColorGradeMode::Lut3D:
+		return "lut3d";
+	case ColorGradeMode::LiftGammaGainLut3D:
+		return "lgg-lut3d";
+	default:
+		return "unknown";
+	}
+}
+
 static ID_INLINE RenderProductTier GLX_RenderIR_TierForVersionAndFeatures( int major, int minor,
 	const FeatureSet &features )
 {
@@ -607,8 +713,43 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateDynamicDraw( const DynamicDraw &d
 
 static ID_INLINE qboolean GLX_RenderIR_ValidateOutputTransform( const OutputTransform &transform )
 {
-	return transform.exposure >= 0.0f && transform.paperWhiteNits >= 0.0f &&
-		transform.maxOutputNits >= 0.0f ? qtrue : qfalse;
+	if ( transform.exposure < 0.0f || transform.bloomThreshold < 0.0f ||
+		transform.bloomSoftKnee < 0.0f || transform.bloomSoftKnee > 1.0f ||
+		transform.paperWhiteNits < 0.0f || transform.maxOutputNits < 0.0f ||
+		transform.displayHdrHeadroom < 0.0f || transform.displaySdrWhiteNits < 0.0f ||
+		transform.displayMaxNits < 0.0f || transform.displayIccProfileBytes < 0 ||
+		transform.whitePointSourceKelvin < 1000.0f || transform.whitePointTargetKelvin < 1000.0f ||
+		transform.whitePointSourceKelvin > 40000.0f || transform.whitePointTargetKelvin > 40000.0f ||
+		transform.lutSize < 0.0f || transform.lutScale < 0.0f ) {
+		return qfalse;
+	}
+	if ( transform.requestedBackend < ROUTPUT_REQUEST_AUTO ||
+		transform.requestedBackend >= ROUTPUT_REQUEST_COUNT ||
+		transform.selectedBackend < ROUTPUT_BACKEND_SDR_SRGB ||
+		transform.selectedBackend >= ROUTPUT_BACKEND_COUNT ||
+		transform.nativeBackend < ROUTPUT_BACKEND_SDR_SRGB ||
+		transform.nativeBackend >= ROUTPUT_BACKEND_COUNT ) {
+		return qfalse;
+	}
+	for ( int i = 0; i < 3; i++ ) {
+		if ( transform.gradeGamma[i] <= 0.0f || transform.gradeGain[i] < 0.0f ) {
+			return qfalse;
+		}
+	}
+	if ( transform.precisionMode != -1 && transform.precisionMode != 8 &&
+		transform.precisionMode != 16 ) {
+		return qfalse;
+	}
+	if ( transform.sceneColorSpace == SceneColorSpace::SceneLinear &&
+		transform.hdrMode <= 0 ) {
+		return qfalse;
+	}
+	if ( transform.outputHardwareActive &&
+		( transform.selectedBackend == ROUTPUT_BACKEND_SDR_SRGB ||
+		transform.sceneColorSpace != SceneColorSpace::SceneLinear ) ) {
+		return qfalse;
+	}
+	return qtrue;
 }
 
 static ID_INLINE qboolean GLX_RenderIR_ValidatePostNode( const PostNode &node )
@@ -682,6 +823,9 @@ static ID_INLINE qboolean GLX_RenderIR_TierSupportsOutputTransform( RenderProduc
 		return qfalse;
 	}
 	if ( tier == RenderProductTier::GL2X ) {
+		if ( transform.sceneColorSpace != SceneColorSpace::DisplayReferredSdr ) {
+			return qfalse;
+		}
 		switch ( transform.transfer ) {
 		case OutputTransfer::SdrSrgb:
 		case OutputTransfer::ScreenshotSrgb:
@@ -696,6 +840,9 @@ static ID_INLINE qboolean GLX_RenderIR_TierSupportsOutputTransform( RenderProduc
 	}
 	if ( tier != RenderProductTier::GL12 ) {
 		return qtrue;
+	}
+	if ( transform.sceneColorSpace != SceneColorSpace::DisplayReferredSdr ) {
+		return qfalse;
 	}
 
 	switch ( transform.transfer ) {
@@ -795,9 +942,35 @@ static ID_INLINE OutputTransform GLX_RenderIR_DefaultOutputTransform()
 {
 	OutputTransform transform {};
 	transform.transfer = OutputTransfer::SdrSrgb;
+	transform.sceneColorSpace = SceneColorSpace::DisplayReferredSdr;
+	transform.toneMap = ToneMapOperator::Legacy;
+	transform.grade = ColorGradeMode::None;
+	transform.requestedBackend = ROUTPUT_REQUEST_AUTO;
+	transform.selectedBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	transform.nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	transform.hdrMode = 0;
+	transform.precisionMode = 8;
 	transform.exposure = 1.0f;
+	transform.bloomThreshold = 0.75f;
+	transform.bloomSoftKnee = 0.0f;
 	transform.paperWhiteNits = 80.0f;
 	transform.maxOutputNits = 80.0f;
+	transform.displayHdrHeadroom = 1.0f;
+	transform.displaySdrWhiteNits = 203.0f;
+	transform.displayMaxNits = 203.0f;
+	transform.gradeLift[0] = 0.0f;
+	transform.gradeLift[1] = 0.0f;
+	transform.gradeLift[2] = 0.0f;
+	transform.gradeGamma[0] = 1.0f;
+	transform.gradeGamma[1] = 1.0f;
+	transform.gradeGamma[2] = 1.0f;
+	transform.gradeGain[0] = 1.0f;
+	transform.gradeGain[1] = 1.0f;
+	transform.gradeGain[2] = 1.0f;
+	transform.whitePointSourceKelvin = 6504.0f;
+	transform.whitePointTargetKelvin = 6504.0f;
+	transform.lutSize = 0.0f;
+	transform.lutScale = 4.0f;
 	return transform;
 }
 

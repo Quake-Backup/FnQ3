@@ -92,10 +92,26 @@ cvar_t	*r_vbo;
 #ifdef USE_FBO
 cvar_t	*r_fbo;
 cvar_t	*r_hdr;
+cvar_t	*r_hdrPrecision;
+cvar_t	*r_srgbTextures;
+cvar_t	*r_framebufferSRGB;
+cvar_t	*r_tonemap;
+cvar_t	*r_tonemapExposure;
+cvar_t	*r_colorGrade;
+cvar_t	*r_colorGradeLift;
+cvar_t	*r_colorGradeGamma;
+cvar_t	*r_colorGradeGain;
+cvar_t	*r_colorGradeWhitePoint;
+cvar_t	*r_colorGradeAdaptWhitePoint;
+cvar_t	*r_colorGradeLUT;
+cvar_t	*r_colorGradeLUTScale;
+cvar_t	*r_outputBackend;
+cvar_t	*r_outputAllowExperimentalLinuxHDR;
 cvar_t	*r_bloom;
 cvar_t	*r_bloom_threshold;
 cvar_t	*r_bloom_threshold_mode;
 cvar_t	*r_bloom_modulate;
+cvar_t	*r_bloom_soft_knee;
 cvar_t	*r_bloom_passes;
 cvar_t	*r_bloom_blend_base;
 cvar_t	*r_bloom_intensity;
@@ -209,6 +225,8 @@ int		max_polys;
 int		max_polyverts;
 
 static char gl_extensions[ 32768 ];
+qboolean textureSrgbAvailable = qfalse;
+qboolean framebufferSrgbAvailable = qfalse;
 
 #define GLE( ret, name, ... ) ret ( APIENTRY * q##name )( __VA_ARGS__ );
 	QGL_Core_PROCS;
@@ -354,6 +372,8 @@ static void R_InitExtensions( void )
 	maxAnisotropy = 0;
 
 	nonPowerOfTwoTextures = qfalse;
+	textureSrgbAvailable = qfalse;
+	framebufferSrgbAvailable = qfalse;
 
 	qglLockArraysEXT = NULL;
 	qglUnlockArraysEXT = NULL;
@@ -382,6 +402,22 @@ static void R_InitExtensions( void )
 	}
 
 	ri.Printf( PRINT_ALL, "Initializing OpenGL extensions\n" );
+
+	if ( gl_version >= 21 || R_HaveExtension( "GL_EXT_texture_sRGB" ) ) {
+		textureSrgbAvailable = qtrue;
+		ri.Printf( PRINT_ALL, "...using sRGB texture formats\n" );
+	} else {
+		ri.Printf( PRINT_ALL, "...GL_EXT_texture_sRGB not found\n" );
+	}
+
+	if ( gl_version >= 30 ||
+		R_HaveExtension( "GL_ARB_framebuffer_sRGB" ) ||
+		R_HaveExtension( "GL_EXT_framebuffer_sRGB" ) ) {
+		framebufferSrgbAvailable = qtrue;
+		ri.Printf( PRINT_ALL, "...using framebuffer sRGB state control\n" );
+	} else {
+		ri.Printf( PRINT_ALL, "...GL_ARB_framebuffer_sRGB not found\n" );
+	}
 
 	if ( R_HaveExtension( "GL_EXT_texture_edge_clamp" ) || R_HaveExtension( "GL_SGIS_texture_edge_clamp" ) ) {
 		gl_clamp_mode = GL_CLAMP_TO_EDGE;
@@ -2142,6 +2178,7 @@ static void GfxInfo( void )
 	const char *enablestrings[] = { "disabled", "enabled" };
 	const char *fsstrings[] = { "windowed", "fullscreen" };
 	const char *fs;
+	rendererDisplayOutput_t displayOutput;
 	int mode;
 
 	ri.Printf( PRINT_ALL, "\nGL_VENDOR: %s\n", glConfig.vendor_string );
@@ -2185,6 +2222,22 @@ static void GfxInfo( void )
 	else
 	{
 		ri.Printf( PRINT_ALL, "N/A\n" );
+	}
+
+	Com_Memset( &displayOutput, 0, sizeof( displayOutput ) );
+	if ( ri.GLimp_QueryDisplayOutput ) {
+		ri.GLimp_QueryDisplayOutput( &displayOutput );
+	}
+	if ( displayOutput.valid ) {
+		ri.Printf( PRINT_ALL, "display output: native %s, HDR %s, headroom %.2f, SDR white %.0f nits, ICC %s/%i, driver %s, display %s\n",
+			RendererOutputBackendName( displayOutput.nativeBackend ),
+			enablestrings[displayOutput.hdrEnabled != 0],
+			displayOutput.hdrHeadroom > 0.0f ? displayOutput.hdrHeadroom : 1.0f,
+			displayOutput.sdrWhiteNits > 0.0f ? displayOutput.sdrWhiteNits : 203.0f,
+			enablestrings[displayOutput.iccProfileAvailable != 0],
+			displayOutput.iccProfileBytes,
+			displayOutput.videoDriver[0] ? displayOutput.videoDriver : "unknown",
+			displayOutput.displayName[0] ? displayOutput.displayName : "unknown" );
 	}
 
 	ri.Printf( PRINT_ALL, "multitexture: %s\n", enablestrings[qglActiveTextureARB != 0] );
@@ -2394,18 +2447,99 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_ext_multisample, "For anti-aliasing geometry edges, valid values: 0|2|4|6|8. Requires \\r_fbo 1." );
 	ri.Cvar_SetGroup( r_ext_multisample, CVG_RENDERER );
 	r_hdr = ri.Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND );
-	ri.Cvar_SetDescription(r_hdr, "Enables high dynamic range frame buffer texture format. Requires \\r_fbo 1.\n -1: 4-bit, for testing purposes, heavy color banding, might not work on all systems\n  0: 8 bit, default, moderate color banding with multi-stage shaders\n  1: 16 bit, enhanced blending precision, no color banding, might decrease performance on AMD / Intel GPUs\n" );
+	ri.Cvar_CheckRange( r_hdr, "-1", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_hdr,
+		"Selects the scene-linear HDR render pipeline. Requires \\r_fbo 1.\n"
+		" 0: display-referred SDR compatibility path\n"
+		" 1: scene-linear HDR pipeline with exposure, bloom thresholding, tone mapping, and SDR output transform\n"
+		"-1: legacy debug alias for \\r_hdrPrecision -1 without enabling scene-linear HDR\n"
+		"Internal framebuffer storage precision is controlled by \\r_hdrPrecision." );
 	ri.Cvar_SetGroup( r_hdr, CVG_RENDERER );
+	r_hdrPrecision = ri.Cvar_Get( "r_hdrPrecision", "0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_hdrPrecision, "-1", "16", CV_INTEGER );
+	ri.Cvar_SetDescription( r_hdrPrecision,
+		"Internal FBO color precision for the display pipeline.\n"
+		" 0: automatic (8-bit SDR, 16-bit when \\r_hdr 1)\n"
+		"-1: debug 4-bit storage for banding tests\n"
+		" 8: force 8-bit storage\n"
+		"16: force 16-bit storage" );
+	ri.Cvar_SetGroup( r_hdrPrecision, CVG_RENDERER );
+	r_srgbTextures = ri.Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_srgbTextures, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_srgbTextures, "Use sRGB texture formats for authored color images in the scene-linear HDR pipeline. Data, lightmap, fog, and utility textures stay linear/data." );
+	ri.Cvar_SetGroup( r_srgbTextures, CVG_RENDERER );
+	r_framebufferSRGB = ri.Cvar_Get( "r_framebufferSRGB", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_framebufferSRGB, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_framebufferSRGB, "Allow GL_FRAMEBUFFER_SRGB when the active draw target is an sRGB-encoded framebuffer. The current GLx/OpenGL SDR output shader keeps it disabled to avoid double encoding." );
+	ri.Cvar_SetGroup( r_framebufferSRGB, CVG_RENDERER );
+	r_outputBackend = ri.Cvar_Get( "r_outputBackend", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_outputBackend, "0", "5", CV_INTEGER );
+	ri.Cvar_SetDescription( r_outputBackend,
+		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR. Non-SDR output requires r_hdr 1 and platform support." );
+	ri.Cvar_SetGroup( r_outputBackend, CVG_RENDERER );
+	r_outputAllowExperimentalLinuxHDR = ri.Cvar_Get( "r_outputAllowExperimentalLinuxHDR", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_outputAllowExperimentalLinuxHDR, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_outputAllowExperimentalLinuxHDR, "Allows Linux HDR output only when SDL reports HDR headroom and an explicit compositor/protocol path." );
+	ri.Cvar_SetGroup( r_outputAllowExperimentalLinuxHDR, CVG_RENDERER );
+	r_tonemap = ri.Cvar_Get( "r_tonemap", "0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_tonemap, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_tonemap,
+		"Final-pass tone mapper used by the scene-linear HDR pipeline:\n"
+		" 0: legacy gamma/overbright\n"
+		" 1: Reinhard\n"
+		" 2: ACES fitted filmic curve" );
+	ri.Cvar_SetGroup( r_tonemap, CVG_RENDERER );
+	r_tonemapExposure = ri.Cvar_Get( "r_tonemapExposure", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_tonemapExposure, "0.1", "8.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_tonemapExposure, "Exposure multiplier used by scene-linear tone mapping and bloom extraction." );
+	ri.Cvar_SetGroup( r_tonemapExposure, CVG_RENDERER );
+	r_colorGrade = ri.Cvar_Get( "r_colorGrade", "0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_colorGrade, "0", "3", CV_INTEGER );
+	ri.Cvar_SetDescription( r_colorGrade,
+		"Scene-linear final-pass color grading for \\r_hdr 1:\n"
+		" 0: disabled\n"
+		" 1: lift/gamma/gain and white-point adaptation\n"
+		" 2: 3D LUT atlas\n"
+		" 3: lift/gamma/gain, white-point adaptation, then 3D LUT atlas." );
+	ri.Cvar_SetGroup( r_colorGrade, CVG_RENDERER );
+	r_colorGradeLift = ri.Cvar_Get( "r_colorGradeLift", "0 0 0", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_colorGradeLift, "Lift offset applied to scene-linear RGB before tone mapping, formatted as \"r g b\"." );
+	ri.Cvar_SetGroup( r_colorGradeLift, CVG_RENDERER );
+	r_colorGradeGamma = ri.Cvar_Get( "r_colorGradeGamma", "1 1 1", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_colorGradeGamma, "Per-channel color-grade gamma in scene-linear space, formatted as \"r g b\". Values above 1 lift midtones." );
+	ri.Cvar_SetGroup( r_colorGradeGamma, CVG_RENDERER );
+	r_colorGradeGain = ri.Cvar_Get( "r_colorGradeGain", "1 1 1", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_colorGradeGain, "Per-channel scene-linear gain applied before tone mapping, formatted as \"r g b\"." );
+	ri.Cvar_SetGroup( r_colorGradeGain, CVG_RENDERER );
+	r_colorGradeWhitePoint = ri.Cvar_Get( "r_colorGradeWhitePoint", "6504", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_colorGradeWhitePoint, "1000", "40000", CV_FLOAT );
+	ri.Cvar_SetDescription( r_colorGradeWhitePoint, "Source scene white point in Kelvin for Bradford chromatic adaptation." );
+	ri.Cvar_SetGroup( r_colorGradeWhitePoint, CVG_RENDERER );
+	r_colorGradeAdaptWhitePoint = ri.Cvar_Get( "r_colorGradeAdaptWhitePoint", "6504", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_colorGradeAdaptWhitePoint, "1000", "40000", CV_FLOAT );
+	ri.Cvar_SetDescription( r_colorGradeAdaptWhitePoint, "Target scene white point in Kelvin for Bradford chromatic adaptation." );
+	ri.Cvar_SetGroup( r_colorGradeAdaptWhitePoint, CVG_RENDERER );
+	r_colorGradeLUT = ri.Cvar_Get( "r_colorGradeLUT", "", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_colorGradeLUT, "Optional 3D LUT atlas image for \\r_colorGrade 2/3. Layout is width N*N, height N, blue slices laid out horizontally." );
+	ri.Cvar_SetGroup( r_colorGradeLUT, CVG_RENDERER );
+	r_colorGradeLUTScale = ri.Cvar_Get( "r_colorGradeLUTScale", "4.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_colorGradeLUTScale, "1.0", "32.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_colorGradeLUTScale, "Scene-linear range represented by the 3D LUT atlas. A value of 4 maps 0..4 scene-linear RGB into the LUT domain." );
+	ri.Cvar_SetGroup( r_colorGradeLUTScale, CVG_RENDERER );
 	// bloom
 	r_bloom = ri.Cvar_Get( "r_bloom", "0", CVAR_ARCHIVE_ND );
 	r_bloom->flags &= ~CVAR_LATCH; // If we were running renderervk before, we need to remove latch
 	ri.Cvar_SetDescription(r_bloom, "Enables bloom post-processing effect. Requires \\r_fbo 1.");
 	r_bloom_threshold = ri.Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
-	ri.Cvar_SetDescription(r_bloom_threshold, "Color level to extract to bloom texture, default is 0.6.");
+	ri.Cvar_SetDescription(r_bloom_threshold, "Scene-linear color level to extract to bloom texture, default is 0.75.");
 	ri.Cvar_SetGroup( r_bloom_threshold, CVG_RENDERER );
 	r_bloom_threshold_mode = ri.Cvar_Get( "r_bloom_threshold_mode", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_bloom_threshold_mode, "Color extraction mode:\n 0: (r|g|b) >= threshold\n 1: (r + g + b ) / 3 >= threshold\n 2: luma(r, g, b) >= threshold" );
 	ri.Cvar_SetGroup( r_bloom_threshold_mode, CVG_RENDERER );
+	r_bloom_soft_knee = ri.Cvar_Get( "r_bloom_soft_knee", "0.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_bloom_soft_knee, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_bloom_soft_knee, "Softens scene-linear bloom extraction around \\r_bloom_threshold. 0 keeps the legacy hard cutoff; 1 uses a full threshold-width knee." );
+	ri.Cvar_SetGroup( r_bloom_soft_knee, CVG_RENDERER );
 	r_bloom_intensity = ri.Cvar_Get( "r_bloom_intensity", "0.5", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_bloom_intensity, "Final bloom blend factor, default is 0.5." );
 	r_bloom_passes = ri.Cvar_Get( "r_bloom_passes", "5", CVAR_ARCHIVE_ND | CVAR_LATCH );

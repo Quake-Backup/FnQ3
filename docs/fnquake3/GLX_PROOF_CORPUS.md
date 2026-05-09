@@ -6,7 +6,7 @@ The GLx proof corpus is the single scene list used by RC gate dry runs, runtime 
 
 `scripts/glx_runtime_sweep.py` owns the machine-readable corpus. This document is the maintainer-facing description of the same corpus and must stay in sync with `GLX_PROOF_CORPUS_VERSION`.
 
-Current corpus version: `2026-05-09-task-o`.
+Current corpus version: `2026-05-09-task-r`.
 
 ## Scene Sets
 
@@ -14,18 +14,18 @@ Current corpus version: `2026-05-09-task-o`.
 |---|---|---|
 | `rc-smoke` | `stock-q3dm1-hud` | Retail stock map, UI/HUD-sensitive renderer switching, screenshots, diagnostics, frame-counter samples. |
 | `rc-parity` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `timedemo-demo1` | Retail stock screenshots plus legacy OpenGL versus GLx timedemo comparison. |
-| `rc-proof` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `timedemo-demo1` | Retail stock, high-geometry, shader-heavy, fog-sensitive, UI/HUD-sensitive, screenshot-baseline, and performance-baseline proof. |
-| `rc-stress` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `modern-fnq3glx-heavy01`, `modern-fnq3glx-shader01`, `modern-fnq3glx-fog01`, `timedemo-demo1`, `timedemo-fnq3glx-particles01` | Full retail proof set plus staged modern-map, high-geometry, shader-heavy, fog-heavy, particle-heavy-demo, and performance stress coverage. |
+| `rc-proof` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `timedemo-demo1` | Retail stock, high-geometry, shader-heavy, fog-sensitive, UI/HUD-sensitive, tone-map/color-grade, screenshot-baseline, and performance-baseline proof. |
+| `rc-stress` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `modern-fnq3glx-heavy01`, `modern-fnq3glx-shader01`, `modern-fnq3glx-fog01`, `timedemo-demo1`, `timedemo-fnq3glx-particles01` | Full retail proof set plus staged modern-map, high-geometry, shader-heavy, fog-heavy, tone-map/color-grade, particle-heavy-demo, and performance stress coverage. |
 
 ## Scenes
 
 | Scene ID | Kind | Target | Asset tier | Tags |
 |---|---|---|---|---|
 | `stock-q3dm1-hud` | map | `q3dm1` | `retail-baseq3` | `stock-map`, `baseline-map`, `ui-hud-sensitive`, `lightmap` |
-| `stock-q3dm17-open` | map | `q3dm17` | `retail-baseq3` | `stock-map`, `open-map`, `shader-heavy`, `sky` |
+| `stock-q3dm17-open` | map | `q3dm17` | `retail-baseq3` | `stock-map`, `open-map`, `shader-heavy`, `sky`, `tone-map-proof` |
 | `stock-q3dm6-geometry` | map | `q3dm6` | `retail-baseq3` | `stock-map`, `high-geometry`, `large-map`, `performance-comparison` |
-| `stock-q3dm11-shader` | map | `q3dm11` | `retail-baseq3` | `stock-map`, `shader-heavy`, `material-stage` |
-| `stock-q3dm15-fog` | map | `q3dm15` | `retail-baseq3` | `stock-map`, `fog-heavy`, `visibility` |
+| `stock-q3dm11-shader` | map | `q3dm11` | `retail-baseq3` | `stock-map`, `shader-heavy`, `material-stage`, `color-grade-proof`, `tone-map-proof` |
+| `stock-q3dm15-fog` | map | `q3dm15` | `retail-baseq3` | `stock-map`, `fog-heavy`, `visibility`, `color-grade-proof` |
 | `modern-fnq3glx-heavy01` | map | `fnq3_glx_heavy01` | `glx-proof-corpus` | `modern-map`, `high-geometry`, `large-map`, `performance-comparison` |
 | `modern-fnq3glx-shader01` | map | `fnq3_glx_shader01` | `glx-proof-corpus` | `modern-map`, `shader-heavy`, `material-stage` |
 | `modern-fnq3glx-fog01` | map | `fnq3_glx_fog01` | `glx-proof-corpus` | `modern-map`, `fog-heavy`, `visibility` |

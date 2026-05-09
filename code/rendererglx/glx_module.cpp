@@ -386,14 +386,12 @@ static WorldPacket GLX_Module_WorldPacketIR( int packetIndex, int sort,
 	return packet;
 }
 
-static OutputTransform GLX_Module_OutputTransformIR( int hdrMode, int renderScaleMode,
-	float greyscale )
+static OutputTransform GLX_Module_OutputTransformIR( const PostProcessState &postprocess )
 {
-	OutputTransform output = GLX_RenderIR_DefaultOutputTransform();
-	output.hdrMode = hdrMode;
-	output.renderScaleMode = renderScaleMode;
-	output.greyscale = greyscale;
-	return output;
+	if ( GLX_RenderIR_ValidateOutputTransform( postprocess.lastOutput ) ) {
+		return postprocess.lastOutput;
+	}
+	return GLX_RenderIR_DefaultOutputTransform();
 }
 
 static qboolean GLX_Module_EmitFrameSchedule( FramePass *passes, int capacity, int *count )
@@ -467,7 +465,8 @@ public:
 	void RecordFboInit( qboolean requested, qboolean ready, qboolean programReady, qboolean framebufferFnsReady,
 		int vidWidth, int vidHeight, int captureWidth, int captureHeight, int windowWidth, int windowHeight,
 		int internalFormat, int textureFormat, int textureType, qboolean multiSampled, qboolean superSampled,
-		qboolean windowAdjusted, int blitFilter, int hdrMode, int renderScaleMode, int bloomMode );
+		qboolean windowAdjusted, int blitFilter, int hdrMode, int renderScaleMode, int bloomMode,
+		qboolean textureSrgbAvailable, qboolean framebufferSrgbAvailable, qboolean framebufferSrgbEnabled );
 	void RecordFboShutdown();
 	void RecordPostProcessFrame( qboolean minimized, qboolean bloomAvailable, qboolean programReady,
 		int screenshotMask, qboolean windowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
@@ -1161,6 +1160,44 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.msaaBlits,
 		postprocess_.ssaaBlits,
 		GLX_PostProcess_ResultName( postprocess_.lastResult ) );
+	RI().Printf( PRINT_ALL, "glx: color pipeline %s precision %i transfer %s tone-map %s exposure %.2f bloom-threshold %.2f/%i knee %.2f grade %s paper-white %.0f max %.0f\n",
+		GLX_RenderIR_SceneColorSpaceName( postprocess_.lastOutput.sceneColorSpace ),
+		postprocess_.lastOutput.precisionMode,
+		GLX_RenderIR_OutputTransferName( postprocess_.lastOutput.transfer ),
+		GLX_RenderIR_ToneMapName( postprocess_.lastOutput.toneMap ),
+		postprocess_.lastOutput.exposure,
+		postprocess_.lastOutput.bloomThreshold,
+		postprocess_.bloomThresholdMode,
+		postprocess_.lastOutput.bloomSoftKnee,
+		GLX_RenderIR_ColorGradeName( postprocess_.lastOutput.grade ),
+		postprocess_.lastOutput.paperWhiteNits,
+		postprocess_.lastOutput.maxOutputNits );
+	RI().Printf( PRINT_ALL, "glx: output backend request %s selected %s native %s hardware %s experimental %s display-hdr %s headroom %.2f sdr-white %.0f display-max %.0f icc %s/%i\n",
+		RendererOutputRequestName( postprocess_.lastOutput.requestedBackend ),
+		RendererOutputBackendName( postprocess_.lastOutput.selectedBackend ),
+		RendererOutputBackendName( postprocess_.lastOutput.nativeBackend ),
+		BoolName( postprocess_.lastOutput.outputHardwareActive ),
+		BoolName( postprocess_.lastOutput.outputExperimental ),
+		BoolName( postprocess_.lastOutput.displayHdrEnabled ),
+		postprocess_.lastOutput.displayHdrHeadroom,
+		postprocess_.lastOutput.displaySdrWhiteNits,
+		postprocess_.lastOutput.displayMaxNits,
+		BoolName( postprocess_.lastOutput.displayIccProfileAvailable ),
+		postprocess_.lastOutput.displayIccProfileBytes );
+	RI().Printf( PRINT_ALL, "glx: color grade mode %s lift %.2f/%.2f/%.2f gamma %.2f/%.2f/%.2f gain %.2f/%.2f/%.2f white-point %.0f->%.0f lut-size %.0f lut-scale %.2f\n",
+		GLX_RenderIR_ColorGradeName( postprocess_.lastOutput.grade ),
+		postprocess_.lastGradeLift[0], postprocess_.lastGradeLift[1], postprocess_.lastGradeLift[2],
+		postprocess_.lastGradeGamma[0], postprocess_.lastGradeGamma[1], postprocess_.lastGradeGamma[2],
+		postprocess_.lastGradeGain[0], postprocess_.lastGradeGain[1], postprocess_.lastGradeGain[2],
+		postprocess_.lastWhitePointSourceKelvin, postprocess_.lastWhitePointTargetKelvin,
+		postprocess_.lastColorGradeLutSize, postprocess_.lastColorGradeLutScale );
+	RI().Printf( PRINT_ALL, "glx: color audit srgb-decode %s requested %s available %s framebuffer-srgb %s requested %s available %s capture sdr-srgb\n",
+		BoolName( postprocess_.textureSrgbDecode ),
+		BoolName( postprocess_.r_srgbTextures && postprocess_.r_srgbTextures->integer ? qtrue : qfalse ),
+		BoolName( postprocess_.textureSrgbAvailable ),
+		BoolName( postprocess_.framebufferSrgbEnabled ),
+		BoolName( postprocess_.r_framebufferSRGB && postprocess_.r_framebufferSRGB->integer ? qtrue : qfalse ),
+		BoolName( postprocess_.framebufferSrgbAvailable ) );
 	RI().Printf( PRINT_ALL, "glx: stream draws %u/%u attempts, %u idx, %.2fMB/index %.2fMB/tex1 %.2fMB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, shadow %u, beam %u, post %u, fallbacks %u, skips %u\n",
 		stream_.streamedDraws,
 		stream_.streamedDrawAttempts,
@@ -1618,12 +1655,14 @@ void RendererModule::RecordStreamDrawSkip( int reason )
 void RendererModule::RecordFboInit( qboolean requested, qboolean ready, qboolean programReady, qboolean framebufferFnsReady,
 	int vidWidth, int vidHeight, int captureWidth, int captureHeight, int windowWidth, int windowHeight,
 	int internalFormat, int textureFormat, int textureType, qboolean multiSampled, qboolean superSampled,
-	qboolean windowAdjusted, int blitFilter, int hdrMode, int renderScaleMode, int bloomMode )
+	qboolean windowAdjusted, int blitFilter, int hdrMode, int renderScaleMode, int bloomMode,
+	qboolean textureSrgbAvailable, qboolean framebufferSrgbAvailable, qboolean framebufferSrgbEnabled )
 {
 	GLX_PostProcess_RecordFboInit( &postprocess_, requested, ready, programReady, framebufferFnsReady,
 		vidWidth, vidHeight, captureWidth, captureHeight, windowWidth, windowHeight,
 		internalFormat, textureFormat, textureType, multiSampled, superSampled,
-		windowAdjusted, blitFilter, hdrMode, renderScaleMode, bloomMode );
+		windowAdjusted, blitFilter, hdrMode, renderScaleMode, bloomMode,
+		textureSrgbAvailable, framebufferSrgbAvailable, framebufferSrgbEnabled );
 }
 
 void RendererModule::RecordFboShutdown()
@@ -1635,20 +1674,34 @@ void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomA
 	int screenshotMask, qboolean windowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
 	float greyscale )
 {
-	OutputTransform output = GLX_Module_OutputTransformIR( hdrMode, renderScaleMode, greyscale );
 	PostNode node {};
+
+	GLX_PostProcess_RecordFrame( &postprocess_, minimized, bloomAvailable, programReady,
+		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
+	OutputTransform output = GLX_Module_OutputTransformIR( postprocess_ );
+
 	node.kind = bloomAvailable ? PostNodeKind::BloomFinal : PostNodeKind::Resolve;
 	node.pass = FramePassKind::PostProcess;
-	node.sequence = static_cast<int>( postprocess_.frames );
+	node.sequence = static_cast<int>( postprocess_.frames ? postprocess_.frames - 1 : 0 );
 	node.inputTarget = fboReadIndex;
 	node.outputTarget = 0;
 	node.flags = ( minimized ? 0x1u : 0u ) | ( programReady ? 0x2u : 0u ) |
 		( windowAdjusted ? 0x4u : 0u ) | ( screenshotMask ? 0x8u : 0u );
 	node.output = output;
 
-	GLX_PostProcess_RecordFrame( &postprocess_, minimized, bloomAvailable, programReady,
-		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
 	GLX_Executor_ConsumePostNode( &executor_, node );
+	if ( output.grade != ColorGradeMode::None ) {
+		PostNode gradeNode = node;
+		gradeNode.kind = PostNodeKind::Grade;
+		gradeNode.sequence = node.sequence + 1;
+		GLX_Executor_ConsumePostNode( &executor_, gradeNode );
+	}
+	if ( output.toneMap != ToneMapOperator::Legacy ) {
+		PostNode toneMapNode = node;
+		toneMapNode.kind = PostNodeKind::ToneMap;
+		toneMapNode.sequence = node.sequence + 2;
+		GLX_Executor_ConsumePostNode( &executor_, toneMapNode );
+	}
 	GLX_Executor_ConsumeOutputTransform( &executor_, output );
 }
 
@@ -1657,7 +1710,7 @@ void RendererModule::RecordPostProcessResult( int result )
 	PostNode node {};
 	node.pass = FramePassKind::PostProcess;
 	node.sequence = static_cast<int>( postprocess_.frames );
-	node.output = GLX_Module_OutputTransformIR( postprocess_.hdrMode, postprocess_.renderScaleMode, postprocess_.lastGreyscale );
+	node.output = GLX_Module_OutputTransformIR( postprocess_ );
 
 	switch ( result ) {
 	case GLX_POSTPROCESS_RESULT_BLOOM_FINAL:
@@ -2094,12 +2147,14 @@ extern "C" void GLX_Renderer_RecordFboInit( qboolean requested, qboolean ready,
 	int captureWidth, int captureHeight, int windowWidth, int windowHeight,
 	int internalFormat, int textureFormat, int textureType, qboolean multiSampled,
 	qboolean superSampled, qboolean windowAdjusted, int blitFilter, int hdrMode,
-	int renderScaleMode, int bloomMode )
+	int renderScaleMode, int bloomMode, qboolean textureSrgbAvailable,
+	qboolean framebufferSrgbAvailable, qboolean framebufferSrgbEnabled )
 {
 	glx::g_module.RecordFboInit( requested, ready, programReady, framebufferFnsReady,
 		vidWidth, vidHeight, captureWidth, captureHeight, windowWidth, windowHeight,
 		internalFormat, textureFormat, textureType, multiSampled, superSampled,
-		windowAdjusted, blitFilter, hdrMode, renderScaleMode, bloomMode );
+		windowAdjusted, blitFilter, hdrMode, renderScaleMode, bloomMode,
+		textureSrgbAvailable, framebufferSrgbAvailable, framebufferSrgbEnabled );
 }
 
 extern "C" void GLX_Renderer_RecordFboShutdown( void )

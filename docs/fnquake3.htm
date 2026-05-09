@@ -35,11 +35,14 @@ It is based on ioquake3-r1160 (latest non-SDL revision) with upstream patches an
 <li><b>\r_vbo</b> <font color=silver><b>0</b>|1</font> - use Vertex Buffer Objects to cache static map geometry, may improve FPS on modern GPUs, increases hunk memory usage by 15-30MB (map-dependent)</li>
 <div id="r_fbo"></div>
 <li><b>\r_fbo</b> <font color=silver><b>0</b>|1</font> - use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary size (i.e. greater than logical desktop resolution) screenshot/video capture, required for bloom, hdr rendering, anti-aliasing, greyscale effects, OpenGL 3.0+ required</li>
-<li><b>\r_hdr</b> <font color=silver>-1|<b>0</b>|1</font> - select texture format for framebuffer:<br>
-&nbsp;&nbsp;-1 - 4-bit, for testing purposes, heavy color banding, might not work on all systems<br>
-&nbsp;&nbsp; 0 - 8 bit, default, moderate color banding with multi-stage shaders<br>
-&nbsp;&nbsp; 1 - 16 bit, enhanced blending precision, no color banding, might decrease performance on AMD/Intel GPUs<br>
-</li>
+<li><b>\r_hdr</b> <font color=silver>-1|<b>0</b>|1</font> - select the scene-linear HDR render pipeline: 0 keeps the display-referred SDR compatibility path, 1 enables scene-linear exposure, bloom thresholding, tone mapping, and output transform state, and -1 remains a legacy debug alias for <b>\r_hdrPrecision -1</b>.</li>
+<li><b>\r_hdrPrecision</b> <font color=silver>-1|<b>0</b>|8|16</font> - select internal FBO color storage independently from HDR semantics: 0 automatic, -1 debug 4-bit storage, 8 force 8-bit storage, 16 force 16-bit storage.</li>
+<li><b>\r_tonemap</b> <font color=silver><b>0</b>|1|2</font> - final-pass tone mapper for <b>\r_hdr 1</b>: 0 legacy gamma/overbright, 1 Reinhard, 2 ACES fitted filmic curve.</li>
+<li><b>\r_tonemapExposure</b> <font color=silver>0.1..8.0</font> - exposure multiplier used by scene-linear tone mapping and bloom extraction.</li>
+<li><b>\r_colorGrade</b> <font color=silver><b>0</b>|1|2|3</font> - scene-linear color grading for <b>\r_hdr 1</b>: 0 disabled, 1 lift/gamma/gain plus white-point adaptation, 2 3D LUT atlas, 3 both. Defaults are identity and demo-safe.</li>
+<li><b>\r_colorGradeLift</b>, <b>\r_colorGradeGamma</b>, <b>\r_colorGradeGain</b> - per-channel grading controls as <b>"r g b"</b>; defaults are <b>"0 0 0"</b>, <b>"1 1 1"</b>, and <b>"1 1 1"</b>.</li>
+<li><b>\r_colorGradeWhitePoint</b>, <b>\r_colorGradeAdaptWhitePoint</b> <font color=silver>1000..40000</font> - source and target white points in Kelvin for Bradford adaptation; both default to D65-ish <b>6504</b>.</li>
+<li><b>\r_colorGradeLUT</b>, <b>\r_colorGradeLUTScale</b> - optional 3D LUT atlas path and scene-linear range. LUT atlases use width <b>N*N</b>, height <b>N</b>, with blue slices laid out horizontally.</li>
 <li><b><a href="#r_bloom">\r_bloom</a></b> <font color=silver><b>0</b>|1|2</font> - high-quality light bloom postprocessing effect</li>
 <li><b>\r_dlightMode</b> <font color=silver>0|<b>1</b>|2</font> - dynamic light mode</li>
 &nbsp;&nbsp; 0 - VQ3 'fake' dynamic lights<br>

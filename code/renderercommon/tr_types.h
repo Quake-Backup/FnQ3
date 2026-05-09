@@ -180,6 +180,87 @@ typedef enum {
 	GLHW_PERMEDIA2			// where you don't have src*dst
 } glHardwareType_t;
 
+typedef enum {
+	ROUTPUT_REQUEST_AUTO,
+	ROUTPUT_REQUEST_SDR_SRGB,
+	ROUTPUT_REQUEST_WINDOWS_SCRGB,
+	ROUTPUT_REQUEST_HDR10_PQ,
+	ROUTPUT_REQUEST_MACOS_EDR,
+	ROUTPUT_REQUEST_LINUX_EXPERIMENTAL_HDR,
+	ROUTPUT_REQUEST_COUNT
+} rendererOutputRequest_t;
+
+typedef enum {
+	ROUTPUT_BACKEND_SDR_SRGB,
+	ROUTPUT_BACKEND_WINDOWS_SCRGB,
+	ROUTPUT_BACKEND_HDR10_PQ,
+	ROUTPUT_BACKEND_MACOS_EDR,
+	ROUTPUT_BACKEND_LINUX_EXPERIMENTAL_HDR,
+	ROUTPUT_BACKEND_COUNT
+} rendererOutputBackend_t;
+
+typedef struct rendererDisplayOutput_s {
+	qboolean				valid;
+	int						displayIndex;
+	char					videoDriver[64];
+	char					displayName[128];
+	char					reason[256];
+	rendererOutputBackend_t	nativeBackend;
+	qboolean				hdrEnabled;
+	qboolean				hdrHeadroomValid;
+	float					sdrWhiteNits;
+	float					hdrHeadroom;
+	float					maxLuminanceNits;
+	float					maxFullFrameLuminanceNits;
+	qboolean				iccProfileAvailable;
+	int						iccProfileBytes;
+	qboolean				windowsAdvancedColor;
+	qboolean				windowsScRgbSupported;
+	qboolean				windowsHdr10Supported;
+	qboolean				macosEdrSupported;
+	qboolean				linuxHdrExperimental;
+	qboolean				waylandColorProtocol;
+	qboolean				explicitLinuxHdrProtocol;
+} rendererDisplayOutput_t;
+
+static ID_INLINE const char *RendererOutputRequestName( rendererOutputRequest_t request )
+{
+	switch ( request ) {
+	case ROUTPUT_REQUEST_AUTO:
+		return "auto";
+	case ROUTPUT_REQUEST_SDR_SRGB:
+		return "sdr-srgb";
+	case ROUTPUT_REQUEST_WINDOWS_SCRGB:
+		return "windows-scrgb";
+	case ROUTPUT_REQUEST_HDR10_PQ:
+		return "hdr10-pq";
+	case ROUTPUT_REQUEST_MACOS_EDR:
+		return "macos-edr";
+	case ROUTPUT_REQUEST_LINUX_EXPERIMENTAL_HDR:
+		return "linux-experimental-hdr";
+	default:
+		return "unknown";
+	}
+}
+
+static ID_INLINE const char *RendererOutputBackendName( rendererOutputBackend_t backend )
+{
+	switch ( backend ) {
+	case ROUTPUT_BACKEND_SDR_SRGB:
+		return "sdr-srgb";
+	case ROUTPUT_BACKEND_WINDOWS_SCRGB:
+		return "windows-scrgb";
+	case ROUTPUT_BACKEND_HDR10_PQ:
+		return "hdr10-pq";
+	case ROUTPUT_BACKEND_MACOS_EDR:
+		return "macos-edr";
+	case ROUTPUT_BACKEND_LINUX_EXPERIMENTAL_HDR:
+		return "linux-experimental-hdr";
+	default:
+		return "unknown";
+	}
+}
+
 typedef struct glconfig_s {
 	char					renderer_string[MAX_STRING_CHARS];
 	char					vendor_string[MAX_STRING_CHARS];

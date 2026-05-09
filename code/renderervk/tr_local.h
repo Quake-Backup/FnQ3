@@ -563,6 +563,8 @@ typedef struct image_s {
 	int			uploadWidth;		// after power of two and picmip but not including clamp to MAX_TEXTURE_SIZE
 	int			uploadHeight;
 	imgFlags_t	flags;
+	imageColorSpace_t colorSpace;
+	qboolean	srgbDecode;
 	int			frameUsed;			// for texture usage in frame statistics
 
 #ifdef USE_VULKAN
@@ -1344,13 +1346,25 @@ extern cvar_t	*r_vbo;
 #endif
 extern cvar_t	*r_fbo;
 extern cvar_t	*r_hdr;
+extern cvar_t	*r_hdrPrecision;
+extern cvar_t	*r_srgbTextures;
 extern cvar_t	*r_hdrDisplay;
 extern cvar_t	*r_hdrDisplayPaperWhite;
 extern cvar_t	*r_hdrDisplayMaxLuminance;
 extern cvar_t	*r_hdrDisplayMaxCLL;
 extern cvar_t	*r_hdrDisplayMaxFALL;
+extern cvar_t	*r_outputBackend;
+extern cvar_t	*r_outputAllowExperimentalLinuxHDR;
 extern cvar_t	*r_tonemap;
 extern cvar_t	*r_tonemapExposure;
+extern cvar_t	*r_colorGrade;
+extern cvar_t	*r_colorGradeLift;
+extern cvar_t	*r_colorGradeGamma;
+extern cvar_t	*r_colorGradeGain;
+extern cvar_t	*r_colorGradeWhitePoint;
+extern cvar_t	*r_colorGradeAdaptWhitePoint;
+extern cvar_t	*r_colorGradeLUT;
+extern cvar_t	*r_colorGradeLUTScale;
 extern cvar_t	*r_bloom;
 extern cvar_t	*r_bloom_threshold;
 extern cvar_t	*r_bloom_intensity;

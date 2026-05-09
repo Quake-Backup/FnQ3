@@ -1096,6 +1096,37 @@ bool RenderIRProductsValidate()
 	draw.upload = upload;
 
 	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
+	CHECK( output.sceneColorSpace == glx::SceneColorSpace::DisplayReferredSdr );
+	CHECK( output.toneMap == glx::ToneMapOperator::Legacy );
+	CHECK( output.grade == glx::ColorGradeMode::None );
+	CHECK( output.precisionMode == 8 );
+	CHECK( output.bloomThreshold == 0.75f );
+	CHECK( output.bloomSoftKnee == 0.0f );
+	CHECK( output.gradeLift[0] == 0.0f );
+	CHECK( output.gradeLift[1] == 0.0f );
+	CHECK( output.gradeLift[2] == 0.0f );
+	CHECK( output.gradeGamma[0] == 1.0f );
+	CHECK( output.gradeGamma[1] == 1.0f );
+	CHECK( output.gradeGamma[2] == 1.0f );
+	CHECK( output.gradeGain[0] == 1.0f );
+	CHECK( output.gradeGain[1] == 1.0f );
+	CHECK( output.gradeGain[2] == 1.0f );
+	CHECK( output.whitePointSourceKelvin == 6504.0f );
+	CHECK( output.whitePointTargetKelvin == 6504.0f );
+	CHECK( output.lutSize == 0.0f );
+	CHECK( output.lutScale == 4.0f );
+	CHECK( output.requestedBackend == ROUTPUT_REQUEST_AUTO );
+	CHECK( output.selectedBackend == ROUTPUT_BACKEND_SDR_SRGB );
+	CHECK( output.nativeBackend == ROUTPUT_BACKEND_SDR_SRGB );
+	CHECK( output.outputHardwareActive == qfalse );
+	CHECK( output.displayHdrHeadroom == 1.0f );
+	CHECK( output.displaySdrWhiteNits == 203.0f );
+	CHECK( output.displayMaxNits == 203.0f );
+	CHECK( std::strcmp( RendererOutputRequestName( ROUTPUT_REQUEST_HDR10_PQ ), "hdr10-pq" ) == 0 );
+	CHECK( std::strcmp( RendererOutputBackendName( ROUTPUT_BACKEND_MACOS_EDR ), "macos-edr" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_SceneColorSpaceName( output.sceneColorSpace ), "display-referred-sdr" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_ToneMapName( glx::ToneMapOperator::Aces ), "aces" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_ColorGradeName( glx::ColorGradeMode::LiftGammaGainLut3D ), "lgg-lut3d" ) == 0 );
 
 	glx::PostNode post {};
 	post.kind = glx::PostNodeKind::BloomFinal;
@@ -1117,6 +1148,36 @@ bool RenderIRProductsValidate()
 	draw.count = 0;
 	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qfalse );
 	output.exposure = -1.0f;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.precisionMode = 0;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.bloomSoftKnee = 1.1f;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	output.hdrMode = 1;
+	output.precisionMode = 16;
+	output.toneMap = glx::ToneMapOperator::Aces;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qtrue );
+	output.selectedBackend = ROUTPUT_BACKEND_HDR10_PQ;
+	output.outputHardwareActive = qtrue;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qtrue );
+	output.grade = glx::ColorGradeMode::LiftGammaGainLut3D;
+	output.gradeGamma[0] = 1.1f;
+	output.whitePointTargetKelvin = 6000.0f;
+	output.lutSize = 16.0f;
+	output.lutScale = 4.0f;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qtrue );
+	output.gradeGamma[1] = 0.0f;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	output.gradeGamma[1] = 1.0f;
+	output.lutSize = -1.0f;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.outputHardwareActive = qtrue;
 	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
 
 	return true;
@@ -1438,6 +1499,11 @@ bool GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements()
 
 	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
 	output.transfer = glx::OutputTransfer::LinearSrgb;
+	output.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
+	output.hdrMode = 1;
+	output.precisionMode = 16;
+	output.toneMap = glx::ToneMapOperator::Aces;
+	output.bloomSoftKnee = 0.5f;
 	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL3X, output ) == qtrue );
 	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL2X, output ) == qfalse );
 

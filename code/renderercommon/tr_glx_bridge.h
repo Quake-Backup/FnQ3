@@ -395,13 +395,15 @@ static ID_INLINE void GLX_CompatRecordFboInit( qboolean requested, qboolean read
 	int captureWidth, int captureHeight, int windowWidth, int windowHeight,
 	int internalFormat, int textureFormat, int textureType, qboolean multiSampled,
 	qboolean fboSuperSampled, qboolean fboWindowAdjusted, int blitFilter, int hdrMode,
-	int renderScaleMode, int bloomMode )
+	int renderScaleMode, int bloomMode, qboolean textureSrgbAvailable,
+	qboolean framebufferSrgbAvailable, qboolean framebufferSrgbEnabled )
 {
 #ifdef RENDERER_GLX
 	GLX_Renderer_RecordFboInit( requested, ready, programReady, framebufferFnsReady,
 		vidWidth, vidHeight, captureWidth, captureHeight, windowWidth, windowHeight,
 		internalFormat, textureFormat, textureType, multiSampled, fboSuperSampled,
-		fboWindowAdjusted, blitFilter, hdrMode, renderScaleMode, bloomMode );
+		fboWindowAdjusted, blitFilter, hdrMode, renderScaleMode, bloomMode,
+		textureSrgbAvailable, framebufferSrgbAvailable, framebufferSrgbEnabled );
 #else
 	(void)requested;
 	(void)ready;
@@ -423,6 +425,9 @@ static ID_INLINE void GLX_CompatRecordFboInit( qboolean requested, qboolean read
 	(void)hdrMode;
 	(void)renderScaleMode;
 	(void)bloomMode;
+	(void)textureSrgbAvailable;
+	(void)framebufferSrgbAvailable;
+	(void)framebufferSrgbEnabled;
 #endif
 }
 

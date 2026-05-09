@@ -30,6 +30,7 @@ int      fboReadIndex = 0;
 GLint    fboInternalFormat;
 GLint    fboTextureFormat;
 GLint    fboTextureType;
+static qboolean framebufferSrgbEnabled = qfalse;
 int      fboBloomPasses;
 int      fboBloomBlendBase;
 int      fboBloomFilterSize;
@@ -62,6 +63,401 @@ static qboolean frameBufferMultiSampling = qfalse;
 qboolean blitMSfbo = qfalse;
 #endif
 
+#ifdef USE_FBO
+static int FBO_HdrSceneLinearMode( void )
+{
+	return ( r_hdr && r_hdr->integer > 0 ) ? 1 : 0;
+}
+
+static int FBO_HdrPrecisionMode( void )
+{
+	const int precision = r_hdrPrecision ? r_hdrPrecision->integer : 0;
+
+	if ( precision == -1 || precision == 8 || precision == 16 ) {
+		return precision;
+	}
+	if ( r_hdr && r_hdr->integer < 0 ) {
+		return -1;
+	}
+	if ( FBO_HdrSceneLinearMode() ) {
+		return 16;
+	}
+	return 8;
+}
+
+static int FBO_ToneMapMode( void )
+{
+	int mode;
+
+	if ( !FBO_HdrSceneLinearMode() || !r_tonemap ) {
+		return 0;
+	}
+	mode = r_tonemap->integer;
+	if ( mode < 0 ) {
+		return 0;
+	}
+	if ( mode > 2 ) {
+		return 2;
+	}
+	return mode;
+}
+
+static float FBO_TonemapExposure( void )
+{
+	if ( !FBO_HdrSceneLinearMode() || !r_tonemapExposure ) {
+		return 1.0f;
+	}
+	return Com_Clamp( 0.1f, 8.0f, r_tonemapExposure->value );
+}
+
+static int FBO_ColorGradeMode( void )
+{
+	int mode;
+
+	if ( !FBO_HdrSceneLinearMode() || !r_colorGrade ) {
+		return 0;
+	}
+	mode = r_colorGrade->integer;
+	if ( mode < 0 ) {
+		return 0;
+	}
+	if ( mode > 3 ) {
+		return 3;
+	}
+	return mode;
+}
+
+static qboolean FBO_ColorGradeUsesLiftGammaGain( int mode )
+{
+	return ( mode == 1 || mode == 3 ) ? qtrue : qfalse;
+}
+
+static qboolean FBO_ColorGradeUsesLut( int mode )
+{
+	return ( mode == 2 || mode == 3 ) ? qtrue : qfalse;
+}
+
+static void FBO_ParseVec3Cvar( const cvar_t *cvar, float fallback0, float fallback1,
+	float fallback2, float minValue, float maxValue, vec3_t out )
+{
+	float values[3];
+
+	values[0] = fallback0;
+	values[1] = fallback1;
+	values[2] = fallback2;
+	if ( cvar && cvar->string && cvar->string[0] ) {
+		(void)sscanf( cvar->string, "%f %f %f", &values[0], &values[1], &values[2] );
+	}
+	out[0] = Com_Clamp( minValue, maxValue, values[0] );
+	out[1] = Com_Clamp( minValue, maxValue, values[1] );
+	out[2] = Com_Clamp( minValue, maxValue, values[2] );
+}
+
+static void FBO_SetIdentity3x3( float matrix[9] )
+{
+	matrix[0] = 1.0f; matrix[1] = 0.0f; matrix[2] = 0.0f;
+	matrix[3] = 0.0f; matrix[4] = 1.0f; matrix[5] = 0.0f;
+	matrix[6] = 0.0f; matrix[7] = 0.0f; matrix[8] = 1.0f;
+}
+
+static void FBO_CctToXyz( float kelvin, float xyz[3] )
+{
+	float x, y;
+	const float t = Com_Clamp( 1667.0f, 25000.0f, kelvin );
+	const float t2 = t * t;
+	const float t3 = t2 * t;
+
+	if ( t <= 4000.0f ) {
+		x = -0.2661239e9f / t3 - 0.2343580e6f / t2 + 0.8776956e3f / t + 0.179910f;
+	} else {
+		x = -3.0258469e9f / t3 + 2.1070379e6f / t2 + 0.2226347e3f / t + 0.240390f;
+	}
+
+	if ( t < 2222.0f ) {
+		y = -1.1063814f * x * x * x - 1.34811020f * x * x + 2.18555832f * x - 0.20219683f;
+	} else if ( t < 4000.0f ) {
+		y = -0.9549476f * x * x * x - 1.37418593f * x * x + 2.09137015f * x - 0.16748867f;
+	} else {
+		y = 3.0817580f * x * x * x - 5.87338670f * x * x + 3.75112997f * x - 0.37001483f;
+	}
+
+	if ( y <= 0.0001f ) {
+		xyz[0] = 0.95047f;
+		xyz[1] = 1.0f;
+		xyz[2] = 1.08883f;
+		return;
+	}
+	xyz[0] = x / y;
+	xyz[1] = 1.0f;
+	xyz[2] = ( 1.0f - x - y ) / y;
+}
+
+static void FBO_BuildBradfordAdaptation( float sourceKelvin, float targetKelvin, float matrix[9] )
+{
+	static const float bradford[9] = {
+		 0.8951f,  0.2664f, -0.1614f,
+		-0.7502f,  1.7135f,  0.0367f,
+		 0.0389f, -0.0685f,  1.0296f
+	};
+	static const float bradfordInv[9] = {
+		 0.9869929f, -0.1470543f,  0.1599627f,
+		 0.4323053f,  0.5183603f,  0.0492912f,
+		-0.0085287f,  0.0400428f,  0.9684867f
+	};
+	float src[3], dst[3], srcCone[3], dstCone[3], scale[3];
+	float scaledBradford[9];
+	int row, col;
+
+	FBO_CctToXyz( sourceKelvin, src );
+	FBO_CctToXyz( targetKelvin, dst );
+
+	for ( row = 0; row < 3; row++ ) {
+		srcCone[row] = bradford[row * 3 + 0] * src[0] +
+			bradford[row * 3 + 1] * src[1] +
+			bradford[row * 3 + 2] * src[2];
+		dstCone[row] = bradford[row * 3 + 0] * dst[0] +
+			bradford[row * 3 + 1] * dst[1] +
+			bradford[row * 3 + 2] * dst[2];
+		scale[row] = fabs( srcCone[row] ) > 0.0001f ? dstCone[row] / srcCone[row] : 1.0f;
+	}
+
+	for ( row = 0; row < 3; row++ ) {
+		for ( col = 0; col < 3; col++ ) {
+			scaledBradford[row * 3 + col] = scale[row] * bradford[row * 3 + col];
+		}
+	}
+
+	for ( row = 0; row < 3; row++ ) {
+		for ( col = 0; col < 3; col++ ) {
+			matrix[row * 3 + col] =
+				bradfordInv[row * 3 + 0] * scaledBradford[0 * 3 + col] +
+				bradfordInv[row * 3 + 1] * scaledBradford[1 * 3 + col] +
+				bradfordInv[row * 3 + 2] * scaledBradford[2 * 3 + col];
+		}
+	}
+}
+
+static qboolean FBO_ValidateColorGradeLutAtlas( const image_t *image, int *size )
+{
+	int lutSize;
+
+	if ( !image || image->width <= 0 || image->height <= 0 ) {
+		return qfalse;
+	}
+	if ( image->width != image->height * image->height ) {
+		return qfalse;
+	}
+	lutSize = image->height;
+	if ( lutSize < 2 || lutSize > 64 ) {
+		return qfalse;
+	}
+	if ( size ) {
+		*size = lutSize;
+	}
+	return qtrue;
+}
+
+static image_t *FBO_CreateIdentityColorGradeLut( int *size )
+{
+	static image_t *identityLut;
+	enum { IDENTITY_LUT_SIZE = 16 };
+	byte data[ IDENTITY_LUT_SIZE * IDENTITY_LUT_SIZE * IDENTITY_LUT_SIZE * 4 ];
+	int r, g, b;
+	const int width = IDENTITY_LUT_SIZE * IDENTITY_LUT_SIZE;
+
+	if ( identityLut ) {
+		if ( size ) {
+			*size = IDENTITY_LUT_SIZE;
+		}
+		return identityLut;
+	}
+
+	for ( b = 0; b < IDENTITY_LUT_SIZE; b++ ) {
+		for ( g = 0; g < IDENTITY_LUT_SIZE; g++ ) {
+			for ( r = 0; r < IDENTITY_LUT_SIZE; r++ ) {
+				const int index = ( g * width + b * IDENTITY_LUT_SIZE + r ) * 4;
+				data[index + 0] = (byte)( r * 255 / ( IDENTITY_LUT_SIZE - 1 ) );
+				data[index + 1] = (byte)( g * 255 / ( IDENTITY_LUT_SIZE - 1 ) );
+				data[index + 2] = (byte)( b * 255 / ( IDENTITY_LUT_SIZE - 1 ) );
+				data[index + 3] = 255;
+			}
+		}
+	}
+
+	identityLut = R_CreateImage( "*colorGradeIdentityLUT", NULL, data,
+		width, IDENTITY_LUT_SIZE,
+		IMGFLAG_CLAMPTOEDGE | IMGFLAG_NO_COMPRESSION |
+		IMGFLAG_NOSCALE | IMGFLAG_COLORSPACE_LINEAR );
+	if ( size ) {
+		*size = IDENTITY_LUT_SIZE;
+	}
+	return identityLut;
+}
+
+static image_t *FBO_ColorGradeLutImage( int *size )
+{
+	static image_t *lutImage;
+	static int lutSize;
+	static int lutModificationCount = -1;
+	const int flags = IMGFLAG_CLAMPTOEDGE | IMGFLAG_NO_COMPRESSION |
+		IMGFLAG_NOSCALE | IMGFLAG_COLORSPACE_LINEAR;
+
+	if ( !r_colorGradeLUT || r_colorGradeLUT->modificationCount == lutModificationCount ) {
+		if ( size ) {
+			*size = lutSize;
+		}
+		return lutImage;
+	}
+
+	lutModificationCount = r_colorGradeLUT->modificationCount;
+	lutImage = NULL;
+	lutSize = 0;
+
+	if ( r_colorGradeLUT->string && r_colorGradeLUT->string[0] ) {
+		image_t *loaded = R_FindImageFile( r_colorGradeLUT->string, flags );
+		if ( FBO_ValidateColorGradeLutAtlas( loaded, &lutSize ) ) {
+			lutImage = loaded;
+		} else {
+			ri.Printf( PRINT_WARNING,
+				"WARNING: color-grade LUT '%s' must use width N*N and height N; using identity LUT\n",
+				r_colorGradeLUT->string );
+		}
+	}
+
+	if ( !lutImage ) {
+		lutImage = FBO_CreateIdentityColorGradeLut( &lutSize );
+	}
+
+	if ( size ) {
+		*size = lutSize;
+	}
+	return lutImage;
+}
+
+static qboolean FBO_ColorGradeLutActive( void )
+{
+	int size;
+	const int mode = FBO_ColorGradeMode();
+
+	if ( !FBO_ColorGradeUsesLut( mode ) || !qglActiveTextureARB || glConfig.numTextureUnits <= 2 ) {
+		return qfalse;
+	}
+	return FBO_ColorGradeLutImage( &size ) && size > 1 ? qtrue : qfalse;
+}
+
+static float FBO_ColorGradeLutScale( void )
+{
+	if ( !r_colorGradeLUTScale ) {
+		return 4.0f;
+	}
+	return Com_Clamp( 1.0f, 32.0f, r_colorGradeLUTScale->value );
+}
+
+static void FBO_BindColorGradeLut( void )
+{
+	int size;
+	image_t *lutImage;
+
+	if ( !FBO_ColorGradeLutActive() ) {
+		return;
+	}
+
+	lutImage = FBO_ColorGradeLutImage( &size );
+	if ( lutImage ) {
+		GL_BindTexture( 2, lutImage->texnum );
+	}
+}
+
+static float FBO_OutputOverbrightScale( float obScale )
+{
+	return FBO_HdrSceneLinearMode() ? 1.0f : obScale;
+}
+
+static void FBO_SetOutputTransformParams( float gamma, float obScale )
+{
+	const float outputScale = FBO_OutputOverbrightScale( obScale );
+	const float exposure = FBO_TonemapExposure();
+	const float srgbOutput = FBO_HdrSceneLinearMode() ? 1.0f : 0.0f;
+	const int gradeMode = FBO_ColorGradeMode();
+	const qboolean lgg = FBO_ColorGradeUsesLiftGammaGain( gradeMode );
+	vec3_t lift, gradeGamma, invGradeGamma, gain;
+	float whitePointMatrix[9];
+	float sourceWhitePoint = r_colorGradeWhitePoint ?
+		Com_Clamp( 1000.0f, 40000.0f, r_colorGradeWhitePoint->value ) : 6504.0f;
+	float targetWhitePoint = r_colorGradeAdaptWhitePoint ?
+		Com_Clamp( 1000.0f, 40000.0f, r_colorGradeAdaptWhitePoint->value ) : 6504.0f;
+	int lutSize = 16;
+	float lutScale = FBO_ColorGradeLutScale();
+
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, gamma, gamma, gamma, outputScale );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 2, exposure, exposure, exposure, 1.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 3, srgbOutput, srgbOutput, srgbOutput, 1.0f );
+
+	FBO_ParseVec3Cvar( r_colorGradeLift, 0.0f, 0.0f, 0.0f, -1.0f, 1.0f, lift );
+	FBO_ParseVec3Cvar( r_colorGradeGamma, 1.0f, 1.0f, 1.0f, 0.1f, 8.0f, gradeGamma );
+	FBO_ParseVec3Cvar( r_colorGradeGain, 1.0f, 1.0f, 1.0f, 0.0f, 8.0f, gain );
+
+	if ( !lgg ) {
+		VectorClear( lift );
+		VectorSet( gradeGamma, 1.0f, 1.0f, 1.0f );
+		VectorSet( gain, 1.0f, 1.0f, 1.0f );
+		sourceWhitePoint = 6504.0f;
+		targetWhitePoint = 6504.0f;
+	}
+	invGradeGamma[0] = 1.0f / gradeGamma[0];
+	invGradeGamma[1] = 1.0f / gradeGamma[1];
+	invGradeGamma[2] = 1.0f / gradeGamma[2];
+
+	if ( lgg ) {
+		FBO_BuildBradfordAdaptation( sourceWhitePoint, targetWhitePoint, whitePointMatrix );
+	} else {
+		FBO_SetIdentity3x3( whitePointMatrix );
+	}
+	if ( !FBO_ColorGradeLutActive() ) {
+		lutScale = 4.0f;
+	} else {
+		(void)FBO_ColorGradeLutImage( &lutSize );
+	}
+
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 4, lift[0], lift[1], lift[2], 0.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 5, invGradeGamma[0], invGradeGamma[1], invGradeGamma[2], 1.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 6, gain[0], gain[1], gain[2], 1.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 7, whitePointMatrix[0], whitePointMatrix[1], whitePointMatrix[2], 0.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 8, whitePointMatrix[3], whitePointMatrix[4], whitePointMatrix[5], 0.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 9, whitePointMatrix[6], whitePointMatrix[7], whitePointMatrix[8], 0.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 10, lutScale, (float)( lutSize - 1 ),
+		1.0f / (float)lutSize, 1.0f / (float)( lutSize * lutSize ) );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 11, 0.5f, (float)lutSize, 1.0f / lutScale, 0.0f );
+}
+
+static void FBO_SetFramebufferSrgb( qboolean enable )
+{
+	static qboolean initialized = qfalse;
+
+	if ( !framebufferSrgbAvailable ) {
+		framebufferSrgbEnabled = qfalse;
+		initialized = qtrue;
+		return;
+	}
+
+	enable = ( enable &&
+		r_framebufferSRGB && r_framebufferSRGB->integer &&
+		framebufferSrgbAvailable ) ? qtrue : qfalse;
+
+	if ( initialized && framebufferSrgbEnabled == enable ) {
+		return;
+	}
+
+	if ( enable ) {
+		qglEnable( GL_FRAMEBUFFER_SRGB );
+	} else {
+		qglDisable( GL_FRAMEBUFFER_SRGB );
+	}
+	framebufferSrgbEnabled = enable;
+	initialized = qtrue;
+}
+#endif
+
 #ifndef GL_TEXTURE_IMAGE_FORMAT
 #define GL_TEXTURE_IMAGE_FORMAT 0x828F
 #endif
@@ -80,8 +476,9 @@ static void GLX_RecordFboInitState( qboolean requested, qboolean ready,
 		glConfig.vidWidth, glConfig.vidHeight, gls.captureWidth, gls.captureHeight,
 		gls.windowWidth, gls.windowHeight, fboInternalFormat, fboTextureFormat,
 		fboTextureType, frameBufferMultiSampling, superSampled, windowAdjusted,
-		blitFilter, r_hdr ? r_hdr->integer : 0, r_renderScale ? r_renderScale->integer : 0,
-		r_bloom ? r_bloom->integer : 0 );
+		blitFilter, FBO_HdrSceneLinearMode(), r_renderScale ? r_renderScale->integer : 0,
+		r_bloom ? r_bloom->integer : 0,
+		textureSrgbAvailable, framebufferSrgbAvailable, framebufferSrgbEnabled );
 }
 
 static void GLX_RecordBloomCreateState( int result )
@@ -828,17 +1225,164 @@ static char *ARB_BuildGreyscaleProgram( char *buf ) {
 	return buf;
 }
 
+static char *ARB_BuildToneMapProgram( char *buf ) {
+	char *s = buf;
+
+	*buf = '\0';
+
+	switch ( FBO_ToneMapMode() ) {
+	case 1:
+		s = Q_stradd( s,
+			"PARAM toneOne = { 1.0, 1.0, 1.0, 1.0 }; \n"
+			"TEMP denom; \n"
+			"ADD denom.xyz, base, toneOne; \n"
+			"RCP denom.x, denom.x; \n"
+			"RCP denom.y, denom.y; \n"
+			"RCP denom.z, denom.z; \n"
+			"MUL base.xyz, base, denom; \n" );
+		break;
+	case 2:
+		s = Q_stradd( s,
+			"PARAM acesA = { 2.51, 2.51, 2.51, 1.0 }; \n"
+			"PARAM acesB = { 0.03, 0.03, 0.03, 1.0 }; \n"
+			"PARAM acesC = { 2.43, 2.43, 2.43, 1.0 }; \n"
+			"PARAM acesD = { 0.59, 0.59, 0.59, 1.0 }; \n"
+			"PARAM acesE = { 0.14, 0.14, 0.14, 1.0 }; \n"
+			"TEMP numerator; \n"
+			"TEMP denominator; \n"
+			"MAD numerator.xyz, base, acesA, acesB; \n"
+			"MUL numerator.xyz, numerator, base; \n"
+			"MAD denominator.xyz, base, acesC, acesD; \n"
+			"MAD denominator.xyz, denominator, base, acesE; \n"
+			"RCP denominator.x, denominator.x; \n"
+			"RCP denominator.y, denominator.y; \n"
+			"RCP denominator.z, denominator.z; \n"
+			"MUL base.xyz, numerator, denominator; \n" );
+		break;
+	default:
+		break;
+	}
+
+	return buf;
+}
+
+static char *ARB_BuildColorGradeProgram( char *buf ) {
+	char *s = buf;
+	const int mode = FBO_ColorGradeMode();
+	const qboolean lgg = FBO_ColorGradeUsesLiftGammaGain( mode );
+	const qboolean lut = FBO_ColorGradeLutActive();
+
+	*buf = '\0';
+
+	if ( !lgg && !lut ) {
+		return buf;
+	}
+
+	s = Q_stradd( s, "PARAM zeroGrade = { 0.0, 0.0, 0.0, 0.0 }; \n" );
+
+	if ( lgg ) {
+		s = Q_stradd( s,
+			"PARAM gradeLift = program.local[4]; \n"
+			"PARAM gradeGamma = program.local[5]; \n"
+			"PARAM gradeGain = program.local[6]; \n"
+			"PARAM whitePoint0 = program.local[7]; \n"
+			"PARAM whitePoint1 = program.local[8]; \n"
+			"PARAM whitePoint2 = program.local[9]; \n"
+			"TEMP gradeColor; \n"
+			"ADD base.xyz, base, gradeLift; \n"
+			"MAX base.xyz, base, zeroGrade; \n"
+			"POW base.x, base.x, gradeGamma.x; \n"
+			"POW base.y, base.y, gradeGamma.y; \n"
+			"POW base.z, base.z, gradeGamma.z; \n"
+			"MUL base.xyz, base, gradeGain; \n"
+			"DP3 gradeColor.x, base, whitePoint0; \n"
+			"DP3 gradeColor.y, base, whitePoint1; \n"
+			"DP3 gradeColor.z, base, whitePoint2; \n"
+			"MAX base.xyz, gradeColor, zeroGrade; \n" );
+	}
+
+	if ( lut ) {
+		s = Q_stradd( s,
+			"PARAM lutControl = program.local[10]; \n"
+			"PARAM lutExtra = program.local[11]; \n"
+			"PARAM oneGrade = { 1.0, 1.0, 1.0, 1.0 }; \n"
+			"TEMP lutCoord; \n"
+			"TEMP lutSlice; \n"
+			"TEMP lutUv0; \n"
+			"TEMP lutUv1; \n"
+			"TEMP lutLow; \n"
+			"TEMP lutHigh; \n"
+			"MUL lutCoord.xyz, base, lutExtra.z; \n"
+			"MAX lutCoord.xyz, lutCoord, zeroGrade; \n"
+			"MIN lutCoord.xyz, lutCoord, oneGrade; \n"
+			"MUL lutCoord.xyz, lutCoord, lutControl.y; \n"
+			"FLR lutSlice.x, lutCoord.z; \n"
+			"FRC lutSlice.y, lutCoord.z; \n"
+			"ADD lutSlice.z, lutSlice.x, oneGrade.x; \n"
+			"MIN lutSlice.z, lutSlice.z, lutControl.y; \n"
+			"MAD lutUv0.x, lutSlice.x, lutExtra.y, lutCoord.x; \n"
+			"ADD lutUv0.x, lutUv0.x, lutExtra.x; \n"
+			"MUL lutUv0.x, lutUv0.x, lutControl.w; \n"
+			"ADD lutUv0.y, lutCoord.y, lutExtra.x; \n"
+			"MUL lutUv0.y, lutUv0.y, lutControl.z; \n"
+			"MAD lutUv1.x, lutSlice.z, lutExtra.y, lutCoord.x; \n"
+			"ADD lutUv1.x, lutUv1.x, lutExtra.x; \n"
+			"MUL lutUv1.x, lutUv1.x, lutControl.w; \n"
+			"MOV lutUv1.y, lutUv0.y; \n"
+			"TEX lutLow, lutUv0, texture[2], 2D; \n"
+			"TEX lutHigh, lutUv1, texture[2], 2D; \n"
+			"LRP base.xyz, lutSlice.y, lutHigh, lutLow; \n"
+			"MUL base.xyz, base, lutControl.x; \n" );
+	}
+
+	return buf;
+}
+
+static char *ARB_BuildOutputEncodeProgram( char *buf ) {
+	char *s = buf;
+
+	s = Q_stradd( s,
+		"PARAM outputTransfer = program.local[3]; \n"
+		"PARAM srgbCutoff = { 0.0031308, 0.0031308, 0.0031308, 1.0 }; \n"
+		"PARAM srgbGamma = { 0.4166667, 0.4166667, 0.4166667, 1.0 }; \n"
+		"PARAM srgbScaleLow = { 12.92, 12.92, 12.92, 1.0 }; \n"
+		"PARAM srgbScaleHigh = { 1.055, 1.055, 1.055, 1.0 }; \n"
+		"PARAM srgbOffset = { 0.055, 0.055, 0.055, 0.0 }; \n"
+		"PARAM zero = { 0.0, 0.0, 0.0, 0.0 }; \n"
+		"TEMP legacyOut; \n"
+		"TEMP srgbHi; \n"
+		"TEMP srgbLo; \n"
+		"TEMP srgbMask; \n"
+		"MAX base.xyz, base, zero; \n"
+		"MOV legacyOut, base; \n"
+		"POW legacyOut.x, legacyOut.x, gamma.x; \n"
+		"POW legacyOut.y, legacyOut.y, gamma.y; \n"
+		"POW legacyOut.z, legacyOut.z, gamma.z; \n"
+		"MUL legacyOut.xyz, legacyOut, gamma.w; \n"
+		"POW srgbHi.x, base.x, srgbGamma.x; \n"
+		"POW srgbHi.y, base.y, srgbGamma.y; \n"
+		"POW srgbHi.z, base.z, srgbGamma.z; \n"
+		"MAD srgbHi.xyz, srgbHi, srgbScaleHigh, -srgbOffset; \n"
+		"MUL srgbLo.xyz, base, srgbScaleLow; \n"
+		"SLT srgbMask.xyz, base, srgbCutoff; \n"
+		"LRP srgbHi.xyz, srgbMask, srgbLo, srgbHi; \n"
+		"LRP base.xyz, outputTransfer.x, srgbHi, legacyOut; \n" );
+
+	return buf;
+}
+
 
 static const char *gammaFP = {
 	"!!ARBfp1.0 \n"
 	"OPTION ARB_precision_hint_fastest; \n"
 	"PARAM gamma = program.local[0]; \n"
+	"PARAM exposure = program.local[2]; \n"
 	"TEMP base; \n"
 	"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
-	"POW base.x, base.x, gamma.x; \n"
-	"POW base.y, base.y, gamma.y; \n"
-	"POW base.z, base.z, gamma.z; \n"
-	"MUL base.xyz, base, gamma.w; \n"
+	"MUL base.xyz, base, exposure.x; \n"
+	"%s" // scene-linear color grading, if requested
+	"%s" // tone scale, if scene-linear mode requested it
+	"%s" // legacy gamma or SDR sRGB output transfer
 	"%s" // for greyscale shader if needed
 	"MOV base.w, 1.0; \n"
 	"MOV_SAT result.color, base; \n"
@@ -854,8 +1398,10 @@ static char *ARB_BuildBloomProgram( char *buf ) {
 		"!!ARBfp1.0 \n"
 		"OPTION ARB_precision_hint_fastest; \n"
 		"PARAM thres = program.local[0]; \n"
+		"PARAM exposure = program.local[1]; \n"
 		"TEMP base; \n"
-		"TEX base, fragment.texcoord[0], texture[0], 2D; \n" );
+		"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
+		"MUL base.xyz, base, exposure.x; \n" );
 
 	if ( r_bloom_threshold_mode->integer == 0 ) {
 		// (r|g|b) >= threshold
@@ -998,16 +1544,17 @@ static const char *blend2gammaFP = {
 	"OPTION ARB_precision_hint_fastest; \n"
 	"PARAM gamma = program.local[0]; \n"
 	"PARAM factor = program.local[1]; \n"
+	"PARAM exposure = program.local[2]; \n"
 	"TEMP base; \n"
 	"TEMP post; \n"
 	"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
 	"TEX post, fragment.texcoord[0], texture[1], 2D; \n"
 	//"ADD base, base, post; \n"
 	"MAD base, post, factor.x, base; \n"
-	"POW base.x, base.x, gamma.x; \n"
-	"POW base.y, base.y, gamma.y; \n"
-	"POW base.z, base.z, gamma.z; \n"
-	"MUL base.xyz, base, gamma.w; \n"
+	"MUL base.xyz, base, exposure.x; \n"
+	"%s" // scene-linear color grading, if requested
+	"%s" // tone scale, if scene-linear mode requested it
+	"%s" // legacy gamma or SDR sRGB output transfer
 	"%s" // for greyscale shader if needed
 	"MOV base.w, 1.0; \n"
 	"MOV_SAT result.color, base; \n"
@@ -1190,7 +1737,12 @@ qboolean ARB_UpdatePrograms( void )
 	int i;
 #endif
 #if defined (USE_FBO) || defined (USE_PMLIGHT)
-	char buf[4096];
+	char buf[8192];
+#endif
+#ifdef USE_FBO
+	char buf2[8192];
+	char buf3[8192];
+	char buf4[8192];
 #endif
 
 	if ( !qglGenProgramsARB )
@@ -1227,7 +1779,10 @@ qboolean ARB_UpdatePrograms( void )
 		return qfalse;
 
 #ifdef USE_FBO
-	if ( !ARB_CompileProgram( Fragment, va( gammaFP, ARB_BuildGreyscaleProgram( buf ) ), programs[ GAMMA_FRAGMENT ] ) )
+	if ( !ARB_CompileProgram( Fragment, va( gammaFP,
+			ARB_BuildColorGradeProgram( buf ), ARB_BuildToneMapProgram( buf2 ),
+			ARB_BuildOutputEncodeProgram( buf3 ), ARB_BuildGreyscaleProgram( buf4 ) ),
+			programs[ GAMMA_FRAGMENT ] ) )
 		return qfalse;
 
 	if ( !ARB_CompileProgram( Fragment, ARB_BuildBloomProgram( buf ), programs[ BLOOM_EXTRACT_FRAGMENT ] ) )
@@ -1252,7 +1807,10 @@ qboolean ARB_UpdatePrograms( void )
 	if ( !ARB_CompileProgram( Fragment, blend2FP, programs[ BLEND2_FRAGMENT ] ) )
 		return qfalse;
 
-	if ( !ARB_CompileProgram( Fragment, va( blend2gammaFP, ARB_BuildGreyscaleProgram( buf ) ), programs[ BLEND2_GAMMA_FRAGMENT ] ) )
+	if ( !ARB_CompileProgram( Fragment, va( blend2gammaFP,
+			ARB_BuildColorGradeProgram( buf ), ARB_BuildToneMapProgram( buf2 ),
+			ARB_BuildOutputEncodeProgram( buf3 ), ARB_BuildGreyscaleProgram( buf4 ) ),
+			programs[ BLEND2_GAMMA_FRAGMENT ] ) )
 		return qfalse;
 #endif // USE_FBO
 
@@ -1397,6 +1955,10 @@ static const char *glDefToStr( GLint define )
 		CASE_STR(GL_RGBA16);
 		CASE_STR(GL_RGB10_A2);
 		CASE_STR(GL_R11F_G11F_B10F);
+		CASE_STR(GL_SRGB);
+		CASE_STR(GL_SRGB8);
+		CASE_STR(GL_SRGB_ALPHA);
+		CASE_STR(GL_SRGB8_ALPHA8);
 		// data types
 		CASE_STR(GL_BYTE);
 		CASE_STR(GL_UNSIGNED_BYTE);
@@ -1715,6 +2277,7 @@ static void FBO_Bind( GLuint target, GLuint buffer )
 #else
 	qglBindFramebuffer( target, buffer );
 #endif
+	FBO_SetFramebufferSrgb( qfalse );
 }
 
 
@@ -2063,6 +2626,8 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 	ARB_ProgramEnable( DUMMY_VERTEX, BLOOM_EXTRACT_FRAGMENT );
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, r_bloom_threshold->value, r_bloom_threshold->value,
 		r_bloom_threshold->value, 1.0 );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1, FBO_TonemapExposure(), FBO_TonemapExposure(),
+		FBO_TonemapExposure(), 1.0f );
 	RenderQuad( w, h );
 
 	// downscale and blur
@@ -2160,7 +2725,8 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 	if ( finalStage ) {
 		// blend & apply gamma in one pass
 		ARB_ProgramEnable( DUMMY_VERTEX, BLEND2_GAMMA_FRAGMENT );
-		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, gamma, gamma, gamma, obScale );
+		FBO_SetOutputTransformParams( gamma, obScale );
+		FBO_BindColorGradeLut();
 		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1, r_bloom_intensity->value, 0, 0, 0 );
 	} else {
 		// just blend
@@ -2245,7 +2811,7 @@ void FBO_PostProcess( void )
 	GLX_CompatRecordPostProcessFrame( minimized,
 		( r_bloom->integer && programCompiled && qglActiveTextureARB ) ? qtrue : qfalse,
 		programCompiled ? qtrue : qfalse, backEnd.screenshotMask, windowAdjusted,
-		fboReadIndex, r_hdr->integer, r_renderScale->integer, r_greyscale->value );
+		fboReadIndex, FBO_HdrSceneLinearMode(), r_renderScale->integer, r_greyscale->value );
 #endif
 
 	if ( r_bloom->integer && programCompiled && qglActiveTextureARB ) {
@@ -2262,7 +2828,8 @@ void FBO_PostProcess( void )
 		FBO_Bind( GL_FRAMEBUFFER, 0 );
 		GL_BindTexture( 0, frameBuffers[ fboReadIndex ].color );
 		ARB_ProgramEnable( DUMMY_VERTEX, GAMMA_FRAGMENT );
-		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, gamma, gamma, gamma, obScale );
+		FBO_SetOutputTransformParams( gamma, obScale );
+		FBO_BindColorGradeLut();
 		RenderQuad( w, h );
 		ARB_ProgramDisable();
 #ifdef RENDERER_GLX
@@ -2275,7 +2842,8 @@ void FBO_PostProcess( void )
 	FBO_Bind( GL_FRAMEBUFFER, frameBuffers[ 1 ].fbo ); // destination - secondary buffer
 	GL_BindTexture( 0, frameBuffers[ fboReadIndex ].color );  // source - main color buffer
 	ARB_ProgramEnable( DUMMY_VERTEX, GAMMA_FRAGMENT );
-	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, gamma, gamma, gamma, obScale );
+	FBO_SetOutputTransformParams( gamma, obScale );
+	FBO_BindColorGradeLut();
 	RenderQuad( w, h );
 	ARB_ProgramDisable();
 
@@ -2414,11 +2982,11 @@ void QGL_InitFBO( void )
 	else
 		blitClear = 0;
 
-	switch ( r_hdr->integer )
+	switch ( FBO_HdrPrecisionMode() )
 	{
 		case -1: fboInternalFormat = GL_RGBA4; break;
-		case 0: fboInternalFormat = GL_RGBA8; break;
-		default: fboInternalFormat = GL_RGBA16; break;
+		case 16: fboInternalFormat = GL_RGBA16; break;
+		default: fboInternalFormat = GL_RGBA8; break;
 	}
 
 	if ( FBO_CreateMS( &frameBufferMS, w, h ) )

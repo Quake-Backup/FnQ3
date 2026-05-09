@@ -1,6 +1,7 @@
 #version 450
 
 layout(set = 0, binding = 0) uniform sampler2D texture0;
+layout(set = 1, binding = 0) uniform sampler2D colorGradeLut;
 
 layout(location = 0) in vec2 frag_tex_coord;
 
@@ -19,6 +20,28 @@ layout(constant_id = 12) const float hdrPaperWhiteNits = 203.0;
 layout(constant_id = 13) const float hdrMaxNits = 1000.0;
 layout(constant_id = 14) const int toneMapMode = 0; // 0 - legacy, 1 - Reinhard, 2 - ACES fit
 layout(constant_id = 15) const float toneMapExposure = 1.0;
+layout(constant_id = 17) const int sceneLinearMode = 0;
+layout(constant_id = 18) const int colorGradeMode = 0; // 0 - none, 1 - LGG, 2 - 3D LUT atlas, 3 - both
+layout(constant_id = 19) const float gradeLiftR = 0.0;
+layout(constant_id = 20) const float gradeLiftG = 0.0;
+layout(constant_id = 21) const float gradeLiftB = 0.0;
+layout(constant_id = 22) const float gradeGammaR = 1.0;
+layout(constant_id = 23) const float gradeGammaG = 1.0;
+layout(constant_id = 24) const float gradeGammaB = 1.0;
+layout(constant_id = 25) const float gradeGainR = 1.0;
+layout(constant_id = 26) const float gradeGainG = 1.0;
+layout(constant_id = 27) const float gradeGainB = 1.0;
+layout(constant_id = 28) const float whitePoint00 = 1.0;
+layout(constant_id = 29) const float whitePoint01 = 0.0;
+layout(constant_id = 30) const float whitePoint02 = 0.0;
+layout(constant_id = 31) const float whitePoint10 = 0.0;
+layout(constant_id = 32) const float whitePoint11 = 1.0;
+layout(constant_id = 33) const float whitePoint12 = 0.0;
+layout(constant_id = 34) const float whitePoint20 = 0.0;
+layout(constant_id = 35) const float whitePoint21 = 0.0;
+layout(constant_id = 36) const float whitePoint22 = 1.0;
+layout(constant_id = 37) const int colorGradeLutSize = 0;
+layout(constant_id = 38) const float colorGradeLutScale = 4.0;
 
 const vec3 sRGB = { 0.2126, 0.7152, 0.0722 };
 
@@ -82,7 +105,7 @@ vec3 encodeHdr10(vec3 color) {
 }
 
 vec3 toneMapReinhard(vec3 color) {
-	color = max(color * max(toneMapExposure, 0.0), vec3(0.0));
+	color = max(color, vec3(0.0));
 	return color / (vec3(1.0) + color);
 }
 
@@ -92,7 +115,7 @@ vec3 toneMapAces(vec3 color) {
 	const float c = 2.43;
 	const float d = 0.59;
 	const float e = 0.14;
-	color = max(color * max(toneMapExposure, 0.0), vec3(0.0));
+	color = max(color, vec3(0.0));
 	return clamp((color * (a * color + b)) / (color * (c * color + d) + e), vec3(0.0), vec3(1.0));
 }
 
@@ -102,6 +125,49 @@ vec3 applyToneMap(vec3 color) {
 	}
 	if ( toneMapMode == 2 ) {
 		return toneMapAces(color);
+	}
+	return color;
+}
+
+vec3 applyLiftGammaGainAndWhitePoint(vec3 color) {
+	vec3 lift = vec3(gradeLiftR, gradeLiftG, gradeLiftB);
+	vec3 invGamma = 1.0 / max(vec3(gradeGammaR, gradeGammaG, gradeGammaB), vec3(0.0001));
+	vec3 gain = vec3(gradeGainR, gradeGainG, gradeGainB);
+	mat3 whitePoint = mat3(
+		whitePoint00, whitePoint10, whitePoint20,
+		whitePoint01, whitePoint11, whitePoint21,
+		whitePoint02, whitePoint12, whitePoint22
+	);
+
+	color = max(color + lift, vec3(0.0));
+	color = pow(color, invGamma) * gain;
+	return max(whitePoint * color, vec3(0.0));
+}
+
+vec3 sampleColorGradeLut(vec3 color) {
+	if ( colorGradeLutSize < 2 ) {
+		return color;
+	}
+
+	float lutSize = float(colorGradeLutSize);
+	float lutMax = max(colorGradeLutScale, 1.0);
+	vec3 coord = clamp(color / lutMax, vec3(0.0), vec3(1.0)) * (lutSize - 1.0);
+	float slice0 = floor(coord.b);
+	float slice1 = min(slice0 + 1.0, lutSize - 1.0);
+	float fracB = coord.b - slice0;
+	float atlasWidth = lutSize * lutSize;
+	vec2 uv0 = vec2((slice0 * lutSize + coord.r + 0.5) / atlasWidth, (coord.g + 0.5) / lutSize);
+	vec2 uv1 = vec2((slice1 * lutSize + coord.r + 0.5) / atlasWidth, uv0.y);
+	vec3 graded = mix(texture(colorGradeLut, uv0).rgb, texture(colorGradeLut, uv1).rgb, fracB);
+	return graded * lutMax;
+}
+
+vec3 applyColorGrade(vec3 color) {
+	if ( colorGradeMode == 1 || colorGradeMode == 3 ) {
+		color = applyLiftGammaGainAndWhitePoint(color);
+	}
+	if ( colorGradeMode == 2 || colorGradeMode == 3 ) {
+		color = sampleColorGradeLut(color);
 	}
 	return color;
 }
@@ -120,16 +186,20 @@ void main() {
 		base = mix(base, luma, greyscale);
 	}
 
-	if ( gamma != 1.0 )
-	{
-		color = pow(base, vec3(gamma)) * obScale;
+	if ( sceneLinearMode != 0 ) {
+		color = max(base * obScale * max(toneMapExposure, 0.0), vec3(0.0));
+		color = applyColorGrade(color);
+		color = applyToneMap(color);
+	} else {
+		if ( gamma != 1.0 )
+		{
+			color = pow(max(base, vec3(0.0)), vec3(gamma)) * obScale;
+		}
+		else
+		{
+			color = base * obScale;
+		}
 	}
-	else
-	{
-		color = base * obScale;
-	}
-
-	color = applyToneMap(color);
 
 	if ( outputColorSpace == 1 ) {
 		color = encodeHdr10(color);

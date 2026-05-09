@@ -26,6 +26,17 @@ DISPLAY_HDR_RE = re.compile(
     r"paper white\s*(?P<paperWhite>\d+(?:\.\d+)?)\s*nits,\s*max\s*(?P<maxLuminance>\d+(?:\.\d+)?)\s*nits",
     re.IGNORECASE,
 )
+OUTPUT_BACKEND_RE = re.compile(
+    r"output backend:\s*request\s+(?P<request>[A-Za-z0-9_-]+),\s*"
+    r"selected\s+(?P<selected>[A-Za-z0-9_-]+),\s*"
+    r"native\s+(?P<native>[A-Za-z0-9_-]+),\s*"
+    r"display HDR\s+(?P<displayHdr>\w+),\s*"
+    r"headroom\s+(?P<headroom>-?\d+(?:\.\d+)?),\s*"
+    r"SDR white\s+(?P<sdrWhite>-?\d+(?:\.\d+)?)\s*nits,\s*"
+    r"display max\s+(?P<displayMax>-?\d+(?:\.\d+)?)\s*nits,\s*"
+    r"ICC\s+(?P<icc>\w+)/(?P<iccBytes>\d+)",
+    re.IGNORECASE,
+)
 TONE_MAP_RE = re.compile(
     r"tone map:\s*(?P<mode>.*?),\s*exposure\s*(?P<exposure>\d+(?:\.\d+)?)",
     re.IGNORECASE,
@@ -101,6 +112,13 @@ PROFILE_CVARS = {
         "r_ext_multisample": "4",
         "r_tonemap": "2",
         "r_tonemapExposure": "1.0",
+        "r_colorGrade": "3",
+        "r_colorGradeLift": "0 0 0",
+        "r_colorGradeGamma": "1 1 1",
+        "r_colorGradeGain": "1 1 1",
+        "r_colorGradeWhitePoint": "6504",
+        "r_colorGradeAdaptWhitePoint": "6504",
+        "r_colorGradeLUTScale": "4.0",
     },
     "vk-hdr": {
         "r_fbo": "1",
@@ -111,7 +129,15 @@ PROFILE_CVARS = {
         "r_ext_multisample": "4",
         "r_tonemap": "2",
         "r_tonemapExposure": "1.0",
+        "r_colorGrade": "3",
+        "r_colorGradeLift": "0 0 0",
+        "r_colorGradeGamma": "1 1 1",
+        "r_colorGradeGain": "1 1 1",
+        "r_colorGradeWhitePoint": "6504",
+        "r_colorGradeAdaptWhitePoint": "6504",
+        "r_colorGradeLUTScale": "4.0",
         "r_hdrDisplay": "1",
+        "r_outputBackend": "3",
         "r_hdrDisplayPaperWhite": "203",
         "r_hdrDisplayMaxLuminance": "1000",
         "r_hdrDisplayMaxCLL": "1000",
@@ -520,6 +546,19 @@ def parse_vkinfo_text(text: str) -> dict[str, object]:
                 "paperWhite": float(match.group("paperWhite")),
                 "maxLuminance": float(match.group("maxLuminance")),
             }
+        elif match := OUTPUT_BACKEND_RE.search(line):
+            info["found"] = True
+            info["outputBackend"] = {
+                "request": match.group("request").lower(),
+                "selected": match.group("selected").lower(),
+                "native": match.group("native").lower(),
+                "displayHdr": match.group("displayHdr").lower(),
+                "headroom": float(match.group("headroom")),
+                "sdrWhite": float(match.group("sdrWhite")),
+                "displayMax": float(match.group("displayMax")),
+                "icc": match.group("icc").lower(),
+                "iccBytes": int(match.group("iccBytes")),
+            }
         elif match := TONE_MAP_RE.search(line):
             info["found"] = True
             info["toneMap"] = {
@@ -595,7 +634,7 @@ def analyze_vk_log(log_path: Path, profile: str) -> dict[str, object]:
     if not info.get("found"):
         failures.append("vkinfo output was not found.")
 
-    for required_key in ("pipelineCache", "displayHdr", "toneMap", "bloom", "modernVulkan", "barriers", "descriptors", "commandPools", "memory"):
+    for required_key in ("pipelineCache", "displayHdr", "outputBackend", "toneMap", "bloom", "modernVulkan", "barriers", "descriptors", "commandPools", "memory"):
         if required_key not in info:
             failures.append(f"vkinfo field is missing: {required_key}.")
 
@@ -607,10 +646,13 @@ def analyze_vk_log(log_path: Path, profile: str) -> dict[str, object]:
 
     if profile == "vk-hdr":
         display_hdr = info.get("displayHdr")
+        output_backend = info.get("outputBackend")
         if isinstance(display_hdr, dict):
             state = str(display_hdr.get("state", "")).lower()
             if state == "disabled":
                 failures.append("vk-hdr profile requested HDR display, but vkinfo reported it disabled.")
+        if isinstance(output_backend, dict) and output_backend.get("request") != "hdr10-pq":
+            failures.append("vk-hdr profile did not request the HDR10 output backend.")
 
     vulkan_failures = info.get("vulkanFailures", [])
     if isinstance(vulkan_failures, list) and vulkan_failures:
@@ -706,8 +748,15 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
             for analysis in analyses
             if isinstance(analysis.get("displayHdr"), dict)
         ]
+        hdr_backend_requests = [
+            str(analysis.get("outputBackend", {}).get("request", "")).lower()
+            for analysis in analyses
+            if isinstance(analysis.get("outputBackend"), dict)
+        ]
         if hdr_states and all(state == "disabled" for state in hdr_states):
             failures.append("HDR display request was not visible in vkinfo.")
+        if hdr_backend_requests and "hdr10-pq" not in hdr_backend_requests:
+            failures.append("HDR10 output backend request was not visible in vkinfo.")
 
     return failures
 
@@ -840,12 +889,21 @@ def main() -> int:
             "r_customHeight",
             "r_fbo",
             "r_hdr",
+            "r_hdrPrecision",
             "r_hdrDisplay",
             "r_bloom",
             "r_bloom_soft_knee",
             "r_ext_multisample",
             "r_tonemap",
             "r_tonemapExposure",
+            "r_colorGrade",
+            "r_colorGradeLift",
+            "r_colorGradeGamma",
+            "r_colorGradeGain",
+            "r_colorGradeWhitePoint",
+            "r_colorGradeAdaptWhitePoint",
+            "r_colorGradeLUT",
+            "r_colorGradeLUTScale",
             "r_vbo",
         }
     }

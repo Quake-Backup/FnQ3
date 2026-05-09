@@ -84,7 +84,8 @@ void GLX_Renderer_RecordFboInit( qboolean requested, qboolean ready,
 	int captureWidth, int captureHeight, int windowWidth, int windowHeight,
 	int internalFormat, int textureFormat, int textureType, qboolean multiSampled,
 	qboolean superSampled, qboolean windowAdjusted, int blitFilter, int hdrMode,
-	int renderScaleMode, int bloomMode );
+	int renderScaleMode, int bloomMode, qboolean textureSrgbAvailable,
+	qboolean framebufferSrgbAvailable, qboolean framebufferSrgbEnabled );
 void GLX_Renderer_RecordFboShutdown( void );
 void GLX_Renderer_RecordPostProcessFrame( qboolean minimized, qboolean bloomAvailable,
 	qboolean programReady, int screenshotMask, qboolean windowAdjusted, int fboReadIndex,

@@ -91,13 +91,25 @@ cvar_t	*r_vbo;
 #endif
 cvar_t	*r_fbo;
 cvar_t	*r_hdr;
+cvar_t	*r_hdrPrecision;
+cvar_t	*r_srgbTextures;
 cvar_t	*r_hdrDisplay;
 cvar_t	*r_hdrDisplayPaperWhite;
 cvar_t	*r_hdrDisplayMaxLuminance;
 cvar_t	*r_hdrDisplayMaxCLL;
 cvar_t	*r_hdrDisplayMaxFALL;
+cvar_t	*r_outputBackend;
+cvar_t	*r_outputAllowExperimentalLinuxHDR;
 cvar_t	*r_tonemap;
 cvar_t	*r_tonemapExposure;
+cvar_t	*r_colorGrade;
+cvar_t	*r_colorGradeLift;
+cvar_t	*r_colorGradeGamma;
+cvar_t	*r_colorGradeGain;
+cvar_t	*r_colorGradeWhitePoint;
+cvar_t	*r_colorGradeAdaptWhitePoint;
+cvar_t	*r_colorGradeLUT;
+cvar_t	*r_colorGradeLUTScale;
 cvar_t	*r_bloom;
 cvar_t	*r_bloom_threshold;
 cvar_t	*r_bloom_intensity;
@@ -2074,6 +2086,18 @@ static void GfxInfo( void )
 		vk_color_space_string( vk.present_format.colorSpace ),
 		vk.hdrDisplayActive ? ", native HDR" : "",
 		( vk.hdrDisplayActive && vk.hdrMetadata ) ? " + metadata" : "" );
+	ri.Printf( PRINT_ALL, " output backend: request %s, selected %s, native %s, display HDR %s, headroom %.2f, SDR white %.0f nits, display max %.0f nits, ICC %s/%i, driver %s, display %s\n",
+		RendererOutputRequestName( vk.outputRequest ),
+		RendererOutputBackendName( vk.outputBackend ),
+		RendererOutputBackendName( vk.displayOutput.nativeBackend ),
+		vk.displayOutput.hdrEnabled ? "enabled" : "disabled",
+		vk.displayOutput.hdrHeadroom > 0.0f ? vk.displayOutput.hdrHeadroom : 1.0f,
+		vk.displayOutput.sdrWhiteNits > 0.0f ? vk.displayOutput.sdrWhiteNits : 203.0f,
+		vk.displayOutput.maxLuminanceNits > 0.0f ? vk.displayOutput.maxLuminanceNits : 203.0f,
+		vk.displayOutput.iccProfileAvailable ? "yes" : "no",
+		vk.displayOutput.iccProfileBytes,
+		vk.displayOutput.videoDriver[0] ? vk.displayOutput.videoDriver : "unknown",
+		vk.displayOutput.displayName[0] ? vk.displayOutput.displayName : "unknown" );
 	if ( vk.color_format != vk.present_format.format ) {
 		ri.Printf( PRINT_ALL, " color: %s\n", vk_format_string( vk.color_format ) );
 	}
@@ -2218,10 +2242,25 @@ static void VkInfo_f( void )
 		( vk.pipelineCacheLoaded ? vk.pipelineCacheInitialSize : 0 ) / 1024,
 		vk.pipelineCacheSavedSize / 1024 );
 	ri.Printf(PRINT_ALL, "display HDR: %s, metadata: %s, paper white %.0f nits, max %.0f nits\n",
-		vk.hdrDisplayActive ? "active" : ( r_hdrDisplay->integer ? "requested unavailable" : "disabled" ),
+		vk.hdrDisplayActive ? "active" : ( ( r_hdrDisplay->integer ||
+			( r_outputBackend && r_outputBackend->integer == ROUTPUT_REQUEST_HDR10_PQ ) ) ?
+			"requested unavailable" : "disabled" ),
 		( vk.hdrDisplayActive && vk.hdrMetadata ) ? "enabled" : "disabled",
 		r_hdrDisplayPaperWhite->value,
 		r_hdrDisplayMaxLuminance->value );
+	ri.Printf(PRINT_ALL, "output backend: request %s, selected %s, native %s, display HDR %s, headroom %.2f, SDR white %.0f nits, display max %.0f nits, ICC %s/%i, driver %s, display %s, reason: %s\n",
+		RendererOutputRequestName( vk.outputRequest ),
+		RendererOutputBackendName( vk.outputBackend ),
+		RendererOutputBackendName( vk.displayOutput.nativeBackend ),
+		vk.displayOutput.hdrEnabled ? "enabled" : "disabled",
+		vk.displayOutput.hdrHeadroom > 0.0f ? vk.displayOutput.hdrHeadroom : 1.0f,
+		vk.displayOutput.sdrWhiteNits > 0.0f ? vk.displayOutput.sdrWhiteNits : 203.0f,
+		vk.displayOutput.maxLuminanceNits > 0.0f ? vk.displayOutput.maxLuminanceNits : 203.0f,
+		vk.displayOutput.iccProfileAvailable ? "yes" : "no",
+		vk.displayOutput.iccProfileBytes,
+		vk.displayOutput.videoDriver[0] ? vk.displayOutput.videoDriver : "unknown",
+		vk.displayOutput.displayName[0] ? vk.displayOutput.displayName : "unknown",
+		vk.displayOutput.reason[0] ? vk.displayOutput.reason : "none" );
 	ri.Printf(PRINT_ALL, "tone map: %s, exposure %.2f\n",
 		r_tonemap->integer == 2 ? "ACES" : ( r_tonemap->integer == 1 ? "Reinhard" : "legacy" ),
 		r_tonemapExposure->value );
@@ -2582,7 +2621,7 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_levelshotSourceAspect, "Optional centered source crop aspect for levelshots, such as 4:3, 16:9, or 1:1. Blank keeps the full viewport." );
 
 	r_bloom_threshold = ri.Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
-	ri.Cvar_SetDescription( r_bloom_threshold, "Color level to extract to bloom texture, default is 0.75. With Vulkan tone mapping enabled this threshold is evaluated after tone-map exposure." );
+	ri.Cvar_SetDescription( r_bloom_threshold, "Scene-linear color level to extract to bloom texture, default is 0.75. With tone mapping enabled this threshold is evaluated after tone-map exposure." );
 	ri.Cvar_SetGroup( r_bloom_threshold, CVG_RENDERER );
 
 	r_bloom_threshold_mode = ri.Cvar_Get( "r_bloom_threshold_mode", "0", CVAR_ARCHIVE_ND );
@@ -2598,7 +2637,7 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( r_bloom_modulate, CVG_RENDERER );
 	r_bloom_soft_knee = ri.Cvar_Get( "r_bloom_soft_knee", "0.0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_bloom_soft_knee, "0.0", "1.0", CV_FLOAT );
-	ri.Cvar_SetDescription( r_bloom_soft_knee, "Softens Vulkan bloom extraction around r_bloom_threshold. 0 keeps the legacy hard cutoff; 1 uses a full threshold-width knee." );
+	ri.Cvar_SetDescription( r_bloom_soft_knee, "Softens scene-linear bloom extraction around r_bloom_threshold. 0 keeps the legacy hard cutoff; 1 uses a full threshold-width knee." );
 	ri.Cvar_SetGroup( r_bloom_soft_knee, CVG_RENDERER );
 
 	if ( glConfig.vidWidth )
@@ -2645,10 +2684,31 @@ static void R_Register( void )
 	r_fbo = ri.Cvar_Get( "r_fbo", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_fbo, "Use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary video size and screenshot/video capture.\n Required for bloom, HDR rendering, anti-aliasing and greyscale effects." );
 	r_hdr = ri.Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
-	ri.Cvar_SetDescription(r_hdr, "Enables high dynamic range frame buffer texture format. Requires \\r_fbo 1.\n -1: 4-bit, for testing purposes, heavy color banding, might not work on all systems\n  0: 8 bit, default, moderate color banding with multi-stage shaders\n  1: 16 bit, enhanced blending precision, no color banding, might decrease performance on AMD / Intel GPUs\n" );
+	ri.Cvar_CheckRange( r_hdr, "-1", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_hdr,
+		"Selects the scene-linear HDR render pipeline. Requires \\r_fbo 1.\n"
+		" 0: display-referred SDR compatibility path\n"
+		" 1: scene-linear HDR pipeline with exposure, bloom thresholding, tone mapping, and output transform\n"
+		"-1: legacy debug alias for \\r_hdrPrecision -1 without enabling scene-linear HDR\n"
+		"Internal framebuffer storage precision is controlled by \\r_hdrPrecision." );
+	ri.Cvar_SetGroup( r_hdr, CVG_RENDERER );
+	r_hdrPrecision = ri.Cvar_Get( "r_hdrPrecision", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_hdrPrecision, "-1", "16", CV_INTEGER );
+	ri.Cvar_SetDescription( r_hdrPrecision,
+		"Internal FBO color precision for the display pipeline.\n"
+		" 0: automatic (8-bit SDR, 16-bit when \\r_hdr 1 or native HDR output is active)\n"
+		"-1: debug 4-bit storage for banding tests\n"
+		" 8: force 8-bit storage\n"
+		"16: force 16-bit storage" );
+	ri.Cvar_SetGroup( r_hdrPrecision, CVG_RENDERER );
+	r_srgbTextures = ri.Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_srgbTextures, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_srgbTextures, "Use sRGB sampled-image formats for authored color images in the scene-linear HDR pipeline. Data, lightmap, fog, and utility textures stay linear/data." );
+	ri.Cvar_SetGroup( r_srgbTextures, CVG_RENDERER );
 	r_hdrDisplay = ri.Cvar_Get( "r_hdrDisplay", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_hdrDisplay, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_hdrDisplay, "Enable native HDR10 swapchain presentation when supported. Requires \\r_fbo 1 and an HDR-capable display path." );
+	ri.Cvar_SetGroup( r_hdrDisplay, CVG_RENDERER );
 	r_hdrDisplayPaperWhite = ri.Cvar_Get( "r_hdrDisplayPaperWhite", "203", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_hdrDisplayPaperWhite, "80", "500", CV_FLOAT );
 	ri.Cvar_SetDescription( r_hdrDisplayPaperWhite, "SDR reference white level in nits for native HDR presentation." );
@@ -2665,14 +2725,56 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_hdrDisplayMaxFALL, "80", "10000", CV_FLOAT );
 	ri.Cvar_SetDescription( r_hdrDisplayMaxFALL, "HDR10 metadata maximum frame-average light level in nits." );
 	ri.Cvar_SetGroup( r_hdrDisplayMaxFALL, CVG_RENDERER );
+	r_outputBackend = ri.Cvar_Get( "r_outputBackend", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_outputBackend, "0", "5", CV_INTEGER );
+	ri.Cvar_SetDescription( r_outputBackend,
+		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR. Vulkan maps HDR output to HDR10 swapchain when requested and available." );
+	ri.Cvar_SetGroup( r_outputBackend, CVG_RENDERER );
+	r_outputAllowExperimentalLinuxHDR = ri.Cvar_Get( "r_outputAllowExperimentalLinuxHDR", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_outputAllowExperimentalLinuxHDR, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_outputAllowExperimentalLinuxHDR, "Allows Linux HDR output only when SDL reports HDR headroom and an explicit compositor/protocol path." );
+	ri.Cvar_SetGroup( r_outputAllowExperimentalLinuxHDR, CVG_RENDERER );
 	r_tonemap = ri.Cvar_Get( "r_tonemap", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_tonemap, "0", "2", CV_INTEGER );
-	ri.Cvar_SetDescription( r_tonemap, "Vulkan final-pass tone mapper:\n 0: legacy gamma/overbright\n 1: Reinhard\n 2: ACES fitted filmic curve" );
+	ri.Cvar_SetDescription( r_tonemap, "Final-pass tone mapper used by the scene-linear HDR pipeline:\n 0: legacy gamma/overbright\n 1: Reinhard\n 2: ACES fitted filmic curve" );
 	ri.Cvar_SetGroup( r_tonemap, CVG_RENDERER );
 	r_tonemapExposure = ri.Cvar_Get( "r_tonemapExposure", "1.0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_tonemapExposure, "0.1", "8.0", CV_FLOAT );
-	ri.Cvar_SetDescription( r_tonemapExposure, "Exposure multiplier used by Vulkan Reinhard and ACES tone mapping." );
+	ri.Cvar_SetDescription( r_tonemapExposure, "Exposure multiplier used by scene-linear tone mapping and bloom extraction." );
 	ri.Cvar_SetGroup( r_tonemapExposure, CVG_RENDERER );
+	r_colorGrade = ri.Cvar_Get( "r_colorGrade", "0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_colorGrade, "0", "3", CV_INTEGER );
+	ri.Cvar_SetDescription( r_colorGrade,
+		"Scene-linear final-pass color grading for \\r_hdr 1:\n"
+		" 0: disabled\n"
+		" 1: lift/gamma/gain and white-point adaptation\n"
+		" 2: 3D LUT atlas\n"
+		" 3: lift/gamma/gain, white-point adaptation, then 3D LUT atlas." );
+	ri.Cvar_SetGroup( r_colorGrade, CVG_RENDERER );
+	r_colorGradeLift = ri.Cvar_Get( "r_colorGradeLift", "0 0 0", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_colorGradeLift, "Lift offset applied to scene-linear RGB before tone mapping, formatted as \"r g b\"." );
+	ri.Cvar_SetGroup( r_colorGradeLift, CVG_RENDERER );
+	r_colorGradeGamma = ri.Cvar_Get( "r_colorGradeGamma", "1 1 1", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_colorGradeGamma, "Per-channel color-grade gamma in scene-linear space, formatted as \"r g b\". Values above 1 lift midtones." );
+	ri.Cvar_SetGroup( r_colorGradeGamma, CVG_RENDERER );
+	r_colorGradeGain = ri.Cvar_Get( "r_colorGradeGain", "1 1 1", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_colorGradeGain, "Per-channel scene-linear gain applied before tone mapping, formatted as \"r g b\"." );
+	ri.Cvar_SetGroup( r_colorGradeGain, CVG_RENDERER );
+	r_colorGradeWhitePoint = ri.Cvar_Get( "r_colorGradeWhitePoint", "6504", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_colorGradeWhitePoint, "1000", "40000", CV_FLOAT );
+	ri.Cvar_SetDescription( r_colorGradeWhitePoint, "Source scene white point in Kelvin for Bradford chromatic adaptation." );
+	ri.Cvar_SetGroup( r_colorGradeWhitePoint, CVG_RENDERER );
+	r_colorGradeAdaptWhitePoint = ri.Cvar_Get( "r_colorGradeAdaptWhitePoint", "6504", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_colorGradeAdaptWhitePoint, "1000", "40000", CV_FLOAT );
+	ri.Cvar_SetDescription( r_colorGradeAdaptWhitePoint, "Target scene white point in Kelvin for Bradford chromatic adaptation." );
+	ri.Cvar_SetGroup( r_colorGradeAdaptWhitePoint, CVG_RENDERER );
+	r_colorGradeLUT = ri.Cvar_Get( "r_colorGradeLUT", "", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_colorGradeLUT, "Optional 3D LUT atlas image for \\r_colorGrade 2/3. Layout is width N*N, height N, blue slices laid out horizontally." );
+	ri.Cvar_SetGroup( r_colorGradeLUT, CVG_RENDERER );
+	r_colorGradeLUTScale = ri.Cvar_Get( "r_colorGradeLUTScale", "4.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_colorGradeLUTScale, "1.0", "32.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_colorGradeLUTScale, "Scene-linear range represented by the 3D LUT atlas. A value of 4 maps 0..4 scene-linear RGB into the LUT domain." );
+	ri.Cvar_SetGroup( r_colorGradeLUTScale, CVG_RENDERER );
 	r_bloom = ri.Cvar_Get( "r_bloom", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_bloom, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription(r_bloom, "Enables bloom post-processing effect. Requires \\r_fbo 1.");

@@ -185,20 +185,28 @@ Keep the internal precision control, but redesign `r_hdr` semantics around a rea
 **Contract:** [Color Pipeline Contract](../fnquake3/GLX_FINAL_CONTRACT.md#color-pipeline-contract).  
 **Done when:** renderer docs no longer describe HDR merely as 4-bit/8-bit/16-bit framebuffer precision. fileciteturn14file0
 
+**Implemented by:** `r_hdr` now represents scene-linear HDR pipeline intent while `r_hdrPrecision` owns automatic/debug/8-bit/16-bit internal storage selection across OpenGL/GLx and Vulkan. GLx carries the color pipeline through `OutputTransform` with scene color space, output transfer, exposure, tone-map operator, grading mode, bloom threshold/knee, paper-white, and max-output fields; `glxpostprocess`, `r_speeds 7`, and the runtime sweep parser expose that state. The OpenGL/GLx FBO path now chooses storage through `r_hdrPrecision`, applies scene-linear exposure/tone-scale state in the ARB final pass, and records bloom thresholding as scene-linear pipeline data.
+
 **Task Q — Make color handling physically sane**  
 Adopt correct sRGB decode/encode rules, ensure `GL_FRAMEBUFFER_SRGB` behavior is correct where applicable, audit all texture formats, and keep blending in linear space where the destination encoding requires it.  
 **Contract:** [Color Pipeline Contract](../fnquake3/GLX_FINAL_CONTRACT.md#color-pipeline-contract) and [Tier Feature Matrix](../fnquake3/GLX_FINAL_CONTRACT.md#tier-feature-matrix).  
 **Done when:** SDR output is color-correct, screenshot baselines stop drifting due to gamma mistakes, and the renderer has a color-space audit document. citeturn12search0turn7search9
+
+**Implemented by:** GLx/OpenGL and Vulkan images now carry explicit color-space metadata, authored color textures use sRGB sampled formats in the scene-linear `r_hdr 1` path through `r_srgbTextures`, lightmaps/fog/dynamic-light/data textures stay linear or data, the OpenGL final pass shader applies SDR sRGB output encoding for scene-linear output, the current shader-encoded SDR path keeps `GL_FRAMEBUFFER_SRGB` disabled to avoid double encoding, `glxpostprocess`/`r_speeds 7` expose color-audit diagnostics, screenshots/video are documented as SDR sRGB captures, and [GLX_COLORSPACE_AUDIT.md](../fnquake3/GLX_COLORSPACE_AUDIT.md) records the texture, framebuffer, blending, and capture audit.
 
 **Task R — Add color grading and tone mapping**  
 Implement at minimum: exposure control, filmic tone map, lift/gamma/gain controls, white-point adaptation, and 3D LUT color grading. Keep defaults conservative and demo-safe.  
 **Contract:** [Color Pipeline Contract](../fnquake3/GLX_FINAL_CONTRACT.md#color-pipeline-contract) and [Pass Order](../fnquake3/GLX_FINAL_CONTRACT.md#pass-order).  
 **Done when:** there is a dedicated postprocess grading stage with test scenes and user-facing controls.
 
+**Implemented by:** OpenGL/GLx and Vulkan now expose a conservative scene-linear grading surface with `r_colorGrade`, lift/gamma/gain vectors, Bradford white-point adaptation, `r_colorGradeLUT` 3D atlas grading, and `r_colorGradeLUTScale`; defaults are disabled or identity so retail demos and SDR output remain stable. The final postprocess order is exposure, optional grading, tone mapping, and output encoding, with GLx `OutputTransform` and post nodes recording grade and tone-map stages separately. Runtime diagnostics, `glxpostprocess`, `r_speeds 7`, the runtime sweep parser, the `glx-color` proof profile, and the proof corpus now expose color-grade state and retail tone/grading proof scenes.
+
 **Task S — Add platform output backends for true HDR hardware support**  
 Implement an output abstraction with at least these targets: SDR sRGB; Windows scRGB and HDR10-capable output; macOS extended-linear-sRGB/EDR output; Linux HDR behind explicit compositor/protocol checks. Use SDL monitor ICC and HDR state/headroom where available.  
 **Contract:** [Color Pipeline Contract](../fnquake3/GLX_FINAL_CONTRACT.md#color-pipeline-contract) and [Render Products](../fnquake3/GLX_FINAL_CONTRACT.md#render-products).  
 **Done when:** the renderer can query display state, select an output transform, and prove correct behavior on at least one HDR-capable Windows system and one Apple EDR-capable system; Linux remains experimental until compositor support is validated. citeturn7search8turn5search0turn5search2turn6search5turn8search6turn9search1
+
+**Implemented by:** The platform/renderer ABI now has `rendererDisplayOutput_t` plus `GLimp_QueryDisplayOutput`, with SDL3 querying display HDR state, window HDR headroom, SDR-white hints, monitor ICC profile bytes, Windows monitor handles, Wayland output handles, and platform-specific native backend capability. GLx records `r_outputBackend` and `r_outputAllowExperimentalLinuxHDR`, selects SDR sRGB, Windows scRGB, HDR10/PQ, macOS EDR, or Linux experimental HDR transforms only when `r_hdr 1` and platform state allow it, and exposes request/selected/native backend state in `OutputTransform`, `glxpostprocess`, and compact `r_speeds 7` output. Vulkan now maps explicit HDR10 output requests and legacy `r_hdrDisplay 1` to HDR10 swapchain negotiation, clamps HDR metadata/tone scale against queried display headroom when available, and reports the same output-backend state in `vkinfo`. Linux HDR remains opt-in behind SDL compositor/protocol checks and `r_outputAllowExperimentalLinuxHDR`; the hardware proof slots are represented in the runtime parsers and docs so Windows HDR and Apple EDR artifacts can be archived as release evidence.
 
 ### Performance, testing, and release tasks
 

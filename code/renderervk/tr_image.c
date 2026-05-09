@@ -540,6 +540,46 @@ static qboolean RawImage_HasAlpha( const byte *scan, const int numPixels )
 	return qfalse;
 }
 
+static imageColorSpace_t R_ImageColorSpaceForFlags( const char *name, imgFlags_t flags )
+{
+	if ( flags & IMGFLAG_COLORSPACE_DATA ) {
+		return IMAGE_COLORSPACE_DATA;
+	}
+	if ( flags & IMGFLAG_COLORSPACE_LINEAR ) {
+		return IMAGE_COLORSPACE_LINEAR;
+	}
+	if ( flags & IMGFLAG_COLORSPACE_SRGB ) {
+		return IMAGE_COLORSPACE_SRGB;
+	}
+	if ( flags & IMGFLAG_LIGHTMAP ) {
+		return IMAGE_COLORSPACE_LINEAR;
+	}
+	if ( name ) {
+		if ( !Q_stricmpn( name, "*dlight", 7 ) ||
+			!Q_stricmpn( name, "*identityLight", 14 ) ) {
+			return IMAGE_COLORSPACE_LINEAR;
+		}
+		if ( !Q_stricmpn( name, "*fog", 4 ) ||
+			!Q_stricmpn( name, "*white", 6 ) ||
+			!Q_stricmpn( name, "*black", 6 ) ) {
+			return IMAGE_COLORSPACE_DATA;
+		}
+	}
+	return IMAGE_COLORSPACE_SRGB;
+}
+
+static qboolean R_ImageWantsSrgbDecode( imageColorSpace_t colorSpace )
+{
+#ifdef USE_FBO
+	return ( colorSpace == IMAGE_COLORSPACE_SRGB &&
+		r_srgbTextures && r_srgbTextures->integer &&
+		r_hdr && r_hdr->integer > 0 ) ? qtrue : qfalse;
+#else
+	(void)colorSpace;
+	return qfalse;
+#endif
+}
+
 #ifdef USE_VULKAN
 
 typedef struct {
@@ -727,7 +767,9 @@ static void upload_vk_image( image_t *image, byte *pic ) {
 	w = upload_data.base_level_width;
 	h = upload_data.base_level_height;
 
-	if ( r_texturebits->integer > 16 || r_texturebits->integer == 0 || ( image->flags & IMGFLAG_LIGHTMAP ) ) {
+	if ( image->srgbDecode ) {
+		image->internalFormat = VK_FORMAT_R8G8B8A8_SRGB;
+	} else if ( r_texturebits->integer > 16 || r_texturebits->integer == 0 || ( image->flags & IMGFLAG_LIGHTMAP ) ) {
 		image->internalFormat = VK_FORMAT_R8G8B8A8_UNORM;
 		//image->internalFormat = VK_FORMAT_B8G8R8A8_UNORM;
 	} else {
@@ -1022,12 +1064,15 @@ image_t *R_CreateImage( const char *name, const char *name2, byte *pic, int widt
 	image->flags = flags;
 	image->width = width;
 	image->height = height;
+	image->colorSpace = R_ImageColorSpaceForFlags( image->imgName, image->flags );
 
 	if ( namelen > 6 && Q_stristr( image->imgName, "maps/" ) == image->imgName && Q_stristr( image->imgName + 6, "/lm_" ) != NULL ) {
 		// external lightmap atlases stored in maps/<mapname>/lm_XXXX textures
 		// image->flags = IMGFLAG_NOLIGHTSCALE | IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE | IMGFLAG_COLORSHIFT;
-		image->flags |= IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE;
+		image->flags |= IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE | IMGFLAG_COLORSPACE_LINEAR;
+		image->colorSpace = IMAGE_COLORSPACE_LINEAR;
 	}
+	image->srgbDecode = R_ImageWantsSrgbDecode( image->colorSpace );
 
 #ifdef USE_VULKAN
 	if ( flags & IMGFLAG_CLAMPTOBORDER )

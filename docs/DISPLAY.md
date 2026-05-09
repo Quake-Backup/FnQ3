@@ -67,10 +67,25 @@ vid_restart
 These settings control the render path behind the display output.
 
 - `r_fbo`: Enables framebuffer-object rendering. This is the foundation for the modern display path and is required for bloom, HDR, multisample anti-aliasing, supersampling, greyscale, and arbitrary internal render resolutions.
-- `r_hdr`: Controls framebuffer precision.
-  - `-1`: 4-bit, mainly for testing and likely to band heavily.
-  - `0`: 8-bit, the default.
-  - `1`: 16-bit, higher precision with a possible performance cost.
+- `r_hdr`: Selects the scene-linear HDR render pipeline.
+  - `0`: Display-referred SDR compatibility path.
+  - `1`: Scene-linear HDR path with exposure, bloom thresholding, tone mapping, color grading, and the selected output transform.
+  - `-1`: Legacy debug alias for `r_hdrPrecision -1` without enabling scene-linear HDR.
+- `r_hdrPrecision`: Controls the internal FBO color storage used by the display pipeline.
+  - `0`: Automatic. SDR uses 8-bit storage; `r_hdr 1` uses 16-bit storage.
+  - `-1`: Debug 4-bit storage for deliberate banding tests.
+  - `8`: Force 8-bit storage.
+  - `16`: Force 16-bit storage.
+- `r_srgbTextures`: Allows authored color textures to use hardware sRGB decode in the scene-linear `r_hdr 1` path. Lightmaps, fog, dynamic-light masks, and data textures remain linear/data.
+- `r_framebufferSRGB`: Allows `GL_FRAMEBUFFER_SRGB` only when the draw target itself is sRGB-encoded. The current OpenGL/GLx SDR final shader keeps it disabled because the shader already writes SDR sRGB output.
+- `r_outputBackend`: Selects the final hardware output backend.
+  - `0`: Automatic. Conservative by default; Vulkan keeps using `r_hdrDisplay` to request HDR10, while GLx selects a non-SDR transform only when `r_hdr 1` and platform HDR/EDR state are visible.
+  - `1`: Force SDR sRGB.
+  - `2`: Request Windows scRGB output on an HDR/Advanced Color display path.
+  - `3`: Request HDR10/PQ output. Vulkan maps this to an HDR10 swapchain when the surface exposes `VK_COLOR_SPACE_HDR10_ST2084_EXT`.
+  - `4`: Request macOS extended-linear-sRGB/EDR output when SDL reports EDR headroom.
+  - `5`: Request Linux experimental HDR output, gated by `r_outputAllowExperimentalLinuxHDR` plus explicit SDL compositor/protocol HDR checks.
+- `r_outputAllowExperimentalLinuxHDR`: Allows the Linux experimental HDR backend only when the platform reports HDR headroom and an explicit compositor/protocol path. Leave this disabled unless you are validating a known HDR-capable Wayland path.
 - `r_ext_multisample`: Geometry-edge anti-aliasing. The practical values are `0`, `2`, `4`, `6`, and `8`.
 - `r_ext_supersample`: Enables supersample anti-aliasing.
 - `r_renderWidth` and `r_renderHeight`: Internal render resolution when `r_renderScale > 0`.
@@ -103,6 +118,23 @@ vid_restart
 These settings affect the rendered scene itself rather than the window mode.
 
 - `r_gamma`: Gamma correction factor. This is one of the first settings to check if the whole frame looks too dark or too washed out.
+- `r_tonemap`: Final-pass tone scale for `r_hdr 1`.
+  - `0`: Legacy gamma/overbright behavior.
+  - `1`: Reinhard tone mapping.
+  - `2`: ACES fitted filmic curve.
+- `r_tonemapExposure`: Exposure multiplier for scene-linear tone mapping and bloom extraction.
+- `r_colorGrade`: Scene-linear grading stage for `r_hdr 1`.
+  - `0`: Disabled. This is the conservative default and preserves the compatibility image.
+  - `1`: Lift/gamma/gain plus white-point adaptation.
+  - `2`: 3D LUT atlas.
+  - `3`: Lift/gamma/gain, white-point adaptation, then the 3D LUT atlas.
+- `r_colorGradeLift`: Per-channel lift as `"r g b"` before tone mapping. Default is `"0 0 0"`.
+- `r_colorGradeGamma`: Per-channel grading gamma as `"r g b"`. Default is `"1 1 1"`.
+- `r_colorGradeGain`: Per-channel scene-linear gain as `"r g b"`. Default is `"1 1 1"`.
+- `r_colorGradeWhitePoint`: Source scene white point in Kelvin for Bradford adaptation. Default is `6504`.
+- `r_colorGradeAdaptWhitePoint`: Target white point in Kelvin. Default is `6504`.
+- `r_colorGradeLUT`: Optional 3D LUT atlas image for `r_colorGrade 2` or `3`. The atlas layout is width `N*N`, height `N`, with blue slices arranged horizontally.
+- `r_colorGradeLUTScale`: Scene-linear RGB range represented by the LUT. Default `4.0` maps `0..4` into the LUT domain.
 - `r_fovCorrection`: Auto-corrects classic `4:3` scene FOV values for the current viewport aspect. This is for world rendering, not HUD layout.
 - `r_greyscale`: Full-frame desaturation. Requires `r_fbo 1`.
 
@@ -299,6 +331,7 @@ Use `vid_restart` after changes to:
 - `r_noborder`
 - `r_fbo`
 - `r_hdr`
+- `r_hdrPrecision`
 - `r_ext_multisample`
 - `r_renderWidth`, `r_renderHeight`, `r_renderScale`
 - `r_ext_supersample`
@@ -313,8 +346,19 @@ Settings that are usually safe to tune live:
 - `r_greyscale`
 - `r_bloom_threshold`
 - `r_bloom_threshold_mode`
+- `r_bloom_soft_knee`
 - `r_bloom_modulate`
 - `r_bloom_intensity`
+- `r_tonemap`
+- `r_tonemapExposure`
+- `r_colorGrade`
+- `r_colorGradeLift`
+- `r_colorGradeGamma`
+- `r_colorGradeGain`
+- `r_colorGradeWhitePoint`
+- `r_colorGradeAdaptWhitePoint`
+- `r_colorGradeLUT`
+- `r_colorGradeLUTScale`
 - OpenGL or GLx `r_bloom_blend_base`
 - OpenGL or GLx `r_bloom_filter_size`
 - OpenGL or GLx `r_bloom_reflection`

@@ -3710,6 +3710,7 @@ static void CL_InitRef( void ) {
 
 	rimp.GLimp_InitGamma = GLimp_InitGamma;
 	rimp.GLimp_SetGamma = GLimp_SetGamma;
+	rimp.GLimp_QueryDisplayOutput = GLimp_QueryDisplayOutput;
 
 	// OpenGL API
 #ifdef USE_OPENGL_API

@@ -1397,6 +1397,37 @@ static qboolean GLW_StartOpenGL( void )
 	return qtrue;
 }
 
+void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
+{
+	if ( !output ) {
+		return;
+	}
+
+	Com_Memset( output, 0, sizeof( *output ) );
+	output->displayIndex = -1;
+	output->nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	output->sdrWhiteNits = 203.0f;
+	output->hdrHeadroom = 1.0f;
+	output->maxLuminanceNits = 203.0f;
+	output->maxFullFrameLuminanceNits = 203.0f;
+	Q_strncpyz( output->videoDriver, "win32", sizeof( output->videoDriver ) );
+	Q_strncpyz( output->reason,
+		"Legacy Win32 window path does not expose live Advanced Color headroom; use SDL3 output query for HDR proof",
+		sizeof( output->reason ) );
+
+	if ( !g_wv.hWnd ) {
+		return;
+	}
+
+	output->valid = qtrue;
+	output->windowsScRgbSupported = qtrue;
+	output->windowsHdr10Supported = qtrue;
+
+	if ( glw_state.displayName[0] ) {
+		Q_strncpyz( output->displayName, glw_state.displayName, sizeof( output->displayName ) );
+	}
+}
+
 
 /*
 ** GLimp_Init

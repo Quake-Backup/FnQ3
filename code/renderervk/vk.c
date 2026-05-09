@@ -1233,7 +1233,13 @@ static void vk_set_hdr_metadata( void )
 	}
 
 	max_luminance = Com_Clamp( 200.0f, 10000.0f, r_hdrDisplayMaxLuminance->value );
+	if ( vk.displayOutput.maxLuminanceNits >= 200.0f ) {
+		max_luminance = Com_Clamp( 200.0f, max_luminance, vk.displayOutput.maxLuminanceNits );
+	}
 	max_cll = Com_Clamp( 200.0f, 10000.0f, r_hdrDisplayMaxCLL->value );
+	if ( max_cll > max_luminance ) {
+		max_cll = max_luminance;
+	}
 	max_fall = Com_Clamp( 80.0f, max_cll, r_hdrDisplayMaxFALL->value );
 
 	Com_Memset( &metadata, 0, sizeof( metadata ) );
@@ -2286,6 +2292,8 @@ static qboolean vk_blit_enabled( VkPhysicalDevice physical_device, const VkForma
 
 static VkFormat get_hdr_format( VkFormat base_format )
 {
+	int precision;
+
 	if ( r_fbo->integer == 0 ) {
 		return base_format;
 	}
@@ -2294,11 +2302,25 @@ static VkFormat get_hdr_format( VkFormat base_format )
 		return VK_FORMAT_R16G16B16A16_UNORM;
 	}
 
-	switch ( r_hdr->integer ) {
-		case -1: return VK_FORMAT_B4G4R4A4_UNORM_PACK16;
-		case 1: return VK_FORMAT_R16G16B16A16_UNORM;
-		default: return base_format;
+	precision = r_hdrPrecision ? r_hdrPrecision->integer : 0;
+	switch ( precision ) {
+	case -1:
+		return VK_FORMAT_B4G4R4A4_UNORM_PACK16;
+	case 8:
+		return base_format;
+	case 16:
+		return VK_FORMAT_R16G16B16A16_UNORM;
+	default:
+		break;
 	}
+
+	if ( r_hdr && r_hdr->integer < 0 ) {
+		return VK_FORMAT_B4G4R4A4_UNORM_PACK16;
+	}
+	if ( r_hdr && r_hdr->integer > 0 ) {
+		return VK_FORMAT_R16G16B16A16_UNORM;
+	}
+	return base_format;
 }
 
 typedef struct {
@@ -2373,6 +2395,62 @@ static qboolean vk_find_hdr10_surface_format( const VkSurfaceFormatKHR *candidat
 	return qfalse;
 }
 
+static void vk_init_display_output_defaults( rendererDisplayOutput_t *output )
+{
+	if ( !output ) {
+		return;
+	}
+
+	Com_Memset( output, 0, sizeof( *output ) );
+	output->displayIndex = -1;
+	output->nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	output->sdrWhiteNits = 203.0f;
+	output->hdrHeadroom = 1.0f;
+	output->maxLuminanceNits = 203.0f;
+	output->maxFullFrameLuminanceNits = 203.0f;
+	Q_strncpyz( output->reason, "display output query unavailable", sizeof( output->reason ) );
+}
+
+static rendererOutputRequest_t vk_output_request( void )
+{
+	const int request = r_outputBackend ? r_outputBackend->integer : ROUTPUT_REQUEST_AUTO;
+
+	if ( request < ROUTPUT_REQUEST_AUTO || request >= ROUTPUT_REQUEST_COUNT ) {
+		return ROUTPUT_REQUEST_AUTO;
+	}
+	return (rendererOutputRequest_t)request;
+}
+
+static void vk_query_display_output( void )
+{
+	vk_init_display_output_defaults( &vk.displayOutput );
+	if ( ri.GLimp_QueryDisplayOutput ) {
+		ri.GLimp_QueryDisplayOutput( &vk.displayOutput );
+	}
+}
+
+static qboolean vk_output_request_wants_hdr10( void )
+{
+	vk.outputRequest = vk_output_request();
+
+	switch ( vk.outputRequest ) {
+	case ROUTPUT_REQUEST_SDR_SRGB:
+		return qfalse;
+	case ROUTPUT_REQUEST_HDR10_PQ:
+		return qtrue;
+	case ROUTPUT_REQUEST_LINUX_EXPERIMENTAL_HDR:
+		return ( r_outputAllowExperimentalLinuxHDR && r_outputAllowExperimentalLinuxHDR->integer &&
+			vk.displayOutput.linuxHdrExperimental && vk.displayOutput.explicitLinuxHdrProtocol ) ?
+			qtrue : qfalse;
+	case ROUTPUT_REQUEST_AUTO:
+		return ( r_hdrDisplay && r_hdrDisplay->integer ) ? qtrue : qfalse;
+	case ROUTPUT_REQUEST_WINDOWS_SCRGB:
+	case ROUTPUT_REQUEST_MACOS_EDR:
+	default:
+		return qfalse;
+	}
+}
+
 
 static qboolean vk_select_surface_format( VkPhysicalDevice physical_device, VkSurfaceKHR surface )
 {
@@ -2424,8 +2502,10 @@ static qboolean vk_select_surface_format( VkPhysicalDevice physical_device, VkSu
 		}
 	}
 
+	vk_query_display_output();
+	vk.outputBackend = ROUTPUT_BACKEND_SDR_SRGB;
 	vk.hdrDisplayActive = qfalse;
-	if ( r_hdrDisplay->integer ) {
+	if ( vk_output_request_wants_hdr10() ) {
 		if ( !r_fbo->integer ) {
 			ri.Printf( PRINT_WARNING, "...native HDR presentation requires \\r_fbo 1, using SDR presentation\n" );
 		} else if ( !vk.swapchainColorspace ) {
@@ -2435,6 +2515,7 @@ static qboolean vk_select_surface_format( VkPhysicalDevice physical_device, VkSu
 		} else if ( vk_find_hdr10_surface_format( candidates, format_count, &hdr10_format ) ) {
 			vk.present_format = hdr10_format;
 			vk.hdrDisplayActive = qtrue;
+			vk.outputBackend = ROUTPUT_BACKEND_HDR10_PQ;
 		} else {
 			ri.Printf( PRINT_WARNING, "...HDR10 ST2084 surface format is not available, using SDR presentation\n" );
 		}
@@ -4230,6 +4311,261 @@ static void vk_alloc_persistent_pipelines( void )
 
 void vk_create_blur_pipeline( uint32_t index, uint32_t width, uint32_t height, qboolean horizontal_pass );
 
+static int vk_color_grade_mode( void )
+{
+	int mode;
+
+	if ( !r_hdr || r_hdr->integer <= 0 || !r_colorGrade ) {
+		return 0;
+	}
+	mode = r_colorGrade->integer;
+	if ( mode < 0 ) {
+		return 0;
+	}
+	if ( mode > 3 ) {
+		return 3;
+	}
+	return mode;
+}
+
+static qboolean vk_color_grade_uses_lgg( int mode )
+{
+	return ( mode == 1 || mode == 3 ) ? qtrue : qfalse;
+}
+
+static qboolean vk_color_grade_uses_lut( int mode )
+{
+	return ( mode == 2 || mode == 3 ) ? qtrue : qfalse;
+}
+
+static void vk_parse_vec3_cvar( const cvar_t *cvar, float fallback0, float fallback1,
+	float fallback2, float minValue, float maxValue, float out[3] )
+{
+	float values[3];
+
+	values[0] = fallback0;
+	values[1] = fallback1;
+	values[2] = fallback2;
+	if ( cvar && cvar->string && cvar->string[0] ) {
+		(void)sscanf( cvar->string, "%f %f %f", &values[0], &values[1], &values[2] );
+	}
+	out[0] = Com_Clamp( minValue, maxValue, values[0] );
+	out[1] = Com_Clamp( minValue, maxValue, values[1] );
+	out[2] = Com_Clamp( minValue, maxValue, values[2] );
+}
+
+static void vk_set_identity_3x3( float matrix[9] )
+{
+	matrix[0] = 1.0f; matrix[1] = 0.0f; matrix[2] = 0.0f;
+	matrix[3] = 0.0f; matrix[4] = 1.0f; matrix[5] = 0.0f;
+	matrix[6] = 0.0f; matrix[7] = 0.0f; matrix[8] = 1.0f;
+}
+
+static void vk_cct_to_xyz( float kelvin, float xyz[3] )
+{
+	float x, y;
+	const float t = Com_Clamp( 1667.0f, 25000.0f, kelvin );
+	const float t2 = t * t;
+	const float t3 = t2 * t;
+
+	if ( t <= 4000.0f ) {
+		x = -0.2661239e9f / t3 - 0.2343580e6f / t2 + 0.8776956e3f / t + 0.179910f;
+	} else {
+		x = -3.0258469e9f / t3 + 2.1070379e6f / t2 + 0.2226347e3f / t + 0.240390f;
+	}
+
+	if ( t < 2222.0f ) {
+		y = -1.1063814f * x * x * x - 1.34811020f * x * x + 2.18555832f * x - 0.20219683f;
+	} else if ( t < 4000.0f ) {
+		y = -0.9549476f * x * x * x - 1.37418593f * x * x + 2.09137015f * x - 0.16748867f;
+	} else {
+		y = 3.0817580f * x * x * x - 5.87338670f * x * x + 3.75112997f * x - 0.37001483f;
+	}
+
+	if ( y <= 0.0001f ) {
+		xyz[0] = 0.95047f;
+		xyz[1] = 1.0f;
+		xyz[2] = 1.08883f;
+		return;
+	}
+	xyz[0] = x / y;
+	xyz[1] = 1.0f;
+	xyz[2] = ( 1.0f - x - y ) / y;
+}
+
+static void vk_build_bradford_adaptation( float sourceKelvin, float targetKelvin, float matrix[9] )
+{
+	static const float bradford[9] = {
+		 0.8951f,  0.2664f, -0.1614f,
+		-0.7502f,  1.7135f,  0.0367f,
+		 0.0389f, -0.0685f,  1.0296f
+	};
+	static const float bradfordInv[9] = {
+		 0.9869929f, -0.1470543f,  0.1599627f,
+		 0.4323053f,  0.5183603f,  0.0492912f,
+		-0.0085287f,  0.0400428f,  0.9684867f
+	};
+	float src[3], dst[3], srcCone[3], dstCone[3], scale[3], scaledBradford[9];
+	int row, col;
+
+	vk_cct_to_xyz( sourceKelvin, src );
+	vk_cct_to_xyz( targetKelvin, dst );
+
+	for ( row = 0; row < 3; row++ ) {
+		srcCone[row] = bradford[row * 3 + 0] * src[0] +
+			bradford[row * 3 + 1] * src[1] +
+			bradford[row * 3 + 2] * src[2];
+		dstCone[row] = bradford[row * 3 + 0] * dst[0] +
+			bradford[row * 3 + 1] * dst[1] +
+			bradford[row * 3 + 2] * dst[2];
+		scale[row] = fabs( srcCone[row] ) > 0.0001f ? dstCone[row] / srcCone[row] : 1.0f;
+	}
+
+	for ( row = 0; row < 3; row++ ) {
+		for ( col = 0; col < 3; col++ ) {
+			scaledBradford[row * 3 + col] = scale[row] * bradford[row * 3 + col];
+		}
+	}
+
+	for ( row = 0; row < 3; row++ ) {
+		for ( col = 0; col < 3; col++ ) {
+			matrix[row * 3 + col] =
+				bradfordInv[row * 3 + 0] * scaledBradford[0 * 3 + col] +
+				bradfordInv[row * 3 + 1] * scaledBradford[1 * 3 + col] +
+				bradfordInv[row * 3 + 2] * scaledBradford[2 * 3 + col];
+		}
+	}
+}
+
+static qboolean vk_validate_color_grade_lut_atlas( const image_t *image, int *size )
+{
+	int lutSize;
+
+	if ( !image || image->width <= 0 || image->height <= 0 ) {
+		return qfalse;
+	}
+	if ( image->width != image->height * image->height ) {
+		return qfalse;
+	}
+	lutSize = image->height;
+	if ( lutSize < 2 || lutSize > 64 ) {
+		return qfalse;
+	}
+	if ( size ) {
+		*size = lutSize;
+	}
+	return qtrue;
+}
+
+static image_t *vk_create_identity_color_grade_lut( int *size )
+{
+	static image_t *identityLut;
+	enum { IDENTITY_LUT_SIZE = 16 };
+	byte data[ IDENTITY_LUT_SIZE * IDENTITY_LUT_SIZE * IDENTITY_LUT_SIZE * 4 ];
+	int r, g, b;
+	const int width = IDENTITY_LUT_SIZE * IDENTITY_LUT_SIZE;
+
+	if ( identityLut ) {
+		if ( size ) {
+			*size = IDENTITY_LUT_SIZE;
+		}
+		return identityLut;
+	}
+
+	for ( b = 0; b < IDENTITY_LUT_SIZE; b++ ) {
+		for ( g = 0; g < IDENTITY_LUT_SIZE; g++ ) {
+			for ( r = 0; r < IDENTITY_LUT_SIZE; r++ ) {
+				const int index = ( g * width + b * IDENTITY_LUT_SIZE + r ) * 4;
+				data[index + 0] = (byte)( r * 255 / ( IDENTITY_LUT_SIZE - 1 ) );
+				data[index + 1] = (byte)( g * 255 / ( IDENTITY_LUT_SIZE - 1 ) );
+				data[index + 2] = (byte)( b * 255 / ( IDENTITY_LUT_SIZE - 1 ) );
+				data[index + 3] = 255;
+			}
+		}
+	}
+
+	identityLut = R_CreateImage( "*colorGradeIdentityLUT", NULL, data,
+		width, IDENTITY_LUT_SIZE,
+		IMGFLAG_CLAMPTOEDGE | IMGFLAG_NO_COMPRESSION |
+		IMGFLAG_NOSCALE | IMGFLAG_COLORSPACE_LINEAR );
+	if ( size ) {
+		*size = IDENTITY_LUT_SIZE;
+	}
+	return identityLut;
+}
+
+static image_t *vk_color_grade_lut_image( int *size )
+{
+	static image_t *lutImage;
+	static int lutSize;
+	static int lutModificationCount = -1;
+	const int flags = IMGFLAG_CLAMPTOEDGE | IMGFLAG_NO_COMPRESSION |
+		IMGFLAG_NOSCALE | IMGFLAG_COLORSPACE_LINEAR;
+
+	if ( !r_colorGradeLUT || r_colorGradeLUT->modificationCount == lutModificationCount ) {
+		if ( size ) {
+			*size = lutSize;
+		}
+		return lutImage;
+	}
+
+	lutModificationCount = r_colorGradeLUT->modificationCount;
+	lutImage = NULL;
+	lutSize = 0;
+
+	if ( r_colorGradeLUT->string && r_colorGradeLUT->string[0] ) {
+		image_t *loaded = R_FindImageFile( r_colorGradeLUT->string, flags );
+		if ( vk_validate_color_grade_lut_atlas( loaded, &lutSize ) ) {
+			lutImage = loaded;
+		} else {
+			ri.Printf( PRINT_WARNING,
+				"WARNING: color-grade LUT '%s' must use width N*N and height N; using identity LUT\n",
+				r_colorGradeLUT->string );
+		}
+	}
+
+	if ( !lutImage ) {
+		lutImage = vk_create_identity_color_grade_lut( &lutSize );
+	}
+
+	if ( size ) {
+		*size = lutSize;
+	}
+	return lutImage;
+}
+
+static VkDescriptorSet vk_color_grade_lut_descriptor( void )
+{
+	image_t *image;
+	int size;
+
+	if ( !vk_color_grade_uses_lut( vk_color_grade_mode() ) ) {
+		if ( tr.whiteImage && tr.whiteImage->descriptor != VK_NULL_HANDLE ) {
+			return tr.whiteImage->descriptor;
+		}
+		return vk.color_descriptor;
+	}
+
+	image = vk_color_grade_lut_image( &size );
+	if ( image && image->descriptor != VK_NULL_HANDLE ) {
+		return image->descriptor;
+	}
+	if ( tr.whiteImage && tr.whiteImage->descriptor != VK_NULL_HANDLE ) {
+		return tr.whiteImage->descriptor;
+	}
+	return vk.color_descriptor;
+}
+
+static void vk_bind_gamma_descriptor_sets( void )
+{
+	VkDescriptorSet post_sets[2];
+
+	post_sets[0] = vk.color_descriptor;
+	post_sets[1] = vk_color_grade_lut_descriptor();
+	qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		vk.pipeline_layout_post_process, 0, ARRAY_LEN( post_sets ), post_sets, 0, NULL );
+}
+
 void vk_update_post_process_pipelines( void )
 {
 	vk_set_hdr_metadata();
@@ -5461,7 +5797,7 @@ void vk_initialize( void )
 		desc.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		desc.pNext = NULL;
 		desc.flags = 0;
-		desc.setLayoutCount = 1;
+		desc.setLayoutCount = 2;
 		desc.pSetLayouts = set_layouts;
 		desc.pushConstantRangeCount = 0;
 		desc.pPushConstantRanges = NULL;
@@ -6304,7 +6640,7 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	VkGraphicsPipelineCreateInfo create_info;
 	VkViewport viewport;
 	VkRect2D scissor;
-	VkSpecializationMapEntry spec_entries[17];
+	VkSpecializationMapEntry spec_entries[39];
 	VkSpecializationInfo frag_spec_info;
 	VkPipeline *pipeline;
 	VkShaderModule fsmodule;
@@ -6332,6 +6668,14 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 		int tonemap_mode;
 		float tonemap_exposure;
 		float bloom_soft_knee;
+		int scene_linear_mode;
+		int color_grade_mode;
+		float grade_lift[3];
+		float grade_gamma[3];
+		float grade_gain[3];
+		float white_point[9];
+		int color_grade_lut_size;
+		float color_grade_lut_scale;
 	} frag_spec_data;
 
 	switch ( program_index ) {
@@ -6402,9 +6746,51 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	frag_spec_data.output_color_space = ( program_index == 0 && vk.hdrDisplayActive ) ? VK_POST_COLOR_SPACE_HDR10_ST2084 : VK_POST_COLOR_SPACE_SDR;
 	frag_spec_data.hdr_paper_white = Com_Clamp( 80.0f, 500.0f, r_hdrDisplayPaperWhite->value );
 	frag_spec_data.hdr_max_luminance = Com_Clamp( frag_spec_data.hdr_paper_white, 10000.0f, r_hdrDisplayMaxLuminance->value );
-	frag_spec_data.tonemap_mode = ( program_index == 0 || program_index == 1 || program_index == 3 ) ? r_tonemap->integer : 0;
+	if ( vk.hdrDisplayActive && vk.displayOutput.maxLuminanceNits >= frag_spec_data.hdr_paper_white ) {
+		frag_spec_data.hdr_max_luminance = Com_Clamp( frag_spec_data.hdr_paper_white,
+			frag_spec_data.hdr_max_luminance, vk.displayOutput.maxLuminanceNits );
+	}
+	frag_spec_data.scene_linear_mode = ( r_hdr && r_hdr->integer > 0 ) ? 1 : 0;
+	frag_spec_data.tonemap_mode = ( frag_spec_data.scene_linear_mode && ( program_index == 0 || program_index == 1 || program_index == 3 ) ) ? r_tonemap->integer : 0;
 	frag_spec_data.tonemap_exposure = Com_Clamp( 0.1f, 8.0f, r_tonemapExposure->value );
 	frag_spec_data.bloom_soft_knee = Com_Clamp( 0.0f, 1.0f, r_bloom_soft_knee->value );
+	{
+		const int color_grade_mode = vk_color_grade_mode();
+		const qboolean use_lgg = vk_color_grade_uses_lgg( color_grade_mode );
+		const qboolean use_lut = vk_color_grade_uses_lut( color_grade_mode );
+		const float sourceWhitePoint = ( r_colorGradeWhitePoint ) ?
+			Com_Clamp( 1000.0f, 40000.0f, r_colorGradeWhitePoint->value ) : 6504.0f;
+		const float targetWhitePoint = ( r_colorGradeAdaptWhitePoint ) ?
+			Com_Clamp( 1000.0f, 40000.0f, r_colorGradeAdaptWhitePoint->value ) : 6504.0f;
+		int lutSize = 0;
+
+		frag_spec_data.color_grade_mode = color_grade_mode;
+		frag_spec_data.color_grade_lut_scale = ( r_colorGradeLUTScale ) ?
+			Com_Clamp( 1.0f, 32.0f, r_colorGradeLUTScale->value ) : 4.0f;
+
+		if ( use_lgg ) {
+			vk_parse_vec3_cvar( r_colorGradeLift, 0.0f, 0.0f, 0.0f, -1.0f, 1.0f, frag_spec_data.grade_lift );
+			vk_parse_vec3_cvar( r_colorGradeGamma, 1.0f, 1.0f, 1.0f, 0.1f, 8.0f, frag_spec_data.grade_gamma );
+			vk_parse_vec3_cvar( r_colorGradeGain, 1.0f, 1.0f, 1.0f, 0.0f, 8.0f, frag_spec_data.grade_gain );
+			vk_build_bradford_adaptation( sourceWhitePoint, targetWhitePoint, frag_spec_data.white_point );
+		} else {
+			frag_spec_data.grade_lift[0] = 0.0f;
+			frag_spec_data.grade_lift[1] = 0.0f;
+			frag_spec_data.grade_lift[2] = 0.0f;
+			frag_spec_data.grade_gamma[0] = 1.0f;
+			frag_spec_data.grade_gamma[1] = 1.0f;
+			frag_spec_data.grade_gamma[2] = 1.0f;
+			frag_spec_data.grade_gain[0] = 1.0f;
+			frag_spec_data.grade_gain[1] = 1.0f;
+			frag_spec_data.grade_gain[2] = 1.0f;
+			vk_set_identity_3x3( frag_spec_data.white_point );
+		}
+
+		if ( use_lut ) {
+			vk_color_grade_lut_image( &lutSize );
+		}
+		frag_spec_data.color_grade_lut_size = use_lut ? lutSize : 0;
+	}
 
 	if ( !vk_surface_format_color_depth( vk.present_format.format, &frag_spec_data.depth_r, &frag_spec_data.depth_g, &frag_spec_data.depth_b ) )
 		ri.Printf( PRINT_ALL, "Format %s not recognized, dither to assume 8bpc\n", vk_format_string( vk.base_format.format ) );
@@ -6476,6 +6862,94 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	spec_entries[16].constantID = 16;
 	spec_entries[16].offset = offsetof( struct FragSpecData, bloom_soft_knee );
 	spec_entries[16].size = sizeof( frag_spec_data.bloom_soft_knee );
+
+	spec_entries[17].constantID = 17;
+	spec_entries[17].offset = offsetof( struct FragSpecData, scene_linear_mode );
+	spec_entries[17].size = sizeof( frag_spec_data.scene_linear_mode );
+
+	spec_entries[18].constantID = 18;
+	spec_entries[18].offset = offsetof( struct FragSpecData, color_grade_mode );
+	spec_entries[18].size = sizeof( frag_spec_data.color_grade_mode );
+
+	spec_entries[19].constantID = 19;
+	spec_entries[19].offset = offsetof( struct FragSpecData, grade_lift ) + sizeof( frag_spec_data.grade_lift[0] ) * 0;
+	spec_entries[19].size = sizeof( frag_spec_data.grade_lift[0] );
+
+	spec_entries[20].constantID = 20;
+	spec_entries[20].offset = offsetof( struct FragSpecData, grade_lift ) + sizeof( frag_spec_data.grade_lift[0] ) * 1;
+	spec_entries[20].size = sizeof( frag_spec_data.grade_lift[0] );
+
+	spec_entries[21].constantID = 21;
+	spec_entries[21].offset = offsetof( struct FragSpecData, grade_lift ) + sizeof( frag_spec_data.grade_lift[0] ) * 2;
+	spec_entries[21].size = sizeof( frag_spec_data.grade_lift[0] );
+
+	spec_entries[22].constantID = 22;
+	spec_entries[22].offset = offsetof( struct FragSpecData, grade_gamma ) + sizeof( frag_spec_data.grade_gamma[0] ) * 0;
+	spec_entries[22].size = sizeof( frag_spec_data.grade_gamma[0] );
+
+	spec_entries[23].constantID = 23;
+	spec_entries[23].offset = offsetof( struct FragSpecData, grade_gamma ) + sizeof( frag_spec_data.grade_gamma[0] ) * 1;
+	spec_entries[23].size = sizeof( frag_spec_data.grade_gamma[0] );
+
+	spec_entries[24].constantID = 24;
+	spec_entries[24].offset = offsetof( struct FragSpecData, grade_gamma ) + sizeof( frag_spec_data.grade_gamma[0] ) * 2;
+	spec_entries[24].size = sizeof( frag_spec_data.grade_gamma[0] );
+
+	spec_entries[25].constantID = 25;
+	spec_entries[25].offset = offsetof( struct FragSpecData, grade_gain ) + sizeof( frag_spec_data.grade_gain[0] ) * 0;
+	spec_entries[25].size = sizeof( frag_spec_data.grade_gain[0] );
+
+	spec_entries[26].constantID = 26;
+	spec_entries[26].offset = offsetof( struct FragSpecData, grade_gain ) + sizeof( frag_spec_data.grade_gain[0] ) * 1;
+	spec_entries[26].size = sizeof( frag_spec_data.grade_gain[0] );
+
+	spec_entries[27].constantID = 27;
+	spec_entries[27].offset = offsetof( struct FragSpecData, grade_gain ) + sizeof( frag_spec_data.grade_gain[0] ) * 2;
+	spec_entries[27].size = sizeof( frag_spec_data.grade_gain[0] );
+
+	spec_entries[28].constantID = 28;
+	spec_entries[28].offset = offsetof( struct FragSpecData, white_point ) + sizeof( frag_spec_data.white_point[0] ) * 0;
+	spec_entries[28].size = sizeof( frag_spec_data.white_point[0] );
+
+	spec_entries[29].constantID = 29;
+	spec_entries[29].offset = offsetof( struct FragSpecData, white_point ) + sizeof( frag_spec_data.white_point[0] ) * 1;
+	spec_entries[29].size = sizeof( frag_spec_data.white_point[0] );
+
+	spec_entries[30].constantID = 30;
+	spec_entries[30].offset = offsetof( struct FragSpecData, white_point ) + sizeof( frag_spec_data.white_point[0] ) * 2;
+	spec_entries[30].size = sizeof( frag_spec_data.white_point[0] );
+
+	spec_entries[31].constantID = 31;
+	spec_entries[31].offset = offsetof( struct FragSpecData, white_point ) + sizeof( frag_spec_data.white_point[0] ) * 3;
+	spec_entries[31].size = sizeof( frag_spec_data.white_point[0] );
+
+	spec_entries[32].constantID = 32;
+	spec_entries[32].offset = offsetof( struct FragSpecData, white_point ) + sizeof( frag_spec_data.white_point[0] ) * 4;
+	spec_entries[32].size = sizeof( frag_spec_data.white_point[0] );
+
+	spec_entries[33].constantID = 33;
+	spec_entries[33].offset = offsetof( struct FragSpecData, white_point ) + sizeof( frag_spec_data.white_point[0] ) * 5;
+	spec_entries[33].size = sizeof( frag_spec_data.white_point[0] );
+
+	spec_entries[34].constantID = 34;
+	spec_entries[34].offset = offsetof( struct FragSpecData, white_point ) + sizeof( frag_spec_data.white_point[0] ) * 6;
+	spec_entries[34].size = sizeof( frag_spec_data.white_point[0] );
+
+	spec_entries[35].constantID = 35;
+	spec_entries[35].offset = offsetof( struct FragSpecData, white_point ) + sizeof( frag_spec_data.white_point[0] ) * 7;
+	spec_entries[35].size = sizeof( frag_spec_data.white_point[0] );
+
+	spec_entries[36].constantID = 36;
+	spec_entries[36].offset = offsetof( struct FragSpecData, white_point ) + sizeof( frag_spec_data.white_point[0] ) * 8;
+	spec_entries[36].size = sizeof( frag_spec_data.white_point[0] );
+
+	spec_entries[37].constantID = 37;
+	spec_entries[37].offset = offsetof( struct FragSpecData, color_grade_lut_size );
+	spec_entries[37].size = sizeof( frag_spec_data.color_grade_lut_size );
+
+	spec_entries[38].constantID = 38;
+	spec_entries[38].offset = offsetof( struct FragSpecData, color_grade_lut_scale );
+	spec_entries[38].size = sizeof( frag_spec_data.color_grade_lut_scale );
 
 	frag_spec_info.mapEntryCount = ARRAY_LEN( spec_entries );
 	frag_spec_info.pMapEntries = spec_entries;
@@ -8878,7 +9352,7 @@ void vk_end_frame( void )
 			// render to capture FBO
 			vk_begin_render_pass( vk.render_pass.capture, vk.framebuffers.capture, qfalse, gls.captureWidth, gls.captureHeight );
 			qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.capture_pipeline );
-			qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline_layout_post_process, 0, 1, &vk.color_descriptor, 0, NULL );
+			vk_bind_gamma_descriptor_sets();
 
 			qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
 		}
@@ -8895,7 +9369,7 @@ void vk_end_frame( void )
 
 			vk_begin_render_pass( vk.render_pass.gamma, vk.framebuffers.gamma[ vk.cmd->swapchain_image_index ], qfalse, vk.renderWidth, vk.renderHeight );
 			qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.gamma_pipeline );
-			qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline_layout_post_process, 0, 1, &vk.color_descriptor, 0, NULL );
+			vk_bind_gamma_descriptor_sets();
 
 			qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
 		}

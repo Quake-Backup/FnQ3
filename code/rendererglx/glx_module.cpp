@@ -299,6 +299,8 @@ public:
 		int tcGen0, int tcGen1, int texMods0, int texMods1,
 		unsigned int texModTypes0, unsigned int texModTypes1,
 		unsigned int texModSequence0, unsigned int texModSequence1,
+		int rgbWaveFunc, int alphaWaveFunc,
+		unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1, int fogAdjust,
 		int materialCombine, qboolean fogPass );
 	qboolean BindFogMaterial();
 	void UnbindMaterial();
@@ -1114,6 +1116,8 @@ qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, i
 	int tcGen0, int tcGen1, int texMods0, int texMods1,
 	unsigned int texModTypes0, unsigned int texModTypes1,
 	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1, int fogAdjust,
 	int materialCombine, qboolean fogPass )
 {
 	MaterialRequest request {};
@@ -1122,6 +1126,8 @@ qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, i
 	request.stateBits = stateBits;
 	request.rgbGen = rgbGen;
 	request.alphaGen = alphaGen;
+	request.rgbWaveFunc = rgbWaveFunc;
+	request.alphaWaveFunc = alphaWaveFunc;
 	request.tcGen0 = tcGen0;
 	request.tcGen1 = tcGen1;
 	request.texMods0 = texMods0;
@@ -1130,6 +1136,9 @@ qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, i
 	request.texModTypes1 = texModTypes1;
 	request.texModSequence0 = texModSequence0;
 	request.texModSequence1 = texModSequence1;
+	request.texModWaveFuncs0 = texModWaveFuncs0;
+	request.texModWaveFuncs1 = texModWaveFuncs1;
+	request.fogAdjust = fogAdjust;
 	request.materialCombine = materialCombine;
 	request.fogPass = fogPass;
 
@@ -1560,11 +1569,14 @@ extern "C" qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stat
 	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
 	unsigned int texModTypes0, unsigned int texModTypes1,
 	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1, int fogAdjust,
 	int materialCombine, qboolean fogPass )
 {
 	return glx::g_module.BindMaterialStage( flags, stateBits, rgbGen, alphaGen,
 		tcGen0, tcGen1, texMods0, texMods1, texModTypes0, texModTypes1,
-		texModSequence0, texModSequence1,
+		texModSequence0, texModSequence1, rgbWaveFunc, alphaWaveFunc,
+		texModWaveFuncs0, texModWaveFuncs1, fogAdjust,
 		materialCombine, fogPass );
 }
 

@@ -31,6 +31,8 @@ struct MaterialStageKey {
 	unsigned int stateBits;
 	int rgbGen;
 	int alphaGen;
+	int rgbWaveFunc;
+	int alphaWaveFunc;
 	int tcGen0;
 	int tcGen1;
 	int texMods0;
@@ -39,6 +41,9 @@ struct MaterialStageKey {
 	unsigned int texModTypes1;
 	unsigned int texModSequence0;
 	unsigned int texModSequence1;
+	unsigned int texModWaveFuncs0;
+	unsigned int texModWaveFuncs1;
+	int fogAdjust;
 	qboolean fogPass;
 };
 
@@ -102,6 +107,35 @@ static ID_INLINE qboolean GLX_Material_IsKnownTcGen( int tcGen )
 	}
 }
 
+static ID_INLINE qboolean GLX_Material_IsKnownWaveFunc( int waveFunc )
+{
+	switch ( waveFunc ) {
+	case GLX_MATERIAL_WAVEFUNC_NONE:
+	case GLX_MATERIAL_WAVEFUNC_SIN:
+	case GLX_MATERIAL_WAVEFUNC_SQUARE:
+	case GLX_MATERIAL_WAVEFUNC_TRIANGLE:
+	case GLX_MATERIAL_WAVEFUNC_SAWTOOTH:
+	case GLX_MATERIAL_WAVEFUNC_INVERSE_SAWTOOTH:
+	case GLX_MATERIAL_WAVEFUNC_NOISE:
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
+static ID_INLINE qboolean GLX_Material_IsKnownFogAdjust( int fogAdjust )
+{
+	switch ( fogAdjust ) {
+	case GLX_MATERIAL_FOG_ADJUST_NONE:
+	case GLX_MATERIAL_FOG_ADJUST_MODULATE_RGB:
+	case GLX_MATERIAL_FOG_ADJUST_MODULATE_RGBA:
+	case GLX_MATERIAL_FOG_ADJUST_MODULATE_ALPHA:
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
 static ID_INLINE qboolean GLX_Material_TexModMaskKnown( unsigned int texModTypes )
 {
 	return ( texModTypes & ~GLX_MATERIAL_TMOD_KNOWN_BITS ) == 0 ? qtrue : qfalse;
@@ -148,6 +182,11 @@ static ID_INLINE unsigned int GLX_Material_TexModSequenceSlot( unsigned int sequ
 		GLX_MATERIAL_TMOD_SEQUENCE_SLOT_MASK;
 }
 
+static ID_INLINE unsigned int GLX_Material_TexModWaveFuncSlot( unsigned int waveFuncs, int slot )
+{
+	return GLX_Material_TexModSequenceSlot( waveFuncs, slot );
+}
+
 static ID_INLINE unsigned int GLX_Material_TexModSequenceSetSlot( unsigned int sequence,
 	int slot, unsigned int opcode )
 {
@@ -156,6 +195,12 @@ static ID_INLINE unsigned int GLX_Material_TexModSequenceSetSlot( unsigned int s
 
 	return ( sequence & ~mask ) |
 		( ( opcode & GLX_MATERIAL_TMOD_SEQUENCE_SLOT_MASK ) << shift );
+}
+
+static ID_INLINE unsigned int GLX_Material_TexModWaveFuncSetSlot( unsigned int waveFuncs,
+	int slot, unsigned int waveFunc )
+{
+	return GLX_Material_TexModSequenceSetSlot( waveFuncs, slot, waveFunc );
 }
 
 static ID_INLINE unsigned int GLX_Material_TexModSequenceMask( int texMods,
@@ -232,6 +277,26 @@ static ID_INLINE unsigned int GLX_Material_DefaultTexModSequence( int texMods,
 	return sequence;
 }
 
+static ID_INLINE unsigned int GLX_Material_DefaultTexModWaveFuncs( int texMods,
+	unsigned int texModSequence )
+{
+	unsigned int waveFuncs = 0;
+
+	if ( !GLX_Material_TexModCountKnown( texMods ) || texMods == 0 ) {
+		return 0;
+	}
+
+	for ( int i = 0; i < texMods; ++i ) {
+		const unsigned int opcode = GLX_Material_TexModSequenceSlot( texModSequence, i );
+		if ( opcode == GLX_MATERIAL_TMOD_OPCODE_STRETCH ) {
+			waveFuncs = GLX_Material_TexModWaveFuncSetSlot( waveFuncs, i,
+				GLX_MATERIAL_WAVEFUNC_SIN );
+		}
+	}
+
+	return waveFuncs;
+}
+
 static ID_INLINE qboolean GLX_Material_TexModSequenceKnown( int texMods,
 	unsigned int texModTypes, unsigned int sequence )
 {
@@ -246,6 +311,43 @@ static ID_INLINE qboolean GLX_Material_TexModSequenceKnown( int texMods,
 	}
 	return GLX_Material_TexModSequenceMask( texMods, sequence ) == texModTypes ?
 		qtrue : qfalse;
+}
+
+static ID_INLINE qboolean GLX_Material_TexModWaveFuncsKnown( int texMods,
+	unsigned int texModSequence, unsigned int waveFuncs )
+{
+	if ( !GLX_Material_TexModCountKnown( texMods ) ) {
+		return qfalse;
+	}
+	if ( texMods == 0 ) {
+		return waveFuncs == 0 ? qtrue : qfalse;
+	}
+	if ( waveFuncs & GLX_Material_TexModSequenceTailMask( texMods ) ) {
+		return qfalse;
+	}
+	for ( int i = 0; i < texMods; ++i ) {
+		const unsigned int opcode = GLX_Material_TexModSequenceSlot( texModSequence, i );
+		const unsigned int waveFunc = GLX_Material_TexModWaveFuncSlot( waveFuncs, i );
+		if ( !GLX_Material_IsKnownWaveFunc( static_cast<int>( waveFunc ) ) ) {
+			return qfalse;
+		}
+		if ( opcode != GLX_MATERIAL_TMOD_OPCODE_STRETCH &&
+			waveFunc != GLX_MATERIAL_WAVEFUNC_NONE ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+static ID_INLINE qboolean GLX_Material_GenWaveFuncKnown( int gen, int waveFunc, int waveformGen )
+{
+	if ( !GLX_Material_IsKnownWaveFunc( waveFunc ) ) {
+		return qfalse;
+	}
+	if ( gen != waveformGen && waveFunc != GLX_MATERIAL_WAVEFUNC_NONE ) {
+		return qfalse;
+	}
+	return qtrue;
 }
 
 static ID_INLINE unsigned int GLX_Material_StateUnknownBits( unsigned int stateBits )
@@ -351,10 +453,12 @@ static ID_INLINE qboolean GLX_Material_KeyForInputs( int flags, int materialComb
 }
 
 static ID_INLINE qboolean GLX_Material_StageKeyForInputsFull( int flags, unsigned int stateBits,
-	int materialCombine, int rgbGen, int alphaGen, int tcGen0, int tcGen1,
+	int materialCombine, int rgbGen, int alphaGen, int rgbWaveFunc, int alphaWaveFunc,
+	int tcGen0, int tcGen1,
 	int texMods0, int texMods1, unsigned int texModTypes0, unsigned int texModTypes1,
 	unsigned int texModSequence0, unsigned int texModSequence1,
-	qboolean fogPass, MaterialStageKey *key )
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, qboolean fogPass, MaterialStageKey *key )
 {
 	MaterialProgramKey program;
 
@@ -366,8 +470,12 @@ static ID_INLINE qboolean GLX_Material_StageKeyForInputsFull( int flags, unsigne
 	if ( !fogPass ) {
 		if ( !GLX_Material_IsKnownRgbGen( rgbGen ) ||
 			!GLX_Material_IsKnownAlphaGen( alphaGen ) ||
+			!GLX_Material_GenWaveFuncKnown( rgbGen, rgbWaveFunc, GLX_MATERIAL_RGBGEN_WAVEFORM ) ||
+			!GLX_Material_GenWaveFuncKnown( alphaGen, alphaWaveFunc,
+				GLX_MATERIAL_ALPHAGEN_WAVEFORM ) ||
 			!GLX_Material_IsKnownTcGen( tcGen0 ) ||
-			!GLX_Material_IsKnownTcGen( tcGen1 ) ) {
+			!GLX_Material_IsKnownTcGen( tcGen1 ) ||
+			!GLX_Material_IsKnownFogAdjust( fogAdjust ) ) {
 			return qfalse;
 		}
 		if ( !GLX_Material_TexModCountKnown( texMods0 ) ||
@@ -377,7 +485,11 @@ static ID_INLINE qboolean GLX_Material_StageKeyForInputsFull( int flags, unsigne
 			( texMods0 > 0 && texModTypes0 == 0 ) ||
 			( texMods1 > 0 && texModTypes1 == 0 ) ||
 			!GLX_Material_TexModSequenceKnown( texMods0, texModTypes0, texModSequence0 ) ||
-			!GLX_Material_TexModSequenceKnown( texMods1, texModTypes1, texModSequence1 ) ) {
+			!GLX_Material_TexModSequenceKnown( texMods1, texModTypes1, texModSequence1 ) ||
+			!GLX_Material_TexModWaveFuncsKnown( texMods0, texModSequence0,
+				texModWaveFuncs0 ) ||
+			!GLX_Material_TexModWaveFuncsKnown( texMods1, texModSequence1,
+				texModWaveFuncs1 ) ) {
 			return qfalse;
 		}
 	}
@@ -387,6 +499,8 @@ static ID_INLINE qboolean GLX_Material_StageKeyForInputsFull( int flags, unsigne
 	key->stateBits = stateBits;
 	key->rgbGen = rgbGen;
 	key->alphaGen = alphaGen;
+	key->rgbWaveFunc = rgbWaveFunc;
+	key->alphaWaveFunc = alphaWaveFunc;
 	key->tcGen0 = tcGen0;
 	key->tcGen1 = tcGen1;
 	key->texMods0 = texMods0;
@@ -395,6 +509,9 @@ static ID_INLINE qboolean GLX_Material_StageKeyForInputsFull( int flags, unsigne
 	key->texModTypes1 = texModTypes1;
 	key->texModSequence0 = texModSequence0;
 	key->texModSequence1 = texModSequence1;
+	key->texModWaveFuncs0 = texModWaveFuncs0;
+	key->texModWaveFuncs1 = texModWaveFuncs1;
+	key->fogAdjust = fogAdjust;
 	key->fogPass = fogPass;
 	return qtrue;
 }
@@ -404,10 +521,18 @@ static ID_INLINE qboolean GLX_Material_StageKeyForInputs( int flags, unsigned in
 	int texMods0, int texMods1, unsigned int texModTypes0, unsigned int texModTypes1,
 	qboolean fogPass, MaterialStageKey *key )
 {
+	const unsigned int texModSequence0 = GLX_Material_DefaultTexModSequence( texMods0,
+		texModTypes0 );
+	const unsigned int texModSequence1 = GLX_Material_DefaultTexModSequence( texMods1,
+		texModTypes1 );
+
 	return GLX_Material_StageKeyForInputsFull( flags, stateBits, materialCombine,
-		rgbGen, alphaGen, tcGen0, tcGen1, texMods0, texMods1, texModTypes0,
-		texModTypes1, GLX_Material_DefaultTexModSequence( texMods0, texModTypes0 ),
-		GLX_Material_DefaultTexModSequence( texMods1, texModTypes1 ), fogPass, key );
+		rgbGen, alphaGen, GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
+		tcGen0, tcGen1, texMods0, texMods1, texModTypes0,
+		texModTypes1, texModSequence0, texModSequence1,
+		GLX_Material_DefaultTexModWaveFuncs( texMods0, texModSequence0 ),
+		GLX_Material_DefaultTexModWaveFuncs( texMods1, texModSequence1 ),
+		GLX_MATERIAL_FOG_ADJUST_NONE, fogPass, key );
 }
 
 static ID_INLINE qboolean GLX_Material_KeyEquals( const MaterialProgramKey &lhs,
@@ -424,6 +549,8 @@ static ID_INLINE qboolean GLX_Material_StageKeyEquals( const MaterialStageKey &l
 		lhs.stateBits == rhs.stateBits &&
 		lhs.rgbGen == rhs.rgbGen &&
 		lhs.alphaGen == rhs.alphaGen &&
+		lhs.rgbWaveFunc == rhs.rgbWaveFunc &&
+		lhs.alphaWaveFunc == rhs.alphaWaveFunc &&
 		lhs.tcGen0 == rhs.tcGen0 &&
 		lhs.tcGen1 == rhs.tcGen1 &&
 		lhs.texMods0 == rhs.texMods0 &&
@@ -432,6 +559,9 @@ static ID_INLINE qboolean GLX_Material_StageKeyEquals( const MaterialStageKey &l
 		lhs.texModTypes1 == rhs.texModTypes1 &&
 		lhs.texModSequence0 == rhs.texModSequence0 &&
 		lhs.texModSequence1 == rhs.texModSequence1 &&
+		lhs.texModWaveFuncs0 == rhs.texModWaveFuncs0 &&
+		lhs.texModWaveFuncs1 == rhs.texModWaveFuncs1 &&
+		lhs.fogAdjust == rhs.fogAdjust &&
 		lhs.fogPass == rhs.fogPass ? qtrue : qfalse;
 }
 

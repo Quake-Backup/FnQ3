@@ -171,6 +171,15 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 		GLX_MATERIAL_TCGEN_FOG,
 		GLX_MATERIAL_TCGEN_VECTOR
 	};
+	const int waveFuncs[] = {
+		GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_WAVEFUNC_SIN,
+		GLX_MATERIAL_WAVEFUNC_SQUARE,
+		GLX_MATERIAL_WAVEFUNC_TRIANGLE,
+		GLX_MATERIAL_WAVEFUNC_SAWTOOTH,
+		GLX_MATERIAL_WAVEFUNC_INVERSE_SAWTOOTH,
+		GLX_MATERIAL_WAVEFUNC_NOISE
+	};
 	const unsigned int allTexMods = GLX_MATERIAL_TMOD_NONE_BIT |
 		GLX_MATERIAL_TMOD_TRANSFORM_BIT |
 		GLX_MATERIAL_TMOD_TURBULENT_BIT |
@@ -223,21 +232,43 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 		CHECK( key.tcGen0 == tcGen );
 	}
 
+	for ( int waveFunc : waveFuncs ) {
+		CHECK( glx::GLX_Material_StageKeyForInputsFull( 0, 0, 0,
+			GLX_MATERIAL_RGBGEN_WAVEFORM, GLX_MATERIAL_ALPHAGEN_SKIP,
+			waveFunc, GLX_MATERIAL_WAVEFUNC_NONE,
+			GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+			0, 0, 0, 0, 0, 0, 0, 0,
+			GLX_MATERIAL_FOG_ADJUST_NONE, qfalse, &key ) == qtrue );
+		CHECK( key.rgbWaveFunc == waveFunc );
+
+		CHECK( glx::GLX_Material_StageKeyForInputsFull( 0, 0, 0,
+			GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_WAVEFORM,
+			GLX_MATERIAL_WAVEFUNC_NONE, waveFunc,
+			GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+			0, 0, 0, 0, 0, 0, 0, 0,
+			GLX_MATERIAL_FOG_ADJUST_NONE, qfalse, &key ) == qtrue );
+		CHECK( key.alphaWaveFunc == waveFunc );
+	}
+
 	CHECK( glx::GLX_Material_StageKeyForInputsFull(
 		GLX_STAGE_TEXMOD | GLX_STAGE_ENVIRONMENT | GLX_STAGE_DEPTH_FRAGMENT,
 		0x1234, 0,
 		GLX_MATERIAL_RGBGEN_WAVEFORM, GLX_MATERIAL_ALPHAGEN_PORTAL,
+		GLX_MATERIAL_WAVEFUNC_SAWTOOTH, GLX_MATERIAL_WAVEFUNC_NONE,
 		GLX_MATERIAL_TCGEN_VECTOR, GLX_MATERIAL_TCGEN_LIGHTMAP,
 		glx::GLX_MATERIAL_MAX_TEXMODS_PER_BUNDLE,
 		glx::GLX_MATERIAL_MAX_TEXMODS_PER_BUNDLE,
 		fiveTexModMask, fiveTexModMask, fiveTexModSequence, fiveTexModSequence,
-		qfalse, &key ) == qtrue );
+		0, 0, GLX_MATERIAL_FOG_ADJUST_MODULATE_RGB, qfalse, &key ) == qtrue );
 	CHECK( key.flags == ( GLX_STAGE_TEXMOD | GLX_STAGE_ENVIRONMENT | GLX_STAGE_DEPTH_FRAGMENT ) );
 	CHECK( key.stateBits == 0x1234u );
+	CHECK( key.rgbWaveFunc == GLX_MATERIAL_WAVEFUNC_SAWTOOTH );
+	CHECK( key.alphaWaveFunc == GLX_MATERIAL_WAVEFUNC_NONE );
 	CHECK( key.texModTypes0 == fiveTexModMask );
 	CHECK( key.texModTypes1 == fiveTexModMask );
 	CHECK( key.texModSequence0 == fiveTexModSequence );
 	CHECK( key.texModSequence1 == fiveTexModSequence );
+	CHECK( key.fogAdjust == GLX_MATERIAL_FOG_ADJUST_MODULATE_RGB );
 	CHECK( key.program.features == ( glx::GLX_MATERIAL_FEATURE_TEXMOD |
 		glx::GLX_MATERIAL_FEATURE_ENVIRONMENT | glx::GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT ) );
 	CHECK( glx::GLX_Material_StageKeyEquals( key, key ) == qtrue );
@@ -285,22 +316,111 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 		GLX_MATERIAL_TMOD_OPCODE_SCROLL );
 	CHECK( glx::GLX_Material_StageKeyForInputsFull( GLX_STAGE_TEXMOD, 0, 0,
 		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
 		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
-		2, 0, scrollScaleMask, 0, scrollScaleSequence, 0, qfalse,
+		2, 0, scrollScaleMask, 0, scrollScaleSequence, 0,
+		0, 0, GLX_MATERIAL_FOG_ADJUST_NONE, qfalse,
 		&scrollScaleKey ) == qtrue );
 	CHECK( glx::GLX_Material_StageKeyForInputsFull( GLX_STAGE_TEXMOD, 0, 0,
 		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
 		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
-		2, 0, scrollScaleMask, 0, scaleScrollSequence, 0, qfalse,
+		2, 0, scrollScaleMask, 0, scaleScrollSequence, 0,
+		0, 0, GLX_MATERIAL_FOG_ADJUST_NONE, qfalse,
 		&scaleScrollKey ) == qtrue );
 	CHECK( glx::GLX_Material_KeyEquals( scrollScaleKey.program, scaleScrollKey.program ) == qtrue );
 	CHECK( scrollScaleKey.texModTypes0 == scaleScrollKey.texModTypes0 );
 	CHECK( glx::GLX_Material_StageKeyEquals( scrollScaleKey, scaleScrollKey ) == qfalse );
 	CHECK( glx::GLX_Material_StageKeyForInputsFull( GLX_STAGE_TEXMOD, 0, 0,
 		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
 		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
 		2, 0, scrollScaleMask, 0, scrollScaleSequence | ( 1u << 12 ), 0,
-		qfalse, &scrollScaleKey ) == qfalse );
+		0, 0, GLX_MATERIAL_FOG_ADJUST_NONE, qfalse, &scrollScaleKey ) == qfalse );
+
+	glx::MaterialStageKey sineRgbWaveKey {};
+	glx::MaterialStageKey squareRgbWaveKey {};
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( 0, 0, 0,
+		GLX_MATERIAL_RGBGEN_WAVEFORM, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_SIN, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		GLX_MATERIAL_FOG_ADJUST_NONE, qfalse, &sineRgbWaveKey ) == qtrue );
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( 0, 0, 0,
+		GLX_MATERIAL_RGBGEN_WAVEFORM, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_SQUARE, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		GLX_MATERIAL_FOG_ADJUST_NONE, qfalse, &squareRgbWaveKey ) == qtrue );
+	CHECK( glx::GLX_Material_KeyEquals( sineRgbWaveKey.program, squareRgbWaveKey.program ) == qtrue );
+	CHECK( glx::GLX_Material_StageKeyEquals( sineRgbWaveKey, squareRgbWaveKey ) == qfalse );
+
+	glx::MaterialStageKey sineStretchKey {};
+	glx::MaterialStageKey triangleStretchKey {};
+	unsigned int stretchSequence = 0;
+	unsigned int sineStretchWave = 0;
+	unsigned int triangleStretchWave = 0;
+
+	stretchSequence = glx::GLX_Material_TexModSequenceSetSlot( stretchSequence, 0,
+		GLX_MATERIAL_TMOD_OPCODE_STRETCH );
+	sineStretchWave = glx::GLX_Material_TexModWaveFuncSetSlot( sineStretchWave, 0,
+		GLX_MATERIAL_WAVEFUNC_SIN );
+	triangleStretchWave = glx::GLX_Material_TexModWaveFuncSetSlot( triangleStretchWave, 0,
+		GLX_MATERIAL_WAVEFUNC_TRIANGLE );
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( GLX_STAGE_TEXMOD, 0, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		1, 0, GLX_MATERIAL_TMOD_STRETCH_BIT, 0, stretchSequence, 0,
+		sineStretchWave, 0, GLX_MATERIAL_FOG_ADJUST_NONE, qfalse,
+		&sineStretchKey ) == qtrue );
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( GLX_STAGE_TEXMOD, 0, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		1, 0, GLX_MATERIAL_TMOD_STRETCH_BIT, 0, stretchSequence, 0,
+		triangleStretchWave, 0, GLX_MATERIAL_FOG_ADJUST_NONE, qfalse,
+		&triangleStretchKey ) == qtrue );
+	CHECK( glx::GLX_Material_KeyEquals( sineStretchKey.program, triangleStretchKey.program ) == qtrue );
+	CHECK( glx::GLX_Material_StageKeyEquals( sineStretchKey, triangleStretchKey ) == qfalse );
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( GLX_STAGE_TEXMOD, 0, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		1, 0, GLX_MATERIAL_TMOD_SCROLL_BIT, 0,
+		glx::GLX_Material_TexModSequenceSetSlot( 0, 0, GLX_MATERIAL_TMOD_OPCODE_SCROLL ),
+		0, sineStretchWave, 0, GLX_MATERIAL_FOG_ADJUST_NONE, qfalse,
+		&sineStretchKey ) == qfalse );
+
+	glx::MaterialStageKey noDetailKey {};
+	glx::MaterialStageKey detailKey {};
+	CHECK( glx::GLX_Material_StageKeyForInputs( 0, 0, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, qfalse, &noDetailKey ) == qtrue );
+	CHECK( glx::GLX_Material_StageKeyForInputs( GLX_STAGE_DETAIL, 0, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, qfalse, &detailKey ) == qtrue );
+	CHECK( glx::GLX_Material_KeyEquals( noDetailKey.program, detailKey.program ) == qtrue );
+	CHECK( glx::GLX_Material_StageKeyEquals( noDetailKey, detailKey ) == qfalse );
+
+	glx::MaterialStageKey fogRgbAdjustKey {};
+	glx::MaterialStageKey fogAlphaAdjustKey {};
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( 0, 0, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		GLX_MATERIAL_FOG_ADJUST_MODULATE_RGB, qfalse, &fogRgbAdjustKey ) == qtrue );
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( 0, 0, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		GLX_MATERIAL_FOG_ADJUST_MODULATE_ALPHA, qfalse, &fogAlphaAdjustKey ) == qtrue );
+	CHECK( glx::GLX_Material_KeyEquals( fogRgbAdjustKey.program, fogAlphaAdjustKey.program ) == qtrue );
+	CHECK( glx::GLX_Material_StageKeyEquals( fogRgbAdjustKey, fogAlphaAdjustKey ) == qfalse );
 
 	glx::MaterialStageKey blendStateKey {};
 	glx::MaterialStageKey alphaStateKey {};
@@ -324,7 +444,7 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 		GLX_STAGE_MULTITEXTURE | GLX_STAGE_DEPTH_FRAGMENT | GLX_STAGE_BLEND |
 			GLX_STAGE_ALPHA_TEST | GLX_STAGE_DEPTH_WRITE | GLX_STAGE_LIGHTMAP |
 			GLX_STAGE_ANIMATED_IMAGE | GLX_STAGE_VIDEO_MAP | GLX_STAGE_SCREEN_MAP |
-			GLX_STAGE_DLIGHT_MAP | GLX_STAGE_ST0 | GLX_STAGE_ST1,
+			GLX_STAGE_DLIGHT_MAP | GLX_STAGE_DETAIL | GLX_STAGE_ST0 | GLX_STAGE_ST1,
 		0xabcd, GLX_MATERIAL_COMBINE_MODULATE,
 		GLX_MATERIAL_RGBGEN_LIGHTING_DIFFUSE, GLX_MATERIAL_ALPHAGEN_LIGHTING_SPECULAR,
 		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_LIGHTMAP,
@@ -332,6 +452,7 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 	CHECK( key.program.mode == glx::MaterialProgramMode::MultiModulate );
 	CHECK( key.program.features == glx::GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT );
 	CHECK( ( key.flags & GLX_STAGE_DLIGHT_MAP ) != 0 );
+	CHECK( ( key.flags & GLX_STAGE_DETAIL ) != 0 );
 	CHECK( ( key.flags & GLX_STAGE_SCREEN_MAP ) != 0 );
 	CHECK( ( key.flags & GLX_STAGE_VIDEO_MAP ) != 0 );
 
@@ -357,6 +478,24 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
 		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
 		1, 0, GLX_MATERIAL_TMOD_UNKNOWN_BIT, 0, qfalse, &key ) == qfalse );
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( 0, 0, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_SIN, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		GLX_MATERIAL_FOG_ADJUST_NONE, qfalse, &key ) == qfalse );
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( 0, 0, 0,
+		GLX_MATERIAL_RGBGEN_WAVEFORM, GLX_MATERIAL_ALPHAGEN_SKIP,
+		99, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		GLX_MATERIAL_FOG_ADJUST_NONE, qfalse, &key ) == qfalse );
+	CHECK( glx::GLX_Material_StageKeyForInputsFull( 0, 0, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		99, qfalse, &key ) == qfalse );
 
 	return true;
 }

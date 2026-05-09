@@ -364,6 +364,9 @@ static ID_INLINE int GLX_CompatMaterialStageFlags( const shaderStage_t *pStage )
 	if ( pStage->bundle[0].dlight || pStage->bundle[1].dlight ) {
 		flags |= GLX_STAGE_DLIGHT_MAP;
 	}
+	if ( pStage->isDetail ) {
+		flags |= GLX_STAGE_DETAIL;
+	}
 	if ( pStage->bundle[0].numTexMods || pStage->bundle[1].numTexMods ) {
 		flags |= GLX_STAGE_TEXMOD;
 	}
@@ -480,6 +483,44 @@ static ID_INLINE unsigned int GLX_CompatMaterialTexModOpcode( texMod_t type )
 	}
 }
 
+static ID_INLINE int GLX_CompatMaterialWaveFunc( genFunc_t func )
+{
+	switch ( func ) {
+	case GF_NONE:
+		return GLX_MATERIAL_WAVEFUNC_NONE;
+	case GF_SIN:
+		return GLX_MATERIAL_WAVEFUNC_SIN;
+	case GF_SQUARE:
+		return GLX_MATERIAL_WAVEFUNC_SQUARE;
+	case GF_TRIANGLE:
+		return GLX_MATERIAL_WAVEFUNC_TRIANGLE;
+	case GF_SAWTOOTH:
+		return GLX_MATERIAL_WAVEFUNC_SAWTOOTH;
+	case GF_INVERSE_SAWTOOTH:
+		return GLX_MATERIAL_WAVEFUNC_INVERSE_SAWTOOTH;
+	case GF_NOISE:
+		return GLX_MATERIAL_WAVEFUNC_NOISE;
+	default:
+		return GLX_MATERIAL_WAVEFUNC_NONE;
+	}
+}
+
+static ID_INLINE int GLX_CompatMaterialFogAdjust( acff_t adjust )
+{
+	switch ( adjust ) {
+	case ACFF_NONE:
+		return GLX_MATERIAL_FOG_ADJUST_NONE;
+	case ACFF_MODULATE_RGB:
+		return GLX_MATERIAL_FOG_ADJUST_MODULATE_RGB;
+	case ACFF_MODULATE_RGBA:
+		return GLX_MATERIAL_FOG_ADJUST_MODULATE_RGBA;
+	case ACFF_MODULATE_ALPHA:
+		return GLX_MATERIAL_FOG_ADJUST_MODULATE_ALPHA;
+	default:
+		return GLX_MATERIAL_FOG_ADJUST_NONE;
+	}
+}
+
 static ID_INLINE unsigned int GLX_CompatMaterialTexModMask( const textureBundle_t *bundle )
 {
 	unsigned int mask = 0;
@@ -514,16 +555,40 @@ static ID_INLINE unsigned int GLX_CompatMaterialTexModSequence( const textureBun
 	return sequence;
 }
 
+static ID_INLINE unsigned int GLX_CompatMaterialTexModWaveFuncs( const textureBundle_t *bundle )
+{
+	unsigned int waveFuncs = 0;
+	int i;
+
+	if ( !bundle || !bundle->texMods ) {
+		return 0;
+	}
+
+	for ( i = 0; i < bundle->numTexMods && i < GLX_MATERIAL_TMOD_SEQUENCE_MAX_SLOTS; ++i ) {
+		if ( bundle->texMods[ i ].type == TMOD_STRETCH ) {
+			const unsigned int waveFunc =
+				(unsigned int)GLX_CompatMaterialWaveFunc( bundle->texMods[ i ].wave.func );
+			waveFuncs |= ( waveFunc & GLX_MATERIAL_TMOD_SEQUENCE_SLOT_MASK ) <<
+				( i * GLX_MATERIAL_TMOD_SEQUENCE_SLOT_BITS );
+		}
+	}
+
+	return waveFuncs;
+}
+
 static ID_INLINE qboolean GLX_CompatBindMaterialStage( int flags, unsigned int stateBits,
 	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
 	unsigned int texModTypes0, unsigned int texModTypes1,
 	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1, int fogAdjust,
 	int multitextureEnv, qboolean fogPass )
 {
 #ifdef RENDERER_GLX
 	return GLX_Renderer_BindMaterialStage( flags, stateBits, rgbGen, alphaGen,
 		tcGen0, tcGen1, texMods0, texMods1, texModTypes0, texModTypes1,
-		texModSequence0, texModSequence1,
+		texModSequence0, texModSequence1, rgbWaveFunc, alphaWaveFunc,
+		texModWaveFuncs0, texModWaveFuncs1, fogAdjust,
 		GLX_CompatMaterialCombineForGLEnv( multitextureEnv ), fogPass );
 #else
 	(void)flags;
@@ -538,6 +603,11 @@ static ID_INLINE qboolean GLX_CompatBindMaterialStage( int flags, unsigned int s
 	(void)texModTypes1;
 	(void)texModSequence0;
 	(void)texModSequence1;
+	(void)rgbWaveFunc;
+	(void)alphaWaveFunc;
+	(void)texModWaveFuncs0;
+	(void)texModWaveFuncs1;
+	(void)fogAdjust;
 	(void)multitextureEnv;
 	(void)fogPass;
 	return qfalse;

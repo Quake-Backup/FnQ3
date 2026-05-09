@@ -173,6 +173,13 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 			GLX_CompatMaterialTexModMask( &pStage->bundle[1] ),
 			GLX_CompatMaterialTexModSequence( &pStage->bundle[0] ),
 			GLX_CompatMaterialTexModSequence( &pStage->bundle[1] ),
+			pStage->rgbGen == CGEN_WAVEFORM ?
+				GLX_CompatMaterialWaveFunc( pStage->rgbWave.func ) : GLX_MATERIAL_WAVEFUNC_NONE,
+			pStage->alphaGen == AGEN_WAVEFORM ?
+				GLX_CompatMaterialWaveFunc( pStage->alphaWave.func ) : GLX_MATERIAL_WAVEFUNC_NONE,
+			GLX_CompatMaterialTexModWaveFuncs( &pStage->bundle[0] ),
+			GLX_CompatMaterialTexModWaveFuncs( &pStage->bundle[1] ),
+			GLX_CompatMaterialFogAdjust( pStage->adjustColorsForFog ),
 			multitextureEnv, qfalse );
 		if ( !glxMaterialBound ) {
 			GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_PROGRAM );

@@ -5,7 +5,7 @@
 The harness currently checks:
 
 - GLSL material permutation key selection for RC-supported single-texture, multitexture, texmod, environment, depth-fragment, and fog shapes.
-- Full prepared id Tech 3 stage-language keys for `rgbGen`, `alphaGen`, `tcGen`, ordered `tcMod` chains, blend/depth/alpha-test state flags, dynamic-light, screen-map, and video-map cases, including proof that compact-key matches still produce distinct stage-language permutations.
+- Full prepared id Tech 3 stage-language keys for `rgbGen`, `alphaGen`, their wave functions, `tcGen`, ordered `tcMod` chains, `tcMod stretch` wave functions, detail stages, fog color adjustment, blend/depth/alpha-test state flags, dynamic-light, screen-map, and video-map cases, including proof that compact-key matches still produce distinct stage-language permutations.
 - Rejection of unsupported multitexture combine modes.
 - Stream material-gate behavior for the RC allowlist, including explicit multitexture and depth-fragment gates.
 - The legacy shader collapse path not blocking compatible `depthFragment` base stages from becoming multitexture stages.

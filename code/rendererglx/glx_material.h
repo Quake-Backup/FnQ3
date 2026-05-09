@@ -61,6 +61,8 @@ struct MaterialRequest {
 	unsigned int stateBits;
 	int rgbGen;
 	int alphaGen;
+	int rgbWaveFunc;
+	int alphaWaveFunc;
 	int tcGen0;
 	int tcGen1;
 	int texMods0;
@@ -69,6 +71,9 @@ struct MaterialRequest {
 	unsigned int texModTypes1;
 	unsigned int texModSequence0;
 	unsigned int texModSequence1;
+	unsigned int texModWaveFuncs0;
+	unsigned int texModWaveFuncs1;
+	int fogAdjust;
 	int materialCombine;
 	qboolean fogPass;
 };

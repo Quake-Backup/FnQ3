@@ -2,6 +2,7 @@
 #define GLX_STREAM_H
 
 #include "glx_caps.h"
+#include "glx_render_ir.h"
 
 namespace glx {
 
@@ -34,6 +35,7 @@ struct StreamState {
 	cvar_t *r_glxStreamDrawShadows;
 	cvar_t *r_glxStreamDrawBeams;
 	cvar_t *r_glxStreamDrawPostProcess;
+	RenderProductTier tier;
 	StreamStrategy strategy;
 	char reason[96];
 	int ringMegabytes;
@@ -74,6 +76,8 @@ struct StreamState {
 	unsigned int streamedDrawSkipReasons[GLX_STREAM_SKIP_REASON_COUNT];
 	unsigned int streamedDrawMaterialAccepted;
 	unsigned int streamedDrawMaterialRejected;
+	unsigned int streamedDrawMaterialCompilerRejected;
+	unsigned int streamedDrawMaterialCompilerLastUnsupportedReasons;
 	unsigned int streamedDrawMultitextureAccepted;
 	unsigned int streamedDrawMultitextureRejected;
 	unsigned int streamedDrawMultitextureDraws;
@@ -99,6 +103,9 @@ struct StreamState {
 	unsigned int streamedDrawShadowDraws;
 	unsigned int streamedDrawBeamDraws;
 	unsigned int streamedDrawPostProcessDraws;
+	unsigned int streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_COUNT];
+	unsigned int streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_COUNT];
+	unsigned int streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_COUNT];
 	unsigned int streamedDrawVertexes;
 	unsigned int streamedDrawIndexes;
 	unsigned int largestReservationBytes;
@@ -134,11 +141,10 @@ qboolean GLX_Stream_DrawVideoMapsEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawShadowsEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawBeamsEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawPostProcessEnabled( const StreamState &state );
-qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned int stateBits,
-	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 );
+qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, const MaterialIR &material );
 void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
-	qboolean depthFragment, int materialFlags, qboolean success );
+	qboolean depthFragment, int materialFlags, unsigned int categoryMask, qboolean success );
 void GLX_Stream_RecordDrawSkip( StreamState *state, int reason );
 void GLX_Stream_RunSelfTest( StreamState *state );
 void GLX_Stream_ShadowUploadTess( StreamState *state, int numVertexes, int numIndexes,

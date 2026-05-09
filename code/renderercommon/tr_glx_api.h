@@ -41,6 +41,11 @@ void GLX_Renderer_RecordShaderBatch( const char *shaderName, int sort, int numPa
 	int numVertexes, int numIndexes, int flags );
 void GLX_Renderer_RecordMaterialStage( int path, int flags, unsigned int stateBits,
 	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, int materialCombine, qboolean fogPass,
 	int numVertexes, int numIndexes );
 qboolean GLX_Renderer_MaterialRendererActive( void );
 qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stateBits,
@@ -60,14 +65,19 @@ qboolean GLX_Renderer_StreamDrawShadowsEnabled( void );
 qboolean GLX_Renderer_StreamDrawBeamsEnabled( void );
 qboolean GLX_Renderer_StreamDrawPostProcessEnabled( void );
 qboolean GLX_Renderer_StreamDrawAllowsMaterial( int flags, unsigned int stateBits,
-	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 );
+	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, int materialCombine, qboolean fogPass );
 qboolean GLX_Renderer_StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation );
 qboolean GLX_Renderer_StreamUploadAt( glxStreamReservation_t *reservation, int relativeOffset,
 	const void *data, int bytes );
 void GLX_Renderer_StreamCommit( glxStreamReservation_t *reservation );
 void GLX_Renderer_RecordStreamDrawResult( int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
-	qboolean depthFragment, int materialFlags, qboolean success );
+	qboolean depthFragment, int materialFlags, unsigned int categoryMask, qboolean success );
 void GLX_Renderer_RecordStreamDrawSkip( int reason );
 void GLX_Renderer_RecordFboInit( qboolean requested, qboolean ready,
 	qboolean programReady, qboolean framebufferFnsReady, int vidWidth, int vidHeight,

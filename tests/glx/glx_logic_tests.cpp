@@ -503,6 +503,82 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 	return true;
 }
 
+bool MaterialIRCompilesToProgramStatePlans()
+{
+	glx::MaterialIR material = glx::GLX_RenderIR_MakeMaterial(
+		17,
+		GLX_STAGE_MULTITEXTURE | GLX_STAGE_TEXMOD | GLX_STAGE_ENVIRONMENT |
+			GLX_STAGE_BLEND | GLX_STAGE_ST0 | GLX_STAGE_ST1,
+		GLX_MATERIAL_STATE_SRCBLEND_SRC_ALPHA |
+			GLX_MATERIAL_STATE_DSTBLEND_ONE_MINUS_SRC_ALPHA,
+		2 );
+	glx::MaterialStatePlan plan {};
+	unsigned int reasons = 0;
+	unsigned int texModSequence0 = 0;
+	unsigned int texModSequence1 = 0;
+
+	texModSequence0 = glx::GLX_Material_TexModSequenceSetSlot( texModSequence0, 0,
+		GLX_MATERIAL_TMOD_OPCODE_SCROLL );
+	texModSequence0 = glx::GLX_Material_TexModSequenceSetSlot( texModSequence0, 1,
+		GLX_MATERIAL_TMOD_OPCODE_SCALE );
+	texModSequence1 = glx::GLX_Material_TexModSequenceSetSlot( texModSequence1, 0,
+		GLX_MATERIAL_TMOD_OPCODE_ROTATE );
+
+	material.rgbGen = GLX_MATERIAL_RGBGEN_WAVEFORM;
+	material.alphaGen = GLX_MATERIAL_ALPHAGEN_VERTEX;
+	material.rgbWaveFunc = GLX_MATERIAL_WAVEFUNC_SIN;
+	material.alphaWaveFunc = GLX_MATERIAL_WAVEFUNC_NONE;
+	material.tcGen0 = GLX_MATERIAL_TCGEN_TEXTURE;
+	material.tcGen1 = GLX_MATERIAL_TCGEN_LIGHTMAP;
+	material.texMods0 = 2;
+	material.texMods1 = 1;
+	material.texModTypes0 = GLX_MATERIAL_TMOD_SCROLL_BIT | GLX_MATERIAL_TMOD_SCALE_BIT;
+	material.texModTypes1 = GLX_MATERIAL_TMOD_ROTATE_BIT;
+	material.texModSequence0 = texModSequence0;
+	material.texModSequence1 = texModSequence1;
+	material.fogAdjust = GLX_MATERIAL_FOG_ADJUST_MODULATE_RGB;
+	material.materialCombine = GLX_MATERIAL_COMBINE_MODULATE;
+
+	CHECK( glx::GLX_Material_StatePlanForIR( material, &plan, &reasons ) == qtrue );
+	CHECK( reasons == glx::GLX_MATERIAL_UNSUPPORTED_NONE );
+	CHECK( plan.tier == glx::RenderProductTier::GL2X );
+	CHECK( plan.programmable == qtrue );
+	CHECK( plan.sort == 17 );
+	CHECK( plan.stage.program.mode == glx::MaterialProgramMode::MultiModulate );
+	CHECK( plan.stage.program.features == ( glx::GLX_MATERIAL_FEATURE_TEXMOD |
+		glx::GLX_MATERIAL_FEATURE_ENVIRONMENT ) );
+	CHECK( plan.stage.stateBits == material.stateBits );
+	CHECK( plan.stage.rgbGen == GLX_MATERIAL_RGBGEN_WAVEFORM );
+	CHECK( plan.stage.rgbWaveFunc == GLX_MATERIAL_WAVEFUNC_SIN );
+	CHECK( plan.stage.texModSequence0 == texModSequence0 );
+	CHECK( plan.stage.texModSequence1 == texModSequence1 );
+
+	CHECK( glx::GLX_Material_StatePlanForTierAndIR( glx::RenderProductTier::GL12,
+		material, &plan, &reasons ) == qtrue );
+	CHECK( plan.tier == glx::RenderProductTier::GL12 );
+	CHECK( plan.programmable == qfalse );
+
+	glx::MaterialIR badCombine = material;
+	badCombine.materialCombine = 99;
+	CHECK( glx::GLX_Material_StatePlanForIR( badCombine, &plan, &reasons ) == qfalse );
+	CHECK( ( reasons & glx::GLX_MATERIAL_UNSUPPORTED_INVALID_COMBINE ) != 0 );
+	CHECK( std::strcmp( glx::GLX_Material_UnsupportedReasonName( reasons ),
+		"invalid multitexture combine" ) == 0 );
+
+	glx::MaterialIR badSequence = material;
+	badSequence.texModSequence0 = glx::GLX_Material_TexModSequenceSetSlot(
+		badSequence.texModSequence0, 2, GLX_MATERIAL_TMOD_OPCODE_ROTATE );
+	CHECK( glx::GLX_Material_StatePlanForIR( badSequence, &plan, &reasons ) == qfalse );
+	CHECK( ( reasons & glx::GLX_MATERIAL_UNSUPPORTED_TEXMOD_SEQUENCE ) != 0 );
+
+	glx::MaterialIR badWave = material;
+	badWave.rgbWaveFunc = 99;
+	CHECK( glx::GLX_Material_StatePlanForIR( badWave, &plan, &reasons ) == qfalse );
+	CHECK( ( reasons & glx::GLX_MATERIAL_UNSUPPORTED_RGB_WAVE ) != 0 );
+
+	return true;
+}
+
 bool StreamGatesMatchRcAllowlist()
 {
 	glx::StreamMaterialGateConfig rc {};
@@ -749,6 +825,27 @@ bool StreamPostProcessGateIsExplicit()
 	config.streamDraw = qtrue;
 	config.postprocess = qtrue;
 	CHECK( glx::GLX_Stream_EvaluatePostProcessDrawGate( config ) == qtrue );
+
+	return true;
+}
+
+bool StreamDynamicCategoriesNormalizeToSceneProducts()
+{
+	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask(
+		GLX_DYNAMIC_CATEGORY_MASK_ENTITY, 0 ) == GLX_DYNAMIC_CATEGORY_MASK_ENTITY );
+	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask(
+		GLX_DYNAMIC_CATEGORY_MASK_PARTICLE | GLX_DYNAMIC_CATEGORY_MASK_MARK, 0 ) ==
+		( GLX_DYNAMIC_CATEGORY_MASK_PARTICLE | GLX_DYNAMIC_CATEGORY_MASK_MARK ) );
+	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask( 0,
+		GLX_STAGE_BEAM_PASS ) == GLX_DYNAMIC_CATEGORY_MASK_BEAM );
+	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask( 0,
+		GLX_STAGE_SHADOW_PASS ) == GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
+	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask( 0,
+		GLX_STAGE_POSTPROCESS_PASS ) == GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
+	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask( 0,
+		GLX_STAGE_DLIGHT_MAP ) == GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
+	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask( 0, 0 ) ==
+		GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
 
 	return true;
 }
@@ -1582,12 +1679,14 @@ int main()
 		{ "MaterialKeysRejectUnsupportedCombines", MaterialKeysRejectUnsupportedCombines },
 		{ "MaterialKeysTreatSpecialSceneFlagsAsGates", MaterialKeysTreatSpecialSceneFlagsAsGates },
 		{ "MaterialStageKeysCoverPreparedIdTech3StageLanguage", MaterialStageKeysCoverPreparedIdTech3StageLanguage },
+		{ "MaterialIRCompilesToProgramStatePlans", MaterialIRCompilesToProgramStatePlans },
 		{ "StreamGatesMatchRcAllowlist", StreamGatesMatchRcAllowlist },
 		{ "StreamBroadKeyModeRemainsDeveloperEscapeHatch", StreamBroadKeyModeRemainsDeveloperEscapeHatch },
 		{ "StreamSpecialSceneGatesAreExplicit", StreamSpecialSceneGatesAreExplicit },
 		{ "StreamShadowGateIsExplicit", StreamShadowGateIsExplicit },
 		{ "StreamBeamGateIsExplicit", StreamBeamGateIsExplicit },
 		{ "StreamPostProcessGateIsExplicit", StreamPostProcessGateIsExplicit },
+		{ "StreamDynamicCategoriesNormalizeToSceneProducts", StreamDynamicCategoriesNormalizeToSceneProducts },
 		{ "CapabilityLogicClassifiesTiersAndExtensions", CapabilityLogicClassifiesTiersAndExtensions },
 		{ "StreamStrategySelectionFollowsFallbackLadder", StreamStrategySelectionFollowsFallbackLadder },
 		{ "StaticWorldPacketLogicClassifiesRunsAndPolicies", StaticWorldPacketLogicClassifiesRunsAndPolicies },

@@ -114,18 +114,18 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxMaterialRenderer", "0", "1", "1" },
 	{ "r_glxMaterialPrecache", "0", "1", "1" },
 	{ "r_glxGpuTiming", "0", "1", "1" },
-	{ "r_glxStaticWorldArena", "0", "0", "0" },
-	{ "r_glxStaticWorldArenaDraw", "0", "0", "0" },
-	{ "r_glxStaticWorldDraw", "0", "0", "0" },
-	{ "r_glxStaticWorldSoftDraw", "0", "0", "0" },
+	{ "r_glxStaticWorldArena", "0", "1", "1" },
+	{ "r_glxStaticWorldArenaDraw", "0", "1", "1" },
+	{ "r_glxStaticWorldDraw", "0", "1", "1" },
+	{ "r_glxStaticWorldSoftDraw", "0", "1", "1" },
 	{ "r_glxStaticWorldDrawPolicy", "full", "full", "full" },
-	{ "r_glxStaticWorldMultiDraw", "0", "0", "1" },
+	{ "r_glxStaticWorldMultiDraw", "0", "1", "1" },
 	{ "r_glxStaticWorldPacketBatch", "0", "1", "1" },
-	{ "r_glxStaticWorldIndirectBuffer", "0", "0", "1" },
-	{ "r_glxStaticWorldIndirectDraw", "0", "0", "1" },
-	{ "r_glxStaticWorldMultiDrawIndirect", "0", "0", "1" },
+	{ "r_glxStaticWorldIndirectBuffer", "0", "1", "1" },
+	{ "r_glxStaticWorldIndirectDraw", "0", "1", "1" },
+	{ "r_glxStaticWorldMultiDrawIndirect", "0", "1", "1" },
 	{ "r_glxStaticWorldMultiDrawIndirectCompact", "0", "0", "1" },
-	{ "r_glxStaticWorldMultiDrawIndirectSpans", "0", "0", "1" },
+	{ "r_glxStaticWorldMultiDrawIndirectSpans", "0", "1", "1" },
 };
 
 static const char *GLX_Module_ProfileName( GlxProfile profile )
@@ -298,6 +298,35 @@ static MaterialIR GLX_Module_DrawMaterialIR( int profilerPath )
 	return material;
 }
 
+static MaterialIR GLX_Module_StageMaterialIR( int sort, int flags, unsigned int stateBits,
+	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, int materialCombine, qboolean fogPass )
+{
+	MaterialIR material = GLX_RenderIR_MakeMaterial( sort, flags, stateBits, 1 );
+	material.rgbGen = rgbGen;
+	material.alphaGen = alphaGen;
+	material.rgbWaveFunc = rgbWaveFunc;
+	material.alphaWaveFunc = alphaWaveFunc;
+	material.tcGen0 = tcGen0;
+	material.tcGen1 = tcGen1;
+	material.texMods0 = texMods0;
+	material.texMods1 = texMods1;
+	material.texModTypes0 = texModTypes0;
+	material.texModTypes1 = texModTypes1;
+	material.texModSequence0 = texModSequence0;
+	material.texModSequence1 = texModSequence1;
+	material.texModWaveFuncs0 = texModWaveFuncs0;
+	material.texModWaveFuncs1 = texModWaveFuncs1;
+	material.fogAdjust = fogAdjust;
+	material.materialCombine = materialCombine;
+	material.fogPass = fogPass;
+	return material;
+}
+
 static DynamicDraw GLX_Module_IndexedDrawIR( unsigned int mode, int count, unsigned int type,
 	const void *indices, int legacyReason, int profilerPath )
 {
@@ -397,7 +426,13 @@ public:
 	void RecordDraw( int indexes, int path );
 	void RecordShaderBatch( const char *shaderName, int sort, int numPasses, int numVertexes, int numIndexes, int flags );
 	void RecordMaterialStage( int path, int flags, unsigned int stateBits, int rgbGen, int alphaGen,
-		int tcGen0, int tcGen1, int texMods0, int texMods1, int numVertexes, int numIndexes );
+		int tcGen0, int tcGen1, int texMods0, int texMods1,
+		unsigned int texModTypes0, unsigned int texModTypes1,
+		unsigned int texModSequence0, unsigned int texModSequence1,
+		int rgbWaveFunc, int alphaWaveFunc,
+		unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+		int fogAdjust, int materialCombine, qboolean fogPass,
+		int numVertexes, int numIndexes );
 	qboolean MaterialRendererActive() const;
 	qboolean BindMaterialStage( int flags, unsigned int stateBits, int rgbGen, int alphaGen,
 		int tcGen0, int tcGen1, int texMods0, int texMods1,
@@ -415,12 +450,19 @@ public:
 	qboolean StreamDrawShadowsEnabled() const;
 	qboolean StreamDrawBeamsEnabled() const;
 	qboolean StreamDrawPostProcessEnabled() const;
-	qboolean StreamDrawAllowsMaterial( int flags, unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 );
+	qboolean StreamDrawAllowsMaterial( int flags, unsigned int stateBits,
+		int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
+		unsigned int texModTypes0, unsigned int texModTypes1,
+		unsigned int texModSequence0, unsigned int texModSequence1,
+		int rgbWaveFunc, int alphaWaveFunc,
+		unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+		int fogAdjust, int materialCombine, qboolean fogPass );
 	qboolean StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation );
 	qboolean StreamUploadAt( glxStreamReservation_t *reservation, int relativeOffset, const void *data, int bytes );
 	void StreamCommit( glxStreamReservation_t *reservation );
 	void RecordStreamDrawResult( int numVertexes, int numIndexes, int totalBytes, int indexBytes,
-		int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, int materialFlags, qboolean success );
+		int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, int materialFlags,
+		unsigned int categoryMask, qboolean success );
 	void RecordStreamDrawSkip( int reason );
 	void RecordFboInit( qboolean requested, qboolean ready, qboolean programReady, qboolean framebufferFnsReady,
 		int vidWidth, int vidHeight, int captureWidth, int captureHeight, int windowWidth, int windowHeight,
@@ -819,6 +861,23 @@ void RendererModule::PrintCaps() const
 		stream_.streamedDrawShadowDraws,
 		stream_.streamedDrawBeamDraws,
 		stream_.streamedDrawPostProcessDraws );
+	RI().Printf( PRINT_ALL, "  dynamic stream categories: entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, special %u/%u\n",
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_ENTITY],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_ENTITY],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_PARTICLE],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_PARTICLE],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_POLY],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_POLY],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_MARK],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_MARK],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_WEAPON],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_WEAPON],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_UI],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_UI],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_BEAM],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_BEAM],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_SPECIAL],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_SPECIAL] );
 	RI().Printf( PRINT_ALL, "  dynamic stream draw material keys: accepted %u, rejected %u, mt accepted %u, mt rejected %u, depthfrag accepted %u, depthfrag rejected %u, texmod accepted %u, texmod rejected %u, env accepted %u, env rejected %u, dlight accepted %u, dlight rejected %u, screen accepted %u, screen rejected %u, video accepted %u, video rejected %u\n",
 		stream_.streamedDrawMaterialAccepted, stream_.streamedDrawMaterialRejected,
 		stream_.streamedDrawMultitextureAccepted, stream_.streamedDrawMultitextureRejected,
@@ -1122,6 +1181,23 @@ void RendererModule::PrintFrameCounters() const
 		stream_.streamedDrawPostProcessDraws,
 		stream_.streamedDrawFallbacks,
 		stream_.streamedDrawSkips );
+	RI().Printf( PRINT_ALL, "glx: stream categories entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, special %u/%u\n",
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_ENTITY],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_ENTITY],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_PARTICLE],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_PARTICLE],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_POLY],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_POLY],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_MARK],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_MARK],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_WEAPON],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_WEAPON],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_UI],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_UI],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_BEAM],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_BEAM],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_SPECIAL],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_SPECIAL] );
 	RI().Printf( PRINT_ALL, "glx: stream reservation last %u bytes at %u using %s, largest %u bytes, same-frame wrap rejects %u\n",
 		stream_.lastReservationBytes,
 		stream_.lastReservationOffset,
@@ -1350,15 +1426,19 @@ void RendererModule::RecordShaderBatch( const char *shaderName, int sort, int nu
 }
 
 void RendererModule::RecordMaterialStage( int path, int flags, unsigned int stateBits, int rgbGen, int alphaGen,
-	int tcGen0, int tcGen1, int texMods0, int texMods1, int numVertexes, int numIndexes )
+	int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, int materialCombine, qboolean fogPass,
+	int numVertexes, int numIndexes )
 {
-	MaterialIR material = GLX_RenderIR_MakeMaterial( 0, flags, stateBits, 1 );
-	material.rgbGen = rgbGen;
-	material.alphaGen = alphaGen;
-	material.tcGen0 = tcGen0;
-	material.tcGen1 = tcGen1;
-	material.texMods0 = texMods0;
-	material.texMods1 = texMods1;
+	MaterialIR material = GLX_Module_StageMaterialIR( 0, flags, stateBits,
+		rgbGen, alphaGen, tcGen0, tcGen1, texMods0, texMods1,
+		texModTypes0, texModTypes1, texModSequence0, texModSequence1,
+		rgbWaveFunc, alphaWaveFunc, texModWaveFuncs0, texModWaveFuncs1,
+		fogAdjust, materialCombine, fogPass );
 
 	GLX_Profiler_RecordMaterialStage( &profiler_, path, flags, stateBits, rgbGen, alphaGen,
 		tcGen0, tcGen1, texMods0, texMods1, numVertexes, numIndexes );
@@ -1379,6 +1459,11 @@ qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, i
 	int materialCombine, qboolean fogPass )
 {
 	MaterialRequest request {};
+	MaterialIR material = GLX_Module_StageMaterialIR( 0, flags, stateBits,
+		rgbGen, alphaGen, tcGen0, tcGen1, texMods0, texMods1,
+		texModTypes0, texModTypes1, texModSequence0, texModSequence1,
+		rgbWaveFunc, alphaWaveFunc, texModWaveFuncs0, texModWaveFuncs1,
+		fogAdjust, materialCombine, fogPass );
 
 	request.flags = flags;
 	request.stateBits = stateBits;
@@ -1400,7 +1485,8 @@ qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, i
 	request.materialCombine = materialCombine;
 	request.fogPass = fogPass;
 
-	return GLX_Material_BindStage( &material_, request );
+	material_.lastRequest = request;
+	return GLX_Material_BindIR( &material_, material );
 }
 
 qboolean RendererModule::BindFogMaterial()
@@ -1448,9 +1534,20 @@ qboolean RendererModule::StreamDrawPostProcessEnabled() const
 	return GLX_Stream_DrawPostProcessEnabled( stream_ );
 }
 
-qboolean RendererModule::StreamDrawAllowsMaterial( int flags, unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 )
+qboolean RendererModule::StreamDrawAllowsMaterial( int flags, unsigned int stateBits,
+	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, int materialCombine, qboolean fogPass )
 {
-	return GLX_Stream_DrawAllowsMaterial( &stream_, flags, stateBits, rgbGen, alphaGen, tcGen0, texMods0, texMods1 );
+	const MaterialIR material = GLX_Module_StageMaterialIR( 0, flags, stateBits,
+		rgbGen, alphaGen, tcGen0, tcGen1, texMods0, texMods1,
+		texModTypes0, texModTypes1, texModSequence0, texModSequence1,
+		rgbWaveFunc, alphaWaveFunc, texModWaveFuncs0, texModWaveFuncs1,
+		fogAdjust, materialCombine, fogPass );
+	return GLX_Stream_DrawAllowsMaterial( &stream_, material );
 }
 
 qboolean RendererModule::StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation )
@@ -1500,7 +1597,8 @@ void RendererModule::StreamCommit( glxStreamReservation_t *reservation )
 }
 
 void RendererModule::RecordStreamDrawResult( int numVertexes, int numIndexes, int totalBytes, int indexBytes,
-	int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, int materialFlags, qboolean success )
+	int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, int materialFlags,
+	unsigned int categoryMask, qboolean success )
 {
 	UploadPlan upload = GLX_Module_StreamUploadPlan( totalBytes,
 		totalBytes > indexBytes + texcoord1Bytes ? totalBytes - indexBytes - texcoord1Bytes : 0,
@@ -1508,7 +1606,7 @@ void RendererModule::RecordStreamDrawResult( int numVertexes, int numIndexes, in
 	upload.texcoordBytes = texcoord1Bytes > 0 ? static_cast<unsigned int>( texcoord1Bytes ) : 0;
 
 	GLX_Stream_RecordDrawResult( &stream_, numVertexes, numIndexes, totalBytes, indexBytes,
-		texcoord1Bytes, multitexture, fog, depthFragment, materialFlags, success );
+		texcoord1Bytes, multitexture, fog, depthFragment, materialFlags, categoryMask, success );
 	GLX_Executor_ConsumeUploadPlan( &executor_, upload );
 }
 
@@ -1869,10 +1967,18 @@ extern "C" void GLX_Renderer_RecordShaderBatch( const char *shaderName, int sort
 
 extern "C" void GLX_Renderer_RecordMaterialStage( int path, int flags, unsigned int stateBits,
 	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, int materialCombine, qboolean fogPass,
 	int numVertexes, int numIndexes )
 {
 	glx::g_module.RecordMaterialStage( path, flags, stateBits, rgbGen, alphaGen,
-		tcGen0, tcGen1, texMods0, texMods1, numVertexes, numIndexes );
+		tcGen0, tcGen1, texMods0, texMods1, texModTypes0, texModTypes1,
+		texModSequence0, texModSequence1, rgbWaveFunc, alphaWaveFunc,
+		texModWaveFuncs0, texModWaveFuncs1, fogAdjust, materialCombine, fogPass,
+		numVertexes, numIndexes );
 }
 
 extern "C" qboolean GLX_Renderer_MaterialRendererActive( void )
@@ -1941,9 +2047,17 @@ extern "C" qboolean GLX_Renderer_StreamDrawPostProcessEnabled( void )
 }
 
 extern "C" qboolean GLX_Renderer_StreamDrawAllowsMaterial( int flags, unsigned int stateBits,
-	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 )
+	int rgbGen, int alphaGen, int tcGen0, int tcGen1, int texMods0, int texMods1,
+	unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, int materialCombine, qboolean fogPass )
 {
-	return glx::g_module.StreamDrawAllowsMaterial( flags, stateBits, rgbGen, alphaGen, tcGen0, texMods0, texMods1 );
+	return glx::g_module.StreamDrawAllowsMaterial( flags, stateBits, rgbGen, alphaGen,
+		tcGen0, tcGen1, texMods0, texMods1, texModTypes0, texModTypes1,
+		texModSequence0, texModSequence1, rgbWaveFunc, alphaWaveFunc,
+		texModWaveFuncs0, texModWaveFuncs1, fogAdjust, materialCombine, fogPass );
 }
 
 extern "C" qboolean GLX_Renderer_StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation )
@@ -1964,10 +2078,10 @@ extern "C" void GLX_Renderer_StreamCommit( glxStreamReservation_t *reservation )
 
 extern "C" void GLX_Renderer_RecordStreamDrawResult( int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
-	qboolean depthFragment, int materialFlags, qboolean success )
+	qboolean depthFragment, int materialFlags, unsigned int categoryMask, qboolean success )
 {
 	glx::g_module.RecordStreamDrawResult( numVertexes, numIndexes, totalBytes, indexBytes,
-		texcoord1Bytes, multitexture, fog, depthFragment, materialFlags, success );
+		texcoord1Bytes, multitexture, fog, depthFragment, materialFlags, categoryMask, success );
 }
 
 extern "C" void GLX_Renderer_RecordStreamDrawSkip( int reason )

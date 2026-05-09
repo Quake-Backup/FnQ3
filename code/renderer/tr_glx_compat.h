@@ -43,8 +43,108 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  * so the remaining compatibility substrate is explicit and easier to carve away.
  */
 
+static ID_INLINE unsigned int GLX_CompatEntityDynamicCategoryMask( const refEntity_t *entity )
+{
+#ifdef RENDERER_GLX
+	if ( !entity ) {
+		return GLX_DYNAMIC_CATEGORY_MASK_ENTITY;
+	}
+
+	switch ( entity->reType ) {
+	case RT_BEAM:
+	case RT_RAIL_CORE:
+	case RT_RAIL_RINGS:
+	case RT_LIGHTNING:
+		return GLX_DYNAMIC_CATEGORY_MASK_BEAM;
+	default:
+		break;
+	}
+
+	if ( entity->renderfx & ( RF_FIRST_PERSON | RF_DEPTHHACK ) ) {
+		return GLX_DYNAMIC_CATEGORY_MASK_WEAPON;
+	}
+	return GLX_DYNAMIC_CATEGORY_MASK_ENTITY;
+#else
+	(void)entity;
+	return 0u;
+#endif
+}
+
+static ID_INLINE unsigned int GLX_CompatPolyDynamicCategoryMaskForShader( const shader_t *shader,
+	int numVertexes )
+{
+#ifdef RENDERER_GLX
+	if ( shader && ( shader->polygonOffset || shader->sort <= SS_DECAL ) ) {
+		return GLX_DYNAMIC_CATEGORY_MASK_MARK;
+	}
+	if ( numVertexes <= 4 && shader && shader->sort >= SS_BLEND0 ) {
+		return GLX_DYNAMIC_CATEGORY_MASK_PARTICLE;
+	}
+	return GLX_DYNAMIC_CATEGORY_MASK_POLY;
+#else
+	(void)shader;
+	(void)numVertexes;
+	return 0u;
+#endif
+}
+
+static ID_INLINE unsigned int GLX_CompatPolyDynamicCategoryMask( const shaderCommands_t *input )
+{
+#ifdef RENDERER_GLX
+	return GLX_CompatPolyDynamicCategoryMaskForShader( input ? input->shader : NULL,
+		input ? input->numVertexes : 0 );
+#else
+	(void)input;
+	return 0u;
+#endif
+}
+
+static ID_INLINE unsigned int GLX_CompatDynamicCategoryMaskForTess( const shaderCommands_t *input,
+	int materialFlags )
+{
+#ifdef RENDERER_GLX
+	unsigned int categoryMask = input ? input->glxDynamicCategoryMask : 0u;
+
+	if ( materialFlags & GLX_STAGE_BEAM_PASS ) {
+		categoryMask |= GLX_DYNAMIC_CATEGORY_MASK_BEAM;
+	}
+	if ( materialFlags & ( GLX_STAGE_SHADOW_PASS | GLX_STAGE_POSTPROCESS_PASS ) ) {
+		categoryMask |= GLX_DYNAMIC_CATEGORY_MASK_SPECIAL;
+	}
+	if ( backEnd.currentEntity == &backEnd.entity2D || backEnd.projection2D ) {
+		categoryMask |= GLX_DYNAMIC_CATEGORY_MASK_UI;
+	} else if ( backEnd.currentEntity && backEnd.currentEntity != &tr.worldEntity ) {
+		categoryMask |= GLX_CompatEntityDynamicCategoryMask( &backEnd.currentEntity->e );
+	}
+	if ( input && input->surfType == SF_POLY ) {
+		categoryMask |= GLX_CompatPolyDynamicCategoryMask( input );
+	}
+	if ( !categoryMask && ( materialFlags & GLX_STAGE_DLIGHT_MAP ) ) {
+		categoryMask |= GLX_DYNAMIC_CATEGORY_MASK_SPECIAL;
+	}
+	if ( !categoryMask ) {
+		categoryMask = GLX_DYNAMIC_CATEGORY_MASK_SPECIAL;
+	}
+	return categoryMask;
+#else
+	(void)input;
+	(void)materialFlags;
+	return 0u;
+#endif
+}
+
+static ID_INLINE void GLX_CompatMarkDynamicCategory( unsigned int categoryMask )
+{
+#ifdef RENDERER_GLX
+	tess.glxDynamicCategoryMask |= categoryMask & GLX_DYNAMIC_CATEGORY_MASK_ALL;
+#else
+	(void)categoryMask;
+#endif
+}
+
 static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
-	const void *xyz, int xyzStride, unsigned int primitive, int materialFlags )
+	const void *xyz, int xyzStride, unsigned int primitive, int materialFlags,
+	unsigned int categoryMask )
 {
 #ifdef RENDERER_GLX
 	glxStreamReservation_t reservation;
@@ -70,7 +170,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
 		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -81,7 +181,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 
 	if ( !ok ) {
 		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -104,7 +204,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );
 	return ok;
 #else
 	(void)vertexCount;
@@ -112,13 +212,14 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 	(void)xyzStride;
 	(void)primitive;
 	(void)materialFlags;
+	(void)categoryMask;
 	return qfalse;
 #endif
 }
 
 static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCount,
 	const void *xyz, int xyzStride, const void *texcoords, int texcoordStride,
-	unsigned int primitive, int materialFlags )
+	unsigned int primitive, int materialFlags, unsigned int categoryMask )
 {
 #ifdef RENDERER_GLX
 	glxStreamReservation_t reservation;
@@ -150,7 +251,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
 		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -164,7 +265,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 
 	if ( !ok ) {
 		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -190,7 +291,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );
 	return ok;
 #else
 	(void)vertexCount;
@@ -200,6 +301,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 	(void)texcoordStride;
 	(void)primitive;
 	(void)materialFlags;
+	(void)categoryMask;
 	return qfalse;
 #endif
 }
@@ -223,7 +325,7 @@ static ID_INLINE int GLX_CompatArrayElementBytes( int components, unsigned int t
 static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int vertexCount,
 	const void *xyz, int xyzStride, const void *texcoords, int texcoordStride,
 	const void *colors, int colorComponents, unsigned int colorType, int colorStride,
-	unsigned int primitive, int materialFlags )
+	unsigned int primitive, int materialFlags, unsigned int categoryMask )
 {
 #ifdef RENDERER_GLX
 	glxStreamReservation_t reservation;
@@ -265,7 +367,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
 		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -282,7 +384,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 
 	if ( !ok ) {
 		GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -311,7 +413,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
-		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );
 	return ok;
 #else
 	(void)vertexCount;
@@ -325,6 +427,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 	(void)colorStride;
 	(void)primitive;
 	(void)materialFlags;
+	(void)categoryMask;
 	return qfalse;
 #endif
 }
@@ -390,27 +493,6 @@ static ID_INLINE int GLX_CompatMaterialStageFlags( const shaderStage_t *pStage )
 #endif
 
 	return flags;
-}
-
-static ID_INLINE void GLX_CompatRecordMaterialStage( const shaderStage_t *pStage,
-	int path, int numVertexes, int numIndexes )
-{
-#ifdef RENDERER_GLX
-	if ( !pStage ) {
-		return;
-	}
-
-	GLX_Renderer_RecordMaterialStage( path, GLX_CompatMaterialStageFlags( pStage ),
-		pStage->stateBits, pStage->rgbGen, pStage->alphaGen,
-		pStage->bundle[0].tcGen, pStage->bundle[1].tcGen,
-		pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods,
-		numVertexes, numIndexes );
-#else
-	(void)pStage;
-	(void)path;
-	(void)numVertexes;
-	(void)numIndexes;
-#endif
 }
 
 static ID_INLINE int GLX_CompatMaterialCombineForGLEnv( int mtEnv )
@@ -580,6 +662,39 @@ static ID_INLINE unsigned int GLX_CompatMaterialTexModWaveFuncs( const textureBu
 	}
 
 	return waveFuncs;
+}
+
+static ID_INLINE void GLX_CompatRecordMaterialStage( const shaderStage_t *pStage,
+	int path, int numVertexes, int numIndexes )
+{
+#ifdef RENDERER_GLX
+	if ( !pStage ) {
+		return;
+	}
+
+	GLX_Renderer_RecordMaterialStage( path, GLX_CompatMaterialStageFlags( pStage ),
+		pStage->stateBits, pStage->rgbGen, pStage->alphaGen,
+		pStage->bundle[0].tcGen, pStage->bundle[1].tcGen,
+		pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods,
+		GLX_CompatMaterialTexModMask( &pStage->bundle[0] ),
+		GLX_CompatMaterialTexModMask( &pStage->bundle[1] ),
+		GLX_CompatMaterialTexModSequence( &pStage->bundle[0] ),
+		GLX_CompatMaterialTexModSequence( &pStage->bundle[1] ),
+		pStage->rgbGen == CGEN_WAVEFORM ?
+			GLX_CompatMaterialWaveFunc( pStage->rgbWave.func ) : GLX_MATERIAL_WAVEFUNC_NONE,
+		pStage->alphaGen == AGEN_WAVEFORM ?
+			GLX_CompatMaterialWaveFunc( pStage->alphaWave.func ) : GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_CompatMaterialTexModWaveFuncs( &pStage->bundle[0] ),
+		GLX_CompatMaterialTexModWaveFuncs( &pStage->bundle[1] ),
+		GLX_CompatMaterialFogAdjust( pStage->adjustColorsForFog ),
+		GLX_CompatMaterialCombineForGLEnv( pStage->mtEnv ), qfalse,
+		numVertexes, numIndexes );
+#else
+	(void)pStage;
+	(void)path;
+	(void)numVertexes;
+	(void)numIndexes;
+#endif
 }
 
 static ID_INLINE qboolean GLX_CompatBindMaterialStage( int flags, unsigned int stateBits,

@@ -5,14 +5,19 @@
 The harness currently checks:
 
 - GLSL material permutation key selection for RC-supported single-texture, multitexture, texmod, environment, depth-fragment, and fog shapes.
+- Compilation from prepared shader-stage language into `MaterialIR` and material state plans, including preserved sort values and named unsupported-reason bits.
 - Full prepared id Tech 3 stage-language keys for `rgbGen`, `alphaGen`, their wave functions, `tcGen`, ordered `tcMod` chains, `tcMod stretch` wave functions, detail stages, fog color adjustment, blend/depth/alpha-test state flags, dynamic-light, screen-map, and video-map cases, including proof that compact-key matches still produce distinct stage-language permutations.
 - Rejection of unsupported multitexture combine modes.
 - Stream material-gate behavior for the RC allowlist, including explicit multitexture and depth-fragment gates.
 - The legacy shader collapse path not blocking compatible `depthFragment` base stages from becoming multitexture stages.
 - Explicit dynamic-light, screen-map, and video-map stream gate behavior outside the RC allowlist.
 - Explicit shadow-volume, beam, and fullscreen postprocess draw-array stream gate behavior outside the material-key system.
+- Dynamic-scene stream category normalization for entity, particle, poly, mark, weapon, UI, beam, and special-pass metrics.
 - RC runtime-sweep profiles enabling those state-only dynamic submission gates while keeping dynamic-light, screen-map, and video-map material gates off.
 - The frozen RC/stress sweep profiles matching the runtime `r_glxProfile` table in `code/rendererglx/glx_module.cpp`.
+- The RC profile promoting shipped static-world arena, dispatcher, packet-batch, multidraw, and capability-gated indirect/MDI span paths while leaving compact MDI uploads in the stress profile.
+- The checked-in GLx feature-closure matrix using only exact `covered`, `partially covered`, and `missing` statuses with no ambiguous rows.
+- The official GLx proof corpus covering stock maps, high-geometry maps, shader-heavy maps, fog-heavy maps, modern-map stress scenes, particle-heavy demos, UI/HUD-sensitive scenes, and shared artifact metadata.
 - Hard proof-gate policy requiring reviewed screenshot baselines and compared performance baselines for `rc-proof`.
 - The broad `r_glxStreamDrawKeyMode 2` developer escape hatch staying behind hard multitexture and depth-fragment gates.
 - Capability version/extension parsing and tier selection.

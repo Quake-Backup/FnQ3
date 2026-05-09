@@ -75,10 +75,19 @@ struct MaterialIR {
 	unsigned int stateBits;
 	int rgbGen;
 	int alphaGen;
+	int rgbWaveFunc;
+	int alphaWaveFunc;
 	int tcGen0;
 	int tcGen1;
 	int texMods0;
 	int texMods1;
+	unsigned int texModTypes0;
+	unsigned int texModTypes1;
+	unsigned int texModSequence0;
+	unsigned int texModSequence1;
+	unsigned int texModWaveFuncs0;
+	unsigned int texModWaveFuncs1;
+	int fogAdjust;
 	int materialCombine;
 	qboolean fogPass;
 	int shaderStagePasses;
@@ -773,6 +782,11 @@ static ID_INLINE MaterialIR GLX_RenderIR_MakeMaterial( int sort, int flags,
 	material.sort = sort;
 	material.flags = flags;
 	material.stateBits = stateBits;
+	material.alphaGen = GLX_MATERIAL_ALPHAGEN_SKIP;
+	material.rgbWaveFunc = GLX_MATERIAL_WAVEFUNC_NONE;
+	material.alphaWaveFunc = GLX_MATERIAL_WAVEFUNC_NONE;
+	material.tcGen1 = GLX_MATERIAL_TCGEN_BAD;
+	material.fogAdjust = GLX_MATERIAL_FOG_ADJUST_NONE;
 	material.shaderStagePasses = shaderStagePasses;
 	return material;
 }

@@ -1533,6 +1533,7 @@ typedef struct shaderCommands_s
 	surfaceType_t	surfType;
 	int			vboIndex;
 	qboolean	allowVBO;
+	unsigned int	glxDynamicCategoryMask;
 
 	shader_t	*shader;
 	double		shaderTime;	// -EC- set to double for frameloss fix

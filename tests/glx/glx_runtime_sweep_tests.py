@@ -10,6 +10,66 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SWEEP_PATH = ROOT / "scripts" / "glx_runtime_sweep.py"
+FEATURE_MATRIX_PATH = ROOT / "docs" / "fnquake3" / "GLX_FEATURE_MATRIX.md"
+FEATURE_MATRIX_ALLOWED_STATUSES = {"covered", "partially covered", "missing"}
+FEATURE_MATRIX_REQUIRED_IDS = {
+    "CORE-ABI",
+    "CORE-SWITCH",
+    "CORE-PASS-ORDER",
+    "CORE-TIERS",
+    "CORE-OWNERSHIP",
+    "WORLD-BSP",
+    "WORLD-LIGHTMAPS",
+    "WORLD-FOG",
+    "WORLD-SKY",
+    "WORLD-PORTALS",
+    "MATERIAL-STAGES",
+    "MATERIAL-TEXMODS",
+    "MATERIAL-TCGEN",
+    "MATERIAL-VIDEOMAP",
+    "MATERIAL-SCREENMAP",
+    "MATERIAL-DEPTHFRAG",
+    "DYN-ENTITIES",
+    "DYN-PARTICLES",
+    "DYN-BEAMS",
+    "DYN-DLIGHTS",
+    "DYN-SHADOWS-STENCIL",
+    "DYN-SHADOWS-PLANAR",
+    "DYN-CEL",
+    "DYN-OUTLINE",
+    "POST-FBO",
+    "POST-BLOOM1",
+    "POST-BLOOM2",
+    "POST-GAMMA",
+    "POST-GREYSCALE",
+    "POST-RENDERSCALE",
+    "POST-MSAA",
+    "POST-SSAA",
+    "POST-HDR-PRECISION",
+    "COLOR-SCENE-LINEAR",
+    "COLOR-TONEMAP-GRADE",
+    "OUTPUT-SDR",
+    "OUTPUT-HDR-HARDWARE",
+    "UI-HUD",
+    "UI-CINEMATICS",
+    "CAPTURE-SCREENSHOTS",
+    "CAPTURE-CUBEMAPS",
+    "DEMO-PLAYBACK",
+    "MODERN-NORMALMAP",
+    "MODERN-SPECULAR",
+    "MODERN-PARALLAX",
+    "MODERN-CUBEMAP-LIGHTING",
+    "MODERN-SUNLIGHT",
+    "MODERN-SHADOWMAPS",
+    "MODERN-SSAO",
+    "PERF-STATIC-CACHE",
+    "PERF-STATIC-SHIPPED",
+    "PERF-STATIC-MDI",
+    "PERF-DYNAMIC-STREAM",
+    "PERF-GPU-TIMING",
+    "DEBUG-DIAGNOSTICS",
+    "PROOF-RUNTIME",
+}
 
 spec = importlib.util.spec_from_file_location("glx_runtime_sweep", SWEEP_PATH)
 assert spec is not None
@@ -64,6 +124,36 @@ def locked_performance_sample() -> dict[str, object]:
     }
 
 
+def proof_corpus_for_gate(gate: str) -> dict[str, object]:
+    requirements = glx_runtime_sweep.RC_GATE_PRESETS[gate]["requirements"]
+    return glx_runtime_sweep.proof_corpus_manifest(
+        glx_runtime_sweep.GLX_GATE_CORPUS_SCENES[gate],
+        requirements.get("required_corpus_tags", ()),
+    )
+
+
+def parse_glx_feature_matrix() -> list[dict[str, str]]:
+    text = FEATURE_MATRIX_PATH.read_text(encoding="utf-8")
+    rows: list[dict[str, str]] = []
+    for line in text.splitlines():
+        if not line.startswith("| "):
+            continue
+        cells = [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+        if len(cells) != 6 or cells[0] in {"ID", "---"} or set(cells[0]) <= {"-"}:
+            continue
+        rows.append(
+            {
+                "id": cells[0],
+                "category": cells[1],
+                "feature": cells[2],
+                "status": cells[3],
+                "evidence": cells[4],
+                "closure": cells[5],
+            }
+        )
+    return rows
+
+
 class GlxArchitecturalCutoverPlanTests(unittest.TestCase):
     @staticmethod
     def _plan_section(start: str, end: str) -> str:
@@ -87,6 +177,59 @@ class GlxArchitecturalCutoverPlanTests(unittest.TestCase):
 
         self.assertIn("All tiered execution tasks are now implemented.", section)
         self.assert_tasks_are_implemented(section, ("Task E", "Task F", "Task G", "Task H", "Task I", "Task J"))
+
+    def test_material_map_scale_tasks_are_marked_implemented(self) -> None:
+        section = self._plan_section("### Material, map-scale, and feature-closure tasks", "### HDR")
+
+        self.assertIn("All material, map-scale, and feature-closure tasks are now implemented.", section)
+        self.assert_tasks_are_implemented(section, ("Task K", "Task L", "Task M", "Task N", "Task O"))
+
+    def test_task_k_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Material, map-scale, and feature-closure tasks", "**Task L")
+
+        self.assert_tasks_are_implemented(section, ("Task K",))
+
+    def test_task_l_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Material, map-scale, and feature-closure tasks", "**Task M")
+
+        self.assert_tasks_are_implemented(section, ("Task L",))
+
+    def test_task_m_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Material, map-scale, and feature-closure tasks", "**Task N")
+
+        self.assert_tasks_are_implemented(section, ("Task M",))
+
+    def test_task_n_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Material, map-scale, and feature-closure tasks", "**Task O")
+
+        self.assert_tasks_are_implemented(section, ("Task N",))
+
+    def test_task_o_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Material, map-scale, and feature-closure tasks", "### HDR")
+
+        self.assert_tasks_are_implemented(section, ("Task O",))
+
+    def test_feature_closure_matrix_has_zero_ambiguous_rows(self) -> None:
+        rows = parse_glx_feature_matrix()
+        self.assertGreaterEqual(len(rows), 40)
+
+        seen: set[str] = set()
+        statuses: set[str] = set()
+        for row in rows:
+            self.assertNotIn(row["id"], seen)
+            seen.add(row["id"])
+            self.assertIn(row["status"], FEATURE_MATRIX_ALLOWED_STATUSES, row)
+            self.assertTrue(row["category"], row)
+            self.assertTrue(row["feature"], row)
+            self.assertTrue(row["evidence"], row)
+            self.assertTrue(row["closure"], row)
+            self.assertNotRegex(row["status"], r"(?i)\b(tbd|unknown|unclear|maybe|n/a)\b")
+            self.assertNotRegex(row["evidence"], r"(?i)\b(tbd|unknown|unclear|maybe|n/a)\b")
+            self.assertNotRegex(row["closure"], r"(?i)\b(tbd|unknown|unclear|maybe|n/a)\b")
+            statuses.add(row["status"])
+
+        self.assertEqual(statuses, FEATURE_MATRIX_ALLOWED_STATUSES)
+        self.assertTrue(FEATURE_MATRIX_REQUIRED_IDS.issubset(seen))
 
 
 class GlxRuntimeSweepExecutableTests(unittest.TestCase):
@@ -257,6 +400,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "  material renderer: enabled, ready yes, GLSL 1.20",
                         "  material compiles: 24 attempts, 0 compile failures, 0 link failures, precache 0/24, bind failures 0, labels 0",
                         "  material fallbacks: unsupported 0, disabled 0, not-ready 0, full 0, discarded without GL delete 0",
+                        "  material compiler plans: compiled 12, unsupported 0, last unsupported 0x0 (none)",
                         "  product tier: GL2X",
                         "  GL2X programmable executor: active yes, client-memory fallback yes, stream uploads yes, material compiler yes, postprocess-lite yes, modern post chain no, scene-linear output no",
                         "  GL2X programmable support: common materials yes, dynamic entities yes, lightmaps yes, multitexture yes, fog yes, sprites yes, beams yes, screenshots yes, demos yes",
@@ -272,14 +416,17 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "  dynamic stream reservations: 1, commits: 1, wraps: 0, same-frame wrap rejects: 0, orphans: 0",
                         "  dynamic stream uploads: 1 calls, 0.01 MB, failures 0",
                         "  dynamic stream draws: 1/1 attempts, 3 verts, 3 indexes, 0.01 MB, index 0.01 MB, tex1 0.00 MB, mt 0, fog 0, depthfrag 0, texmod 0, env 0, dlight 0, screen 0, video 0, shadow 0, beam 0, post 0, fallbacks 0",
+                        "  dynamic stream categories: entity 1/1, particle 0/0, poly 0/0, mark 0/0, weapon 0/0, ui 0/0, beam 0/0, special 0/0",
+                        "  dynamic stream category fallbacks: entity 0, particle 0, poly 0, mark 0, weapon 0, ui 0, beam 0, special 0",
                         "  dynamic stream draw skips: 2 (bind 0, input 0, mt 0, depthfrag 0, texcoord 0, empty 0, key 1, fog 1, program 0)",
+                        "  dynamic stream material compiler: rejected 0, last unsupported 0x0 (none)",
                         "  dynamic stream multitexture gate: yes, accepted 2, rejected 0",
                         "  dynamic stream depth-fragment gate: yes, accepted 1, rejected 0",
                         "  dynamic stream reservation failures: 0",
                         "  static world GLx renderer: yes, arena upload yes, arena draw yes",
                         "  static world GLx arena: yes, builds 1, skips 0, failures 0, binds v1/i1, draw skips 0, 1.00 MB",
                         "  static world GLx packet batches: yes, attempts 1, batches 1, packet runs 1/3 indexes, fallback runs 0, singles 0",
-                        "  static world GLx multidraw indirect: no, 0/0 calls, 0 runs, 0 indexes, fallbacks 0, skips 0, errors 0, largest 0",
+                        "  static world GLx multidraw indirect: yes, 0/0 calls, 0 runs, 0 indexes, fallbacks 0, skips 0, errors 0, largest 0",
                     ]
                 ),
                 encoding="utf-8",
@@ -295,6 +442,12 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(stream_draw["videoMaps"], 0)
             self.assertEqual(stream_draw["shadows"], 0)
             self.assertEqual(stream_draw["skips"], 2)
+            stream_category = diagnostics["metrics"]["streamCategory"]
+            self.assertEqual(stream_category["entityDraws"], 1)
+            self.assertEqual(stream_category["entityAttempts"], 1)
+            self.assertEqual(stream_category["particleDraws"], 0)
+            self.assertEqual(stream_category["specialDraws"], 0)
+            self.assertEqual(stream_category["entityFallbacks"], 0)
             stream_draw_skips = diagnostics["metrics"]["streamDrawSkip"]
             self.assertEqual(stream_draw_skips["key"], 1)
             self.assertEqual(stream_draw_skips["fog"], 1)
@@ -304,6 +457,15 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(stream_gates["multitextureAccepted"], 2)
             self.assertEqual(stream_gates["depthFragmentEnabled"], 1)
             self.assertEqual(stream_gates["depthFragmentAccepted"], 1)
+            material_plans = diagnostics["metrics"]["materialCompilerPlans"]
+            self.assertEqual(material_plans["compiled"], 12)
+            self.assertEqual(material_plans["unsupported"], 0)
+            self.assertEqual(material_plans["lastUnsupported"], 0)
+            self.assertEqual(material_plans["lastUnsupportedReason"], "none")
+            stream_compiler = diagnostics["metrics"]["streamMaterialCompiler"]
+            self.assertEqual(stream_compiler["rejected"], 0)
+            self.assertEqual(stream_compiler["lastUnsupported"], 0)
+            self.assertEqual(stream_compiler["lastUnsupportedReason"], "none")
             ownership = diagnostics["metrics"]["ownership"]
             self.assertEqual(ownership["calls"], 0)
             self.assertEqual(ownership["items"], 0)
@@ -803,19 +965,93 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             {"r_glxProfile": "stress", **glx_runtime_sweep.GLX_STRESS_PROFILE_CVARS},
         )
 
-    def test_frozen_rc_profile_keeps_stress_paths_out(self) -> None:
+    def test_official_proof_corpus_covers_task_o_scene_families(self) -> None:
+        all_tags = set(glx_runtime_sweep.corpus_tags(glx_runtime_sweep.GLX_PROOF_CORPUS_SCENES))
+        self.assertTrue(
+            {
+                "stock-map",
+                "high-geometry",
+                "shader-heavy",
+                "fog-heavy",
+                "modern-map",
+                "particle-heavy-demo",
+                "ui-hud-sensitive",
+                "performance-comparison",
+            }.issubset(all_tags)
+        )
+
+        stress_tags = set(
+            glx_runtime_sweep.corpus_tags(
+                glx_runtime_sweep.GLX_GATE_CORPUS_SCENES["rc-stress"]
+            )
+        )
+        self.assertTrue({"modern-map", "particle-heavy-demo"}.issubset(stress_tags))
+
+    def test_gate_presets_derive_scene_targets_from_proof_corpus(self) -> None:
+        for gate, scene_ids in glx_runtime_sweep.GLX_GATE_CORPUS_SCENES.items():
+            with self.subTest(gate=gate):
+                defaults = glx_runtime_sweep.RC_GATE_PRESETS[gate]["defaults"]
+                self.assertEqual(
+                    defaults["corpus_scenes"],
+                    glx_runtime_sweep.corpus_scene_ids_csv(scene_ids),
+                )
+                self.assertEqual(
+                    defaults["maps"],
+                    glx_runtime_sweep.corpus_targets_csv(scene_ids, "map"),
+                )
+                self.assertEqual(
+                    defaults["demos"],
+                    glx_runtime_sweep.corpus_targets_csv(scene_ids, "demo"),
+                )
+
+    def test_corpus_manifest_is_gate_enforced(self) -> None:
+        proof_corpus = proof_corpus_for_gate("rc-proof")
+
+        self.assertEqual(proof_corpus["version"], glx_runtime_sweep.GLX_PROOF_CORPUS_VERSION)
+        self.assertEqual(proof_corpus["document"], glx_runtime_sweep.GLX_PROOF_CORPUS_DOC)
+        self.assertIn("stock-q3dm6-geometry", proof_corpus["selectedSceneIds"])
+        self.assertIn("fog-heavy", proof_corpus["selectedTags"])
+
+        broken = dict(proof_corpus)
+        broken["selectedTags"] = ["stock-map"]
+        manifest = {
+            "proofCorpus": broken,
+            "maps": glx_runtime_sweep.corpus_targets(
+                glx_runtime_sweep.GLX_GATE_CORPUS_SCENES["rc-proof"],
+                "map",
+            ),
+            "demos": ["demo1"],
+        }
+        failures = glx_runtime_sweep.evaluate_proof_corpus(
+            manifest,
+            glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"],
+        )
+        self.assertTrue(any("missing required tag" in failure for failure in failures))
+
+    def test_frozen_rc_profile_promotes_static_world_acceleration(self) -> None:
         profile = glx_runtime_sweep.GLX_RC_PROFILE_CVARS
 
         self.assertEqual(profile["r_glxWorldRenderer"], "1")
         self.assertEqual(profile["r_glxStreamDraw"], "1")
         self.assertEqual(profile["r_glxMaterialRenderer"], "1")
+        self.assertEqual(profile["r_glxStaticWorldArena"], "1")
+        self.assertEqual(profile["r_glxStaticWorldArenaDraw"], "1")
+        self.assertEqual(profile["r_glxStaticWorldDraw"], "1")
+        self.assertEqual(profile["r_glxStaticWorldSoftDraw"], "1")
         self.assertEqual(profile["r_glxStaticWorldPacketBatch"], "1")
-        self.assertEqual(profile["r_glxStaticWorldMultiDraw"], "0")
-        self.assertEqual(profile["r_glxStaticWorldIndirectBuffer"], "0")
-        self.assertEqual(profile["r_glxStaticWorldIndirectDraw"], "0")
-        self.assertEqual(profile["r_glxStaticWorldMultiDrawIndirect"], "0")
+        self.assertEqual(profile["r_glxStaticWorldMultiDraw"], "1")
+        self.assertEqual(profile["r_glxStaticWorldIndirectBuffer"], "1")
+        self.assertEqual(profile["r_glxStaticWorldIndirectDraw"], "1")
+        self.assertEqual(profile["r_glxStaticWorldMultiDrawIndirect"], "1")
         self.assertEqual(profile["r_glxStaticWorldMultiDrawIndirectCompact"], "0")
-        self.assertEqual(profile["r_glxStaticWorldMultiDrawIndirectSpans"], "0")
+        self.assertEqual(profile["r_glxStaticWorldMultiDrawIndirectSpans"], "1")
+
+    def test_stress_profile_only_adds_compact_static_world_mdi(self) -> None:
+        rc_profile = dict(glx_runtime_sweep.GLX_RC_PROFILE_CVARS)
+        stress_profile = dict(glx_runtime_sweep.GLX_STRESS_PROFILE_CVARS)
+
+        rc_profile["r_glxStaticWorldMultiDrawIndirectCompact"] = "1"
+        self.assertEqual(stress_profile, rc_profile)
 
     def test_ownership_profile_preserves_independent_ownership_cvar(self) -> None:
         profile = dict(glx_runtime_sweep.PROFILE_CVARS["glx-ownership"])
@@ -948,7 +1184,12 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                 },
             ],
             "renderers": ["opengl", "glx"],
+            "maps": glx_runtime_sweep.corpus_targets(
+                glx_runtime_sweep.GLX_GATE_CORPUS_SCENES["rc-proof"],
+                "map",
+            ),
             "demos": ["demo1"],
+            "proofCorpus": proof_corpus_for_gate("rc-proof"),
             "screenshotBaselineDir": "proof/screenshots",
             "performanceBaselinePath": "proof/performance-baseline.json",
             "performanceBaselineStatus": "compared",
@@ -1015,6 +1256,17 @@ class GlxWorkflowTests(unittest.TestCase):
         self.assertIn('"--performance-max-growth-ratio",', workflow)
         self.assertIn('os.environ["FNQ3_GLX_PERFORMANCE_MAX_GROWTH_RATIO"]', workflow)
 
+    def test_ci_and_release_artifacts_reference_proof_corpus(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "glx-verification.yml").read_text(encoding="utf-8")
+        release_script = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
+        corpus_doc = (ROOT / glx_runtime_sweep.GLX_PROOF_CORPUS_DOC).read_text(encoding="utf-8")
+
+        self.assertIn("--list-corpus", workflow)
+        self.assertIn("GLX_PROOF_CORPUS.md", workflow)
+        self.assertIn("release_corpus_manifest", release_script)
+        self.assertIn("glx_proof_corpus", release_script)
+        self.assertIn(glx_runtime_sweep.GLX_PROOF_CORPUS_VERSION, corpus_doc)
+
 
 class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
     def test_rc_profiles_promote_state_only_dynamic_submission(self) -> None:
@@ -1040,6 +1292,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                         "glx: material renderer on/ready programs 25, binds 12/13 attempts, switches 4, cache 5/6, failures 0 compile/0 link/0 precache/0 bind, labels 8",
                         "glx: postprocess fbo ready 640x480 capture 640x480 bloom 2, frames 3 final 2 prefinal 1 gamma 0/3, copies 4, msaa 5, ssaa 6, last bloom-final",
                         "glx: stream draws 7/8 attempts, 90 idx, 0.50MB/index 0.10MB/tex1 0.20MB, mt 1, fog 2, depthfrag 3, texmod 4, env 5, dlight 0, screen 0, video 0, shadow 2, beam 3, post 4, fallbacks 0, skips 1",
+                        "glx: stream categories entity 2/2, particle 1/1, poly 1/1, mark 1/1, weapon 1/1, ui 1/1, beam 3/3, special 4/4",
                         "glx: static draw 11/12 calls, 130 idx, packets 1 full/2 partial/3 miss, manifest 4/5 idx, soft 6/7 calls/8 idx, arena 9, legacy 10, fallbacks 0, policy skips 1",
                         "glx: static MDI 1/2 calls, 3 runs/4 idx, fallbacks 0, skips 5, errors 0, largest 6",
                         "glx: GL3X performance draws 14 sync-uploads 3 static-buffers 2 dynamic-buffers 5 materials 7 fbo-post 4 unsupported persistent-upload 0",
@@ -1073,6 +1326,14 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["streamDrawShadows"], 2)
             self.assertEqual(performance["latest"]["streamDrawBeams"], 3)
             self.assertEqual(performance["latest"]["streamDrawPostProcess"], 4)
+            self.assertEqual(performance["latest"]["streamCategoryEntityDraws"], 2)
+            self.assertEqual(performance["latest"]["streamCategoryParticleDraws"], 1)
+            self.assertEqual(performance["latest"]["streamCategoryPolyDraws"], 1)
+            self.assertEqual(performance["latest"]["streamCategoryMarkDraws"], 1)
+            self.assertEqual(performance["latest"]["streamCategoryWeaponDraws"], 1)
+            self.assertEqual(performance["latest"]["streamCategoryUiDraws"], 1)
+            self.assertEqual(performance["latest"]["streamCategoryBeamDraws"], 3)
+            self.assertEqual(performance["latest"]["streamCategorySpecialDraws"], 4)
             self.assertEqual(performance["latest"]["gl3xDraws"], 14)
             self.assertEqual(performance["latest"]["gl3xSyncUploads"], 3)
             self.assertEqual(performance["latest"]["gl3xStaticBuffers"], 2)
@@ -1229,6 +1490,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                 "profile": "glx-parity",
                 "maps": ["q3dm1"],
                 "demos": ["demo1"],
+                "proofCorpus": proof_corpus_for_gate("rc-parity"),
             }
             baseline_aggregate = {
                 "sampleCount": 1,
@@ -1253,6 +1515,10 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
 
             glx_runtime_sweep.write_performance_baseline(path, baseline_aggregate, manifest)
             baseline = glx_runtime_sweep.load_json_file(path)
+            self.assertEqual(
+                baseline["proofCorpus"]["version"],
+                glx_runtime_sweep.GLX_PROOF_CORPUS_VERSION,
+            )
             failures, comparisons = glx_runtime_sweep.compare_performance_baseline(
                 current_aggregate,
                 baseline,

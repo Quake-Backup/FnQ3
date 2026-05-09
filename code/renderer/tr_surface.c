@@ -153,6 +153,9 @@ void RB_AddQuadStamp2( float x, float y, float w, float h, float s1, float t1, f
 	RB_CHECKOVERFLOW( 4, 6 );
 
 	tess.surfType = SF_TRIANGLES;
+	if ( backEnd.currentEntity == &backEnd.entity2D || backEnd.projection2D ) {
+		GLX_CompatMarkDynamicCategory( GLX_DYNAMIC_CATEGORY_MASK_UI );
+	}
 
 	numIndexes = tess.numIndexes;
 	numVerts = tess.numVertexes;
@@ -262,6 +265,7 @@ static void RB_SurfacePolychain( const srfPoly_t *p ) {
 	RB_CHECKOVERFLOW( p->numVerts, 3*(p->numVerts - 2) );
 
 	tess.surfType = SF_POLY;
+	GLX_CompatMarkDynamicCategory( GLX_CompatPolyDynamicCategoryMaskForShader( tess.shader, p->numVerts ) );
 
 	// fan triangles into the tess array
 	numv = tess.numVertexes;
@@ -441,7 +445,8 @@ static void RB_SurfaceBeam( void )
 #ifdef RENDERER_GLX
 	if ( GLX_CompatStreamDrawBeamsEnabled() ) {
 		glxStreamedDraw = GLX_CompatTryStreamDrawArrayPass( (NUM_BEAM_SEGS+1)*2,
-			&points[0][0], (int)sizeof( points[0][0] ), GL_TRIANGLE_STRIP, GLX_STAGE_BEAM_PASS );
+			&points[0][0], (int)sizeof( points[0][0] ), GL_TRIANGLE_STRIP,
+			GLX_STAGE_BEAM_PASS, GLX_DYNAMIC_CATEGORY_MASK_BEAM );
 	}
 #endif
 	if ( !glxStreamedDraw ) {
@@ -1363,6 +1368,7 @@ static void RB_SurfaceEntity( const surfaceType_t *surfType ) {
 		break;
 	}
 	tess.surfType = SF_ENTITY;
+	GLX_CompatMarkDynamicCategory( GLX_CompatEntityDynamicCategoryMask( &backEnd.currentEntity->e ) );
 }
 
 

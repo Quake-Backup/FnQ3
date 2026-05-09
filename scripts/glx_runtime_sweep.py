@@ -12,6 +12,7 @@ import sys
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,14 @@ PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "streamDrawPostProcess",
     "streamDrawFallbacks",
     "streamDrawSkips",
+    "streamCategoryEntityDraws",
+    "streamCategoryParticleDraws",
+    "streamCategoryPolyDraws",
+    "streamCategoryMarkDraws",
+    "streamCategoryWeaponDraws",
+    "streamCategoryUiDraws",
+    "streamCategoryBeamDraws",
+    "streamCategorySpecialDraws",
     "staticDrawAttempts",
     "staticDrawIndexes",
     "staticDrawFallbacks",
@@ -118,6 +127,13 @@ MATERIAL_FALLBACKS_RE = re.compile(
     r"material fallbacks:\s*unsupported\s+(?P<unsupported>\d+),\s*"
     r"disabled\s+(?P<disabled>\d+),\s*not-ready\s+(?P<notReady>\d+),\s*"
     r"full\s+(?P<full>\d+),\s*discarded without GL delete\s+(?P<discarded>\d+)",
+    re.IGNORECASE,
+)
+MATERIAL_COMPILER_PLANS_RE = re.compile(
+    r"material compiler plans:\s*compiled\s+(?P<compiled>\d+),\s*"
+    r"unsupported\s+(?P<unsupported>\d+),\s*"
+    r"last unsupported\s+0x(?P<lastUnsupported>[0-9a-fA-F]+)\s*"
+    r"\((?P<lastUnsupportedReason>[^)]*)\)",
     re.IGNORECASE,
 )
 OWNERSHIP_RE = re.compile(
@@ -311,6 +327,26 @@ STREAM_DRAWS_RE = re.compile(
     r"fallbacks\s+(?P<fallbacks>\d+)",
     re.IGNORECASE,
 )
+STREAM_CATEGORIES_RE = re.compile(
+    r"dynamic stream categories:\s*"
+    r"entity\s+(?P<entityDraws>\d+)/(?P<entityAttempts>\d+),\s*"
+    r"particle\s+(?P<particleDraws>\d+)/(?P<particleAttempts>\d+),\s*"
+    r"poly\s+(?P<polyDraws>\d+)/(?P<polyAttempts>\d+),\s*"
+    r"mark\s+(?P<markDraws>\d+)/(?P<markAttempts>\d+),\s*"
+    r"weapon\s+(?P<weaponDraws>\d+)/(?P<weaponAttempts>\d+),\s*"
+    r"ui\s+(?P<uiDraws>\d+)/(?P<uiAttempts>\d+),\s*"
+    r"beam\s+(?P<beamDraws>\d+)/(?P<beamAttempts>\d+),\s*"
+    r"special\s+(?P<specialDraws>\d+)/(?P<specialAttempts>\d+)",
+    re.IGNORECASE,
+)
+STREAM_CATEGORY_FALLBACKS_RE = re.compile(
+    r"dynamic stream category fallbacks:\s*"
+    r"entity\s+(?P<entity>\d+),\s*particle\s+(?P<particle>\d+),\s*"
+    r"poly\s+(?P<poly>\d+),\s*mark\s+(?P<mark>\d+),\s*"
+    r"weapon\s+(?P<weapon>\d+),\s*ui\s+(?P<ui>\d+),\s*"
+    r"beam\s+(?P<beam>\d+),\s*special\s+(?P<special>\d+)",
+    re.IGNORECASE,
+)
 STREAM_DRAW_SKIPS_RE = re.compile(
     r"dynamic stream draw skips:\s*(?P<total>\d+)\s*"
     r"\(bind\s+(?P<bind>\d+),\s*input\s+(?P<input>\d+),\s*"
@@ -318,6 +354,12 @@ STREAM_DRAW_SKIPS_RE = re.compile(
     r"texcoord\s+(?P<texcoord>\d+),\s*empty\s+(?P<empty>\d+),\s*"
     r"key\s+(?P<key>\d+),\s*fog\s+(?P<fog>\d+),\s*"
     r"program\s+(?P<program>\d+)\)",
+    re.IGNORECASE,
+)
+STREAM_MATERIAL_COMPILER_RE = re.compile(
+    r"dynamic stream material compiler:\s*rejected\s+(?P<rejected>\d+),\s*"
+    r"last unsupported\s+0x(?P<lastUnsupported>[0-9a-fA-F]+)\s*"
+    r"\((?P<lastUnsupportedReason>[^)]*)\)",
     re.IGNORECASE,
 )
 STREAM_MATERIAL_GATE_RE = re.compile(
@@ -334,6 +376,16 @@ STREAM_MATERIAL_GATE_KEYS = {
     "screen-map": "screenMap",
     "video-map": "videoMap",
 }
+STREAM_CATEGORY_KEYS = (
+    "entity",
+    "particle",
+    "poly",
+    "mark",
+    "weapon",
+    "ui",
+    "beam",
+    "special",
+)
 STREAM_FAILURE_RE = re.compile(
     r"dynamic stream (?P<name>allocation|map|unmap|reservation) failures:\s*(?P<count>\d+)",
     re.IGNORECASE,
@@ -410,6 +462,18 @@ GLX_STREAM_DRAW_SUMMARY_RE = re.compile(
     r"fallbacks\s+(?P<fallbacks>\d+),\s*skips\s+(?P<skips>\d+)",
     re.IGNORECASE,
 )
+GLX_STREAM_CATEGORY_SUMMARY_RE = re.compile(
+    r"glx:\s*stream categories\s*"
+    r"entity\s+(?P<entityDraws>\d+)/(?P<entityAttempts>\d+),\s*"
+    r"particle\s+(?P<particleDraws>\d+)/(?P<particleAttempts>\d+),\s*"
+    r"poly\s+(?P<polyDraws>\d+)/(?P<polyAttempts>\d+),\s*"
+    r"mark\s+(?P<markDraws>\d+)/(?P<markAttempts>\d+),\s*"
+    r"weapon\s+(?P<weaponDraws>\d+)/(?P<weaponAttempts>\d+),\s*"
+    r"ui\s+(?P<uiDraws>\d+)/(?P<uiAttempts>\d+),\s*"
+    r"beam\s+(?P<beamDraws>\d+)/(?P<beamAttempts>\d+),\s*"
+    r"special\s+(?P<specialDraws>\d+)/(?P<specialAttempts>\d+)",
+    re.IGNORECASE,
+)
 GLX_STATIC_DRAW_SUMMARY_RE = re.compile(
     r"glx:\s*static draw\s+(?P<calls>\d+)/(?P<attempts>\d+)\s+calls,\s*"
     r"(?P<indexes>\d+)\s+idx,.*fallbacks\s+(?P<fallbacks>\d+),\s*"
@@ -465,6 +529,7 @@ DEFAULT_OPTIONS = {
     "switch_sequence": None,
     "maps": None,
     "demos": "",
+    "corpus_scenes": None,
     "profile": "glx-parity",
     "width": 640,
     "height": 480,
@@ -511,28 +576,23 @@ GLX_RC_PROFILE_CVARS = {
     "r_glxMaterialRenderer": "1",
     "r_glxMaterialPrecache": "1",
     "r_glxGpuTiming": "1",
-    "r_glxStaticWorldArena": "0",
-    "r_glxStaticWorldArenaDraw": "0",
-    "r_glxStaticWorldDraw": "0",
-    "r_glxStaticWorldSoftDraw": "0",
+    "r_glxStaticWorldArena": "1",
+    "r_glxStaticWorldArenaDraw": "1",
+    "r_glxStaticWorldDraw": "1",
+    "r_glxStaticWorldSoftDraw": "1",
     "r_glxStaticWorldDrawPolicy": "full",
-    "r_glxStaticWorldMultiDraw": "0",
+    "r_glxStaticWorldMultiDraw": "1",
     "r_glxStaticWorldPacketBatch": "1",
-    "r_glxStaticWorldIndirectBuffer": "0",
-    "r_glxStaticWorldIndirectDraw": "0",
-    "r_glxStaticWorldMultiDrawIndirect": "0",
+    "r_glxStaticWorldIndirectBuffer": "1",
+    "r_glxStaticWorldIndirectDraw": "1",
+    "r_glxStaticWorldMultiDrawIndirect": "1",
     "r_glxStaticWorldMultiDrawIndirectCompact": "0",
-    "r_glxStaticWorldMultiDrawIndirectSpans": "0",
+    "r_glxStaticWorldMultiDrawIndirectSpans": "1",
 }
 
 GLX_STRESS_PROFILE_CVARS = {
     **GLX_RC_PROFILE_CVARS,
-    "r_glxStaticWorldMultiDraw": "1",
-    "r_glxStaticWorldIndirectBuffer": "1",
-    "r_glxStaticWorldIndirectDraw": "1",
-    "r_glxStaticWorldMultiDrawIndirect": "1",
     "r_glxStaticWorldMultiDrawIndirectCompact": "1",
-    "r_glxStaticWorldMultiDrawIndirectSpans": "1",
 }
 
 PROFILE_CVARS = {
@@ -579,14 +639,276 @@ PROFILE_CVARS = {
     },
 }
 
+GLX_PROOF_CORPUS_VERSION = "2026-05-09-task-o"
+GLX_PROOF_CORPUS_DOC = "docs/fnquake3/GLX_PROOF_CORPUS.md"
+
+GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
+    "stock-q3dm1-hud": {
+        "kind": "map",
+        "target": "q3dm1",
+        "assetTier": "retail-baseq3",
+        "tags": (
+            "stock-map",
+            "baseline-map",
+            "ui-hud-sensitive",
+            "lightmap",
+        ),
+        "description": "Small retail map used for renderer-switch, weapon/HUD, and baseline-lighting comparisons.",
+    },
+    "stock-q3dm17-open": {
+        "kind": "map",
+        "target": "q3dm17",
+        "assetTier": "retail-baseq3",
+        "tags": (
+            "stock-map",
+            "open-map",
+            "shader-heavy",
+            "sky",
+        ),
+        "description": "Open retail arena that keeps sky, portal-culling, and broad visibility paths in the RC set.",
+    },
+    "stock-q3dm6-geometry": {
+        "kind": "map",
+        "target": "q3dm6",
+        "assetTier": "retail-baseq3",
+        "tags": (
+            "stock-map",
+            "high-geometry",
+            "large-map",
+            "performance-comparison",
+        ),
+        "description": "Retail large-map geometry probe for static-world packet and draw-pressure comparisons.",
+    },
+    "stock-q3dm11-shader": {
+        "kind": "map",
+        "target": "q3dm11",
+        "assetTier": "retail-baseq3",
+        "tags": (
+            "stock-map",
+            "shader-heavy",
+            "material-stage",
+        ),
+        "description": "Retail shader-stage probe for material ordering, blend, texmod, and environment paths.",
+    },
+    "stock-q3dm15-fog": {
+        "kind": "map",
+        "target": "q3dm15",
+        "assetTier": "retail-baseq3",
+        "tags": (
+            "stock-map",
+            "fog-heavy",
+            "visibility",
+        ),
+        "description": "Retail fog/visibility probe that keeps fog-sensitive world and stream paths represented.",
+    },
+    "modern-fnq3glx-heavy01": {
+        "kind": "map",
+        "target": "fnq3_glx_heavy01",
+        "assetTier": "glx-proof-corpus",
+        "tags": (
+            "modern-map",
+            "high-geometry",
+            "large-map",
+            "performance-comparison",
+        ),
+        "description": "Optional GLx proof-corpus stress map for dense modern static-world geometry.",
+    },
+    "modern-fnq3glx-shader01": {
+        "kind": "map",
+        "target": "fnq3_glx_shader01",
+        "assetTier": "glx-proof-corpus",
+        "tags": (
+            "modern-map",
+            "shader-heavy",
+            "material-stage",
+        ),
+        "description": "Optional GLx proof-corpus stress map for broad shader-stage and material-key coverage.",
+    },
+    "modern-fnq3glx-fog01": {
+        "kind": "map",
+        "target": "fnq3_glx_fog01",
+        "assetTier": "glx-proof-corpus",
+        "tags": (
+            "modern-map",
+            "fog-heavy",
+            "visibility",
+        ),
+        "description": "Optional GLx proof-corpus stress map for layered fog and visibility comparisons.",
+    },
+    "timedemo-demo1": {
+        "kind": "demo",
+        "target": "demo1",
+        "assetTier": "retail-baseq3",
+        "tags": (
+            "stock-demo",
+            "performance-comparison",
+        ),
+        "description": "Retail timedemo used for legacy OpenGL versus GLx performance comparisons.",
+    },
+    "timedemo-fnq3glx-particles01": {
+        "kind": "demo",
+        "target": "fnq3_glx_particles01",
+        "assetTier": "glx-proof-corpus",
+        "tags": (
+            "particle-heavy-demo",
+            "modern-map",
+            "performance-comparison",
+        ),
+        "description": "Optional GLx proof-corpus timedemo for particles, marks, transient polys, and UI churn.",
+    },
+}
+
+GLX_GATE_CORPUS_SCENES = {
+    "rc-smoke": (
+        "stock-q3dm1-hud",
+    ),
+    "rc-parity": (
+        "stock-q3dm1-hud",
+        "stock-q3dm17-open",
+        "timedemo-demo1",
+    ),
+    "rc-proof": (
+        "stock-q3dm1-hud",
+        "stock-q3dm17-open",
+        "stock-q3dm6-geometry",
+        "stock-q3dm11-shader",
+        "stock-q3dm15-fog",
+        "timedemo-demo1",
+    ),
+    "rc-stress": (
+        "stock-q3dm1-hud",
+        "stock-q3dm17-open",
+        "stock-q3dm6-geometry",
+        "stock-q3dm11-shader",
+        "stock-q3dm15-fog",
+        "modern-fnq3glx-heavy01",
+        "modern-fnq3glx-shader01",
+        "modern-fnq3glx-fog01",
+        "timedemo-demo1",
+        "timedemo-fnq3glx-particles01",
+    ),
+}
+
+GLX_PROFILE_CORPUS_SCENES = {
+    "baseline": ("stock-q3dm1-hud",),
+    "glx-world": ("stock-q3dm1-hud",),
+    "glx-material": ("stock-q3dm1-hud",),
+    "glx-bloom": ("stock-q3dm1-hud",),
+    "glx-parity": ("stock-q3dm1-hud",),
+    "glx-ownership": ("stock-q3dm1-hud", "stock-q3dm17-open"),
+    "glx-stress": GLX_GATE_CORPUS_SCENES["rc-stress"],
+}
+
+
+def _dedupe(items: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
+def corpus_scene_ids_csv(scene_ids: Iterable[str]) -> str:
+    return ",".join(scene_ids)
+
+
+def validate_corpus_scene_ids(scene_ids: Iterable[str]) -> list[str]:
+    scene_list = [str(scene_id).strip() for scene_id in scene_ids if str(scene_id).strip()]
+    unknown = [scene_id for scene_id in scene_list if scene_id not in GLX_PROOF_CORPUS_SCENES]
+    if unknown:
+        raise ValueError(
+            "Unknown GLx proof corpus scene id(s): " + ", ".join(unknown)
+        )
+    return scene_list
+
+
+def corpus_targets_csv(scene_ids: Iterable[str], kind: str) -> str:
+    return ",".join(corpus_targets(scene_ids, kind))
+
+
+def corpus_targets(scene_ids: Iterable[str], kind: str) -> list[str]:
+    targets: list[str] = []
+    for scene_id in validate_corpus_scene_ids(scene_ids):
+        scene = GLX_PROOF_CORPUS_SCENES[scene_id]
+        if scene.get("kind") == kind:
+            targets.append(str(scene["target"]))
+    return _dedupe(targets)
+
+
+def corpus_tags(scene_ids: Iterable[str]) -> list[str]:
+    tags: list[str] = []
+    for scene_id in validate_corpus_scene_ids(scene_ids):
+        scene_tags = GLX_PROOF_CORPUS_SCENES[scene_id].get("tags", ())
+        tags.extend(str(tag) for tag in scene_tags if str(tag).strip())
+    return sorted(set(tags))
+
+
+def corpus_scene_records(scene_ids: Iterable[str]) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for scene_id in validate_corpus_scene_ids(scene_ids):
+        scene = GLX_PROOF_CORPUS_SCENES[scene_id]
+        records.append(
+            {
+                "id": scene_id,
+                "kind": scene["kind"],
+                "target": scene["target"],
+                "assetTier": scene["assetTier"],
+                "tags": list(scene.get("tags", ())),
+                "description": scene["description"],
+            }
+        )
+    return records
+
+
+def corpus_scene_ids_for_profile(profile: str) -> tuple[str, ...]:
+    return tuple(GLX_PROFILE_CORPUS_SCENES.get(profile, ("stock-q3dm1-hud",)))
+
+
+def corpus_scene_ids_for_gate(gate: str | None, profile: str) -> tuple[str, ...]:
+    if gate and gate in GLX_GATE_CORPUS_SCENES:
+        return tuple(GLX_GATE_CORPUS_SCENES[gate])
+    return corpus_scene_ids_for_profile(profile)
+
+
+def corpus_scene_ids_for_target(scene_ids: Iterable[str], kind: str, target: str) -> list[str]:
+    target_lower = target.lower()
+    return [
+        scene_id
+        for scene_id in validate_corpus_scene_ids(scene_ids)
+        if GLX_PROOF_CORPUS_SCENES[scene_id].get("kind") == kind and
+        str(GLX_PROOF_CORPUS_SCENES[scene_id].get("target", "")).lower() == target_lower
+    ]
+
+
+def proof_corpus_manifest(
+    scene_ids: Iterable[str],
+    required_tags: Iterable[str] = (),
+) -> dict[str, object]:
+    selected_scene_ids = validate_corpus_scene_ids(scene_ids)
+    return {
+        "version": GLX_PROOF_CORPUS_VERSION,
+        "document": GLX_PROOF_CORPUS_DOC,
+        "selectedSceneIds": selected_scene_ids,
+        "selectedScenes": corpus_scene_records(selected_scene_ids),
+        "selectedTags": corpus_tags(selected_scene_ids),
+        "requiredTags": sorted(set(str(tag) for tag in required_tags if str(tag).strip())),
+        "allSceneIds": sorted(GLX_PROOF_CORPUS_SCENES),
+    }
+
+
+def release_corpus_manifest() -> dict[str, object]:
+    return {
+        "version": GLX_PROOF_CORPUS_VERSION,
+        "document": GLX_PROOF_CORPUS_DOC,
+        "sceneCount": len(GLX_PROOF_CORPUS_SCENES),
+        "allSceneIds": sorted(GLX_PROOF_CORPUS_SCENES),
+        "gateSceneIds": {
+            gate: list(scene_ids)
+            for gate, scene_ids in sorted(GLX_GATE_CORPUS_SCENES.items())
+        },
+        "tags": corpus_tags(GLX_PROOF_CORPUS_SCENES.keys()),
+    }
+
+
 PROFILE_MAPS = {
-    "baseline": "q3dm1",
-    "glx-world": "q3dm1",
-    "glx-material": "q3dm1",
-    "glx-bloom": "q3dm1",
-    "glx-parity": "q3dm1",
-    "glx-ownership": "q3dm1,q3dm17",
-    "glx-stress": "q3dm1,q3dm17",
+    profile: corpus_targets_csv(scene_ids, "map")
+    for profile, scene_ids in GLX_PROFILE_CORPUS_SCENES.items()
 }
 
 STARTUP_CVARS = {
@@ -615,7 +937,8 @@ RC_GATE_PRESETS = {
         "description": "Renderer lifecycle smoke gate for module load, map load, screenshots, and repeated in-process switches.",
         "defaults": {
             "profile": "baseline",
-            "maps": "q3dm1",
+            "corpus_scenes": corpus_scene_ids_csv(GLX_GATE_CORPUS_SCENES["rc-smoke"]),
+            "maps": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-smoke"], "map"),
             "demos": "",
             "renderers": "opengl,glx",
             "switch_sequence": "opengl,glx,opengl,glx",
@@ -623,6 +946,11 @@ RC_GATE_PRESETS = {
             "timeout": 240.0,
         },
         "requirements": {
+            "require_proof_corpus": True,
+            "required_corpus_tags": (
+                "stock-map",
+                "ui-hud-sensitive",
+            ),
             "require_screenshots": True,
             "require_glx_diagnostics": True,
             "require_glx_performance_samples": True,
@@ -632,14 +960,22 @@ RC_GATE_PRESETS = {
         "description": "Blocking GLx RC parity gate for the conservative world, stream, dynamic-scene, material, bloom, and timing profile.",
         "defaults": {
             "profile": "glx-parity",
-            "maps": "q3dm1,q3dm17",
-            "demos": "demo1",
+            "corpus_scenes": corpus_scene_ids_csv(GLX_GATE_CORPUS_SCENES["rc-parity"]),
+            "maps": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-parity"], "map"),
+            "demos": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-parity"], "demo"),
             "renderers": "opengl,glx",
             "switch_sequence": "opengl,glx,opengl,glx",
             "switch_rounds": 1,
             "timeout": 300.0,
         },
         "requirements": {
+            "require_proof_corpus": True,
+            "required_corpus_tags": (
+                "stock-map",
+                "stock-demo",
+                "ui-hud-sensitive",
+                "performance-comparison",
+            ),
             "require_screenshots": True,
             "require_timedemo_metrics": True,
             "baseline_renderer": "opengl",
@@ -655,14 +991,24 @@ RC_GATE_PRESETS = {
         "description": "Blocking GLx RC proof gate requiring reviewed screenshot and performance baselines.",
         "defaults": {
             "profile": "glx-parity",
-            "maps": "q3dm1,q3dm17",
-            "demos": "demo1",
+            "corpus_scenes": corpus_scene_ids_csv(GLX_GATE_CORPUS_SCENES["rc-proof"]),
+            "maps": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-proof"], "map"),
+            "demos": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-proof"], "demo"),
             "renderers": "opengl,glx",
             "switch_sequence": "opengl,glx,opengl,glx",
             "switch_rounds": 1,
             "timeout": 300.0,
         },
         "requirements": {
+            "require_proof_corpus": True,
+            "required_corpus_tags": (
+                "stock-map",
+                "high-geometry",
+                "shader-heavy",
+                "fog-heavy",
+                "ui-hud-sensitive",
+                "performance-comparison",
+            ),
             "require_screenshots": True,
             "require_visual_baseline": True,
             "require_performance_baseline": True,
@@ -677,17 +1023,29 @@ RC_GATE_PRESETS = {
         },
     },
     "rc-stress": {
-        "description": "Developer stress gate for indirect static-world paths before promoting advanced GLx defaults.",
+        "description": "Developer stress gate for compact static-world MDI command uploads before promoting advanced GLx defaults.",
         "defaults": {
             "profile": "glx-stress",
-            "maps": "q3dm1,q3dm17",
-            "demos": "demo1",
+            "corpus_scenes": corpus_scene_ids_csv(GLX_GATE_CORPUS_SCENES["rc-stress"]),
+            "maps": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-stress"], "map"),
+            "demos": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-stress"], "demo"),
             "renderers": "opengl,glx",
             "switch_sequence": "opengl,glx",
             "switch_rounds": 1,
             "timeout": 360.0,
         },
         "requirements": {
+            "require_proof_corpus": True,
+            "required_corpus_tags": (
+                "stock-map",
+                "modern-map",
+                "high-geometry",
+                "shader-heavy",
+                "fog-heavy",
+                "particle-heavy-demo",
+                "ui-hud-sensitive",
+                "performance-comparison",
+            ),
             "require_screenshots": True,
             "require_timedemo_metrics": True,
             "screenshot_max_rms": 2.0,
@@ -719,6 +1077,11 @@ def parse_args() -> argparse.Namespace:
         "--list-profiles",
         action="store_true",
         help="Print exact GLx sweep cvar profiles and exit.",
+    )
+    parser.add_argument(
+        "--list-corpus",
+        action="store_true",
+        help="Print the official GLx proof corpus scene ids and exit.",
     )
     parser.add_argument("--exe", type=Path, help="Client executable to launch.")
     parser.add_argument(
@@ -763,6 +1126,14 @@ def parse_args() -> argparse.Namespace:
         "--demos",
         default=None,
         help="Comma-separated demos for timedemo sweeps. Empty disables demo playback.",
+    )
+    parser.add_argument(
+        "--corpus-scenes",
+        default=None,
+        help=(
+            "Comma-separated GLx proof corpus scene ids. Named gates use this "
+            "to derive maps and demos unless --maps or --demos are explicit."
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -909,6 +1280,7 @@ def print_gate_list() -> None:
         defaults.update(preset["defaults"])  # type: ignore[arg-type]
         requirements = preset["requirements"]  # type: ignore[index]
         startup_profile = PROFILE_CVARS[defaults["profile"]].get("r_glxProfile", "manual")
+        corpus_scene_ids = split_csv(str(defaults.get("corpus_scenes") or ""))
         print(f"  {name}: {preset['description']}")
         print(
             "    "
@@ -916,6 +1288,13 @@ def print_gate_list() -> None:
             f"demos={defaults['demos'] or '-'} "
             f"switch={defaults['switch_sequence'] or defaults['renderers']}"
         )
+        if corpus_scene_ids:
+            print(
+                "    "
+                f"corpus={GLX_PROOF_CORPUS_VERSION} "
+                f"scenes={','.join(corpus_scene_ids)} "
+                f"tags={','.join(corpus_tags(corpus_scene_ids))}"
+            )
         if "min_timedemo_fps_ratio" in requirements:
             print(
                 "    "
@@ -923,6 +1302,18 @@ def print_gate_list() -> None:
                 f"{requirements['min_timedemo_fps_ratio']:.0%} of "
                 f"{requirements['baseline_renderer']}"
             )
+
+
+def print_corpus_list() -> None:
+    print(f"GLx proof corpus: {GLX_PROOF_CORPUS_VERSION}")
+    print(f"Document: {GLX_PROOF_CORPUS_DOC}")
+    print("Scenes:")
+    for scene_id, scene in sorted(GLX_PROOF_CORPUS_SCENES.items()):
+        print(
+            "  "
+            f"{scene_id}: kind={scene['kind']} target={scene['target']} "
+            f"assetTier={scene['assetTier']} tags={','.join(scene.get('tags', ())) }"
+        )
 
 
 def print_profile_list() -> None:
@@ -1128,13 +1519,20 @@ def build_switch_cfg(
     maps: list[str],
     switch_sequence: list[str],
     run_id: str,
+    corpus_scene_ids: Iterable[str] = (),
 ) -> tuple[str, list[dict[str, object]]]:
     lines = cfg_preamble(cvars, "renderer switch screenshot sweep")
     expected_shots: list[dict[str, object]] = []
+    selected_corpus_scene_ids = validate_corpus_scene_ids(corpus_scene_ids)
 
     lines.append(f"wait {args.startup_wait}")
     for map_index, map_name in enumerate(maps, start=1):
         safe_map = sanitize(map_name)
+        map_corpus_scene_ids = corpus_scene_ids_for_target(
+            selected_corpus_scene_ids,
+            "map",
+            map_name,
+        )
         lines.append(f"map {map_name}")
         lines.append(f"wait {args.map_wait}")
 
@@ -1172,6 +1570,8 @@ def build_switch_cfg(
                         "mapIndex": map_index,
                         "round": round_index,
                         "switchStep": switch_index,
+                        "corpusSceneIds": map_corpus_scene_ids,
+                        "corpusTags": corpus_tags(map_corpus_scene_ids),
                     }
                 )
 
@@ -1766,6 +2166,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
     requires_glx_paths = rc_profile_requires_glx_paths(profile)
     requires_glx_ownership = profile_requires_glx_ownership(profile)
     saw_ownership = False
+    saw_stream_categories = False
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -1820,6 +2221,30 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 failures.append(f"GLx material not-ready fallbacks: {int_group(match, 'notReady')}.")
             if int_group(match, "full") > 0:
                 failures.append(f"GLx material program-limit fallbacks: {int_group(match, 'full')}.")
+            continue
+
+        match = MATERIAL_COMPILER_PLANS_RE.search(line)
+        if match:
+            for key in ("compiled", "unsupported"):
+                record_metric_max(metrics, "materialCompilerPlans", key, int_group(match, key))
+            record_metric_max(
+                metrics,
+                "materialCompilerPlans",
+                "lastUnsupported",
+                int(match.group("lastUnsupported"), 16),
+            )
+            record_metric_max(
+                metrics,
+                "materialCompilerPlans",
+                "lastUnsupportedReason",
+                match.group("lastUnsupportedReason"),
+            )
+            if requires_glx_paths and int_group(match, "unsupported") > 0:
+                failures.append(
+                    "GLx material compiler unsupported plans: "
+                    f"{int_group(match, 'unsupported')} "
+                    f"({match.group('lastUnsupportedReason')})."
+                )
             continue
 
         match = OWNERSHIP_RE.search(line)
@@ -2209,6 +2634,34 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                         failures.append(f"GLx streamed high-risk {label} material draws: {count}.")
             continue
 
+        match = STREAM_CATEGORIES_RE.search(line)
+        if match:
+            saw_stream_categories = True
+            for category in STREAM_CATEGORY_KEYS:
+                record_metric_max(metrics, "streamCategory", f"{category}Draws", int_group(match, f"{category}Draws"))
+                record_metric_max(
+                    metrics,
+                    "streamCategory",
+                    f"{category}Attempts",
+                    int_group(match, f"{category}Attempts"),
+                )
+                record_metric_max(
+                    metrics,
+                    "streamCategory",
+                    f"{category}Observed",
+                    1 if int_group(match, f"{category}Attempts") > 0 else 0,
+                )
+            continue
+
+        match = STREAM_CATEGORY_FALLBACKS_RE.search(line)
+        if match:
+            for category in STREAM_CATEGORY_KEYS:
+                count = int_group(match, category)
+                record_metric_max(metrics, "streamCategory", f"{category}Fallbacks", count)
+                if count > 0:
+                    failures.append(f"GLx streamed {category} category fallbacks: {count}.")
+            continue
+
         match = STREAM_DRAW_SKIPS_RE.search(line)
         if match:
             record_metric_max(metrics, "streamDraw", "skips", int_group(match, "total"))
@@ -2226,6 +2679,29 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 record_metric_max(metrics, "streamDrawSkip", key, int_group(match, key))
             if int_group(match, "program") > 0:
                 failures.append(f"GLx streamed draw material-program skips: {int_group(match, 'program')}.")
+            continue
+
+        match = STREAM_MATERIAL_COMPILER_RE.search(line)
+        if match:
+            record_metric_max(metrics, "streamMaterialCompiler", "rejected", int_group(match, "rejected"))
+            record_metric_max(
+                metrics,
+                "streamMaterialCompiler",
+                "lastUnsupported",
+                int(match.group("lastUnsupported"), 16),
+            )
+            record_metric_max(
+                metrics,
+                "streamMaterialCompiler",
+                "lastUnsupportedReason",
+                match.group("lastUnsupportedReason"),
+            )
+            if requires_glx_paths and int_group(match, "rejected") > 0:
+                failures.append(
+                    "GLx stream material compiler rejections: "
+                    f"{int_group(match, 'rejected')} "
+                    f"({match.group('lastUnsupportedReason')})."
+                )
             continue
 
         match = STREAM_MATERIAL_GATE_RE.search(line)
@@ -2300,6 +2776,8 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
 
     if requires_glx_paths and not diagnostics.get("found"):
         failures.append("No GLx diagnostic output was found in the run log.")
+    if requires_glx_paths and not saw_stream_categories:
+        failures.append("No GLx dynamic stream category diagnostics were found in the run log.")
     if requires_glx_ownership and not saw_ownership:
         failures.append("No GLx ownership diagnostic output was found in the run log.")
 
@@ -2645,6 +3123,22 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 perf_record_numeric(performance, prefixed_key("streamDraw", key), float(match.group(key)))
             continue
 
+        match = GLX_STREAM_CATEGORY_SUMMARY_RE.search(line)
+        if match:
+            for category in STREAM_CATEGORY_KEYS:
+                suffix = f"{category[0].upper()}{category[1:]}"
+                perf_record_numeric(
+                    performance,
+                    f"streamCategory{suffix}Draws",
+                    int_group(match, f"{category}Draws"),
+                )
+                perf_record_numeric(
+                    performance,
+                    f"streamCategory{suffix}Attempts",
+                    int_group(match, f"{category}Attempts"),
+                )
+            continue
+
         match = GLX_STATIC_DRAW_SUMMARY_RE.search(line)
         if match:
             perf_record_match_numbers_prefixed(
@@ -2892,6 +3386,7 @@ def write_performance_baseline(
         "profile": manifest.get("profile", ""),
         "maps": manifest.get("maps", []),
         "demos": manifest.get("demos", []),
+        "proofCorpus": manifest.get("proofCorpus", {}),
         "performance": aggregate,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -3013,6 +3508,104 @@ def proof_status(manifest: dict[str, object]) -> dict[str, object]:
     }
 
 
+def evaluate_proof_corpus(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> list[str]:
+    if not requirements.get("require_proof_corpus"):
+        return []
+
+    failures: list[str] = []
+    proof_corpus = manifest.get("proofCorpus")
+    if not isinstance(proof_corpus, dict):
+        return ["GLx proof corpus metadata is missing from the gate manifest."]
+
+    if proof_corpus.get("version") != GLX_PROOF_CORPUS_VERSION:
+        failures.append(
+            "GLx proof corpus version mismatch: "
+            f"{proof_corpus.get('version', '-')}; expected {GLX_PROOF_CORPUS_VERSION}."
+        )
+    if proof_corpus.get("document") != GLX_PROOF_CORPUS_DOC:
+        failures.append(
+            "GLx proof corpus document mismatch: "
+            f"{proof_corpus.get('document', '-')}; expected {GLX_PROOF_CORPUS_DOC}."
+        )
+
+    selected_scene_ids = [
+        str(scene_id)
+        for scene_id in proof_corpus.get("selectedSceneIds", [])
+        if str(scene_id).strip()
+    ]
+    try:
+        selected_scene_ids = validate_corpus_scene_ids(selected_scene_ids)
+    except ValueError as exc:
+        failures.append(str(exc))
+        selected_scene_ids = []
+
+    if not selected_scene_ids:
+        failures.append("GLx proof corpus selection is empty.")
+
+    selected_tags = {
+        str(tag)
+        for tag in proof_corpus.get("selectedTags", [])
+        if str(tag).strip()
+    }
+    expected_tags = set(corpus_tags(selected_scene_ids)) if selected_scene_ids else set()
+    if selected_tags != expected_tags:
+        failures.append(
+            "GLx proof corpus selected tags do not match selected scene ids: "
+            f"{','.join(sorted(selected_tags)) or '-'}; expected "
+            f"{','.join(sorted(expected_tags)) or '-'}."
+        )
+
+    required_tags = {
+        str(tag)
+        for tag in requirements.get("required_corpus_tags", [])
+        if str(tag).strip()
+    }
+    missing_tags = sorted(required_tags.difference(selected_tags))
+    if missing_tags:
+        failures.append(
+            "GLx proof corpus is missing required tag(s): " +
+            ", ".join(missing_tags)
+        )
+
+    manifest_maps = {
+        str(map_name).lower()
+        for map_name in manifest.get("maps", [])
+        if str(map_name).strip()
+    }
+    manifest_demos = {
+        str(demo).lower()
+        for demo in manifest.get("demos", [])
+        if str(demo).strip()
+    }
+    missing_maps = [
+        str(GLX_PROOF_CORPUS_SCENES[scene_id]["target"])
+        for scene_id in selected_scene_ids
+        if GLX_PROOF_CORPUS_SCENES[scene_id].get("kind") == "map" and
+        str(GLX_PROOF_CORPUS_SCENES[scene_id].get("target", "")).lower() not in manifest_maps
+    ]
+    missing_demos = [
+        str(GLX_PROOF_CORPUS_SCENES[scene_id]["target"])
+        for scene_id in selected_scene_ids
+        if GLX_PROOF_CORPUS_SCENES[scene_id].get("kind") == "demo" and
+        str(GLX_PROOF_CORPUS_SCENES[scene_id].get("target", "")).lower() not in manifest_demos
+    ]
+    if missing_maps:
+        failures.append(
+            "GLx proof corpus map scene(s) were not included in the sweep maps: " +
+            ", ".join(_dedupe(missing_maps))
+        )
+    if missing_demos:
+        failures.append(
+            "GLx proof corpus demo scene(s) were not included in the sweep demos: " +
+            ", ".join(_dedupe(missing_demos))
+        )
+
+    return failures
+
+
 def evaluate_gate(manifest: dict[str, object]) -> list[str]:
     gate_name = manifest.get("gate")
     if manifest.get("dryRun"):
@@ -3024,6 +3617,8 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
     runs = manifest.get("runs", [])
     if not isinstance(runs, list):
         return ["Manifest does not contain a run list."]
+
+    failures.extend(evaluate_proof_corpus(manifest, requirements))  # type: ignore[arg-type]
 
     failed_runs = [
         run for run in runs
@@ -3323,6 +3918,33 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
         "",
     ]
 
+    proof_corpus = manifest.get("proofCorpus")
+    if isinstance(proof_corpus, dict):
+        selected_scene_ids = [
+            str(scene_id)
+            for scene_id in proof_corpus.get("selectedSceneIds", [])
+            if str(scene_id).strip()
+        ]
+        selected_tags = [
+            str(tag)
+            for tag in proof_corpus.get("selectedTags", [])
+            if str(tag).strip()
+        ]
+        required_tags = [
+            str(tag)
+            for tag in proof_corpus.get("requiredTags", [])
+            if str(tag).strip()
+        ]
+        lines.append("## GLx Proof Corpus")
+        lines.append("")
+        lines.append(f"- Version: `{proof_corpus.get('version', '-')}`")
+        lines.append(f"- Document: `{proof_corpus.get('document', '-')}`")
+        lines.append(f"- Scenes: `{', '.join(selected_scene_ids) or '-'}`")
+        lines.append(f"- Tags: `{', '.join(selected_tags) or '-'}`")
+        if required_tags:
+            lines.append(f"- Required tags: `{', '.join(required_tags)}`")
+        lines.append("")
+
     gate_failures = manifest.get("gateFailures", [])
     if isinstance(gate_failures, list) and gate_failures:
         lines.append("## Gate Failures")
@@ -3465,6 +4087,15 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
                 f"{maxima.get('streamDrawDynamicLights', '-')}/"
                 f"{maxima.get('streamDrawScreenMaps', '-')}/"
                 f"{maxima.get('streamDrawVideoMaps', '-')}`, "
+                f"categories ent/part/poly/mark/weapon/ui/beam/special "
+                f"`{maxima.get('streamCategoryEntityDraws', '-')}/"
+                f"{maxima.get('streamCategoryParticleDraws', '-')}/"
+                f"{maxima.get('streamCategoryPolyDraws', '-')}/"
+                f"{maxima.get('streamCategoryMarkDraws', '-')}/"
+                f"{maxima.get('streamCategoryWeaponDraws', '-')}/"
+                f"{maxima.get('streamCategoryUiDraws', '-')}/"
+                f"{maxima.get('streamCategoryBeamDraws', '-')}/"
+                f"{maxima.get('streamCategorySpecialDraws', '-')}`, "
                 f"stream draw fallbacks `{maxima.get('streamDrawFallbacks', '-')}`, "
                 f"static draw fallbacks `{maxima.get('staticDrawFallbacks', '-')}`, "
                 f"static MDI errors `{maxima.get('staticMdiErrors', '-')}`"
@@ -3597,16 +4228,39 @@ def main() -> int:
     if args.list_profiles:
         print_profile_list()
         return 0
+    if args.list_corpus:
+        print_corpus_list()
+        return 0
 
+    explicit_maps = args.maps is not None
+    explicit_demos = args.demos is not None
+    explicit_corpus_scenes = args.corpus_scenes is not None
     apply_gate_defaults(args)
 
     exe = resolve_exe(args.exe, allow_missing=args.dry_run)
     basepath = args.basepath.resolve() if args.basepath else exe.parent.resolve()
     renderers = split_csv(args.renderers)
     switch_sequence = split_csv(args.switch_sequence) if args.switch_sequence else list(renderers)
-    maps_value = args.maps if args.maps is not None else PROFILE_MAPS.get(args.profile, "q3dm1")
+    default_corpus_scene_ids = corpus_scene_ids_for_gate(args.gate, args.profile)
+    corpus_scene_ids = validate_corpus_scene_ids(
+        split_csv(args.corpus_scenes)
+        if explicit_corpus_scenes
+        else default_corpus_scene_ids
+    )
+    maps_value = (
+        args.maps
+        if explicit_maps or not corpus_scene_ids
+        else corpus_targets_csv(corpus_scene_ids, "map")
+    )
+    if maps_value is None:
+        maps_value = PROFILE_MAPS.get(args.profile, "q3dm1")
     maps = split_csv(maps_value)
-    demos = split_csv(args.demos)
+    demos_value = (
+        args.demos
+        if explicit_demos or not corpus_scene_ids
+        else corpus_targets_csv(corpus_scene_ids, "demo")
+    )
+    demos = split_csv(demos_value or "")
 
     validate_renderers(renderers)
     validate_renderers(switch_sequence)
@@ -3652,10 +4306,24 @@ def main() -> int:
         args.performance_budget,
         include_default=bool(args.gate) and not args.no_performance_budget,
     )
+    gate_requirements = (
+        RC_GATE_PRESETS[args.gate]["requirements"] if args.gate else {}
+    )
+    proof_corpus = proof_corpus_manifest(
+        corpus_scene_ids,
+        gate_requirements.get("required_corpus_tags", ()),  # type: ignore[union-attr]
+    )
 
     if not args.no_switch_sweep and maps:
         switch_cfg_name = f"{run_id}-switch.cfg"
-        switch_cfg, expected_shots = build_switch_cfg(args, cfg_cvars, maps, switch_sequence, run_id)
+        switch_cfg, expected_shots = build_switch_cfg(
+            args,
+            cfg_cvars,
+            maps,
+            switch_sequence,
+            run_id,
+            corpus_scene_ids,
+        )
         cfg_path = write_cfg(homepath, args.fs_game, switch_cfg_name, switch_cfg)
         command = base_launch_args(
             exe,
@@ -3759,6 +4427,7 @@ def main() -> int:
         "switchSequence": switch_sequence,
         "maps": maps,
         "demos": demos,
+        "proofCorpus": proof_corpus,
         "perfSamplesEnabled": not args.no_perf_samples,
         "perfSampleWait": args.perf_sample_wait,
         "performanceBudget": performance_budget,
@@ -3850,6 +4519,11 @@ def main() -> int:
         print(f"Gate: {args.gate} ({gate_status})")
         for failure in gate_failures:
             print(f"  - {failure}")
+    print(
+        "Corpus: "
+        f"{GLX_PROOF_CORPUS_VERSION} "
+        f"({len(corpus_scene_ids)} selected scene{'s' if len(corpus_scene_ids) != 1 else ''})"
+    )
     print(f"Manifest: {manifest_path}")
     print(f"Runs: {passed_runs}/{run_count} passed or planned")
     if screenshots:

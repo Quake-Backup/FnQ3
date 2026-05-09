@@ -145,6 +145,7 @@ jobs:
         run: |
           python scripts/glx_runtime_sweep.py --list-gates
           python scripts/glx_runtime_sweep.py --list-profiles
+          python scripts/glx_runtime_sweep.py --list-corpus
 
       - name: Run GLx sweep Python tests
         run: python tests/glx/glx_runtime_sweep_tests.py
@@ -152,6 +153,7 @@ jobs:
       - name: Generate dry-run gate artifacts
         run: |
           mkdir -p .tmp/glx-gate-plans
+          cp docs/fnquake3/GLX_PROOF_CORPUS.md .tmp/glx-gate-plans/GLX_PROOF_CORPUS.md
           for gate in rc-smoke rc-parity rc-proof rc-stress; do
             proof_args=""
             if [ "$gate" = "rc-proof" ]; then

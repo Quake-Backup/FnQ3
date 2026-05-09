@@ -84,6 +84,7 @@ struct MaterialState {
 	cvar_t *r_glxMaterialPrecache;
 	MaterialFns fns;
 	MaterialProgram programs[GLX_MATERIAL_PROGRAM_LIMIT];
+	RenderProductTier tier;
 	int programCount;
 	GLuint currentProgram;
 	qboolean ready;
@@ -104,13 +105,17 @@ struct MaterialState {
 	unsigned int bindFailures;
 	unsigned int debugLabels;
 	unsigned int contextlessDeletes;
+	unsigned int compiledMaterialPlans;
+	unsigned int unsupportedMaterialPlans;
 	unsigned int unsupportedRequests;
 	unsigned int disabledSkips;
 	unsigned int notReadySkips;
 	unsigned int programLimitSkips;
 	MaterialRequest lastRequest;
+	MaterialIR lastMaterial;
 	MaterialProgramKey lastKey;
 	MaterialStageKey lastStageKey;
+	unsigned int lastUnsupportedReasons;
 	char lastError[256];
 };
 
@@ -119,6 +124,7 @@ void GLX_Material_OnOpenGLReady( MaterialState *state, const Capabilities &caps 
 void GLX_Material_Shutdown( MaterialState *state, qboolean deletePrograms );
 void GLX_Material_FrameComplete( MaterialState *state );
 qboolean GLX_Material_Active( const MaterialState &state );
+qboolean GLX_Material_BindIR( MaterialState *state, const MaterialIR &material );
 qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &request );
 qboolean GLX_Material_BindFog( MaterialState *state );
 void GLX_Material_Unbind( MaterialState *state );

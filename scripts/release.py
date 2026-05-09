@@ -11,11 +11,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fnq3_meta import ROOT, channel_metadata, package_archive_name
+from glx_runtime_sweep import GLX_PROOF_CORPUS_DOC, release_corpus_manifest
 
 
 DEFAULT_DOCS = [
     (ROOT / "LICENSE", Path("LICENSE")),
     (ROOT / "docs" / "fnquake3" / "TECHNICAL.md", Path("docs") / "fnquake3" / "TECHNICAL.md"),
+    (
+        ROOT / GLX_PROOF_CORPUS_DOC,
+        Path(GLX_PROOF_CORPUS_DOC),
+    ),
     (ROOT / ".install" / "README.html", Path("README.html")),
 ]
 
@@ -115,6 +120,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         "release_title": meta["release_title"],
         "build_date": meta["build_date"],
         "commit": meta["commit"],
+        "glx_proof_corpus": release_corpus_manifest(),
         "archives": archives,
     }
 

@@ -141,30 +141,42 @@ Turn on persistent mapped uploads, DSA, multi-draw-indirect, and the most aggres
 
 ### Material, map-scale, and feature-closure tasks
 
+All material, map-scale, and feature-closure tasks are now implemented. The remaining tasks below this section build HDR/color management, output backends, promotion proof, and release policy on top of the completed material compiler, map-scale acceleration, dynamic streaming, feature matrix, and stress-corpus surface.
+
 **Task K — Compile id Tech 3 / FnQ3 shader intent into MaterialIR**  
 Replace hand-grown special cases with a compiler from stage language to `MaterialIR`, then from `MaterialIR` to tier-specific program/state plans. Preserve sort order and state semantics exactly.  
 **Contract:** [Render Products](../fnquake3/GLX_FINAL_CONTRACT.md#render-products), [Pass Order](../fnquake3/GLX_FINAL_CONTRACT.md#pass-order), and [Tier Feature Matrix](../fnquake3/GLX_FINAL_CONTRACT.md#tier-feature-matrix).  
 **Done when:** material binding no longer depends on ad hoc allowlists for the common path, and unsupported combinations are explicit, logged, and test-covered. fileciteturn12file0 fileciteturn8file2
+
+**Implemented by:** GLx now compiles prepared id Tech 3 / FnQ3 shader-stage language into `MaterialIR`, then validates that IR into a `MaterialStatePlan` carrying the preserved sort value plus the full GLSL program/state key. Material binding, stream material eligibility, and material telemetry consume that compiler path instead of rebuilding compact ad hoc keys at the bind site. Unsupported stage-language combinations now produce named reason bits, are surfaced through `glxmaterial`/`glxinfo` diagnostics, and are covered by pure GLx logic tests for invalid combine modes, invalid ordered texmod sequences, and invalid waveform usage.
 
 **Task L — Finish the feature-closure matrix**  
 Enumerate every feature the legacy GL renderer covers and every FnQ3 render feature that must survive: bloom including `r_bloom 2`, gamma, greyscale, render scaling, multisample/supersample display behavior, cel shading, outline behavior, dynamic lights, screen maps, video maps, depth-fragment paths, beams, shadows, screenshots/cubemaps, HUD and cinematic correctness.  
 **Contract:** [Tier Feature Matrix](../fnquake3/GLX_FINAL_CONTRACT.md#tier-feature-matrix) and [Promotion Rules](../fnquake3/GLX_FINAL_CONTRACT.md#promotion-rules).  
 **Done when:** there is a checked-in feature matrix with `covered / partially covered / missing` status and zero ambiguous rows. fileciteturn14file0 fileciteturn8file2
 
+**Implemented by:** [GLX_FEATURE_MATRIX.md](../fnquake3/GLX_FEATURE_MATRIX.md) now enumerates the GLx replacement surface with stable row IDs, exact `covered`, `partially covered`, or `missing` statuses, current evidence, and closure gates. Runtime-sweep unit tests parse the checked-in matrix, require all Task L feature families, reject duplicate IDs, and fail on ambiguous status/evidence/closure rows.
+
 **Task M — Promote static-world acceleration from stress-only to shipped**  
 The current profile table shows that several large-map acceleration paths still live mainly in `stress`. Move the stable pieces into the shipped path: packetized static-world arenas, run coalescing, per-tier multi-draw, and high-end indirect submission.  
 **Contract:** [Product Tier Matrix](../fnquake3/GLX_FINAL_CONTRACT.md#product-tier-matrix) and [Tier Feature Matrix](../fnquake3/GLX_FINAL_CONTRACT.md#tier-feature-matrix).  
 **Done when:** the conservative shipped profile has a real large-map advantage, not just the stress profile. fileciteturn9file0
+
+**Implemented by:** The `rc`/`glx-parity` profile now explicitly ships GLx static-world arenas, arena binding, device and soft static draw dispatch, packet-batch spans, same-state `glMultiDrawElements`, indirect command-buffer upload, single `glDrawElementsIndirect`, and ordered MDI span submission where the selected tier exposes the required capability. The static-world indirect paths now check the frozen capability table before attempting high-end draws, so lower tiers keep the shipped profile without repeated unsupported MDI attempts. `stress` is narrowed to the remaining compact visible-command MDI upload path, and runtime-sweep tests freeze that profile split.
 
 **Task N — Unify dynamic scene streaming**  
 Make all dynamic scene geometry use one GLx-owned transient upload system with tier-appropriate allocators. Separate static mesh storage from per-frame mutable data.  
 **Contract:** [Render Products](../fnquake3/GLX_FINAL_CONTRACT.md#render-products) and [Tier Feature Matrix](../fnquake3/GLX_FINAL_CONTRACT.md#tier-feature-matrix).  
 **Done when:** entities, particles, polys, marks, weapon, UI quads, beams, and special passes all pass through the same reservation/upload/commit model, with per-category metrics. fileciteturn11file0 fileciteturn9file0
 
+**Implemented by:** GLx dynamic streaming now carries an explicit dynamic-scene category mask through the renderer-common bridge, GLx module ABI, and transient stream state. Generic streamed shader batches infer entity, weapon, UI, particle, poly, mark, or special category from the active tessellation, entity, shader sort, and pass flags; immediate beams, stencil-shadow quads, and postprocess draw-array batches pass explicit category masks into the same stream helpers. All category-aware paths still reserve, upload, and commit through the single `glx_stream.*` ring selected by the tier-appropriate stream strategy, while static-world storage remains in the static arena/packet path. `glxinfo` and `r_speeds 7` now report per-category draw/attempt/fallback metrics, and parser plus logic tests keep the category vocabulary and diagnostics locked.
+
 **Task O — Add heavy-map and modern-map stress content gates**  
 Create an official corpus of stock maps, high-geometry maps, shader-heavy maps, fog-heavy maps, particle-heavy demos, and UI/HUD-sensitive scenes.  
 **Contract:** [Promotion Rules](../fnquake3/GLX_FINAL_CONTRACT.md#promotion-rules).  
 **Done when:** every release and CI artifact references the same corpus for screenshots and performance comparisons.
+
+**Implemented by:** The runtime sweep now owns a versioned GLx proof corpus with stable scene IDs for retail stock maps, high-geometry probes, shader-heavy probes, fog-sensitive probes, staged modern-map stress scenes, a particle-heavy stress timedemo slot, and UI/HUD-sensitive screenshots. Named RC gates derive their default maps and demos from that corpus, include selected scene IDs and tags in manifests, attach corpus scene metadata to screenshots, embed the corpus object into approved performance-baseline JSON, and fail non-dry-run gates if required corpus tags drift. CI dry-run gate artifacts print and upload the corpus reference document, and release packaging includes the same document plus `glx_proof_corpus` metadata in the release manifest.
 
 ### HDR, color grading, and output tasks
 

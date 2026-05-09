@@ -3,6 +3,7 @@
 
 #include "../qcommon/q_shared.h"
 #include "../renderercommon/tr_glx_public.h"
+#include "glx_render_ir.h"
 
 namespace glx {
 
@@ -47,8 +48,81 @@ struct MaterialStageKey {
 	qboolean fogPass;
 };
 
+struct MaterialStatePlan {
+	RenderProductTier tier;
+	qboolean programmable;
+	int sort;
+	MaterialStageKey stage;
+};
+
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_NONE = 0x00000000u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_INVALID_IR = 0x00000001u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_INVALID_COMBINE = 0x00000002u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_FEATURE_SET = 0x00000004u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_RGBGEN = 0x00000008u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_ALPHAGEN = 0x00000010u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_RGB_WAVE = 0x00000020u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_ALPHA_WAVE = 0x00000040u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_TCGEN = 0x00000080u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_FOG_ADJUST = 0x00000100u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_TEXMOD_COUNT = 0x00000200u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_TEXMOD_MASK = 0x00000400u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_TEXMOD_EMPTY = 0x00000800u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_TEXMOD_SEQUENCE = 0x00001000u;
+static constexpr unsigned int GLX_MATERIAL_UNSUPPORTED_TEXMOD_WAVE = 0x00002000u;
+
 static constexpr int GLX_MATERIAL_MAX_TEXMODS_PER_BUNDLE =
 	GLX_MATERIAL_TMOD_SEQUENCE_MAX_SLOTS;
+
+static ID_INLINE const char *GLX_Material_UnsupportedReasonName( unsigned int reasons )
+{
+	if ( reasons == GLX_MATERIAL_UNSUPPORTED_NONE ) {
+		return "none";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_INVALID_IR ) {
+		return "invalid material IR";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_INVALID_COMBINE ) {
+		return "invalid multitexture combine";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_FEATURE_SET ) {
+		return "unsupported material feature set";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_RGBGEN ) {
+		return "unknown rgbGen";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_ALPHAGEN ) {
+		return "unknown alphaGen";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_RGB_WAVE ) {
+		return "invalid rgb waveform";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_ALPHA_WAVE ) {
+		return "invalid alpha waveform";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_TCGEN ) {
+		return "unknown tcGen";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_FOG_ADJUST ) {
+		return "unknown fog adjustment";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_TEXMOD_COUNT ) {
+		return "unsupported texmod count";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_TEXMOD_MASK ) {
+		return "unknown texmod opcode";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_TEXMOD_EMPTY ) {
+		return "missing texmod opcode";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_TEXMOD_SEQUENCE ) {
+		return "invalid texmod sequence";
+	}
+	if ( reasons & GLX_MATERIAL_UNSUPPORTED_TEXMOD_WAVE ) {
+		return "invalid texmod waveform";
+	}
+	return "unsupported material language";
+}
 
 static ID_INLINE qboolean GLX_Material_IsKnownRgbGen( int rgbGen )
 {
@@ -452,6 +526,88 @@ static ID_INLINE qboolean GLX_Material_KeyForInputs( int flags, int materialComb
 	return qtrue;
 }
 
+static ID_INLINE unsigned int GLX_Material_UnsupportedReasonsForInputsFull(
+	int flags, unsigned int stateBits, int materialCombine, int rgbGen, int alphaGen,
+	int rgbWaveFunc, int alphaWaveFunc, int tcGen0, int tcGen1,
+	int texMods0, int texMods1, unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, qboolean fogPass )
+{
+	unsigned int reasons = GLX_MATERIAL_UNSUPPORTED_NONE;
+	MaterialProgramMode mode;
+	(void)stateBits;
+
+	if ( !GLX_Material_ModeForInputs( flags, materialCombine, fogPass, &mode ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_INVALID_COMBINE;
+	} else {
+		const unsigned int features = GLX_Material_FeaturesForInputs( flags,
+			texMods0, texMods1, fogPass );
+		if ( !GLX_Material_FeaturesAllowedForMode( mode, features ) ) {
+			reasons |= GLX_MATERIAL_UNSUPPORTED_FEATURE_SET;
+		}
+	}
+
+	if ( fogPass ) {
+		return reasons;
+	}
+
+	if ( !GLX_Material_IsKnownRgbGen( rgbGen ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_RGBGEN;
+	}
+	if ( !GLX_Material_IsKnownAlphaGen( alphaGen ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_ALPHAGEN;
+	}
+	if ( !GLX_Material_GenWaveFuncKnown( rgbGen, rgbWaveFunc,
+		GLX_MATERIAL_RGBGEN_WAVEFORM ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_RGB_WAVE;
+	}
+	if ( !GLX_Material_GenWaveFuncKnown( alphaGen, alphaWaveFunc,
+		GLX_MATERIAL_ALPHAGEN_WAVEFORM ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_ALPHA_WAVE;
+	}
+	if ( !GLX_Material_IsKnownTcGen( tcGen0 ) || !GLX_Material_IsKnownTcGen( tcGen1 ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_TCGEN;
+	}
+	if ( !GLX_Material_IsKnownFogAdjust( fogAdjust ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_FOG_ADJUST;
+	}
+
+	const qboolean texModCountKnown =
+		GLX_Material_TexModCountKnown( texMods0 ) &&
+		GLX_Material_TexModCountKnown( texMods1 ) ? qtrue : qfalse;
+	const qboolean texModMaskKnown =
+		GLX_Material_TexModMaskKnown( texModTypes0 ) &&
+		GLX_Material_TexModMaskKnown( texModTypes1 ) ? qtrue : qfalse;
+
+	if ( !texModCountKnown ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_TEXMOD_COUNT;
+	}
+	if ( !texModMaskKnown ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_TEXMOD_MASK;
+	}
+	if ( texModCountKnown && ( ( texMods0 > 0 && texModTypes0 == 0 ) ||
+		( texMods1 > 0 && texModTypes1 == 0 ) ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_TEXMOD_EMPTY;
+	}
+	if ( texModCountKnown && texModMaskKnown &&
+		( !GLX_Material_TexModSequenceKnown( texMods0, texModTypes0,
+			texModSequence0 ) ||
+		!GLX_Material_TexModSequenceKnown( texMods1, texModTypes1,
+			texModSequence1 ) ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_TEXMOD_SEQUENCE;
+	}
+	if ( texModCountKnown &&
+		( !GLX_Material_TexModWaveFuncsKnown( texMods0, texModSequence0,
+			texModWaveFuncs0 ) ||
+		!GLX_Material_TexModWaveFuncsKnown( texMods1, texModSequence1,
+			texModWaveFuncs1 ) ) ) {
+		reasons |= GLX_MATERIAL_UNSUPPORTED_TEXMOD_WAVE;
+	}
+
+	return reasons;
+}
+
 static ID_INLINE qboolean GLX_Material_StageKeyForInputsFull( int flags, unsigned int stateBits,
 	int materialCombine, int rgbGen, int alphaGen, int rgbWaveFunc, int alphaWaveFunc,
 	int tcGen0, int tcGen1,
@@ -461,37 +617,16 @@ static ID_INLINE qboolean GLX_Material_StageKeyForInputsFull( int flags, unsigne
 	int fogAdjust, qboolean fogPass, MaterialStageKey *key )
 {
 	MaterialProgramKey program;
+	const unsigned int unsupportedReasons = GLX_Material_UnsupportedReasonsForInputsFull(
+		flags, stateBits, materialCombine, rgbGen, alphaGen, rgbWaveFunc,
+		alphaWaveFunc, tcGen0, tcGen1, texMods0, texMods1, texModTypes0,
+		texModTypes1, texModSequence0, texModSequence1, texModWaveFuncs0,
+		texModWaveFuncs1, fogAdjust, fogPass );
 
-	if ( !key || !GLX_Material_KeyForInputs( flags, materialCombine, texMods0, texMods1,
+	if ( !key || unsupportedReasons != GLX_MATERIAL_UNSUPPORTED_NONE ||
+		!GLX_Material_KeyForInputs( flags, materialCombine, texMods0, texMods1,
 		fogPass, &program ) ) {
 		return qfalse;
-	}
-
-	if ( !fogPass ) {
-		if ( !GLX_Material_IsKnownRgbGen( rgbGen ) ||
-			!GLX_Material_IsKnownAlphaGen( alphaGen ) ||
-			!GLX_Material_GenWaveFuncKnown( rgbGen, rgbWaveFunc, GLX_MATERIAL_RGBGEN_WAVEFORM ) ||
-			!GLX_Material_GenWaveFuncKnown( alphaGen, alphaWaveFunc,
-				GLX_MATERIAL_ALPHAGEN_WAVEFORM ) ||
-			!GLX_Material_IsKnownTcGen( tcGen0 ) ||
-			!GLX_Material_IsKnownTcGen( tcGen1 ) ||
-			!GLX_Material_IsKnownFogAdjust( fogAdjust ) ) {
-			return qfalse;
-		}
-		if ( !GLX_Material_TexModCountKnown( texMods0 ) ||
-			!GLX_Material_TexModCountKnown( texMods1 ) ||
-			!GLX_Material_TexModMaskKnown( texModTypes0 ) ||
-			!GLX_Material_TexModMaskKnown( texModTypes1 ) ||
-			( texMods0 > 0 && texModTypes0 == 0 ) ||
-			( texMods1 > 0 && texModTypes1 == 0 ) ||
-			!GLX_Material_TexModSequenceKnown( texMods0, texModTypes0, texModSequence0 ) ||
-			!GLX_Material_TexModSequenceKnown( texMods1, texModTypes1, texModSequence1 ) ||
-			!GLX_Material_TexModWaveFuncsKnown( texMods0, texModSequence0,
-				texModWaveFuncs0 ) ||
-			!GLX_Material_TexModWaveFuncsKnown( texMods1, texModSequence1,
-				texModWaveFuncs1 ) ) {
-			return qfalse;
-		}
 	}
 
 	key->program = program;
@@ -514,6 +649,74 @@ static ID_INLINE qboolean GLX_Material_StageKeyForInputsFull( int flags, unsigne
 	key->fogAdjust = fogAdjust;
 	key->fogPass = fogPass;
 	return qtrue;
+}
+
+static ID_INLINE unsigned int GLX_Material_UnsupportedReasonsForIR( const MaterialIR &material )
+{
+	unsigned int reasons = GLX_RenderIR_ValidateMaterial( material ) ?
+		GLX_MATERIAL_UNSUPPORTED_NONE : GLX_MATERIAL_UNSUPPORTED_INVALID_IR;
+
+	reasons |= GLX_Material_UnsupportedReasonsForInputsFull( material.flags,
+		material.stateBits, material.materialCombine, material.rgbGen, material.alphaGen,
+		material.rgbWaveFunc, material.alphaWaveFunc, material.tcGen0, material.tcGen1,
+		material.texMods0, material.texMods1, material.texModTypes0,
+		material.texModTypes1, material.texModSequence0, material.texModSequence1,
+		material.texModWaveFuncs0, material.texModWaveFuncs1, material.fogAdjust,
+		material.fogPass );
+	return reasons;
+}
+
+static ID_INLINE qboolean GLX_Material_StageKeyForIR( const MaterialIR &material,
+	MaterialStageKey *key, unsigned int *unsupportedReasons )
+{
+	const unsigned int reasons = GLX_Material_UnsupportedReasonsForIR( material );
+
+	if ( unsupportedReasons ) {
+		*unsupportedReasons = reasons;
+	}
+	if ( reasons != GLX_MATERIAL_UNSUPPORTED_NONE ) {
+		return qfalse;
+	}
+	return GLX_Material_StageKeyForInputsFull( material.flags, material.stateBits,
+		material.materialCombine, material.rgbGen, material.alphaGen,
+		material.rgbWaveFunc, material.alphaWaveFunc, material.tcGen0, material.tcGen1,
+		material.texMods0, material.texMods1, material.texModTypes0,
+		material.texModTypes1, material.texModSequence0, material.texModSequence1,
+		material.texModWaveFuncs0, material.texModWaveFuncs1, material.fogAdjust,
+		material.fogPass, key );
+}
+
+static ID_INLINE qboolean GLX_Material_StatePlanForTierAndIR( RenderProductTier tier,
+	const MaterialIR &material,
+	MaterialStatePlan *plan, unsigned int *unsupportedReasons )
+{
+	MaterialStageKey stageKey {};
+	const TierExecutionPolicy policy = GLX_RenderIR_TierExecutionPolicy( tier );
+
+	if ( !plan || !GLX_Material_StageKeyForIR( material, &stageKey,
+		unsupportedReasons ) ) {
+		return qfalse;
+	}
+	if ( !GLX_RenderIR_TierConsumesProduct( tier, RenderProductKind::MaterialIR ) ||
+		!GLX_RenderIR_TierSupportsMaterial( tier, material ) ) {
+		if ( unsupportedReasons ) {
+			*unsupportedReasons |= GLX_MATERIAL_UNSUPPORTED_FEATURE_SET;
+		}
+		return qfalse;
+	}
+
+	plan->tier = tier;
+	plan->programmable = policy.materialCompiler;
+	plan->sort = material.sort;
+	plan->stage = stageKey;
+	return qtrue;
+}
+
+static ID_INLINE qboolean GLX_Material_StatePlanForIR( const MaterialIR &material,
+	MaterialStatePlan *plan, unsigned int *unsupportedReasons )
+{
+	return GLX_Material_StatePlanForTierAndIR( RenderProductTier::GL2X, material,
+		plan, unsupportedReasons );
 }
 
 static ID_INLINE qboolean GLX_Material_StageKeyForInputs( int flags, unsigned int stateBits,

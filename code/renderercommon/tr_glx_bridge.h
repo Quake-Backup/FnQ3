@@ -270,19 +270,38 @@ static ID_INLINE qboolean GLX_CompatStreamDrawPostProcessEnabled( void )
 }
 
 static ID_INLINE qboolean GLX_CompatStreamDrawAllowsMaterial( int flags,
-	unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 )
+	unsigned int stateBits, int rgbGen, int alphaGen, int tcGen0, int tcGen1,
+	int texMods0, int texMods1, unsigned int texModTypes0, unsigned int texModTypes1,
+	unsigned int texModSequence0, unsigned int texModSequence1,
+	int rgbWaveFunc, int alphaWaveFunc,
+	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1,
+	int fogAdjust, int materialCombine, qboolean fogPass )
 {
 #ifdef RENDERER_GLX
 	return GLX_Renderer_StreamDrawAllowsMaterial( flags, stateBits, rgbGen, alphaGen,
-		tcGen0, texMods0, texMods1 );
+		tcGen0, tcGen1, texMods0, texMods1, texModTypes0, texModTypes1,
+		texModSequence0, texModSequence1, rgbWaveFunc, alphaWaveFunc,
+		texModWaveFuncs0, texModWaveFuncs1, fogAdjust, materialCombine, fogPass );
 #else
 	(void)flags;
 	(void)stateBits;
 	(void)rgbGen;
 	(void)alphaGen;
 	(void)tcGen0;
+	(void)tcGen1;
 	(void)texMods0;
 	(void)texMods1;
+	(void)texModTypes0;
+	(void)texModTypes1;
+	(void)texModSequence0;
+	(void)texModSequence1;
+	(void)rgbWaveFunc;
+	(void)alphaWaveFunc;
+	(void)texModWaveFuncs0;
+	(void)texModWaveFuncs1;
+	(void)fogAdjust;
+	(void)materialCombine;
+	(void)fogPass;
 	return qfalse;
 #endif
 }
@@ -334,11 +353,12 @@ static ID_INLINE void GLX_CompatStreamCommit( glxStreamReservation_t *reservatio
 
 static ID_INLINE void GLX_CompatRecordStreamDrawResult( int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture,
-	qboolean fog, qboolean depthFragment, int materialFlags, qboolean success )
+	qboolean fog, qboolean depthFragment, int materialFlags, unsigned int categoryMask,
+	qboolean success )
 {
 #ifdef RENDERER_GLX
 	GLX_Renderer_RecordStreamDrawResult( numVertexes, numIndexes, totalBytes, indexBytes,
-		texcoord1Bytes, multitexture, fog, depthFragment, materialFlags, success );
+		texcoord1Bytes, multitexture, fog, depthFragment, materialFlags, categoryMask, success );
 #else
 	(void)numVertexes;
 	(void)numIndexes;
@@ -349,6 +369,7 @@ static ID_INLINE void GLX_CompatRecordStreamDrawResult( int numVertexes, int num
 	(void)fog;
 	(void)depthFragment;
 	(void)materialFlags;
+	(void)categoryMask;
 	(void)success;
 #endif
 }

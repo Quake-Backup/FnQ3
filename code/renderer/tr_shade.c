@@ -59,11 +59,25 @@ shaderCommands_t	tess;
 static qboolean	setArraysOnce;
 
 #ifdef RENDERER_GLX
-static qboolean GLX_StreamDrawStageMaterialAllowed( const shaderStage_t *pStage, int materialFlags )
+static qboolean GLX_StreamDrawStageMaterialAllowed( const shaderStage_t *pStage,
+	int materialFlags, GLint multitextureEnv )
 {
 	return GLX_CompatStreamDrawAllowsMaterial( materialFlags, pStage->stateBits,
 		pStage->rgbGen, pStage->alphaGen, pStage->bundle[0].tcGen,
-		pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods );
+		pStage->bundle[1].tcGen,
+		pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods,
+		GLX_CompatMaterialTexModMask( &pStage->bundle[0] ),
+		GLX_CompatMaterialTexModMask( &pStage->bundle[1] ),
+		GLX_CompatMaterialTexModSequence( &pStage->bundle[0] ),
+		GLX_CompatMaterialTexModSequence( &pStage->bundle[1] ),
+		pStage->rgbGen == CGEN_WAVEFORM ?
+			GLX_CompatMaterialWaveFunc( pStage->rgbWave.func ) : GLX_MATERIAL_WAVEFUNC_NONE,
+		pStage->alphaGen == AGEN_WAVEFORM ?
+			GLX_CompatMaterialWaveFunc( pStage->alphaWave.func ) : GLX_MATERIAL_WAVEFUNC_NONE,
+		GLX_CompatMaterialTexModWaveFuncs( &pStage->bundle[0] ),
+		GLX_CompatMaterialTexModWaveFuncs( &pStage->bundle[1] ),
+		GLX_CompatMaterialFogAdjust( pStage->adjustColorsForFog ),
+		GLX_CompatMaterialCombineForGLEnv( multitextureEnv ), qfalse );
 }
 
 static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const shaderStage_t *pStage, qboolean multitexture, GLint multitextureEnv )
@@ -82,6 +96,7 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 	int indexOffset;
 	int totalBytes;
 	int materialFlags;
+	unsigned int categoryMask;
 	GLint oldArrayBuffer = 0;
 	GLint oldElementArrayBuffer = 0;
 
@@ -98,13 +113,14 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 	}
 
 	materialFlags = GLX_CompatMaterialStageFlags( pStage );
+	categoryMask = GLX_CompatDynamicCategoryMaskForTess( input, materialFlags );
 	if ( multitexture && !GLX_CompatStreamDrawMultitextureEnabled() ) {
-		GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags );
+		GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags, multitextureEnv );
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MULTITEXTURE );
 		return qfalse;
 	}
 	if ( pStage->depthFragment && !GLX_CompatStreamDrawDepthFragmentEnabled() ) {
-		GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags );
+		GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags, multitextureEnv );
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_DEPTH_FRAGMENT );
 		return qfalse;
 	}
@@ -121,7 +137,7 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		return qfalse;
 	}
 
-	if ( !GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags ) ) {
+	if ( !GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags, multitextureEnv ) ) {
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_KEY );
 		return qfalse;
 	}
@@ -139,7 +155,8 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
 		GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-			totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, materialFlags, qfalse );
+			totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment,
+			materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -162,7 +179,8 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 
 	if ( !ok ) {
 		GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-			totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, materialFlags, qfalse );
+			totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment,
+			materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -186,7 +204,8 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		if ( !glxMaterialBound ) {
 			GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_PROGRAM );
 			GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-				totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, materialFlags, qfalse );
+				totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment,
+				materialFlags, categoryMask, qfalse );
 			return qfalse;
 		}
 	}
@@ -250,7 +269,8 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-		totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment, materialFlags, ok );
+		totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment,
+		materialFlags, categoryMask, ok );
 	return ok;
 }
 
@@ -267,6 +287,7 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 	int texOffset;
 	int indexOffset;
 	int totalBytes;
+	unsigned int categoryMask;
 	GLint oldArrayBuffer = 0;
 	GLint oldElementArrayBuffer = 0;
 
@@ -290,6 +311,7 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 		return qfalse;
 	}
 
+	categoryMask = GLX_CompatDynamicCategoryMaskForTess( input, 0 );
 	xyzBytes = input->numVertexes * (int)sizeof( input->xyz[0] );
 	colorBytes = input->numVertexes * (int)sizeof( input->svars.colors[0] );
 	texBytes = input->numVertexes * (int)sizeof( input->svars.texcoords[0][0] );
@@ -301,7 +323,7 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
 		GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-			totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, qfalse );
+			totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -321,7 +343,7 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 
 	if ( !ok ) {
 		GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-			totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, qfalse );
+			totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -331,7 +353,7 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 		if ( !glxMaterialBound ) {
 			GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_PROGRAM );
 			GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-				totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, qfalse );
+				totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, categoryMask, qfalse );
 			return qfalse;
 		}
 	}
@@ -368,7 +390,7 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-		totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, ok );
+		totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, categoryMask, ok );
 	return ok;
 }
 
@@ -386,6 +408,7 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 	int indexOffset;
 	int totalBytes;
 	int materialFlags;
+	unsigned int categoryMask;
 	GLint oldArrayBuffer = 0;
 	GLint oldElementArrayBuffer = 0;
 
@@ -406,7 +429,13 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 	}
 
 	materialFlags = GLX_STAGE_DLIGHT_MAP | GLX_STAGE_ST0;
-	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0, 0, 0, 0, 0, 0 ) ) {
+	categoryMask = GLX_CompatDynamicCategoryMaskForTess( input, materialFlags );
+	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, 0, 0,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
+		0, 0, GLX_MATERIAL_FOG_ADJUST_NONE, 0, qfalse ) ) {
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_KEY );
 		return qfalse;
 	}
@@ -422,7 +451,7 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
 		GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
-			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -442,7 +471,7 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 
 	if ( !ok ) {
 		GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
-			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -474,7 +503,7 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
-		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );
 	return ok;
 }
 #endif
@@ -673,6 +702,7 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 	tess.numVertexes = 0;
 	tess.shader = state;
 	tess.fogNum = fogNum;
+	tess.glxDynamicCategoryMask = 0;
 
 #ifdef USE_LEGACY_DLIGHTS
 	tess.dlightBits = 0;		// will be OR'd in by surface functions

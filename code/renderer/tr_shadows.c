@@ -528,7 +528,8 @@ static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
 		GLX_CompatRecordStreamDrawResult( numVertexes, tess.numIndexes,
-			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS, qfalse );
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS,
+			GLX_DYNAMIC_CATEGORY_MASK_SPECIAL, qfalse );
 		return qfalse;
 	}
 
@@ -542,7 +543,8 @@ static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
 
 	if ( !ok ) {
 		GLX_CompatRecordStreamDrawResult( numVertexes, tess.numIndexes,
-			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS, qfalse );
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS,
+			GLX_DYNAMIC_CATEGORY_MASK_SPECIAL, qfalse );
 		return qfalse;
 	}
 
@@ -580,7 +582,8 @@ static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( numVertexes, tess.numIndexes,
-		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS, ok );
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS,
+		GLX_DYNAMIC_CATEGORY_MASK_SPECIAL, ok );
 	return ok;
 }
 #endif
@@ -769,7 +772,8 @@ void RB_ShadowFinish( void ) {
 #ifdef RENDERER_GLX
 	if ( GLX_CompatStreamDrawShadowsEnabled() ) {
 		glxStreamedDraw = GLX_CompatTryStreamDrawArrayPass( 4, verts,
-			(int)sizeof( verts[0] ), GL_TRIANGLE_STRIP, GLX_STAGE_SHADOW_PASS );
+			(int)sizeof( verts[0] ), GL_TRIANGLE_STRIP, GLX_STAGE_SHADOW_PASS,
+			GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
 	}
 #endif
 	if ( !glxStreamedDraw ) {

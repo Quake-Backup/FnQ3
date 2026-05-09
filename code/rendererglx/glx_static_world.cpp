@@ -626,6 +626,42 @@ static qboolean GLX_StaticWorld_PacketBatchEnabled( const StaticWorldStats &stat
 	return stats.r_glxStaticWorldPacketBatch && stats.r_glxStaticWorldPacketBatch->integer ? qtrue : qfalse;
 }
 
+static qboolean GLX_StaticWorld_IndirectDrawRequested( const StaticWorldStats &stats )
+{
+	return stats.r_glxStaticWorldIndirectDraw && stats.r_glxStaticWorldIndirectDraw->integer ? qtrue : qfalse;
+}
+
+static qboolean GLX_StaticWorld_IndirectDrawEnabled( const StaticWorldStats &stats )
+{
+	return GLX_StaticWorld_IndirectDrawRequested( stats ) && stats.drawIndirectAvailable ? qtrue : qfalse;
+}
+
+static qboolean GLX_StaticWorld_MultiDrawIndirectRequested( const StaticWorldStats &stats )
+{
+	return stats.r_glxStaticWorldMultiDrawIndirect &&
+		stats.r_glxStaticWorldMultiDrawIndirect->integer ? qtrue : qfalse;
+}
+
+static qboolean GLX_StaticWorld_MultiDrawIndirectEnabled( const StaticWorldStats &stats )
+{
+	return GLX_StaticWorld_MultiDrawIndirectRequested( stats ) &&
+		stats.multiDrawIndirectAvailable ? qtrue : qfalse;
+}
+
+static qboolean GLX_StaticWorld_CompactMultiDrawIndirectEnabled( const StaticWorldStats &stats )
+{
+	return GLX_StaticWorld_MultiDrawIndirectEnabled( stats ) &&
+		stats.r_glxStaticWorldMultiDrawIndirectCompact &&
+		stats.r_glxStaticWorldMultiDrawIndirectCompact->integer ? qtrue : qfalse;
+}
+
+static qboolean GLX_StaticWorld_MultiDrawIndirectSpansEnabled( const StaticWorldStats &stats )
+{
+	return GLX_StaticWorld_MultiDrawIndirectEnabled( stats ) &&
+		stats.r_glxStaticWorldMultiDrawIndirectSpans &&
+		stats.r_glxStaticWorldMultiDrawIndirectSpans->integer ? qtrue : qfalse;
+}
+
 static StaticWorldDrawPolicy GLX_StaticWorld_EffectiveDrawPolicy( const StaticWorldStats &stats )
 {
 	if ( GLX_StaticWorld_WorldRendererEnabled( stats ) ) {
@@ -1059,15 +1095,15 @@ void GLX_StaticWorld_RegisterCvars( StaticWorldStats *stats )
 
 	stats->r_glxStaticWorldArena = RI().Cvar_Get( "r_glxStaticWorldArena", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldArena,
-		"Upload the packed legacy static world VBO/IBO payload into a GLx-owned arena. Experimental and off by default." );
+		"Upload the packed legacy static world VBO/IBO payload into a GLx-owned arena for the shipped GLx static-world path." );
 
 	stats->r_glxStaticWorldArenaDraw = RI().Cvar_Get( "r_glxStaticWorldArenaDraw", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldArenaDraw,
-		"Bind the GLx-owned static world arena for legacy VBO draws when available. Experimental and off by default." );
+		"Bind the GLx-owned static world arena for static-world VBO draws when available, falling back per draw." );
 
 	stats->r_glxStaticWorldDraw = RI().Cvar_Get( "r_glxStaticWorldDraw", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldDraw,
-		"Submit static-world device-index VBO runs through the GLx draw dispatcher. Experimental and off by default." );
+		"Submit static-world device-index VBO runs through the GLx draw dispatcher with packet validation." );
 
 	stats->r_glxStaticWorldSoftDraw = RI().Cvar_Get( "r_glxStaticWorldSoftDraw", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldSoftDraw,
@@ -1079,7 +1115,7 @@ void GLX_StaticWorld_RegisterCvars( StaticWorldStats *stats )
 
 	stats->r_glxStaticWorldMultiDraw = RI().Cvar_Get( "r_glxStaticWorldMultiDraw", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldMultiDraw,
-		"Submit same-state static-world device-index VBO runs with glMultiDrawElements when available. Experimental and off by default." );
+		"Submit same-state static-world device-index VBO runs with glMultiDrawElements when available." );
 
 	stats->r_glxStaticWorldPacketBatch = RI().Cvar_Get( "r_glxStaticWorldPacketBatch", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldPacketBatch,
@@ -1087,15 +1123,15 @@ void GLX_StaticWorld_RegisterCvars( StaticWorldStats *stats )
 
 	stats->r_glxStaticWorldIndirectBuffer = RI().Cvar_Get( "r_glxStaticWorldIndirectBuffer", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldIndirectBuffer,
-		"Upload the GLx static-world packet command manifest into a GL_DRAW_INDIRECT_BUFFER at map load. Does not draw yet. Experimental and off by default." );
+		"Upload the GLx static-world packet command manifest into a GL_DRAW_INDIRECT_BUFFER at map load when draw-indirect is available." );
 
 	stats->r_glxStaticWorldIndirectDraw = RI().Cvar_Get( "r_glxStaticWorldIndirectDraw", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldIndirectDraw,
-		"Submit full static-world manifest packets with glDrawElementsIndirect when the GLx indirect command buffer is ready. Experimental and off by default." );
+		"Submit full static-world manifest packets with glDrawElementsIndirect when the GLx indirect command buffer is ready." );
 
 	stats->r_glxStaticWorldMultiDrawIndirect = RI().Cvar_Get( "r_glxStaticWorldMultiDrawIndirect", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldMultiDrawIndirect,
-		"Submit contiguous full-packet static-world command spans with glMultiDrawElementsIndirect when the GLx indirect command buffer is ready. Experimental and off by default." );
+		"Submit contiguous full-packet static-world command spans with glMultiDrawElementsIndirect when the GLx indirect command buffer is ready." );
 
 	stats->r_glxStaticWorldMultiDrawIndirectCompact = RI().Cvar_Get( "r_glxStaticWorldMultiDrawIndirectCompact", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldMultiDrawIndirectCompact,
@@ -1103,7 +1139,7 @@ void GLX_StaticWorld_RegisterCvars( StaticWorldStats *stats )
 
 	stats->r_glxStaticWorldMultiDrawIndirectSpans = RI().Cvar_Get( "r_glxStaticWorldMultiDrawIndirectSpans", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( stats->r_glxStaticWorldMultiDrawIndirectSpans,
-		"Split filtered static-world multidraw batches into full-manifest MDI spans and fallback multidraw spans. Experimental and off by default." );
+		"Split filtered static-world multidraw batches into full-manifest MDI spans and fallback multidraw spans." );
 }
 
 void GLX_StaticWorld_SetCapabilities( StaticWorldStats *stats,
@@ -1517,8 +1553,7 @@ static qboolean GLX_StaticWorld_DrawPacketIndirect( StaticWorldStats *stats,
 	GLenum err;
 	int commandIndex;
 
-	if ( !stats || !stats->r_glxStaticWorldIndirectDraw ||
-		!stats->r_glxStaticWorldIndirectDraw->integer ) {
+	if ( !stats || !GLX_StaticWorld_IndirectDrawEnabled( *stats ) ) {
 		return qfalse;
 	}
 
@@ -1529,7 +1564,7 @@ static qboolean GLX_StaticWorld_DrawPacketIndirect( StaticWorldStats *stats,
 		stats->indirectDrawSkips++;
 		return qfalse;
 	}
-	if ( !stats->drawIndirectAvailable || !stats->indirectBufferReady || !stats->indirectCommandBuffer ||
+	if ( !stats->indirectBufferReady || !stats->indirectCommandBuffer ||
 		!GLX_StaticWorld_ResolveFns() || !GLX_StaticWorld_ResolveDrawIndirectFn() ) {
 		stats->indirectDrawFallbacks++;
 		return qfalse;
@@ -1891,8 +1926,7 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 	int firstCommand = -1;
 	int uploadBytes = 0;
 
-	if ( !stats || !stats->r_glxStaticWorldMultiDrawIndirect ||
-		!stats->r_glxStaticWorldMultiDrawIndirect->integer ) {
+	if ( !stats || !GLX_StaticWorld_MultiDrawIndirectEnabled( *stats ) ) {
 		return qfalse;
 	}
 
@@ -1905,8 +1939,7 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 			runs, runCount, -1 );
 		return qfalse;
 	}
-	if ( !stats->multiDrawIndirectAvailable ||
-		!GLX_StaticWorld_ResolveFns() || !GLX_StaticWorld_ResolveMultiDrawIndirectFn() ) {
+	if ( !GLX_StaticWorld_ResolveFns() || !GLX_StaticWorld_ResolveMultiDrawIndirectFn() ) {
 		stats->multiDrawIndirectFallbacks++;
 		stats->multiDrawIndirectUnsupported++;
 		GLX_StaticWorld_RecordMdiReject( stats, GLX_STATIC_WORLD_MDI_REJECT_UNSUPPORTED,
@@ -1914,8 +1947,7 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 		return qfalse;
 	}
 
-	compactEnabled = stats->r_glxStaticWorldMultiDrawIndirectCompact &&
-		stats->r_glxStaticWorldMultiDrawIndirectCompact->integer ? qtrue : qfalse;
+	compactEnabled = GLX_StaticWorld_CompactMultiDrawIndirectEnabled( *stats );
 
 	for ( int i = 0; i < runCount; i++ ) {
 		int commandIndex;
@@ -2359,10 +2391,7 @@ static int GLX_StaticWorld_FlushFilteredDrawBatch( StaticWorldStats *stats,
 	StaticWorldPreparedRun *runs, int runCount, int *drawnRuns,
 	GLenum indexType, qboolean arenaBound )
 {
-	if ( stats && stats->r_glxStaticWorldMultiDrawIndirect &&
-		stats->r_glxStaticWorldMultiDrawIndirect->integer &&
-		stats->r_glxStaticWorldMultiDrawIndirectSpans &&
-		stats->r_glxStaticWorldMultiDrawIndirectSpans->integer &&
+	if ( stats && GLX_StaticWorld_MultiDrawIndirectSpansEnabled( *stats ) &&
 		runs && runCount > 1 ) {
 		int drawnCount = 0;
 		int spanStart = 0;
@@ -2408,8 +2437,7 @@ static int GLX_StaticWorld_FlushFilteredDrawBatch( StaticWorldStats *stats,
 			if ( mdiSpan ) {
 				unsigned int commandMdiRuns = 0;
 				unsigned int commandFallbackRuns = 0;
-				const qboolean compactEnabled = stats->r_glxStaticWorldMultiDrawIndirectCompact &&
-					stats->r_glxStaticWorldMultiDrawIndirectCompact->integer ? qtrue : qfalse;
+				const qboolean compactEnabled = GLX_StaticWorld_CompactMultiDrawIndirectEnabled( *stats );
 				int commandSpanDrawn = 0;
 
 				if ( !compactEnabled ) {

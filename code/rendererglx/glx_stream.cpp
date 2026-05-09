@@ -1,4 +1,5 @@
 #include "glx_stream.h"
+#include "glx_material_key.h"
 #include "glx_stream_logic.h"
 
 #include <cstdio>
@@ -205,6 +206,8 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	std::memset( state->streamedDrawSkipReasons, 0, sizeof( state->streamedDrawSkipReasons ) );
 	state->streamedDrawMaterialAccepted = 0;
 	state->streamedDrawMaterialRejected = 0;
+	state->streamedDrawMaterialCompilerRejected = 0;
+	state->streamedDrawMaterialCompilerLastUnsupportedReasons = GLX_MATERIAL_UNSUPPORTED_NONE;
 	state->streamedDrawMultitextureAccepted = 0;
 	state->streamedDrawMultitextureRejected = 0;
 	state->streamedDrawMultitextureDraws = 0;
@@ -586,6 +589,7 @@ void GLX_Stream_OnOpenGLReady( StreamState *state, const Capabilities &caps )
 
 	state->strategy = StreamStrategy::OrphanSubData;
 	GLX_Stream_ResetCounters( state );
+	state->tier = caps.tier;
 	state->ringMegabytes = state->r_glxStreamMegabytes ? state->r_glxStreamMegabytes->integer : 8;
 	if ( state->ringMegabytes < 1 ) {
 		state->ringMegabytes = 1;
@@ -918,16 +922,16 @@ static void GLX_Stream_RecordMaterialGate( StreamState *state, qboolean present,
 	}
 }
 
-qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned int stateBits,
-	int rgbGen, int alphaGen, int tcGen0, int texMods0, int texMods1 )
+qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, const MaterialIR &material )
 {
 	StreamMaterialGateConfig config {};
 	StreamMaterialGateResult result;
-
-	(void)stateBits;
-	(void)rgbGen;
-	(void)alphaGen;
-	(void)tcGen0;
+	MaterialStatePlan plan {};
+	unsigned int unsupportedReasons = GLX_MATERIAL_UNSUPPORTED_NONE;
+	const RenderProductTier tier = state ? state->tier : RenderProductTier::GL2X;
+	const qboolean compilerAllows =
+		GLX_Material_StatePlanForTierAndIR( tier, material, &plan,
+			&unsupportedReasons );
 
 	if ( state ) {
 		config.keyMode = GLX_Stream_DrawKeyMode( *state );
@@ -939,7 +943,11 @@ qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned 
 		config.screenMaps = GLX_Stream_DrawScreenMapsEnabled( *state );
 		config.videoMaps = GLX_Stream_DrawVideoMapsEnabled( *state );
 	}
-	result = GLX_Stream_EvaluateMaterialGate( flags, texMods0, texMods1, config );
+	result = GLX_Stream_EvaluateMaterialGate( material.flags, material.texMods0,
+		material.texMods1, config );
+	if ( !compilerAllows ) {
+		result.allowed = qfalse;
+	}
 
 	if ( state ) {
 		GLX_Stream_RecordMaterialGate( state, result.hasMultitexture, result.multitextureGateAllowed,
@@ -961,20 +969,50 @@ qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned 
 		} else {
 			state->streamedDrawMaterialRejected++;
 		}
+		if ( !compilerAllows ) {
+			state->streamedDrawMaterialCompilerRejected++;
+			state->streamedDrawMaterialCompilerLastUnsupportedReasons = unsupportedReasons;
+		}
 	}
 
+	(void)plan;
+	(void)unsupportedReasons;
 	return result.allowed;
 }
 
-void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIndexes,
-	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
-	qboolean depthFragment, int materialFlags, qboolean success )
+static void GLX_Stream_RecordDynamicCategoryResult( StreamState *state, unsigned int categoryMask,
+	qboolean success )
 {
 	if ( !state ) {
 		return;
 	}
 
+	for ( int i = 0; i < GLX_DYNAMIC_CATEGORY_COUNT; i++ ) {
+		if ( !( categoryMask & ( 1u << i ) ) ) {
+			continue;
+		}
+		state->streamedDrawCategoryAttempts[i]++;
+		if ( success ) {
+			state->streamedDrawCategoryDraws[i]++;
+		} else {
+			state->streamedDrawCategoryFallbacks[i]++;
+		}
+	}
+}
+
+void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIndexes,
+	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
+	qboolean depthFragment, int materialFlags, unsigned int categoryMask, qboolean success )
+{
+	const unsigned int normalizedCategoryMask =
+		GLX_Stream_NormalizeDynamicCategoryMask( categoryMask, materialFlags );
+
+	if ( !state ) {
+		return;
+	}
+
 	state->streamedDrawAttempts++;
+	GLX_Stream_RecordDynamicCategoryResult( state, normalizedCategoryMask, success );
 	if ( success ) {
 		state->streamedDraws++;
 		if ( numVertexes > 0 ) {
@@ -1163,6 +1201,11 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 	RI().Printf( PRINT_ALL, "  dynamic stream draw key mode: %i (%s), accepted %u, rejected %u\n",
 		GLX_Stream_DrawKeyMode( state ), GLX_Stream_DrawKeyModeName( GLX_Stream_DrawKeyMode( state ) ),
 		state.streamedDrawMaterialAccepted, state.streamedDrawMaterialRejected );
+	RI().Printf( PRINT_ALL, "  dynamic stream material compiler: rejected %u, last unsupported 0x%x (%s)\n",
+		state.streamedDrawMaterialCompilerRejected,
+		state.streamedDrawMaterialCompilerLastUnsupportedReasons,
+		GLX_Material_UnsupportedReasonName(
+			state.streamedDrawMaterialCompilerLastUnsupportedReasons ) );
 	RI().Printf( PRINT_ALL, "  dynamic stream multitexture gate: %s, accepted %u, rejected %u\n",
 		BoolName( GLX_Stream_DrawMultitextureEnabled( state ) ),
 		state.streamedDrawMultitextureAccepted, state.streamedDrawMultitextureRejected );
@@ -1211,6 +1254,32 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 		state.streamedDrawBeamDraws,
 		state.streamedDrawPostProcessDraws,
 		state.streamedDrawFallbacks );
+	RI().Printf( PRINT_ALL, "  dynamic stream categories: entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, special %u/%u\n",
+		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_ENTITY],
+		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_ENTITY],
+		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_PARTICLE],
+		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_PARTICLE],
+		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_POLY],
+		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_POLY],
+		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_MARK],
+		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_MARK],
+		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_WEAPON],
+		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_WEAPON],
+		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_UI],
+		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_UI],
+		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_BEAM],
+		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_BEAM],
+		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_SPECIAL],
+		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_SPECIAL] );
+	RI().Printf( PRINT_ALL, "  dynamic stream category fallbacks: entity %u, particle %u, poly %u, mark %u, weapon %u, ui %u, beam %u, special %u\n",
+		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_ENTITY],
+		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_PARTICLE],
+		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_POLY],
+		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_MARK],
+		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_WEAPON],
+		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_UI],
+		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_BEAM],
+		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_SPECIAL] );
 	RI().Printf( PRINT_ALL, "  dynamic stream draw skips: %u (bind %u, input %u, mt %u, depthfrag %u, texcoord %u, empty %u, key %u, fog %u, program %u)\n",
 		state.streamedDrawSkips,
 		state.streamedDrawSkipReasons[GLX_STREAM_SKIP_NO_BIND_BUFFER],

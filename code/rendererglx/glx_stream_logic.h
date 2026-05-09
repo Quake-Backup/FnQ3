@@ -288,6 +288,23 @@ static ID_INLINE qboolean GLX_Stream_EvaluatePostProcessDrawGate( const StreamSp
 	return config.streamDraw && config.postprocess ? qtrue : qfalse;
 }
 
+static ID_INLINE unsigned int GLX_Stream_NormalizeDynamicCategoryMask( unsigned int categoryMask,
+	int materialFlags )
+{
+	unsigned int mask = categoryMask & GLX_DYNAMIC_CATEGORY_MASK_ALL;
+
+	if ( mask ) {
+		return mask;
+	}
+	if ( materialFlags & GLX_STAGE_BEAM_PASS ) {
+		return GLX_DYNAMIC_CATEGORY_MASK_BEAM;
+	}
+	if ( materialFlags & ( GLX_STAGE_SHADOW_PASS | GLX_STAGE_POSTPROCESS_PASS | GLX_STAGE_DLIGHT_MAP ) ) {
+		return GLX_DYNAMIC_CATEGORY_MASK_SPECIAL;
+	}
+	return GLX_DYNAMIC_CATEGORY_MASK_SPECIAL;
+}
+
 } // namespace glx
 
 #endif // GLX_STREAM_LOGIC_H

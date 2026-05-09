@@ -143,6 +143,10 @@ policy through draw submission.
 
 ## Tier Feature Matrix
 
+The current implementation status for this surface is tracked in
+[GLX_FEATURE_MATRIX.md](GLX_FEATURE_MATRIX.md). That matrix is the living
+closure ledger; this section defines the target contract.
+
 Legend: `Required` means the tier cannot ship without it. `Optional` means the
 tier may use it when feature probing says it is present. `Explicitly absent`
 means GLx must degrade deterministically, report the limit, and never delegate
@@ -192,7 +196,7 @@ migration alias to GLx, until all of these are true:
 
 - the five product tiers are represented in capability policy, diagnostics,
   tests, and documentation;
-- the checked-in feature matrix has no ambiguous rows;
+- the checked-in [feature matrix](GLX_FEATURE_MATRIX.md) has no ambiguous rows;
 - runtime GLx rendering no longer depends on legacy OpenGL draw ownership;
 - screenshot, demo, HUD, fog, bloom, shadow, cel-shading, cinematic, and
   screenshot/export parity evidence is archived for the release candidate;

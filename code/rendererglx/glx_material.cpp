@@ -603,13 +603,17 @@ static void GLX_Material_ResetCounters( MaterialState *state )
 	state->bindFailures = 0;
 	state->debugLabels = 0;
 	state->contextlessDeletes = 0;
+	state->compiledMaterialPlans = 0;
+	state->unsupportedMaterialPlans = 0;
 	state->unsupportedRequests = 0;
 	state->disabledSkips = 0;
 	state->notReadySkips = 0;
 	state->programLimitSkips = 0;
 	state->lastRequest = {};
+	state->lastMaterial = {};
 	state->lastKey = { MaterialProgramMode::SingleTexture, GLX_MATERIAL_FEATURE_NONE };
 	state->lastStageKey = {};
+	state->lastUnsupportedReasons = GLX_MATERIAL_UNSUPPORTED_NONE;
 	GLX_Material_SetLastError( state, "" );
 }
 
@@ -651,16 +655,29 @@ static void GLX_Material_PrintObjectLog( const MaterialState &state, GLuint obje
 	}
 }
 
-static qboolean GLX_Material_StageKeyForRequest( const MaterialRequest &request, MaterialStageKey *key )
+static MaterialIR GLX_Material_IRForRequest( const MaterialRequest &request )
 {
-	return GLX_Material_StageKeyForInputsFull( request.flags, request.stateBits,
-		request.materialCombine, request.rgbGen, request.alphaGen,
-		request.rgbWaveFunc, request.alphaWaveFunc,
-		request.tcGen0, request.tcGen1, request.texMods0, request.texMods1,
-		request.texModTypes0, request.texModTypes1,
-		request.texModSequence0, request.texModSequence1,
-		request.texModWaveFuncs0, request.texModWaveFuncs1,
-		request.fogAdjust, request.fogPass, key );
+	MaterialIR material = GLX_RenderIR_MakeMaterial( 0, request.flags,
+		request.stateBits, 1 );
+
+	material.rgbGen = request.rgbGen;
+	material.alphaGen = request.alphaGen;
+	material.rgbWaveFunc = request.rgbWaveFunc;
+	material.alphaWaveFunc = request.alphaWaveFunc;
+	material.tcGen0 = request.tcGen0;
+	material.tcGen1 = request.tcGen1;
+	material.texMods0 = request.texMods0;
+	material.texMods1 = request.texMods1;
+	material.texModTypes0 = request.texModTypes0;
+	material.texModTypes1 = request.texModTypes1;
+	material.texModSequence0 = request.texModSequence0;
+	material.texModSequence1 = request.texModSequence1;
+	material.texModWaveFuncs0 = request.texModWaveFuncs0;
+	material.texModWaveFuncs1 = request.texModWaveFuncs1;
+	material.fogAdjust = request.fogAdjust;
+	material.materialCombine = request.materialCombine;
+	material.fogPass = request.fogPass;
+	return material;
 }
 
 static qboolean GLX_Material_FragmentSource( const MaterialStageKey &stageKey,
@@ -1694,6 +1711,7 @@ void GLX_Material_OnOpenGLReady( MaterialState *state, const Capabilities &caps 
 
 	GLX_Material_Shutdown( state, qtrue );
 	GLX_Material_ResetCounters( state );
+	state->tier = caps.tier;
 	GLX_Material_SetReason( state, "not initialized" );
 	state->lastKey = { MaterialProgramMode::SingleTexture, GLX_MATERIAL_FEATURE_NONE };
 	state->lastStageKey = {};
@@ -1746,18 +1764,20 @@ qboolean GLX_Material_Active( const MaterialState &state )
 	return state.ready && state.r_glxMaterialRenderer && state.r_glxMaterialRenderer->integer ? qtrue : qfalse;
 }
 
-qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &request )
+qboolean GLX_Material_BindIR( MaterialState *state, const MaterialIR &material )
 {
-	MaterialStageKey stageKey;
+	MaterialStatePlan plan {};
 	MaterialProgram *program;
+	unsigned int unsupportedReasons = GLX_MATERIAL_UNSUPPORTED_NONE;
 
 	if ( !state ) {
 		return qfalse;
 	}
 
 	state->bindAttempts++;
-	state->lastRequest = request;
+	state->lastMaterial = material;
 	state->lastStageKey = {};
+	state->lastUnsupportedReasons = GLX_MATERIAL_UNSUPPORTED_NONE;
 
 	if ( !state->r_glxMaterialRenderer || !state->r_glxMaterialRenderer->integer ) {
 		state->disabledSkips++;
@@ -1767,17 +1787,22 @@ qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &re
 		state->notReadySkips++;
 		return qfalse;
 	}
-	if ( !GLX_Material_StageKeyForRequest( request, &stageKey ) ) {
+	if ( !GLX_Material_StatePlanForTierAndIR( state->tier, material, &plan,
+		&unsupportedReasons ) ) {
+		state->lastUnsupportedReasons = unsupportedReasons;
+		state->unsupportedMaterialPlans++;
 		state->unsupportedRequests++;
-		GLX_Material_SetLastError( state, "unsupported material stage language" );
+		GLX_Material_SetLastError( state,
+			GLX_Material_UnsupportedReasonName( unsupportedReasons ) );
 		return qfalse;
 	}
 
-	state->lastKey = stageKey.program;
-	state->lastStageKey = stageKey;
-	program = GLX_Material_FindProgram( state, stageKey );
+	state->lastKey = plan.stage.program;
+	state->lastStageKey = plan.stage;
+	state->compiledMaterialPlans++;
+	program = GLX_Material_FindProgram( state, plan.stage );
 	if ( !program ) {
-		program = GLX_Material_CreateProgram( state, stageKey );
+		program = GLX_Material_CreateProgram( state, plan.stage );
 	}
 	if ( !program || !program->valid ) {
 		state->bindFailures++;
@@ -1797,6 +1822,14 @@ qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &re
 	state->binds++;
 	GLX_Material_SetLastError( state, "" );
 	return qtrue;
+}
+
+qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &request )
+{
+	if ( state ) {
+		state->lastRequest = request;
+	}
+	return GLX_Material_BindIR( state, GLX_Material_IRForRequest( request ) );
 }
 
 qboolean GLX_Material_BindFog( MaterialState *state )
@@ -1861,12 +1894,16 @@ void GLX_Material_PrintInfo( const MaterialState &state )
 	RI().Printf( PRINT_ALL, "  material fallbacks: unsupported %u, disabled %u, not-ready %u, full %u, discarded without GL delete %u\n",
 		state.unsupportedRequests, state.disabledSkips, state.notReadySkips,
 		state.programLimitSkips, state.contextlessDeletes );
+	RI().Printf( PRINT_ALL, "  material compiler plans: compiled %u, unsupported %u, last unsupported 0x%x (%s)\n",
+		state.compiledMaterialPlans, state.unsupportedMaterialPlans,
+		state.lastUnsupportedReasons,
+		GLX_Material_UnsupportedReasonName( state.lastUnsupportedReasons ) );
 	RI().Printf( PRINT_ALL, "  material last key: %s, flags 0x%x, state 0x%x, rgb %i:%i alpha %i:%i tc %i/%i texmods %i/%i combine %i fog %s\n",
-		lastKeyName, state.lastRequest.flags, state.lastRequest.stateBits,
-		state.lastRequest.rgbGen, state.lastRequest.rgbWaveFunc,
-		state.lastRequest.alphaGen, state.lastRequest.alphaWaveFunc, state.lastRequest.tcGen0,
-		state.lastRequest.tcGen1, state.lastRequest.texMods0, state.lastRequest.texMods1,
-		state.lastRequest.materialCombine, BoolName( state.lastRequest.fogPass ) );
+		lastKeyName, state.lastMaterial.flags, state.lastMaterial.stateBits,
+		state.lastMaterial.rgbGen, state.lastMaterial.rgbWaveFunc,
+		state.lastMaterial.alphaGen, state.lastMaterial.alphaWaveFunc, state.lastMaterial.tcGen0,
+		state.lastMaterial.tcGen1, state.lastMaterial.texMods0, state.lastMaterial.texMods1,
+		state.lastMaterial.materialCombine, BoolName( state.lastMaterial.fogPass ) );
 	RI().Printf( PRINT_ALL, "  material last language: flags 0x%x, state 0x%x, tmasks 0x%x/0x%x, tseq 0x%x/0x%x, twf 0x%x/0x%x, fogadjust %i\n",
 		state.lastStageKey.flags, state.lastStageKey.stateBits,
 		state.lastStageKey.texModTypes0, state.lastStageKey.texModTypes1,

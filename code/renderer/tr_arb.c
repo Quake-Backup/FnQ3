@@ -192,6 +192,7 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 	int indexOffset;
 	int totalBytes;
 	int materialFlags;
+	unsigned int categoryMask;
 	GLint oldArrayBuffer = 0;
 	GLint oldElementArrayBuffer = 0;
 
@@ -215,7 +216,13 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 	}
 
 	materialFlags = GLX_STAGE_DLIGHT_MAP | GLX_STAGE_ST0;
-	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0, 0, 0, 0, 0, 0 ) ) {
+	categoryMask = GLX_CompatDynamicCategoryMaskForTess( input, materialFlags );
+	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0,
+		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
+		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
+		0, 0, 0, 0, 0, 0,
+		GLX_MATERIAL_WAVEFUNC_NONE, GLX_MATERIAL_WAVEFUNC_NONE,
+		0, 0, GLX_MATERIAL_FOG_ADJUST_NONE, 0, qfalse ) ) {
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_KEY );
 		return qfalse;
 	}
@@ -231,7 +238,7 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
 		GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
-			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -251,7 +258,7 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 
 	if ( !ok ) {
 		GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
-			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, qfalse );
+			totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, qfalse );
 		return qfalse;
 	}
 
@@ -283,7 +290,7 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
-		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, ok );
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );
 	return ok;
 }
 #endif
@@ -1026,7 +1033,8 @@ static void RenderQuad( int w, int h )
 
 	if ( GLX_CompatStreamDrawPostProcessEnabled() ) {
 		glxStreamedDraw = GLX_CompatTryStreamDrawArrayTexcoordPass( 4, v,
-			(int)sizeof( v[0] ), t, 0, GL_TRIANGLE_STRIP, GLX_STAGE_POSTPROCESS_PASS );
+			(int)sizeof( v[0] ), t, 0, GL_TRIANGLE_STRIP, GLX_STAGE_POSTPROCESS_PASS,
+			GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
 	}
 	if ( !glxStreamedDraw ) {
 #ifdef RENDERER_GLX
@@ -1989,7 +1997,8 @@ static void R_Bloom_LensEffect( float alpha )
 	if ( GLX_CompatStreamDrawPostProcessEnabled() ) {
 		glxStreamedDraw = GLX_CompatTryStreamDrawArrayTexcoordColorPass(
 			(int)ARRAY_LEN( verts ), verts, (int)sizeof( verts[0] ), coords, 0,
-			colors, 4, GL_FLOAT, 0, GL_TRIANGLES, GLX_STAGE_POSTPROCESS_PASS );
+			colors, 4, GL_FLOAT, 0, GL_TRIANGLES, GLX_STAGE_POSTPROCESS_PASS,
+			GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
 	}
 	if ( !glxStreamedDraw ) {
 #ifdef RENDERER_GLX

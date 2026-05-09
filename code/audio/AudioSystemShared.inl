@@ -4,6 +4,7 @@
 namespace azfmt = fnq3_audiozones;
 namespace azrt = fnq3_audiozones_runtime;
 namespace adr = fnq3_audio_device_recovery;
+namespace occ = fnq3_audio_occlusion;
 
 constexpr int kMaxVoices = MAX_CHANNELS;
 constexpr size_t kMaxRegisteredSamples = 4096;
@@ -30,13 +31,6 @@ constexpr float kOcclusionTargetRiseHysteresis = 0.04f;
 constexpr float kOcclusionTargetFallHysteresis = 0.10f;
 constexpr float kOcclusionAttackPerSecond = 5.5f;
 constexpr float kOcclusionReleasePerSecond = 2.25f;
-constexpr float kOcclusionDirectAttenuation = 0.35f;
-constexpr float kOcclusionDirectGainMinimum = 0.18f;
-constexpr float kOcclusionDirectHFCut = 0.88f;
-constexpr float kOcclusionDirectHFMinimum = 0.08f;
-constexpr float kOcclusionWetBoost = 0.22f;
-constexpr float kOcclusionWetHFCut = 0.35f;
-constexpr float kOcclusionWetHFMinimum = 0.08f;
 constexpr float kToneNeutralThreshold = 0.985f;
 constexpr float kToneStrongOcclusionThreshold = 0.68f;
 constexpr float kToneStrongOcclusionLowCut = 0.18f;
@@ -1420,7 +1414,7 @@ static float ComputeOcclusionFactor( const float *listenerOrigin, const float *s
 	vec3_t toSource;
 	VectorSubtract( sourceOrigin, listenerOrigin, toSource );
 	const float distance = VectorNormalize( toSource );
-	if ( distance < 64.0f ) {
+	if ( !occ::DistanceCanOcclude( distance ) ) {
 		return 0.0f;
 	}
 
@@ -1440,11 +1434,12 @@ static float ComputeOcclusionFactor( const float *listenerOrigin, const float *s
 		vertical[2] = 1.0f;
 	}
 
-	int blocked = TraceBlocked( listenerOrigin, sourceOrigin ) ? 1 : 0;
+	const bool centerBlocked = TraceBlocked( listenerOrigin, sourceOrigin ) != qfalse;
+	int blocked = centerBlocked ? 1 : 0;
 	int total = 1;
 
-	if ( distance > 96.0f ) {
-		const float spread = ClampFloat( distance * 0.04f, 10.0f, 28.0f );
+	if ( occ::UsesProbeFan( distance ) ) {
+		const float spread = occ::ProbeSpreadForDistance( distance );
 		vec3_t shifted;
 
 		VectorMA( sourceOrigin, spread, right, shifted );
@@ -1458,13 +1453,8 @@ static float ComputeOcclusionFactor( const float *listenerOrigin, const float *s
 		total = 5;
 	}
 
-	float occlusion = static_cast<float>( blocked ) / static_cast<float>( total );
-	if ( blocked > 0 && blocked < total ) {
-		occlusion = 0.15f + occlusion * 0.85f;
-	}
-
 	const float strength = ( s_alOcclusionStrength != nullptr ) ? s_alOcclusionStrength->value : 1.0f;
-	return ClampFloat( occlusion * strength, 0.0f, 1.0f );
+	return occ::ApplyStrength( occ::OcclusionFromProbeHits( blocked, total, centerBlocked ), strength );
 }
 
 static float ComputeDopplerPitch( const float *listenerOrigin, const float *sourceOrigin, const float *sourceVelocity ) {

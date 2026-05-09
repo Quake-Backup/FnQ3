@@ -107,9 +107,9 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxStreamDrawDynamicLights", "0", "0", "0" },
 	{ "r_glxStreamDrawScreenMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawVideoMaps", "0", "0", "0" },
-	{ "r_glxStreamDrawShadows", "0", "0", "0" },
-	{ "r_glxStreamDrawBeams", "0", "0", "0" },
-	{ "r_glxStreamDrawPostProcess", "0", "0", "0" },
+	{ "r_glxStreamDrawShadows", "0", "1", "1" },
+	{ "r_glxStreamDrawBeams", "0", "1", "1" },
+	{ "r_glxStreamDrawPostProcess", "0", "1", "1" },
 	{ "r_glxMaterialRenderer", "0", "1", "1" },
 	{ "r_glxMaterialPrecache", "0", "1", "1" },
 	{ "r_glxGpuTiming", "0", "1", "1" },
@@ -237,7 +237,7 @@ static void GLX_Module_PrintProfileUsage()
 {
 	RI().Printf( PRINT_ALL, "usage: glxprofile [off|rc|stress|manual|status]\n" );
 	RI().Printf( PRINT_ALL, "  off     restore compatibility defaults for the cvars owned by the GLx profile\n" );
-	RI().Printf( PRINT_ALL, "  rc      conservative release-candidate profile: world, stream, material, bloom, timing\n" );
+	RI().Printf( PRINT_ALL, "  rc      conservative release-candidate profile: world, stream, dynamic scene, material, bloom, timing\n" );
 	RI().Printf( PRINT_ALL, "  stress  rc profile plus indirect static-world stress paths\n" );
 	RI().Printf( PRINT_ALL, "  manual  clear r_glxProfile without changing the current cvars\n" );
 }
@@ -686,8 +686,10 @@ void RendererModule::PrintCaps() const
 		stream_.streamedDrawShadowDraws,
 		stream_.streamedDrawBeamDraws,
 		stream_.streamedDrawPostProcessDraws );
-	RI().Printf( PRINT_ALL, "  dynamic stream draw material keys: accepted %u, rejected %u, texmod accepted %u, texmod rejected %u, env accepted %u, env rejected %u, dlight accepted %u, dlight rejected %u, screen accepted %u, screen rejected %u, video accepted %u, video rejected %u\n",
+	RI().Printf( PRINT_ALL, "  dynamic stream draw material keys: accepted %u, rejected %u, mt accepted %u, mt rejected %u, depthfrag accepted %u, depthfrag rejected %u, texmod accepted %u, texmod rejected %u, env accepted %u, env rejected %u, dlight accepted %u, dlight rejected %u, screen accepted %u, screen rejected %u, video accepted %u, video rejected %u\n",
 		stream_.streamedDrawMaterialAccepted, stream_.streamedDrawMaterialRejected,
+		stream_.streamedDrawMultitextureAccepted, stream_.streamedDrawMultitextureRejected,
+		stream_.streamedDrawDepthFragmentAccepted, stream_.streamedDrawDepthFragmentRejected,
 		stream_.streamedDrawTexModAccepted, stream_.streamedDrawTexModRejected,
 		stream_.streamedDrawEnvironmentAccepted, stream_.streamedDrawEnvironmentRejected,
 		stream_.streamedDrawDynamicLightAccepted, stream_.streamedDrawDynamicLightRejected,

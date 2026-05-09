@@ -241,7 +241,26 @@ Important details:
 - `s_alOcclusion 0`: Disable occlusion.
 - `s_alOcclusionStrength`: Scale how strongly occluded sounds are muffled. Range `0` to `2`. Default `1.0`.
 
-Occlusion is useful when you want walls, doors, and arena structure to affect how remote sounds read. FnQuake3 smooths occlusion changes over time and applies separate direct-path attenuation and tone filtering, so moving behind a wall should sound like a transition rather than a hard step. If the result feels too dull, reducing `s_alOcclusionStrength` is usually a better first move than disabling the feature entirely.
+Occlusion is useful when you want walls, doors, and arena structure to affect how remote sounds read. FnQuake3 smooths occlusion changes over time and applies separate direct-path attenuation and tone filtering, so moving behind a wall should sound like a transition rather than a hard step. The guaranteed dry-path gain change is intentionally audible even on devices without EFX filters; EFX-capable devices add the stronger low-pass/band-pass tone shift on top. If the result feels too dull, reducing `s_alOcclusionStrength` is usually a better first move than disabling the feature entirely.
+
+### Audio Visibility And Culling
+
+The audio backend does not run its own PVS, PVS2, or PHS pass. It plays the transient and looping sounds that the client game asks it to play, then applies source budgets, distance attenuation, and optional trace-based occlusion.
+
+- Snapshot visibility is handled before audio sees most world entities. The server builds snapshots from `CM_ClusterPVS`, area-portal connectivity, broadcast/single-client flags, and the portal-style second-view PVS paths (`SVF_PORTAL` and `SVF_SELF_PORTAL2`).
+- There is no engine-wide `CM_ClusterPHS` sound visibility path in this tree. The only PHS reference is in bot AAS helpers, not in client sound dispatch.
+- One-shot sounds are limited by duplicate suppression, per-entity concurrency caps, and voice-source eviction. Looping sounds must be refreshed by the client game each frame; unrefreshed transient loops are stopped.
+- Once a voice reaches OpenAL, audibility is mainly distance gain and source availability. Occlusion is a separate `CM_BoxTrace` test against solid/slime/lava contents between listener and source, with a small source-side probe fan so narrow or edge obstructions become partial occlusion instead of a binary on/off gate.
+
+Servers can opt into a compatibility-preserving audio visibility expansion without changing the protocol or relaxing visual PVS:
+
+- `sv_audioPVS 0`: Disabled. This is the default and preserves retail snapshot behavior.
+- `sv_audioPVS 1`: Add nearby sound-only emitters, such as speaker entities, audio-only general sound events, and non-visual `loopSound` entities, when they are outside visual PVS but still area-connected.
+- `sv_audioPVS 2`: Also add nearby non-visually culled entities that carry `loopSound`. This can make more gameplay sounds audible through walls, but it intentionally remains an explicit server choice.
+- `sv_audioPVSRange`: Maximum expansion distance in game units. Default `1024`.
+- `sv_audioPVSMaxEntities`: Maximum extra sound emitters per client snapshot. Default `16`.
+
+The expansion is deliberately server-side, capped, and off by default. It sends ordinary `entityState_t` records that existing clients already understand, then the client-side occlusion path handles the muffling.
 
 ### Tone Shaping
 

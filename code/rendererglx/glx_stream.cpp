@@ -143,7 +143,7 @@ static const char *GLX_Stream_DrawKeyModeName( int mode )
 	case 1:
 		return "computed";
 	case 2:
-		return "all-eligible";
+		return "broad-single-texture";
 	default:
 		return "unknown";
 	}
@@ -205,8 +205,12 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	std::memset( state->streamedDrawSkipReasons, 0, sizeof( state->streamedDrawSkipReasons ) );
 	state->streamedDrawMaterialAccepted = 0;
 	state->streamedDrawMaterialRejected = 0;
+	state->streamedDrawMultitextureAccepted = 0;
+	state->streamedDrawMultitextureRejected = 0;
 	state->streamedDrawMultitextureDraws = 0;
 	state->streamedDrawFogDraws = 0;
+	state->streamedDrawDepthFragmentAccepted = 0;
+	state->streamedDrawDepthFragmentRejected = 0;
 	state->streamedDrawDepthFragmentDraws = 0;
 	state->streamedDrawTexModDraws = 0;
 	state->streamedDrawTexModAccepted = 0;
@@ -521,23 +525,23 @@ void GLX_Stream_RegisterCvars( StreamState *state )
 
 	state->r_glxStreamDraw = RI().Cvar_Get( "r_glxStreamDraw", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDraw,
-		"Draw eligible single-texture generic shader stages from the GLx stream ring. Experimental and off by default." );
+		"Draw eligible generic shader stages from the GLx stream ring. Enabled by the GLx RC profile." );
 
 	state->r_glxStreamDrawKeyMode = RI().Cvar_Get( "r_glxStreamDrawKeyMode", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawKeyMode,
-		"Filter GLx streamed draw material keys: 0 plain plus explicit gates, 1 computed, 2 all eligible." );
+		"Filter GLx streamed draw material keys: 0 plain plus explicit gates, 1 computed, 2 broad single-texture keys." );
 
 	state->r_glxStreamDrawMultitexture = RI().Cvar_Get( "r_glxStreamDrawMultitexture", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawMultitexture,
-		"Allow GLx streamed draws for eligible fixed-function multitexture shader stages. Experimental and off by default." );
+		"Allow GLx streamed draws for eligible fixed-function multitexture shader stages. Enabled by the GLx RC profile." );
 
 	state->r_glxStreamDrawFog = RI().Cvar_Get( "r_glxStreamDrawFog", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawFog,
-		"Allow GLx streamed draws for fog-only passes. Experimental and off by default." );
+		"Allow GLx streamed draws for fog-only passes. Enabled by the GLx RC profile." );
 
 	state->r_glxStreamDrawDepthFragment = RI().Cvar_Get( "r_glxStreamDrawDepthFragment", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawDepthFragment,
-		"Allow GLx streamed draws for eligible depthFragment stages. Experimental and off by default." );
+		"Allow GLx streamed draws for eligible depthFragment stages. Enabled by the GLx RC profile." );
 
 	state->r_glxStreamDrawTexMods = RI().Cvar_Get( "r_glxStreamDrawTexMods", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawTexMods,
@@ -561,15 +565,15 @@ void GLX_Stream_RegisterCvars( StreamState *state )
 
 	state->r_glxStreamDrawShadows = RI().Cvar_Get( "r_glxStreamDrawShadows", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawShadows,
-		"Allow GLx streamed draws for stencil shadow-volume passes. Experimental and off by default." );
+		"Allow GLx streamed draws for stencil shadow-volume passes. Enabled by the GLx RC profile." );
 
 	state->r_glxStreamDrawBeams = RI().Cvar_Get( "r_glxStreamDrawBeams", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawBeams,
-		"Allow GLx streamed draws for immediate beam entity draw-array passes. Experimental and off by default." );
+		"Allow GLx streamed draws for immediate beam entity draw-array passes. Enabled by the GLx RC profile." );
 
 	state->r_glxStreamDrawPostProcess = RI().Cvar_Get( "r_glxStreamDrawPostProcess", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawPostProcess,
-		"Allow GLx streamed draws for fullscreen postprocess draw-array passes. Experimental and off by default." );
+		"Allow GLx streamed draws for fullscreen postprocess draw-array passes. Enabled by the GLx RC profile." );
 }
 
 void GLX_Stream_OnOpenGLReady( StreamState *state, const Capabilities &caps )
@@ -922,6 +926,7 @@ qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned 
 	if ( state ) {
 		config.keyMode = GLX_Stream_DrawKeyMode( *state );
 		config.multitexture = GLX_Stream_DrawMultitextureEnabled( *state );
+		config.depthFragment = GLX_Stream_DrawDepthFragmentEnabled( *state );
 		config.texMods = GLX_Stream_DrawTexModsEnabled( *state );
 		config.environment = GLX_Stream_DrawEnvironmentEnabled( *state );
 		config.dynamicLights = GLX_Stream_DrawDynamicLightsEnabled( *state );
@@ -931,15 +936,19 @@ qboolean GLX_Stream_DrawAllowsMaterial( StreamState *state, int flags, unsigned 
 	result = GLX_Stream_EvaluateMaterialGate( flags, texMods0, texMods1, config );
 
 	if ( state ) {
-		GLX_Stream_RecordMaterialGate( state, result.hasTexMods, result.allowed,
+		GLX_Stream_RecordMaterialGate( state, result.hasMultitexture, result.multitextureGateAllowed,
+			&state->streamedDrawMultitextureAccepted, &state->streamedDrawMultitextureRejected );
+		GLX_Stream_RecordMaterialGate( state, result.hasDepthFragment, result.depthFragmentGateAllowed,
+			&state->streamedDrawDepthFragmentAccepted, &state->streamedDrawDepthFragmentRejected );
+		GLX_Stream_RecordMaterialGate( state, result.hasTexMods, result.texModsGateAllowed,
 			&state->streamedDrawTexModAccepted, &state->streamedDrawTexModRejected );
-		GLX_Stream_RecordMaterialGate( state, result.hasEnvironment, result.allowed,
+		GLX_Stream_RecordMaterialGate( state, result.hasEnvironment, result.environmentGateAllowed,
 			&state->streamedDrawEnvironmentAccepted, &state->streamedDrawEnvironmentRejected );
-		GLX_Stream_RecordMaterialGate( state, result.hasDynamicLight, result.allowed,
+		GLX_Stream_RecordMaterialGate( state, result.hasDynamicLight, result.dynamicLightGateAllowed,
 			&state->streamedDrawDynamicLightAccepted, &state->streamedDrawDynamicLightRejected );
-		GLX_Stream_RecordMaterialGate( state, result.hasScreenMap, result.allowed,
+		GLX_Stream_RecordMaterialGate( state, result.hasScreenMap, result.screenMapGateAllowed,
 			&state->streamedDrawScreenMapAccepted, &state->streamedDrawScreenMapRejected );
-		GLX_Stream_RecordMaterialGate( state, result.hasVideoMap, result.allowed,
+		GLX_Stream_RecordMaterialGate( state, result.hasVideoMap, result.videoMapGateAllowed,
 			&state->streamedDrawVideoMapAccepted, &state->streamedDrawVideoMapRejected );
 		if ( result.allowed ) {
 			state->streamedDrawMaterialAccepted++;
@@ -1148,6 +1157,12 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 	RI().Printf( PRINT_ALL, "  dynamic stream draw key mode: %i (%s), accepted %u, rejected %u\n",
 		GLX_Stream_DrawKeyMode( state ), GLX_Stream_DrawKeyModeName( GLX_Stream_DrawKeyMode( state ) ),
 		state.streamedDrawMaterialAccepted, state.streamedDrawMaterialRejected );
+	RI().Printf( PRINT_ALL, "  dynamic stream multitexture gate: %s, accepted %u, rejected %u\n",
+		BoolName( GLX_Stream_DrawMultitextureEnabled( state ) ),
+		state.streamedDrawMultitextureAccepted, state.streamedDrawMultitextureRejected );
+	RI().Printf( PRINT_ALL, "  dynamic stream depth-fragment gate: %s, accepted %u, rejected %u\n",
+		BoolName( GLX_Stream_DrawDepthFragmentEnabled( state ) ),
+		state.streamedDrawDepthFragmentAccepted, state.streamedDrawDepthFragmentRejected );
 	RI().Printf( PRINT_ALL, "  dynamic stream texmod gate: %s, accepted %u, rejected %u\n",
 		BoolName( GLX_Stream_DrawTexModsEnabled( state ) ),
 		state.streamedDrawTexModAccepted, state.streamedDrawTexModRejected );

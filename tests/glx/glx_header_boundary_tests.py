@@ -17,7 +17,12 @@ PURE_HEADERS = (
 )
 
 MODULE_BRIDGE_HEADERS = (
+    "code/renderercommon/tr_glx_api.h",
     "code/rendererglx/glx_module.h",
+)
+
+RENDERER_FACADE_HEADERS = (
+    "code/renderer/tr_glx_compat.h",
 )
 
 PURE_BANNED_INCLUDE_FRAGMENTS = (
@@ -78,6 +83,11 @@ MODULE_BANNED_TYPE_PATTERNS = (
     r"\bmsurface_t\b",
 )
 
+FACADE_BANNED_INCLUDE_FRAGMENTS = (
+    "../rendererglx/",
+    "rendererglx/",
+)
+
 
 def scan_header(
     path: Path,
@@ -104,6 +114,21 @@ def scan_header(
     return failures
 
 
+def scan_includes_only(path: Path, banned_include_fragments: tuple[str, ...]) -> list[str]:
+    failures: list[str] = []
+    text = path.read_text(encoding="utf-8")
+
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped.startswith("#include"):
+            continue
+        for fragment in banned_include_fragments:
+            if fragment in stripped:
+                failures.append(f"{path}:{line_no}: banned include dependency: {stripped}")
+
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -121,6 +146,13 @@ def main() -> int:
             continue
         failures.extend(scan_header(path, MODULE_BANNED_INCLUDE_FRAGMENTS, MODULE_BANNED_TYPE_PATTERNS))
 
+    for relative in RENDERER_FACADE_HEADERS:
+        path = ROOT / relative
+        if not path.exists():
+            failures.append(f"{path}: missing GLx renderer facade header")
+            continue
+        failures.extend(scan_includes_only(path, FACADE_BANNED_INCLUDE_FRAGMENTS))
+
     if failures:
         print("Pure GLx header boundary violations:", file=sys.stderr)
         for failure in failures:
@@ -129,7 +161,8 @@ def main() -> int:
 
     print(
         f"Checked {len(PURE_HEADERS)} pure GLx headers and "
-        f"{len(MODULE_BRIDGE_HEADERS)} module bridge header; no legacy renderer dependencies found."
+        f"{len(MODULE_BRIDGE_HEADERS)} module bridge headers; "
+        f"{len(RENDERER_FACADE_HEADERS)} renderer facade header no longer includes rendererglx."
     )
     return 0
 

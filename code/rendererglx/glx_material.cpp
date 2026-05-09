@@ -45,6 +45,18 @@ static constexpr unsigned int kMaterialPrecacheFeatures[] = {
 	GLX_MATERIAL_FEATURE_TEXMOD | GLX_MATERIAL_FEATURE_ENVIRONMENT
 };
 
+static constexpr unsigned int kMaterialPrecacheSingleTextureFeatures[] = {
+	GLX_MATERIAL_FEATURE_NONE,
+	GLX_MATERIAL_FEATURE_TEXMOD,
+	GLX_MATERIAL_FEATURE_ENVIRONMENT,
+	GLX_MATERIAL_FEATURE_TEXMOD | GLX_MATERIAL_FEATURE_ENVIRONMENT,
+	GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT,
+	GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT | GLX_MATERIAL_FEATURE_TEXMOD,
+	GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT | GLX_MATERIAL_FEATURE_ENVIRONMENT,
+	GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT | GLX_MATERIAL_FEATURE_TEXMOD |
+		GLX_MATERIAL_FEATURE_ENVIRONMENT
+};
+
 static void GLX_Material_FeatureName( unsigned int features, char *out, size_t outSize )
 {
 	char text[64] = "";
@@ -65,6 +77,10 @@ static void GLX_Material_FeatureName( unsigned int features, char *out, size_t o
 	}
 	if ( features & GLX_MATERIAL_FEATURE_ENVIRONMENT ) {
 		std::snprintf( text + std::strlen( text ), sizeof( text ) - std::strlen( text ), "%senvironment",
+			text[0] ? "+" : "" );
+	}
+	if ( features & GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT ) {
+		std::snprintf( text + std::strlen( text ), sizeof( text ) - std::strlen( text ), "%sdepth-fragment",
 			text[0] ? "+" : "" );
 	}
 
@@ -257,6 +273,9 @@ static qboolean GLX_Material_KeyForRequest( const MaterialRequest &request, Mate
 
 	key->mode = mode;
 	key->features = GLX_Material_FeaturesForRequest( request );
+	if ( !GLX_Material_FeaturesAllowedForMode( key->mode, key->features ) ) {
+		return qfalse;
+	}
 	return qtrue;
 }
 
@@ -299,6 +318,7 @@ static void GLX_Material_FragmentSource( const MaterialProgramKey &key, char *ou
 		"#version 120\n"
 		"#define GLX_MATERIAL_FEATURE_TEXMOD %u\n"
 		"#define GLX_MATERIAL_FEATURE_ENVIRONMENT %u\n"
+		"#define GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT %u\n"
 		"uniform sampler2D u_Texture0;\n"
 		"uniform sampler2D u_Texture1;\n"
 		"varying vec4 v_Color;\n"
@@ -310,6 +330,7 @@ static void GLX_Material_FragmentSource( const MaterialProgramKey &key, char *ou
 		"}\n",
 		( key.features & GLX_MATERIAL_FEATURE_TEXMOD ) ? 1u : 0u,
 		( key.features & GLX_MATERIAL_FEATURE_ENVIRONMENT ) ? 1u : 0u,
+		( key.features & GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT ) ? 1u : 0u,
 		body );
 	out[outSize - 1] = '\0';
 }
@@ -532,11 +553,19 @@ static qboolean GLX_Material_PrecachePrograms( MaterialState *state )
 	state->precacheAttempts++;
 	for ( size_t i = 0; i < modeCount; i++ ) {
 		const MaterialProgramMode mode = kMaterialPrecacheModes[i];
-		const size_t featureCount = mode == MaterialProgramMode::Fog ? 1u :
-			sizeof( kMaterialPrecacheFeatures ) / sizeof( kMaterialPrecacheFeatures[0] );
+		const unsigned int *features = kMaterialPrecacheFeatures;
+		size_t featureCount = sizeof( kMaterialPrecacheFeatures ) / sizeof( kMaterialPrecacheFeatures[0] );
+
+		if ( mode == MaterialProgramMode::SingleTexture ) {
+			features = kMaterialPrecacheSingleTextureFeatures;
+			featureCount = sizeof( kMaterialPrecacheSingleTextureFeatures ) /
+				sizeof( kMaterialPrecacheSingleTextureFeatures[0] );
+		} else if ( mode == MaterialProgramMode::Fog ) {
+			featureCount = 1u;
+		}
 
 		for ( size_t featureIndex = 0; featureIndex < featureCount; featureIndex++ ) {
-			MaterialProgramKey key { mode, kMaterialPrecacheFeatures[featureIndex] };
+			MaterialProgramKey key { mode, features[featureIndex] };
 			MaterialProgram *program = GLX_Material_FindProgram( state, key );
 
 			if ( !program ) {

@@ -27,6 +27,17 @@ PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "streamRejects",
     "streamDrawAttempts",
     "streamDrawIndexes",
+    "streamDrawMultitexture",
+    "streamDrawFog",
+    "streamDrawDepthFragment",
+    "streamDrawTexMods",
+    "streamDrawEnvironment",
+    "streamDrawDynamicLights",
+    "streamDrawScreenMaps",
+    "streamDrawVideoMaps",
+    "streamDrawShadows",
+    "streamDrawBeams",
+    "streamDrawPostProcess",
     "streamDrawFallbacks",
     "streamDrawSkips",
     "staticDrawAttempts",
@@ -43,6 +54,9 @@ DEFAULT_PERFORMANCE_BUDGET = {
         "materialPrecacheFailures": 0,
         "materialBindFailures": 0,
         "streamDrawFallbacks": 0,
+        "streamDrawDynamicLights": 0,
+        "streamDrawScreenMaps": 0,
+        "streamDrawVideoMaps": 0,
         "staticDrawFallbacks": 0,
         "staticMdiErrors": 0,
     },
@@ -117,10 +131,39 @@ STREAM_UPLOADS_RE = re.compile(
     re.IGNORECASE,
 )
 STREAM_DRAWS_RE = re.compile(
-    r"dynamic stream draws:\s*(?P<draws>\d+)/(?P<attempts>\d+)\s+attempts,.*"
+    r"dynamic stream draws:\s*(?P<draws>\d+)/(?P<attempts>\d+)\s+attempts,.*?"
+    r"mt\s+(?P<multitexture>\d+),\s*fog\s+(?P<fog>\d+),\s*"
+    r"depthfrag\s+(?P<depthFragment>\d+),\s*texmod\s+(?P<texMods>\d+),\s*"
+    r"env\s+(?P<environment>\d+),\s*dlight\s+(?P<dynamicLights>\d+),\s*"
+    r"screen\s+(?P<screenMaps>\d+),\s*video\s+(?P<videoMaps>\d+),\s*"
+    r"(?:shadow\s+(?P<shadows>\d+),\s*)?(?:beam\s+(?P<beams>\d+),\s*)?"
+    r"(?:post\s+(?P<postprocess>\d+),\s*)?"
     r"fallbacks\s+(?P<fallbacks>\d+)",
     re.IGNORECASE,
 )
+STREAM_DRAW_SKIPS_RE = re.compile(
+    r"dynamic stream draw skips:\s*(?P<total>\d+)\s*"
+    r"\(bind\s+(?P<bind>\d+),\s*input\s+(?P<input>\d+),\s*"
+    r"mt\s+(?P<multitexture>\d+),\s*depthfrag\s+(?P<depthFragment>\d+),\s*"
+    r"texcoord\s+(?P<texcoord>\d+),\s*empty\s+(?P<empty>\d+),\s*"
+    r"key\s+(?P<key>\d+),\s*fog\s+(?P<fog>\d+),\s*"
+    r"program\s+(?P<program>\d+)\)",
+    re.IGNORECASE,
+)
+STREAM_MATERIAL_GATE_RE = re.compile(
+    r"dynamic stream (?P<name>multitexture|depth-fragment|texmod|environment|dynamic-light|screen-map|video-map) "
+    r"gate:\s*(?P<enabled>\w+),\s*accepted\s+(?P<accepted>\d+),\s*rejected\s+(?P<rejected>\d+)",
+    re.IGNORECASE,
+)
+STREAM_MATERIAL_GATE_KEYS = {
+    "multitexture": "multitexture",
+    "depth-fragment": "depthFragment",
+    "texmod": "texMod",
+    "environment": "environment",
+    "dynamic-light": "dynamicLight",
+    "screen-map": "screenMap",
+    "video-map": "videoMap",
+}
 STREAM_FAILURE_RE = re.compile(
     r"dynamic stream (?P<name>allocation|map|unmap|reservation) failures:\s*(?P<count>\d+)",
     re.IGNORECASE,
@@ -185,13 +228,17 @@ GLX_POSTPROCESS_SUMMARY_RE = re.compile(
     re.IGNORECASE,
 )
 GLX_STREAM_DRAW_SUMMARY_RE = re.compile(
-	r"glx:\s*stream draws\s+(?P<draws>\d+)/(?P<attempts>\d+)\s+attempts,\s*"
-	r"(?P<indexes>\d+)\s+idx,\s*(?P<megabytes>\d+(?:\.\d+)?)MB/index\s+"
-	r"(?P<indexMegabytes>\d+(?:\.\d+)?)MB/tex1\s+(?P<tex1Megabytes>\d+(?:\.\d+)?)MB,.*?"
-	r"(?:shadow\s+(?P<shadows>\d+),\s*)?(?:beam\s+(?P<beams>\d+),\s*)?"
-	r"(?:post\s+(?P<postprocess>\d+),\s*)?"
-	r"fallbacks\s+(?P<fallbacks>\d+),\s*skips\s+(?P<skips>\d+)",
-	re.IGNORECASE,
+    r"glx:\s*stream draws\s+(?P<draws>\d+)/(?P<attempts>\d+)\s+attempts,\s*"
+    r"(?P<indexes>\d+)\s+idx,\s*(?P<megabytes>\d+(?:\.\d+)?)MB/index\s+"
+    r"(?P<indexMegabytes>\d+(?:\.\d+)?)MB/tex1\s+(?P<tex1Megabytes>\d+(?:\.\d+)?)MB,\s*"
+    r"mt\s+(?P<multitexture>\d+),\s*fog\s+(?P<fog>\d+),\s*"
+    r"depthfrag\s+(?P<depthFragment>\d+),\s*texmod\s+(?P<texMods>\d+),\s*"
+    r"env\s+(?P<environment>\d+),\s*dlight\s+(?P<dynamicLights>\d+),\s*"
+    r"screen\s+(?P<screenMaps>\d+),\s*video\s+(?P<videoMaps>\d+),\s*"
+    r"(?:shadow\s+(?P<shadows>\d+),\s*)?(?:beam\s+(?P<beams>\d+),\s*)?"
+    r"(?:post\s+(?P<postprocess>\d+),\s*)?"
+    r"fallbacks\s+(?P<fallbacks>\d+),\s*skips\s+(?P<skips>\d+)",
+    re.IGNORECASE,
 )
 GLX_STATIC_DRAW_SUMMARY_RE = re.compile(
     r"glx:\s*static draw\s+(?P<calls>\d+)/(?P<attempts>\d+)\s+calls,\s*"
@@ -232,6 +279,55 @@ COMMON_CVARS = {
     "r_screenshotWriteViewpos": "1",
 }
 
+# Frozen GLx startup profiles. Keep these in sync with GLX_PROFILE_CVARS in
+# code/rendererglx/glx_module.cpp; the GLx runtime sweep tests parse that table
+# so the launch profile cannot drift quietly from the renderer-owned profile.
+GLX_RC_PROFILE_CVARS = {
+    "r_fbo": "1",
+    "r_bloom": "2",
+    "r_bloom_passes": "3",
+    "r_vbo": "1",
+    "r_glxWorldRenderer": "1",
+    "r_glxStreamDraw": "1",
+    "r_glxStreamDrawKeyMode": "0",
+    "r_glxStreamDrawMultitexture": "1",
+    "r_glxStreamDrawFog": "1",
+    "r_glxStreamDrawDepthFragment": "1",
+    "r_glxStreamDrawTexMods": "1",
+    "r_glxStreamDrawEnvironment": "1",
+    "r_glxStreamDrawDynamicLights": "0",
+    "r_glxStreamDrawScreenMaps": "0",
+    "r_glxStreamDrawVideoMaps": "0",
+    "r_glxStreamDrawShadows": "1",
+    "r_glxStreamDrawBeams": "1",
+    "r_glxStreamDrawPostProcess": "1",
+    "r_glxMaterialRenderer": "1",
+    "r_glxMaterialPrecache": "1",
+    "r_glxGpuTiming": "1",
+    "r_glxStaticWorldArena": "0",
+    "r_glxStaticWorldArenaDraw": "0",
+    "r_glxStaticWorldDraw": "0",
+    "r_glxStaticWorldSoftDraw": "0",
+    "r_glxStaticWorldDrawPolicy": "full",
+    "r_glxStaticWorldMultiDraw": "0",
+    "r_glxStaticWorldPacketBatch": "1",
+    "r_glxStaticWorldIndirectBuffer": "0",
+    "r_glxStaticWorldIndirectDraw": "0",
+    "r_glxStaticWorldMultiDrawIndirect": "0",
+    "r_glxStaticWorldMultiDrawIndirectCompact": "0",
+    "r_glxStaticWorldMultiDrawIndirectSpans": "0",
+}
+
+GLX_STRESS_PROFILE_CVARS = {
+    **GLX_RC_PROFILE_CVARS,
+    "r_glxStaticWorldMultiDraw": "1",
+    "r_glxStaticWorldIndirectBuffer": "1",
+    "r_glxStaticWorldIndirectDraw": "1",
+    "r_glxStaticWorldMultiDrawIndirect": "1",
+    "r_glxStaticWorldMultiDrawIndirectCompact": "1",
+    "r_glxStaticWorldMultiDrawIndirectSpans": "1",
+}
+
 PROFILE_CVARS = {
     "baseline": {},
     "glx-world": {
@@ -263,75 +359,11 @@ PROFILE_CVARS = {
     },
     "glx-parity": {
         "r_glxProfile": "rc",
-        "r_fbo": "1",
-        "r_bloom": "2",
-        "r_bloom_passes": "3",
-        "r_vbo": "1",
-        "r_glxWorldRenderer": "1",
-        "r_glxStreamDraw": "1",
-        "r_glxStreamDrawKeyMode": "0",
-        "r_glxStreamDrawMultitexture": "1",
-        "r_glxStreamDrawFog": "1",
-        "r_glxStreamDrawDepthFragment": "1",
-        "r_glxStreamDrawTexMods": "1",
-        "r_glxStreamDrawEnvironment": "1",
-        "r_glxStreamDrawDynamicLights": "0",
-        "r_glxStreamDrawScreenMaps": "0",
-        "r_glxStreamDrawVideoMaps": "0",
-        "r_glxStreamDrawShadows": "0",
-        "r_glxStreamDrawBeams": "0",
-        "r_glxStreamDrawPostProcess": "0",
-        "r_glxMaterialRenderer": "1",
-        "r_glxMaterialPrecache": "1",
-        "r_glxStaticWorldArena": "0",
-        "r_glxStaticWorldArenaDraw": "0",
-        "r_glxStaticWorldDraw": "0",
-        "r_glxStaticWorldSoftDraw": "0",
-        "r_glxStaticWorldDrawPolicy": "full",
-        "r_glxStaticWorldMultiDraw": "0",
-        "r_glxStaticWorldPacketBatch": "1",
-        "r_glxStaticWorldIndirectBuffer": "0",
-        "r_glxStaticWorldIndirectDraw": "0",
-        "r_glxStaticWorldMultiDrawIndirect": "0",
-        "r_glxStaticWorldMultiDrawIndirectCompact": "0",
-        "r_glxStaticWorldMultiDrawIndirectSpans": "0",
-        "r_glxGpuTiming": "1",
+        **GLX_RC_PROFILE_CVARS,
     },
     "glx-stress": {
         "r_glxProfile": "stress",
-        "r_fbo": "1",
-        "r_bloom": "2",
-        "r_bloom_passes": "3",
-        "r_vbo": "1",
-        "r_glxWorldRenderer": "1",
-        "r_glxStreamDraw": "1",
-        "r_glxStreamDrawKeyMode": "0",
-        "r_glxStreamDrawMultitexture": "1",
-        "r_glxStreamDrawFog": "1",
-        "r_glxStreamDrawDepthFragment": "1",
-        "r_glxStreamDrawTexMods": "1",
-        "r_glxStreamDrawEnvironment": "1",
-        "r_glxStreamDrawDynamicLights": "0",
-        "r_glxStreamDrawScreenMaps": "0",
-        "r_glxStreamDrawVideoMaps": "0",
-        "r_glxStreamDrawShadows": "0",
-        "r_glxStreamDrawBeams": "0",
-        "r_glxStreamDrawPostProcess": "0",
-        "r_glxMaterialRenderer": "1",
-        "r_glxMaterialPrecache": "1",
-        "r_glxStaticWorldArena": "0",
-        "r_glxStaticWorldArenaDraw": "0",
-        "r_glxStaticWorldDraw": "0",
-        "r_glxStaticWorldSoftDraw": "0",
-        "r_glxStaticWorldDrawPolicy": "full",
-        "r_glxStaticWorldMultiDraw": "1",
-        "r_glxStaticWorldPacketBatch": "1",
-        "r_glxStaticWorldIndirectBuffer": "1",
-        "r_glxStaticWorldIndirectDraw": "1",
-        "r_glxStaticWorldMultiDrawIndirect": "1",
-        "r_glxStaticWorldMultiDrawIndirectCompact": "1",
-        "r_glxStaticWorldMultiDrawIndirectSpans": "1",
-        "r_glxGpuTiming": "1",
+        **GLX_STRESS_PROFILE_CVARS,
     },
 }
 
@@ -383,7 +415,7 @@ RC_GATE_PRESETS = {
         },
     },
     "rc-parity": {
-        "description": "Blocking GLx RC parity gate for the conservative world, stream, material, bloom, and timing profile.",
+        "description": "Blocking GLx RC parity gate for the conservative world, stream, dynamic-scene, material, bloom, and timing profile.",
         "defaults": {
             "profile": "glx-parity",
             "maps": "q3dm1,q3dm17",
@@ -395,6 +427,31 @@ RC_GATE_PRESETS = {
         },
         "requirements": {
             "require_screenshots": True,
+            "require_timedemo_metrics": True,
+            "baseline_renderer": "opengl",
+            "candidate_renderer": "glx",
+            "min_timedemo_fps_ratio": 0.90,
+            "screenshot_max_rms": 2.0,
+            "screenshot_max_pixel_ratio": 0.005,
+            "require_glx_diagnostics": True,
+            "require_glx_performance_samples": True,
+        },
+    },
+    "rc-proof": {
+        "description": "Blocking GLx RC proof gate requiring reviewed screenshot and performance baselines.",
+        "defaults": {
+            "profile": "glx-parity",
+            "maps": "q3dm1,q3dm17",
+            "demos": "demo1",
+            "renderers": "opengl,glx",
+            "switch_sequence": "opengl,glx,opengl,glx",
+            "switch_rounds": 1,
+            "timeout": 300.0,
+        },
+        "requirements": {
+            "require_screenshots": True,
+            "require_visual_baseline": True,
+            "require_performance_baseline": True,
             "require_timedemo_metrics": True,
             "baseline_renderer": "opengl",
             "candidate_renderer": "glx",
@@ -443,6 +500,11 @@ def parse_args() -> argparse.Namespace:
         "--list-gates",
         action="store_true",
         help="Print available GLx RC gate presets and exit.",
+    )
+    parser.add_argument(
+        "--list-profiles",
+        action="store_true",
+        help="Print exact GLx sweep cvar profiles and exit.",
     )
     parser.add_argument("--exe", type=Path, help="Client executable to launch.")
     parser.add_argument(
@@ -505,6 +567,24 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Directory containing approved PNG baselines named by stable screenshot "
             "keys. When provided, captured screenshots are compared against it."
+        ),
+    )
+    parser.add_argument(
+        "--proof-dir",
+        type=Path,
+        help=(
+            "Directory containing approved proof inputs. When set, defaults screenshot "
+            "baselines to <dir>/screenshots, the performance baseline to "
+            "<dir>/performance-baseline.json, screenshot diffs to the run artifacts, "
+            "and the summary to summary.md."
+        ),
+    )
+    parser.add_argument(
+        "--approve-proof",
+        action="store_true",
+        help=(
+            "Refresh both screenshot and performance proof baselines under --proof-dir. "
+            "Use only during deliberate reviewed baseline approval runs."
         ),
     )
     parser.add_argument(
@@ -631,6 +711,19 @@ def print_gate_list() -> None:
             )
 
 
+def print_profile_list() -> None:
+    print("Available GLx sweep profiles:")
+    for name in sorted(PROFILE_CVARS):
+        profile = PROFILE_CVARS[name]
+        startup_profile = profile.get("r_glxProfile", "manual")
+        print(f"  {name}: startup={startup_profile}")
+        if not profile:
+            print("    (no profile cvars)")
+            continue
+        for cvar_name in sorted(profile):
+            print(f"    {cvar_name}={profile[cvar_name]}")
+
+
 def apply_gate_defaults(args: argparse.Namespace) -> None:
     options = dict(DEFAULT_OPTIONS)
     if args.gate:
@@ -723,6 +816,43 @@ def parse_extra_sets(items: list[str]) -> dict[str, str]:
             raise ValueError(f"--extra-set has an empty cvar name: {item!r}")
         cvars[name] = value
     return cvars
+
+
+def apply_proof_defaults(args: argparse.Namespace, output_root: Path) -> None:
+    if args.approve_proof and args.proof_dir is None:
+        raise ValueError("--approve-proof requires --proof-dir.")
+
+    proof_dir = args.proof_dir.resolve() if args.proof_dir else None
+    if args.approve_proof:
+        args.approve_screenshot_baselines = True
+        args.approve_performance_baseline = True
+
+    if proof_dir is None:
+        return
+
+    if args.screenshot_baseline_dir is None:
+        args.screenshot_baseline_dir = proof_dir / "screenshots"
+    if args.screenshot_diff_dir is None and not args.approve_screenshot_baselines:
+        args.screenshot_diff_dir = output_root / "screenshot-diffs"
+    if args.performance_baseline is None:
+        args.performance_baseline = proof_dir / "performance-baseline.json"
+    if args.summary_markdown is None:
+        args.summary_markdown = output_root / "summary.md"
+
+
+def validate_proof_approval_mode(args: argparse.Namespace) -> None:
+    if args.gate != "rc-proof":
+        return
+    if not (
+        args.approve_proof or
+        args.approve_screenshot_baselines or
+        args.approve_performance_baseline
+    ):
+        return
+    raise ValueError(
+        "--gate rc-proof compares reviewed baselines; approve refreshed proof "
+        "baselines in a separate rc-parity run."
+    )
 
 
 def make_cvars(args: argparse.Namespace) -> dict[str, str]:
@@ -1507,8 +1637,62 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         if match:
             for key in ("draws", "attempts", "fallbacks"):
                 record_metric_max(metrics, "streamDraw", key, int_group(match, key))
+            for group, key in (
+                ("multitexture", "multitexture"),
+                ("fog", "fog"),
+                ("depthFragment", "depthFragment"),
+                ("texMods", "texMods"),
+                ("environment", "environment"),
+                ("dynamicLights", "dynamicLights"),
+                ("screenMaps", "screenMaps"),
+                ("videoMaps", "videoMaps"),
+            ):
+                record_metric_max(metrics, "streamDraw", key, int_group(match, group))
+            for group, key in (
+                ("shadows", "shadows"),
+                ("beams", "beams"),
+                ("postprocess", "postprocess"),
+            ):
+                if match.group(group) is not None:
+                    record_metric_max(metrics, "streamDraw", key, int_group(match, group))
             if int_group(match, "fallbacks") > 0:
                 failures.append(f"GLx streamed draw fallbacks: {int_group(match, 'fallbacks')}.")
+            if requires_glx_paths:
+                for group, label in (
+                    ("dynamicLights", "dynamic-light"),
+                    ("screenMaps", "screen-map"),
+                    ("videoMaps", "video-map"),
+                ):
+                    count = int_group(match, group)
+                    if count > 0:
+                        failures.append(f"GLx streamed high-risk {label} material draws: {count}.")
+            continue
+
+        match = STREAM_DRAW_SKIPS_RE.search(line)
+        if match:
+            record_metric_max(metrics, "streamDraw", "skips", int_group(match, "total"))
+            for key in (
+                "bind",
+                "input",
+                "multitexture",
+                "depthFragment",
+                "texcoord",
+                "empty",
+                "key",
+                "fog",
+                "program",
+            ):
+                record_metric_max(metrics, "streamDrawSkip", key, int_group(match, key))
+            if int_group(match, "program") > 0:
+                failures.append(f"GLx streamed draw material-program skips: {int_group(match, 'program')}.")
+            continue
+
+        match = STREAM_MATERIAL_GATE_RE.search(line)
+        if match:
+            key = STREAM_MATERIAL_GATE_KEYS[match.group("name").lower()]
+            record_metric_max(metrics, "streamMaterialGate", f"{key}Enabled", 1 if q3_bool(match.group("enabled")) else 0)
+            record_metric_max(metrics, "streamMaterialGate", f"{key}Accepted", int_group(match, "accepted"))
+            record_metric_max(metrics, "streamMaterialGate", f"{key}Rejected", int_group(match, "rejected"))
             continue
 
         match = STREAM_FAILURE_RE.search(line)
@@ -1733,6 +1917,17 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 "streamDraw",
                 ("draws", "attempts", "indexes", "fallbacks", "skips"),
             )
+            for group, key in (
+                ("multitexture", "streamDrawMultitexture"),
+                ("fog", "streamDrawFog"),
+                ("depthFragment", "streamDrawDepthFragment"),
+                ("texMods", "streamDrawTexMods"),
+                ("environment", "streamDrawEnvironment"),
+                ("dynamicLights", "streamDrawDynamicLights"),
+                ("screenMaps", "streamDrawScreenMaps"),
+                ("videoMaps", "streamDrawVideoMaps"),
+            ):
+                perf_record_numeric(performance, key, int_group(match, group))
             if match.group("shadows") is not None:
                 perf_record_numeric(performance, "streamDrawShadows", int(match.group("shadows")))
             if match.group("beams") is not None:
@@ -1934,6 +2129,121 @@ def write_performance_baseline(
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8", newline="\n")
 
 
+def manifest_screenshots(manifest: dict[str, object]) -> list[dict[str, object]]:
+    runs = manifest.get("runs", [])
+    if not isinstance(runs, list):
+        return []
+    return [
+        shot
+        for run in runs
+        if isinstance(run, dict)
+        for shot in run.get("screenshots", [])
+        if isinstance(shot, dict)
+    ]
+
+
+def proof_status(manifest: dict[str, object]) -> dict[str, object]:
+    dry_run = bool(manifest.get("dryRun"))
+    screenshots = manifest_screenshots(manifest)
+    visual = {
+        "status": "not-configured",
+        "baselineDir": str(manifest.get("screenshotBaselineDir", "")),
+        "diffDir": str(manifest.get("screenshotDiffDir", "")),
+        "screenshots": len(screenshots),
+        "found": sum(1 for shot in screenshots if shot.get("found")),
+        "approved": sum(1 for shot in screenshots if shot.get("baselineStatus") == "approved"),
+        "passed": sum(1 for shot in screenshots if shot.get("baselineStatus") == "passed"),
+        "missing": sum(1 for shot in screenshots if shot.get("baselineStatus") == "missing"),
+        "failed": sum(
+            1
+            for shot in screenshots
+            if shot.get("baselineStatus") == "failed" or
+            (isinstance(shot.get("comparison"), dict) and shot["comparison"].get("status") == "failed")  # type: ignore[index]
+        ),
+    }
+    if visual["baselineDir"]:
+        if dry_run:
+            visual["status"] = "planned"
+        elif manifest.get("approveScreenshotBaselines"):
+            visual["status"] = (
+                "approved"
+                if visual["screenshots"] and
+                visual["found"] == visual["screenshots"] and
+                visual["approved"] == visual["screenshots"]
+                else "failed"
+            )
+        elif visual["missing"] or visual["failed"] or visual["found"] != visual["screenshots"]:
+            visual["status"] = "failed"
+        elif visual["screenshots"] and visual["passed"] == visual["screenshots"]:
+            visual["status"] = "passed"
+        else:
+            visual["status"] = "not-compared"
+
+    comparisons = [
+        comparison
+        for comparison in manifest.get("performanceComparisons", [])
+        if isinstance(comparison, dict)
+    ]
+    performance_failures = [
+        failure
+        for failure in manifest.get("performanceFailures", [])
+        if str(failure).strip()
+    ]
+    failed_comparisons = [
+        comparison
+        for comparison in comparisons
+        if comparison.get("status") != "passed"
+    ]
+    performance = {
+        "status": "not-configured",
+        "baselinePath": str(manifest.get("performanceBaselinePath", "")),
+        "sampleCount": int(
+            manifest.get("performanceAggregate", {}).get("sampleCount", 0)  # type: ignore[union-attr]
+            if isinstance(manifest.get("performanceAggregate"), dict)
+            else 0
+        ),
+        "comparisons": len(comparisons),
+        "failedComparisons": len(failed_comparisons),
+        "failures": len(performance_failures),
+        "baselineStatus": str(manifest.get("performanceBaselineStatus", "")),
+    }
+    if performance["baselinePath"]:
+        if dry_run:
+            performance["status"] = "planned"
+        elif manifest.get("approvePerformanceBaseline"):
+            performance["status"] = "approved" if performance["baselineStatus"] == "approved" else "failed"
+        elif performance_failures:
+            performance["status"] = "failed"
+        elif performance["baselineStatus"] == "compared" and not comparisons:
+            performance["status"] = "not-compared"
+        elif performance["baselineStatus"] == "compared" and not failed_comparisons:
+            performance["status"] = "passed"
+        elif performance["baselineStatus"] in {"missing", "not-sampled"} or failed_comparisons:
+            performance["status"] = "failed"
+        else:
+            performance["status"] = performance["baselineStatus"] or "not-compared"
+
+    configured_statuses = [
+        str(item.get("status"))
+        for item in (visual, performance)
+        if item.get("status") != "not-configured"
+    ]
+    if dry_run and configured_statuses:
+        status = "planned"
+    elif configured_statuses and all(item in {"passed", "approved"} for item in configured_statuses):
+        status = "passed"
+    elif any(item == "failed" for item in configured_statuses):
+        status = "failed"
+    else:
+        status = "incomplete" if configured_statuses else "not-configured"
+
+    return {
+        "status": status,
+        "visual": visual,
+        "performance": performance,
+    }
+
+
 def evaluate_gate(manifest: dict[str, object]) -> list[str]:
     gate_name = manifest.get("gate")
     if manifest.get("dryRun"):
@@ -2002,6 +2312,29 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
             "; ".join(dict.fromkeys(performance_failures))
         )
 
+    if requirements.get("require_visual_baseline"):
+        if not manifest.get("screenshotBaselineDir"):
+            failures.append("Visual proof requires --screenshot-baseline-dir or --proof-dir.")
+        if manifest.get("approveScreenshotBaselines"):
+            failures.append("Visual proof must compare against reviewed screenshot baselines, not approve them.")
+
+    if requirements.get("require_performance_baseline"):
+        if not manifest.get("performanceBaselinePath"):
+            failures.append("Performance proof requires --performance-baseline or --proof-dir.")
+        if manifest.get("approvePerformanceBaseline"):
+            failures.append("Performance proof must compare against a reviewed performance baseline, not approve it.")
+        comparisons = [
+            comparison
+            for comparison in manifest.get("performanceComparisons", [])
+            if isinstance(comparison, dict)
+        ]
+        if (
+            manifest.get("performanceBaselinePath") and
+            not manifest.get("approvePerformanceBaseline") and
+            not comparisons
+        ):
+            failures.append("Performance proof did not produce baseline comparisons.")
+
     if requirements.get("require_screenshots") or manifest.get("screenshotBaselineDir"):
         screenshots = [
             shot
@@ -2055,6 +2388,19 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                     f"Screenshot baseline comparisons failed: {len(failed_comparisons)}/{len(screenshots)} "
                     f"({', '.join(labels)}{'...' if len(failed_comparisons) > 6 else ''})"
                 )
+
+            if requirements.get("require_visual_baseline"):
+                unproved = [
+                    shot.get("baselineKey", shot.get("name", "screenshot"))
+                    for shot in screenshots
+                    if shot.get("found") and shot.get("baselineStatus") != "passed"
+                ]
+                if unproved:
+                    failures.append(
+                        f"Visual proof did not compare cleanly: {len(unproved)}/{len(screenshots)} "
+                        f"({', '.join(str(name) for name in unproved[:6])}"
+                        f"{'...' if len(unproved) > 6 else ''})"
+                    )
 
     timedemos: dict[tuple[str, str], dict[str, object]] = {}
     for run in runs:
@@ -2184,6 +2530,31 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
             lines.append(f"- {failure}")
         lines.append("")
 
+    proof = manifest.get("proof")
+    if isinstance(proof, dict):
+        visual = proof.get("visual", {}) if isinstance(proof.get("visual"), dict) else {}
+        performance = proof.get("performance", {}) if isinstance(proof.get("performance"), dict) else {}
+        lines.append("## Proof")
+        lines.append("")
+        lines.append(f"- Overall: `{proof.get('status', '-')}`")
+        if manifest.get("proofDir"):
+            lines.append(f"- Proof dir: `{manifest.get('proofDir')}`")
+        lines.append(
+            "- Visual: "
+            f"`{visual.get('status', '-')}` "
+            f"found `{visual.get('found', '-')}/{visual.get('screenshots', '-')}`, "
+            f"passed `{visual.get('passed', '-')}`, missing `{visual.get('missing', '-')}`, "
+            f"failed `{visual.get('failed', '-')}`"
+        )
+        lines.append(
+            "- Performance: "
+            f"`{performance.get('status', '-')}` samples `{performance.get('sampleCount', '-')}`, "
+            f"comparisons `{performance.get('comparisons', '-')}`, "
+            f"failed comparisons `{performance.get('failedComparisons', '-')}`, "
+            f"failures `{performance.get('failures', '-')}`"
+        )
+        lines.append("")
+
     if runs:
         planned_or_passed = sum(1 for run in runs if run.get("status") in {"passed", "planned"})
         lines.append("## Runs")
@@ -2223,6 +2594,11 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
                 postprocess = metrics.get("postprocess", {}) if isinstance(metrics.get("postprocess"), dict) else {}
                 stream = metrics.get("stream", {}) if isinstance(metrics.get("stream"), dict) else {}
                 stream_draw = metrics.get("streamDraw", {}) if isinstance(metrics.get("streamDraw"), dict) else {}
+                stream_draw_skip = (
+                    metrics.get("streamDrawSkip", {})
+                    if isinstance(metrics.get("streamDrawSkip"), dict)
+                    else {}
+                )
                 static_world = metrics.get("staticWorld", {}) if isinstance(metrics.get("staticWorld"), dict) else {}
                 lines.append(
                     "- Key metrics: "
@@ -2235,6 +2611,15 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
                     f"stream upload/reservation/draw fallbacks "
                     f"`{stream.get('uploadFailures', '-')}/{stream.get('reservationFailures', '-')}/"
                     f"{stream_draw.get('fallbacks', '-')}`, "
+                    f"stream high-risk dlight/screen/video "
+                    f"`{stream_draw.get('dynamicLights', '-')}/"
+                    f"{stream_draw.get('screenMaps', '-')}/"
+                    f"{stream_draw.get('videoMaps', '-')}`, "
+                    f"stream skip bind/key/fog/program "
+                    f"`{stream_draw_skip.get('bind', '-')}/"
+                    f"{stream_draw_skip.get('key', '-')}/"
+                    f"{stream_draw_skip.get('fog', '-')}/"
+                    f"{stream_draw_skip.get('program', '-')}`, "
                     f"static errors/failures `{static_world.get('glErrors', '-')}/"
                     f"{static_world.get('failures', '-')}`"
                 )
@@ -2270,6 +2655,14 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
                 f"{maxima.get('materialLinkFailures', '-')}/"
                 f"{maxima.get('materialPrecacheFailures', '-')}/"
                 f"{maxima.get('materialBindFailures', '-')}`, "
+                f"stream draw material mt/depth/tex/env/dlight/screen/video "
+                f"`{maxima.get('streamDrawMultitexture', '-')}/"
+                f"{maxima.get('streamDrawDepthFragment', '-')}/"
+                f"{maxima.get('streamDrawTexMods', '-')}/"
+                f"{maxima.get('streamDrawEnvironment', '-')}/"
+                f"{maxima.get('streamDrawDynamicLights', '-')}/"
+                f"{maxima.get('streamDrawScreenMaps', '-')}/"
+                f"{maxima.get('streamDrawVideoMaps', '-')}`, "
                 f"stream draw fallbacks `{maxima.get('streamDrawFallbacks', '-')}`, "
                 f"static draw fallbacks `{maxima.get('staticDrawFallbacks', '-')}`, "
                 f"static MDI errors `{maxima.get('staticMdiErrors', '-')}`"
@@ -2399,6 +2792,9 @@ def main() -> int:
     if args.list_gates:
         print_gate_list()
         return 0
+    if args.list_profiles:
+        print_profile_list()
+        return 0
 
     apply_gate_defaults(args)
 
@@ -2420,12 +2816,15 @@ def main() -> int:
     output_root = args.output_dir.resolve() / run_id
     homepath = args.homepath.resolve() if args.homepath else output_root / "home"
     logs_dir = output_root / "logs"
+    apply_proof_defaults(args, output_root)
+    validate_proof_approval_mode(args)
     cvars = make_cvars(args)
     cfg_cvars = config_cvars(args, cvars)
     startup_cvars = launch_cvars(cvars)
     runs: list[dict[str, object]] = []
     screenshot_baseline_dir = args.screenshot_baseline_dir.resolve() if args.screenshot_baseline_dir else None
     screenshot_diff_dir = args.screenshot_diff_dir.resolve() if args.screenshot_diff_dir else None
+    proof_dir = args.proof_dir.resolve() if args.proof_dir else None
     screenshot_max_rms = float(args.screenshot_max_rms)
     screenshot_max_pixel_ratio = float(args.screenshot_max_pixel_ratio)
     if args.approve_screenshot_baselines and screenshot_baseline_dir is None:
@@ -2564,6 +2963,7 @@ def main() -> int:
         "performanceBaselinePath": str(args.performance_baseline.resolve()) if args.performance_baseline else "",
         "approvePerformanceBaseline": args.approve_performance_baseline,
         "performanceMaxGrowthRatio": performance_growth_ratio,
+        "proofDir": str(proof_dir) if proof_dir else "",
         "screenshotBaselineDir": str(screenshot_baseline_dir) if screenshot_baseline_dir else "",
         "screenshotDiffDir": str(screenshot_diff_dir) if screenshot_diff_dir else "",
         "approveScreenshotBaselines": args.approve_screenshot_baselines,
@@ -2614,9 +3014,12 @@ def main() -> int:
 
     manifest["performanceComparisons"] = performance_comparisons
     manifest["performanceFailures"] = list(dict.fromkeys(performance_failures))
+    manifest["proof"] = proof_status(manifest)
 
     gate_failures = evaluate_gate(manifest)
     manifest["gateFailures"] = gate_failures
+    if isinstance(manifest.get("proof"), dict):
+        manifest["proof"]["gateStatus"] = "planned" if args.dry_run else ("passed" if not gate_failures else "failed")  # type: ignore[index]
 
     output_root.mkdir(parents=True, exist_ok=True)
     manifest_path = output_root / "manifest.json"
@@ -2672,6 +3075,15 @@ def main() -> int:
             print(f"Performance baseline: {baseline_status}")
         if manifest["performanceFailures"]:
             print(f"Performance budget/baseline failures: {len(manifest['performanceFailures'])}")
+    proof = manifest.get("proof")
+    if isinstance(proof, dict) and proof.get("status") != "not-configured":
+        visual = proof.get("visual", {}) if isinstance(proof.get("visual"), dict) else {}
+        performance = proof.get("performance", {}) if isinstance(proof.get("performance"), dict) else {}
+        print(
+            "Proof: "
+            f"{proof.get('status')} "
+            f"(visual {visual.get('status', '-')}, performance {performance.get('status', '-')})"
+        )
     if args.dry_run:
         return 0
     if gate_failures or passed_runs != run_count or missing_screenshots:

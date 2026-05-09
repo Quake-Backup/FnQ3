@@ -53,6 +53,17 @@ bool MaterialKeysClassifyRcShapes()
 	CHECK( key.mode == glx::MaterialProgramMode::SingleTexture );
 	CHECK( key.features == ( glx::GLX_MATERIAL_FEATURE_TEXMOD | glx::GLX_MATERIAL_FEATURE_ENVIRONMENT ) );
 
+	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_DEPTH_FRAGMENT,
+		0, 0, 0, qfalse, &key ) == qtrue );
+	CHECK( key.mode == glx::MaterialProgramMode::SingleTexture );
+	CHECK( key.features == glx::GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT );
+
+	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_DEPTH_FRAGMENT | GLX_STAGE_TEXMOD |
+		GLX_STAGE_ENVIRONMENT, 0, 2, 0, qfalse, &key ) == qtrue );
+	CHECK( key.mode == glx::MaterialProgramMode::SingleTexture );
+	CHECK( key.features == ( glx::GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT |
+		glx::GLX_MATERIAL_FEATURE_TEXMOD | glx::GLX_MATERIAL_FEATURE_ENVIRONMENT ) );
+
 	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE,
 		GLX_MATERIAL_COMBINE_MODULATE, 0, 0,
 		qfalse, &key ) == qtrue );
@@ -83,6 +94,9 @@ bool MaterialKeysRejectUnsupportedCombines()
 
 	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE, 0x1234, 0, 0,
 		qfalse, &key ) == qfalse );
+
+	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_MULTITEXTURE | GLX_STAGE_DEPTH_FRAGMENT,
+		GLX_MATERIAL_COMBINE_MODULATE, 0, 0, qfalse, &key ) == qfalse );
 
 	CHECK( glx::GLX_Material_KeyForInputs( GLX_STAGE_TEXMOD | GLX_STAGE_ENVIRONMENT,
 		GLX_MATERIAL_COMBINE_ADD, 4, 4, qtrue, &key ) == qtrue );
@@ -122,6 +136,7 @@ bool StreamGatesMatchRcAllowlist()
 
 	rc.keyMode = 0;
 	rc.multitexture = qtrue;
+	rc.depthFragment = qtrue;
 	rc.texMods = qtrue;
 	rc.environment = qtrue;
 	rc.dynamicLights = qfalse;
@@ -134,27 +149,49 @@ bool StreamGatesMatchRcAllowlist()
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_TEXMOD, 1, 0, rc );
 	CHECK( result.allowed == qtrue );
 	CHECK( result.hasTexMods == qtrue );
+	CHECK( result.texModsGateAllowed == qtrue );
 
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_ENVIRONMENT, 0, 0, rc );
 	CHECK( result.allowed == qtrue );
 	CHECK( result.hasEnvironment == qtrue );
+	CHECK( result.environmentGateAllowed == qtrue );
 
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_MULTITEXTURE | GLX_STAGE_ST1,
 		0, 0, rc );
 	CHECK( result.allowed == qtrue );
+	CHECK( result.hasMultitexture == qtrue );
+	CHECK( result.multitextureGateAllowed == qtrue );
 	CHECK( result.hasSecondTexcoord == qtrue );
+	CHECK( result.secondTexcoordGateAllowed == qtrue );
+
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DEPTH_FRAGMENT, 0, 0, rc );
+	CHECK( result.allowed == qtrue );
+	CHECK( result.hasDepthFragment == qtrue );
+	CHECK( result.depthFragmentGateAllowed == qtrue );
+
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DEPTH_FRAGMENT | GLX_STAGE_MULTITEXTURE,
+		0, 0, rc );
+	CHECK( result.allowed == qfalse );
+	CHECK( result.hasDepthFragment == qtrue );
+	CHECK( result.depthFragmentGateAllowed == qfalse );
+	CHECK( result.hasMultitexture == qtrue );
+	CHECK( result.multitextureGateAllowed == qtrue );
 
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_ST1, 0, 0, rc );
 	CHECK( result.allowed == qfalse );
+	CHECK( result.secondTexcoordGateAllowed == qfalse );
 
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DLIGHT_MAP, 0, 0, rc );
 	CHECK( result.allowed == qfalse );
+	CHECK( result.dynamicLightGateAllowed == qfalse );
 
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_SCREEN_MAP, 0, 0, rc );
 	CHECK( result.allowed == qfalse );
+	CHECK( result.screenMapGateAllowed == qfalse );
 
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_VIDEO_MAP, 0, 0, rc );
 	CHECK( result.allowed == qfalse );
+	CHECK( result.videoMapGateAllowed == qfalse );
 
 	return true;
 }
@@ -167,14 +204,32 @@ bool StreamBroadKeyModeRemainsDeveloperEscapeHatch()
 	config.keyMode = 2;
 
 	result = glx::GLX_Stream_EvaluateMaterialGate(
-		GLX_STAGE_DLIGHT_MAP | GLX_STAGE_SCREEN_MAP | GLX_STAGE_VIDEO_MAP | GLX_STAGE_ST1,
+		GLX_STAGE_ENVIRONMENT | GLX_STAGE_DLIGHT_MAP | GLX_STAGE_SCREEN_MAP |
+			GLX_STAGE_VIDEO_MAP,
 		2, 3, config );
 
 	CHECK( result.allowed == qtrue );
+	CHECK( result.hasEnvironment == qtrue );
+	CHECK( result.environmentGateAllowed == qtrue );
 	CHECK( result.hasDynamicLight == qtrue );
+	CHECK( result.dynamicLightGateAllowed == qtrue );
 	CHECK( result.hasScreenMap == qtrue );
+	CHECK( result.screenMapGateAllowed == qtrue );
 	CHECK( result.hasVideoMap == qtrue );
+	CHECK( result.videoMapGateAllowed == qtrue );
+
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_MULTITEXTURE | GLX_STAGE_ST1,
+		0, 0, config );
+	CHECK( result.allowed == qfalse );
+	CHECK( result.hasMultitexture == qtrue );
+	CHECK( result.multitextureGateAllowed == qfalse );
 	CHECK( result.hasSecondTexcoord == qtrue );
+	CHECK( result.secondTexcoordGateAllowed == qfalse );
+
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DEPTH_FRAGMENT, 0, 0, config );
+	CHECK( result.allowed == qfalse );
+	CHECK( result.hasDepthFragment == qtrue );
+	CHECK( result.depthFragmentGateAllowed == qfalse );
 
 	return true;
 }
@@ -187,28 +242,57 @@ bool StreamSpecialSceneGatesAreExplicit()
 	config.keyMode = 0;
 	config.dynamicLights = qtrue;
 
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_MULTITEXTURE, 0, 0, config );
+	CHECK( result.allowed == qfalse );
+	CHECK( result.hasMultitexture == qtrue );
+	CHECK( result.multitextureGateAllowed == qfalse );
+
+	config.multitexture = qtrue;
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_MULTITEXTURE, 0, 0, config );
+	CHECK( result.allowed == qtrue );
+	CHECK( result.hasMultitexture == qtrue );
+	CHECK( result.multitextureGateAllowed == qtrue );
+
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DEPTH_FRAGMENT, 0, 0, config );
+	CHECK( result.allowed == qfalse );
+	CHECK( result.hasDepthFragment == qtrue );
+	CHECK( result.depthFragmentGateAllowed == qfalse );
+
+	config.depthFragment = qtrue;
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DEPTH_FRAGMENT, 0, 0, config );
+	CHECK( result.allowed == qtrue );
+	CHECK( result.hasDepthFragment == qtrue );
+	CHECK( result.depthFragmentGateAllowed == qtrue );
+
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DLIGHT_MAP, 0, 0, config );
 	CHECK( result.allowed == qtrue );
 	CHECK( result.hasDynamicLight == qtrue );
+	CHECK( result.dynamicLightGateAllowed == qtrue );
 
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DLIGHT_MAP | GLX_STAGE_SCREEN_MAP,
 		0, 0, config );
 	CHECK( result.allowed == qfalse );
 	CHECK( result.hasDynamicLight == qtrue );
+	CHECK( result.dynamicLightGateAllowed == qtrue );
 	CHECK( result.hasScreenMap == qtrue );
+	CHECK( result.screenMapGateAllowed == qfalse );
 
 	config.screenMaps = qtrue;
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_DLIGHT_MAP | GLX_STAGE_SCREEN_MAP,
 		0, 0, config );
 	CHECK( result.allowed == qtrue );
+	CHECK( result.dynamicLightGateAllowed == qtrue );
+	CHECK( result.screenMapGateAllowed == qtrue );
 
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_VIDEO_MAP, 0, 0, config );
 	CHECK( result.allowed == qfalse );
 	CHECK( result.hasVideoMap == qtrue );
+	CHECK( result.videoMapGateAllowed == qfalse );
 
 	config.videoMaps = qtrue;
 	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_VIDEO_MAP, 0, 0, config );
 	CHECK( result.allowed == qtrue );
+	CHECK( result.videoMapGateAllowed == qtrue );
 
 	config.keyMode = 1;
 	config.dynamicLights = qfalse;
@@ -219,8 +303,19 @@ bool StreamSpecialSceneGatesAreExplicit()
 		0, 0, config );
 	CHECK( result.allowed == qfalse );
 	CHECK( result.hasDynamicLight == qtrue );
+	CHECK( result.dynamicLightGateAllowed == qfalse );
 	CHECK( result.hasScreenMap == qtrue );
+	CHECK( result.screenMapGateAllowed == qfalse );
 	CHECK( result.hasVideoMap == qtrue );
+	CHECK( result.videoMapGateAllowed == qfalse );
+
+	result = glx::GLX_Stream_EvaluateMaterialGate( GLX_STAGE_TEXMOD | GLX_STAGE_DLIGHT_MAP,
+		2, 0, config );
+	CHECK( result.allowed == qfalse );
+	CHECK( result.hasTexMods == qtrue );
+	CHECK( result.texModsGateAllowed == qtrue );
+	CHECK( result.hasDynamicLight == qtrue );
+	CHECK( result.dynamicLightGateAllowed == qfalse );
 
 	return true;
 }

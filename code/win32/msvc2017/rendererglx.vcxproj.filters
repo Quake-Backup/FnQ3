@@ -157,6 +157,9 @@
     <ClInclude Include="..\..\renderercommon\tr_public.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\renderercommon\tr_glx_api.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\renderercommon\tr_glx_public.h">
       <Filter>Header Files</Filter>
     </ClInclude>

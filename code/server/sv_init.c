@@ -761,6 +761,15 @@ void SV_Init( void )
 	sv_fps = Cvar_Get ("sv_fps", "20", CVAR_TEMP );
 	Cvar_CheckRange( sv_fps, "10", "125", CV_INTEGER );
 	Cvar_SetDescription( sv_fps, "Set the max frames per second the server sends the client." );
+	sv_audioPVS = Cvar_Get( "sv_audioPVS", "0", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( sv_audioPVS, "0", "2", CV_INTEGER );
+	Cvar_SetDescription( sv_audioPVS, "Compatibility-preserving opt-in for sending nearby occluded sound emitters outside normal visual PVS.\n 0 = disabled, 1 = sound-only emitters, 2 = sound events plus all loopSound and speaker entities." );
+	sv_audioPVSRange = Cvar_Get( "sv_audioPVSRange", "1024", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( sv_audioPVSRange, "0", "4096", CV_INTEGER );
+	Cvar_SetDescription( sv_audioPVSRange, "Maximum distance for sv_audioPVS sound emitter expansion." );
+	sv_audioPVSMaxEntities = Cvar_Get( "sv_audioPVSMaxEntities", "16", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( sv_audioPVSMaxEntities, "0", "64", CV_INTEGER );
+	Cvar_SetDescription( sv_audioPVSMaxEntities, "Maximum number of extra sound emitters sv_audioPVS may add to a client snapshot." );
 	sv_timeout = Cvar_Get( "sv_timeout", "200", CVAR_TEMP );
 	Cvar_CheckRange( sv_timeout, "4", NULL, CV_INTEGER );
 	Cvar_SetDescription( sv_timeout, "Seconds without any message before automatic client disconnect." );
@@ -823,6 +832,9 @@ void SV_Init( void )
 	Cvar_SetGroup( sv_minRate, CVG_SERVER );
 	Cvar_SetGroup( sv_maxRate, CVG_SERVER );
 	Cvar_SetGroup( sv_fps, CVG_SERVER );
+	Cvar_SetGroup( sv_audioPVS, CVG_SERVER );
+	Cvar_SetGroup( sv_audioPVSRange, CVG_SERVER );
+	Cvar_SetGroup( sv_audioPVSMaxEntities, CVG_SERVER );
 	Cvar_SetGroup( sv_autoRecordDemos, CVG_SERVER );
 
 	// force initial check

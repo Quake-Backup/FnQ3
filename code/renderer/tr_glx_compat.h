@@ -24,11 +24,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define TR_GLX_COMPAT_H
 
 #include "tr_local.h"
-#include "../renderercommon/tr_glx_public.h"
+#include "../renderercommon/tr_glx_api.h"
 
 #ifdef RENDERER_GLX
-#include "../rendererglx/glx_module.h"
-
 #ifndef GL_ARRAY_BUFFER_BINDING_ARB
 #define GL_ARRAY_BUFFER_BINDING_ARB 0x8894
 #endif

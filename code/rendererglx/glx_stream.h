@@ -74,8 +74,12 @@ struct StreamState {
 	unsigned int streamedDrawSkipReasons[GLX_STREAM_SKIP_REASON_COUNT];
 	unsigned int streamedDrawMaterialAccepted;
 	unsigned int streamedDrawMaterialRejected;
+	unsigned int streamedDrawMultitextureAccepted;
+	unsigned int streamedDrawMultitextureRejected;
 	unsigned int streamedDrawMultitextureDraws;
 	unsigned int streamedDrawFogDraws;
+	unsigned int streamedDrawDepthFragmentAccepted;
+	unsigned int streamedDrawDepthFragmentRejected;
 	unsigned int streamedDrawDepthFragmentDraws;
 	unsigned int streamedDrawTexModDraws;
 	unsigned int streamedDrawTexModAccepted;

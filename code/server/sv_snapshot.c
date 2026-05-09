@@ -306,6 +306,175 @@ static void SV_AddIndexToSnapshot( svEntity_t *svEnt, int index, snapshotEntityN
 	eNums->numSnapshotEntities++;
 }
 
+/*
+===============
+SV_EntityPassesSnapshotClientFlags
+===============
+*/
+static qboolean SV_EntityPassesSnapshotClientFlags( const sharedEntity_t *ent, int clientNum ) {
+	// entities can be flagged to be sent to only one client
+	if ( ent->r.svFlags & SVF_SINGLECLIENT ) {
+		if ( ent->r.singleClient != clientNum ) {
+			return qfalse;
+		}
+	}
+	// entities can be flagged to be sent to everyone but one client
+	if ( ent->r.svFlags & SVF_NOTSINGLECLIENT ) {
+		if ( ent->r.singleClient == clientNum ) {
+			return qfalse;
+		}
+	}
+	// entities can be flagged to be sent to a given mask of clients
+	if ( ent->r.svFlags & SVF_CLIENTMASK ) {
+		if ( clientNum >= 32 ) {
+			Com_Error( ERR_DROP, "SVF_CLIENTMASK: clientNum >= 32" );
+		}
+		if ( ~ent->r.singleClient & ( 1 << clientNum ) ) {
+			return qfalse;
+		}
+	}
+
+	return qtrue;
+}
+
+/*
+===============
+SV_AreasVisibleForSnapshot
+===============
+*/
+static qboolean SV_AreasVisibleForSnapshot( int clientarea, const svEntity_t *svEnt ) {
+	if ( CM_AreasConnected( clientarea, svEnt->areanum ) ) {
+		return qtrue;
+	}
+	// doors can legally straddle two areas, so we may need to check another one
+	if ( CM_AreasConnected( clientarea, svEnt->areanum2 ) ) {
+		return qtrue;
+	}
+	return qfalse;
+}
+
+/*
+===============
+SV_AudioOnlyEventEntity
+===============
+*/
+static qboolean SV_AudioOnlyEventEntity( const entityState_t *es ) {
+	int event;
+
+	if ( es->eType < ET_EVENTS ) {
+		return qfalse;
+	}
+
+	event = es->eType - ET_EVENTS;
+	return ( event == EV_GENERAL_SOUND || event == EV_GLOBAL_SOUND || event == EV_GLOBAL_TEAM_SOUND ) ? qtrue : qfalse;
+}
+
+/*
+===============
+SV_AudioOnlyEntity
+===============
+*/
+static qboolean SV_AudioOnlyEntity( const entityState_t *es ) {
+	if ( SV_AudioOnlyEventEntity( es ) ) {
+		return qtrue;
+	}
+	if ( es->eType == ET_SPEAKER ) {
+		return qtrue;
+	}
+	if ( !es->loopSound ) {
+		return qfalse;
+	}
+	if ( es->eType != ET_GENERAL && es->eType != ET_INVISIBLE ) {
+		return qfalse;
+	}
+	if ( es->modelindex || es->modelindex2 || es->constantLight || es->solid ) {
+		return qfalse;
+	}
+	if ( es->event || es->eventParm ) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
+/*
+===============
+SV_AudioReachEntity
+===============
+*/
+static qboolean SV_AudioReachEntity( const entityState_t *es ) {
+	const int mode = sv_audioPVS ? sv_audioPVS->integer : 0;
+
+	if ( mode <= 0 ) {
+		return qfalse;
+	}
+	if ( mode == 1 ) {
+		return SV_AudioOnlyEntity( es );
+	}
+	return ( SV_AudioOnlyEventEntity( es ) || es->loopSound || es->eType == ET_SPEAKER ) ? qtrue : qfalse;
+}
+
+/*
+===============
+SV_AddAudioReachableEntities
+
+Opt-in, protocol-neutral expansion for occluded sound emitters. This preserves
+normal visual PVS and only sends extra entityStates that the client already
+knows how to consume for sound.
+===============
+*/
+static void SV_AddAudioReachableEntities( const vec3_t origin, int clientarea, clientSnapshot_t *frame,
+									snapshotEntityNumbers_t *eNums ) {
+	int e;
+	int added;
+	float range;
+	float rangeSquared;
+
+	if ( !sv_audioPVS || sv_audioPVS->integer <= 0 || !sv_audioPVSRange ||
+		!sv_audioPVSMaxEntities || sv_audioPVSRange->value <= 0.0f ||
+		sv_audioPVSMaxEntities->integer <= 0 ) {
+		return;
+	}
+
+	added = 0;
+	range = sv_audioPVSRange->value;
+	rangeSquared = range * range;
+
+	for ( e = 0 ; e < svs.currFrame->count ; e++ ) {
+		entityState_t *es;
+		sharedEntity_t *ent;
+		svEntity_t *svEnt;
+
+		if ( added >= sv_audioPVSMaxEntities->integer ) {
+			break;
+		}
+
+		es = svs.currFrame->ents[ e ];
+		if ( !SV_AudioReachEntity( es ) ) {
+			continue;
+		}
+
+		ent = SV_GentityNum( es->number );
+		if ( !SV_EntityPassesSnapshotClientFlags( ent, frame->ps.clientNum ) ) {
+			continue;
+		}
+
+		svEnt = &sv.svEntities[ es->number ];
+		if ( svEnt->snapshotCounter == sv.snapshotCounter ) {
+			continue;
+		}
+		if ( !SV_AreasVisibleForSnapshot( clientarea, svEnt ) ) {
+			continue;
+		}
+		if ( DistanceSquared( origin, ent->r.currentOrigin ) > rangeSquared ) {
+			continue;
+		}
+
+		SV_AddIndexToSnapshot( svEnt, e, eNums );
+		added++;
+		eNums->unordered = qtrue;
+	}
+}
+
 
 /*
 ===============
@@ -344,24 +513,8 @@ static void SV_AddEntitiesVisibleFromPoint( const vec3_t origin, clientSnapshot_
 		es = svs.currFrame->ents[ e ];
 		ent = SV_GentityNum( es->number );
 
-		// entities can be flagged to be sent to only one client
-		if ( ent->r.svFlags & SVF_SINGLECLIENT ) {
-			if ( ent->r.singleClient != frame->ps.clientNum ) {
-				continue;
-			}
-		}
-		// entities can be flagged to be sent to everyone but one client
-		if ( ent->r.svFlags & SVF_NOTSINGLECLIENT ) {
-			if ( ent->r.singleClient == frame->ps.clientNum ) {
-				continue;
-			}
-		}
-		// entities can be flagged to be sent to a given mask of clients
-		if ( ent->r.svFlags & SVF_CLIENTMASK ) {
-			if (frame->ps.clientNum >= 32)
-				Com_Error( ERR_DROP, "SVF_CLIENTMASK: clientNum >= 32" );
-			if (~ent->r.singleClient & (1 << frame->ps.clientNum))
-				continue;
+		if ( !SV_EntityPassesSnapshotClientFlags( ent, frame->ps.clientNum ) ) {
+			continue;
 		}
 
 		svEnt = &sv.svEntities[ es->number ];
@@ -379,12 +532,8 @@ static void SV_AddEntitiesVisibleFromPoint( const vec3_t origin, clientSnapshot_
 
 		// ignore if not touching a PV leaf
 		// check area
-		if ( !CM_AreasConnected( clientarea, svEnt->areanum ) ) {
-			// doors can legally straddle two areas, so
-			// we may need to check another one
-			if ( !CM_AreasConnected( clientarea, svEnt->areanum2 ) ) {
-				continue;		// blocked by a door
-			}
+		if ( !SV_AreasVisibleForSnapshot( clientarea, svEnt ) ) {
+			continue;		// blocked by a door
 		}
 
 		bitvector = clientpvs;
@@ -594,6 +743,8 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 	clientSnapshot_t			*frame;
 	snapshotEntityNumbers_t		entityNumbers;
 	int							i, cl;
+	int							clientLeaf;
+	int							clientArea;
 	svEntity_t					*svEnt;
 	int							clientNum;
 	playerState_t				*ps;
@@ -650,11 +801,14 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 	// find the client's viewpoint
 	VectorCopy( ps->origin, org );
 	org[2] += ps->viewheight;
+	clientLeaf = CM_PointLeafnum( org );
+	clientArea = CM_LeafArea( clientLeaf );
 
 	// add all the entities directly visible to the eye, which
 	// may include portal entities that merge other viewpoints
 	entityNumbers.unordered = qfalse;
 	SV_AddEntitiesVisibleFromPoint( org, frame, &entityNumbers, qfalse );
+	SV_AddAudioReachableEntities( org, clientArea, frame, &entityNumbers );
 
 	// if there were portals visible, there may be out of order entities
 	// in the list which will need to be resorted for the delta compression

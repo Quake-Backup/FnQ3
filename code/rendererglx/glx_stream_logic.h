@@ -35,6 +35,7 @@ struct StreamRuntimeFallback {
 struct StreamMaterialGateConfig {
 	int keyMode;
 	qboolean multitexture;
+	qboolean depthFragment;
 	qboolean texMods;
 	qboolean environment;
 	qboolean dynamicLights;
@@ -44,12 +45,22 @@ struct StreamMaterialGateConfig {
 
 struct StreamMaterialGateResult {
 	qboolean allowed;
+	qboolean hasMultitexture;
+	qboolean hasDepthFragment;
 	qboolean hasTexMods;
 	qboolean hasEnvironment;
 	qboolean hasDynamicLight;
 	qboolean hasScreenMap;
 	qboolean hasVideoMap;
 	qboolean hasSecondTexcoord;
+	qboolean multitextureGateAllowed;
+	qboolean depthFragmentGateAllowed;
+	qboolean texModsGateAllowed;
+	qboolean environmentGateAllowed;
+	qboolean dynamicLightGateAllowed;
+	qboolean screenMapGateAllowed;
+	qboolean videoMapGateAllowed;
+	qboolean secondTexcoordGateAllowed;
 };
 
 struct StreamSpecialDrawGateConfig {
@@ -199,6 +210,10 @@ static ID_INLINE StreamMaterialGateResult GLX_Stream_EvaluateMaterialGate(
 {
 	StreamMaterialGateResult result {};
 	const int mode = GLX_Stream_ClampedKeyMode( config.keyMode );
+	const qboolean hasMultitexture = ( flags & GLX_STAGE_MULTITEXTURE ) ? qtrue : qfalse;
+	const qboolean multitextureAllowed = config.multitexture;
+	const qboolean hasDepthFragment = ( flags & GLX_STAGE_DEPTH_FRAGMENT ) ? qtrue : qfalse;
+	const qboolean depthFragmentAllowed = config.depthFragment;
 	const qboolean hasTexMods = ( ( flags & GLX_STAGE_TEXMOD ) || texMods0 > 0 || texMods1 > 0 ) ? qtrue : qfalse;
 	const qboolean texModsAllowed = ( config.texMods || mode >= 1 ) ? qtrue : qfalse;
 	const qboolean hasEnvironment = ( flags & GLX_STAGE_ENVIRONMENT ) ? qtrue : qfalse;
@@ -210,32 +225,48 @@ static ID_INLINE StreamMaterialGateResult GLX_Stream_EvaluateMaterialGate(
 	const qboolean hasVideoMap = ( flags & GLX_STAGE_VIDEO_MAP ) ? qtrue : qfalse;
 	const qboolean videoMapAllowed = ( config.videoMaps || mode >= 2 ) ? qtrue : qfalse;
 	const qboolean hasSecondTexcoord = ( flags & GLX_STAGE_ST1 ) ? qtrue : qfalse;
-	const qboolean secondTexcoordAllowed = ( config.multitexture && ( flags & GLX_STAGE_MULTITEXTURE ) ) || mode >= 2 ? qtrue : qfalse;
+	const qboolean secondTexcoordAllowed = multitextureAllowed && hasMultitexture ? qtrue : qfalse;
 
 	result.allowed = qtrue;
+	result.hasMultitexture = hasMultitexture;
+	result.hasDepthFragment = hasDepthFragment;
 	result.hasTexMods = hasTexMods;
 	result.hasEnvironment = hasEnvironment;
 	result.hasDynamicLight = hasDynamicLight;
 	result.hasScreenMap = hasScreenMap;
 	result.hasVideoMap = hasVideoMap;
 	result.hasSecondTexcoord = hasSecondTexcoord;
+	result.multitextureGateAllowed = multitextureAllowed;
+	result.depthFragmentGateAllowed = ( depthFragmentAllowed && !hasMultitexture && !hasSecondTexcoord ) ? qtrue : qfalse;
+	result.texModsGateAllowed = texModsAllowed;
+	result.environmentGateAllowed = environmentAllowed;
+	result.dynamicLightGateAllowed = dynamicLightAllowed;
+	result.screenMapGateAllowed = screenMapAllowed;
+	result.videoMapGateAllowed = videoMapAllowed;
+	result.secondTexcoordGateAllowed = secondTexcoordAllowed;
 
-	if ( hasTexMods && !texModsAllowed ) {
+	if ( hasMultitexture && !result.multitextureGateAllowed ) {
 		result.allowed = qfalse;
 	}
-	if ( hasEnvironment && !environmentAllowed ) {
+	if ( hasDepthFragment && !result.depthFragmentGateAllowed ) {
 		result.allowed = qfalse;
 	}
-	if ( hasDynamicLight && !dynamicLightAllowed ) {
+	if ( hasTexMods && !result.texModsGateAllowed ) {
 		result.allowed = qfalse;
 	}
-	if ( hasScreenMap && !screenMapAllowed ) {
+	if ( hasEnvironment && !result.environmentGateAllowed ) {
 		result.allowed = qfalse;
 	}
-	if ( hasVideoMap && !videoMapAllowed ) {
+	if ( hasDynamicLight && !result.dynamicLightGateAllowed ) {
 		result.allowed = qfalse;
 	}
-	if ( hasSecondTexcoord && !secondTexcoordAllowed ) {
+	if ( hasScreenMap && !result.screenMapGateAllowed ) {
+		result.allowed = qfalse;
+	}
+	if ( hasVideoMap && !result.videoMapGateAllowed ) {
+		result.allowed = qfalse;
+	}
+	if ( hasSecondTexcoord && !result.secondTexcoordGateAllowed ) {
 		result.allowed = qfalse;
 	}
 

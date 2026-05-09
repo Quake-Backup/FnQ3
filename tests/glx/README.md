@@ -4,20 +4,21 @@
 
 The harness currently checks:
 
-- GLSL material permutation key selection for RC-supported single-texture, multitexture, texmod, environment, and fog shapes.
+- GLSL material permutation key selection for RC-supported single-texture, multitexture, texmod, environment, depth-fragment, and fog shapes.
 - Dynamic-light, screen-map, and video-map material flags staying gate-only rather than expanding the shader permutation table.
 - Rejection of unsupported multitexture combine modes.
-- Stream material-gate behavior for the RC allowlist.
+- Stream material-gate behavior for the RC allowlist, including explicit multitexture and depth-fragment gates.
 - Explicit dynamic-light, screen-map, and video-map stream gate behavior outside the RC allowlist.
-- Explicit stencil shadow-volume stream gate behavior outside the material-key system.
-- Explicit immediate beam draw-array stream gate behavior outside the material-key system.
-- Explicit fullscreen postprocess draw-array stream gate behavior outside the material-key system.
-- The broad `r_glxStreamDrawKeyMode 2` developer escape hatch.
+- Explicit shadow-volume, beam, and fullscreen postprocess draw-array stream gate behavior outside the material-key system.
+- RC runtime-sweep profiles enabling those state-only dynamic submission gates while keeping dynamic-light, screen-map, and video-map material gates off.
+- The frozen RC/stress sweep profiles matching the runtime `r_glxProfile` table in `code/rendererglx/glx_module.cpp`.
+- Hard proof-gate policy requiring reviewed screenshot baselines and compared performance baselines for `rc-proof`.
+- The broad single-texture `r_glxStreamDrawKeyMode 2` developer escape hatch staying behind hard multitexture and depth-fragment gates.
 - Capability version/extension parsing and tier selection.
 - Dynamic-stream strategy selection across persistent, map-range, and orphan/subdata fallbacks.
 - Static-world packet run classification and draw-policy gating.
 
-`fnq3_glx_header_boundary` scans the pure GLx headers and the public GLx module bridge header. It fails if pure logic picks up legacy renderer includes, GL object typedefs, `qgl` references, renderer ABI types, or module/local implementation headers. It also keeps `glx_module.h` from growing a `tr_public.h`, `qgl`, GL typedef, or shutdown-enum dependency.
+`fnq3_glx_header_boundary` scans the pure GLx headers, the renderer-common GLx API bridge, and the renderer facade. It fails if pure logic picks up legacy renderer includes, GL object typedefs, `qgl` references, renderer ABI types, or module/local implementation headers. It also keeps the bridge headers from growing a `tr_public.h`, `qgl`, GL typedef, or shutdown-enum dependency, and keeps `tr_glx_compat.h` from including back into `code/rendererglx`.
 
 Build and run it with CMake:
 

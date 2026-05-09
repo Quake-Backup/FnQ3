@@ -26,6 +26,7 @@ extern "C" {
 #include "../openal/include/AL/alc.h"
 #include "../openal/include/AL/alext.h"
 #include "AudioDeviceRecovery.h"
+#include "AudioOcclusion.h"
 #include "AudioZoneFormat.h"
 #include "AudioZoneRuntime.h"
 

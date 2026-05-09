@@ -24,22 +24,29 @@ Nightly packaging should continue to build GLx wherever the repository already e
 | Gate | Purpose | Profile | Scene Set | Automated Floor |
 |---|---|---|---|---|
 | `rc-smoke` | Renderer lifecycle smoke: module load, map load, repeated in-process renderer switches, screenshots, and GLx diagnostics. | `baseline` | `q3dm1` | All runs pass and all expected screenshots are written. |
-| `rc-parity` | Blocking conservative RC gate for world, ordered packet-batch static spans, stream paths including CPU-computed texmods and environment coordinates, material, bloom, and GPU-timing paths. | `glx-parity` / `r_glxProfile rc` | `q3dm1`, `q3dm17`, `demo1` | All runs pass, all screenshots are written, and GLx timedemo FPS is at least 90% of `opengl` on the same machine and demo. |
+| `rc-parity` | Blocking conservative RC gate for world, ordered packet-batch static spans, stream paths including CPU-computed texmods, environment coordinates, state-only dynamic-scene draw arrays, material, bloom, and GPU-timing paths. | `glx-parity` / `r_glxProfile rc` | `q3dm1`, `q3dm17`, `demo1` | All runs pass, all screenshots are written, and GLx timedemo FPS is at least 90% of `opengl` on the same machine and demo. |
+| `rc-proof` | Blocking proof gate for the RC surface, requiring reviewed screenshot baselines and an approved performance baseline in addition to the `rc-parity` checks. | `glx-parity` / `r_glxProfile rc` | `q3dm1`, `q3dm17`, `demo1` | All parity checks pass, every screenshot compares within threshold, and aggregate performance counters stay within the approved baseline growth budget. |
 | `rc-stress` | Developer stress gate for indirect static-world paths before any advanced GLx path becomes a default. | `glx-stress` / `r_glxProfile stress` | `q3dm1`, `q3dm17`, `demo1` | All runs pass, screenshots are written, and timedemo metrics are captured. |
 
 The initial scene set is deliberately small and stock-data friendly. It may grow as bugs are found, but it should not shrink during an RC cycle.
 
 The profile names are not just documentation labels. `glx-parity` launches GLx with `r_glxProfile rc`, and `glx-stress` launches GLx with `r_glxProfile stress`, so startup-sensitive resources are built under the same profile that `glxprofile status` reports in the renderer.
 
+## Frozen RC Profile
+
+The conservative RC profile is frozen as a cvar contract between the runtime renderer and the sweep harness. `code/rendererglx/glx_module.cpp` owns the `r_glxProfile rc` table, while `scripts/glx_runtime_sweep.py` owns the `glx-parity` launch profile. `tests/glx/glx_runtime_sweep_tests.py` parses the runtime table and fails if the script profile drifts from it.
+
+Use `python scripts/glx_runtime_sweep.py --list-profiles` to print the exact profile values used by sweeps. The RC profile enables the compatibility-first GLx world renderer, guarded stream draw, material renderer/precache, packet-batch static spans, final-pass bloom parity, GPU timing, and the state-only shadow/beam/postprocess dynamic draw-array submissions. It intentionally keeps dynamic-light/screen-map/video-map material gates and indirect static-world submission off; those stay in the stress profile or explicit developer overrides until their gates have evidence.
+
 ## Exit Criteria
 
 A GLx RC candidate must meet all of these conditions:
 
-- `rc-smoke` and `rc-parity` pass on every blocking runtime platform.
-- The generated manifest, logs, screenshots, and timedemo metrics are archived with the candidate build.
+- `rc-smoke`, `rc-parity`, and `rc-proof` pass on every blocking runtime platform.
+- The generated manifest, logs, screenshots, screenshot diffs, Markdown summary, timedemo metrics, and performance comparisons are archived with the candidate build.
 - The GLx timedemo result is at least 90% of the legacy `opengl` timedemo result for each required demo on the same machine. A lower result needs a tracked waiver with the measured cause.
 - Manual screenshot review finds no unexplained drift in world visibility, sky, fog, lightmaps, weapon placement, marks/decals, particles, HUD/2D, bloom, gamma, or final output size.
-- GLx diagnostic output shows no shader compile/link failures, material path `not-ready` state, GL errors, postprocess fallback output, or unexpected loss of the static-world/stream fallback guarantees.
+- GLx diagnostic output shows no shader compile/link failures, material path `not-ready` state, GL errors, postprocess fallback output, streamed dynamic-scene fallback growth, or unexpected loss of the static-world/stream fallback guarantees.
 - `renderer_switch opengl,glx,opengl,glx` loops do not leak state, fail screenshot capture, lose the cgame/UI, or leave the next renderer in a partially initialized state.
 - `rc-stress` is clean before indirect static-world or other advanced GLx paths are promoted to default behavior.
 
@@ -51,8 +58,10 @@ From the repository root:
 
 ```sh
 python scripts/glx_runtime_sweep.py --list-gates
+python scripts/glx_runtime_sweep.py --list-profiles
 python scripts/glx_runtime_sweep.py --gate rc-smoke --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root
 python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root
+python scripts/glx_runtime_sweep.py --gate rc-proof --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root --proof-dir .tmp/glx-proof/windows-x64
 python scripts/glx_runtime_sweep.py --gate rc-stress --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root
 ```
 
@@ -76,6 +85,8 @@ python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnquake3.glx.
 
 The initial thresholds are intentionally tight and should be adjusted only with reviewed evidence. Missing baselines or failed comparisons fail a non-dry-run gate when a baseline directory is supplied.
 
+For hard RC proof, prefer `--gate rc-proof --proof-dir <dir>`. The proof directory defaults screenshot baselines to `<dir>/screenshots`, performance baselines to `<dir>/performance-baseline.json`, screenshot diffs to the run artifact directory, and the Markdown summary to the run artifact directory. `rc-proof` rejects baseline-approval mode before launching runtime work; approve refreshed visual and performance baselines in a separate reviewed `rc-parity` run before using them as proof inputs.
+
 ## Diagnostic Gate Analysis
 
 Non-dry-run gate manifests now include structured analysis of the GLx diagnostic commands emitted during screenshot sweeps. The analyzer reads the `glxmaterial`, `glxpostprocess`, and `glxstaticworld`/stream sections from the run log and fails the gate on release-blocking renderer states:
@@ -83,18 +94,18 @@ Non-dry-run gate manifests now include structured analysis of the GLx diagnostic
 - material renderer enabled but not ready under the RC/stress profiles;
 - material compile, link, precache, bind, not-ready, or program-limit failures;
 - requested FBO output that is not ready, FBO init failures, bloom create failures, bloom pass failures, or minimized final output;
-- dynamic stream readiness loss under the RC/stress profiles, sync/upload/reservation failures, same-frame wrap rejects, or streamed draw fallbacks;
+- dynamic stream readiness loss under the RC/stress profiles, sync/upload/reservation failures, same-frame wrap rejects, streamed draw fallbacks, material-program stream skips, or high-risk dynamic-light/screen-map/video-map material stream draws;
 - static-world renderer or packet batching disabled under the RC/stress profiles, static arena/indirect-buffer failures, or static-world GL errors.
 
 Ordinary compatibility counters, unsupported capability fallbacks, packet-shape data, skipped material keys, and other tuning metrics remain in the manifest and Markdown summary for review, but they are not treated as blocking failures by themselves.
 
 ## Performance Samples
 
-During GLx screenshot captures the sweep briefly enables `r_speeds 7`, waits a small number of frames, captures the screenshot, and disables `r_speeds` again. The compact `glx:` frame-counter lines are parsed into the manifest and Markdown summary as performance samples. They include tier, draw/index pressure, stream strategy/readiness, backend GPU timer text, material renderer failure counts, postprocess output state, stream draw pressure, and static-world draw/MDI counters.
+During GLx screenshot captures the sweep briefly enables `r_speeds 7`, waits a small number of frames, captures the screenshot, and disables `r_speeds` again. The compact `glx:` frame-counter lines are parsed into the manifest and Markdown summary as performance samples. They include tier, draw/index pressure, stream strategy/readiness, backend GPU timer text, material renderer failure counts, postprocess output state, stream draw pressure, material-shape stream draw counts, state-only dynamic stream draw counts, and static-world draw/MDI counters.
 
 Named RC gates require at least one GLx frame-counter sample in a non-dry-run screenshot sweep. `--perf-sample-wait` controls the number of frames sampled around each GLx capture, and `--no-perf-samples` is available only for focused local experiments that should not count as RC gate evidence.
 
-Named gates also apply a built-in performance budget to the aggregate sample maxima. The default budget blocks stream rejects, material shader failures, material bind/precache failures, streamed/static draw fallbacks, and static MDI errors from silently entering RC evidence. For local experiments use `--no-performance-budget`; for runner-specific limits add a JSON file with `--performance-budget`:
+Named gates also apply a built-in performance budget to the aggregate sample maxima. The default budget blocks stream rejects, material shader failures, material bind/precache failures, streamed/static draw fallbacks, high-risk dynamic-light/screen-map/video-map material stream draws, and static MDI errors from silently entering RC evidence. For local experiments use `--no-performance-budget`; for runner-specific limits add a JSON file with `--performance-budget`:
 
 ```json
 {
@@ -108,15 +119,15 @@ Named gates also apply a built-in performance budget to the aggregate sample max
 }
 ```
 
-Performance baselines are separate from hard budgets. Approve a reviewed aggregate sample with `--performance-baseline path/to/glx-performance.json --approve-performance-baseline`, then compare future candidates with `--performance-baseline path/to/glx-performance.json`. Counter growth is checked for draw/index pressure, stream pressure, fallback counters, and static-world counters; `--performance-max-growth-ratio` defaults to 20%.
+Performance baselines are separate from hard budgets. Approve a reviewed aggregate sample with `--performance-baseline path/to/glx-performance.json --approve-performance-baseline`, then compare future candidates with `--performance-baseline path/to/glx-performance.json`. Counter growth is checked for draw/index pressure, stream pressure, material-shape and state-only stream draw counts, fallback counters, and static-world counters; `--performance-max-growth-ratio` defaults to 20%. `rc-proof` requires a compared performance baseline rather than an approval run.
 
 ## Automated Verification
 
 `.github/workflows/glx-verification.yml` provides the first renderer-focused automation surface for these gates:
 
-- `GLx logic tests` builds and runs the deterministic `fnq3_glx_logic_tests` target on hosted Ubuntu.
+- `GLx logic and boundary tests` builds the deterministic `fnq3_glx_logic_tests` target on hosted Ubuntu, then runs both the pure logic tests and the GLx header-boundary scan through CTest.
 - `GLx RC gate plans` runs every named gate in `--dry-run` mode, writes the generated configs/manifests/Markdown summaries under `.tmp/glx-gate-plans`, runs the sweep image/diagnostic/performance unit tests, and uploads the gate-plan artifacts. This catches drift between the documented gates and the script-owned cvar/scene presets without requiring retail assets.
-- `GLx runtime sweep` is a manual `workflow_dispatch` job for self-hosted GPU runners labeled for GLx validation. It requires a built client executable and a retail `baseq3` basepath, can optionally approve or compare screenshot and performance baselines, accepts an extra performance budget file, writes a Markdown summary, and uploads the full sweep output for review.
+- `GLx runtime sweep` is a manual `workflow_dispatch` job for self-hosted GPU runners labeled for GLx validation. It requires a built client executable and a retail `baseq3` basepath, accepts `proof_dir` for hard proof runs, preserves the screenshot threshold and performance-growth inputs whether baselines are explicit or proof-derived, can optionally approve or compare screenshot and performance baselines, accepts an extra performance budget file, writes a Markdown summary, and uploads the full sweep output for review.
 
 The pure logic target intentionally covers GLx decisions that do not need a driver: capability-tier and extension parsing, stream strategy fallback selection, material-key allowlists, static-world packet classification, and static draw-policy gating. Runtime sweeps remain responsible for the parts that require a real OpenGL context, retail assets, and screenshots.
 

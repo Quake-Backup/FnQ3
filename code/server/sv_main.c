@@ -27,6 +27,9 @@ server_t		sv;					// local server
 vm_t			*gvm = NULL;		// game virtual machine
 
 cvar_t	*sv_fps;				// time rate for running non-clients
+cvar_t	*sv_audioPVS;			// expanded sound emitter snapshots
+cvar_t	*sv_audioPVSRange;		// max distance for expanded sound emitter snapshots
+cvar_t	*sv_audioPVSMaxEntities;	// max expanded sound emitters per snapshot
 cvar_t	*sv_timeout;			// seconds without any message
 cvar_t	*sv_zombietime;			// seconds to sink messages after disconnect
 cvar_t	*sv_rconPassword;		// password for remote server commands

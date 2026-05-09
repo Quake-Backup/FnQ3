@@ -265,6 +265,7 @@
     <ClInclude Include="..\..\renderer\qgl.h" />
     <ClInclude Include="..\..\renderer\tr_common.h" />
     <ClInclude Include="..\..\renderer\tr_local.h" />
+    <ClInclude Include="..\..\renderercommon\tr_glx_api.h" />
     <ClInclude Include="..\..\renderercommon\tr_glx_public.h" />
     <ClInclude Include="..\..\renderercommon\tr_public.h" />
     <ClInclude Include="..\..\renderercommon\tr_types.h" />

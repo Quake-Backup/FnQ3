@@ -49,7 +49,13 @@ on:
         options:
           - rc-smoke
           - rc-parity
+          - rc-proof
           - rc-stress
+      proof_dir:
+        description: Optional directory containing approved screenshot and performance proof baselines.
+        required: false
+        default: ''
+        type: string
       runtime_exe:
         description: Path to the built FnQuake3 client executable on the runtime runner.
         required: false
@@ -103,7 +109,7 @@ on:
 
 jobs:
   glx-logic-tests:
-    name: GLx logic tests
+    name: GLx logic and boundary tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -126,8 +132,8 @@ jobs:
       - name: Build GLx logic tests
         run: cmake --build .tmp/cmake-glx-verification --target fnq3_glx_logic_tests
 
-      - name: Run GLx logic tests
-        run: ctest --test-dir .tmp/cmake-glx-verification -R fnq3_glx_logic --output-on-failure
+      - name: Run GLx logic and boundary tests
+        run: ctest --test-dir .tmp/cmake-glx-verification -R "fnq3_glx_(logic|header_boundary)" --output-on-failure
 
   glx-gate-plans:
     name: GLx RC gate plans
@@ -136,7 +142,9 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: List GLx RC gates
-        run: python scripts/glx_runtime_sweep.py --list-gates
+        run: |
+          python scripts/glx_runtime_sweep.py --list-gates
+          python scripts/glx_runtime_sweep.py --list-profiles
 
       - name: Run GLx sweep Python tests
         run: python tests/glx/glx_runtime_sweep_tests.py
@@ -144,14 +152,19 @@ jobs:
       - name: Generate dry-run gate artifacts
         run: |
           mkdir -p .tmp/glx-gate-plans
-          for gate in rc-smoke rc-parity rc-stress; do
+          for gate in rc-smoke rc-parity rc-proof rc-stress; do
+            proof_args=""
+            if [ "$gate" = "rc-proof" ]; then
+              proof_args="--proof-dir .tmp/glx-gate-plans/proof"
+            fi
             python scripts/glx_runtime_sweep.py \
               --gate "$gate" \
               --dry-run \
               --exe ".tmp/glx-gate-plans/fnquake3.glx" \
               --basepath ".tmp/glx-gate-plans/basepath" \
               --output-dir ".tmp/glx-gate-plans" \
-              --summary-markdown ".tmp/glx-gate-plans/${gate}.md"
+              --summary-markdown ".tmp/glx-gate-plans/${gate}.md" \
+              $proof_args
             cat ".tmp/glx-gate-plans/${gate}.md" >> "$GITHUB_STEP_SUMMARY"
           done
 
@@ -173,6 +186,8 @@ jobs:
       - name: Validate runtime inputs
         shell: python
         env:
+          FNQ3_GLX_RUNTIME_GATE: ${{ inputs.runtime_gate }}
+          FNQ3_GLX_PROOF_DIR: ${{ inputs.proof_dir }}
           FNQ3_GLX_RUNTIME_EXE: ${{ inputs.runtime_exe }}
           FNQ3_GLX_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath }}
           FNQ3_GLX_SCREENSHOT_BASELINE_DIR: ${{ inputs.screenshot_baseline_dir }}
@@ -194,19 +209,50 @@ jobs:
               sys.exit(2)
           if (
               os.environ.get("FNQ3_GLX_APPROVE_SCREENSHOT_BASELINES") == "true" and
-              not os.environ.get("FNQ3_GLX_SCREENSHOT_BASELINE_DIR")
+              not (
+                  os.environ.get("FNQ3_GLX_SCREENSHOT_BASELINE_DIR") or
+                  os.environ.get("FNQ3_GLX_PROOF_DIR")
+              )
           ):
               print(
-                  "screenshot_baseline_dir is required when approving screenshot baselines.",
+                  "screenshot_baseline_dir or proof_dir is required when approving screenshot baselines.",
                   file=sys.stderr,
               )
               sys.exit(2)
           if (
               os.environ.get("FNQ3_GLX_APPROVE_PERFORMANCE_BASELINE") == "true" and
-              not os.environ.get("FNQ3_GLX_PERFORMANCE_BASELINE")
+              not (
+                  os.environ.get("FNQ3_GLX_PERFORMANCE_BASELINE") or
+                  os.environ.get("FNQ3_GLX_PROOF_DIR")
+              )
           ):
               print(
-                  "performance_baseline is required when approving performance baselines.",
+                  "performance_baseline or proof_dir is required when approving performance baselines.",
+                  file=sys.stderr,
+              )
+              sys.exit(2)
+          if (
+              os.environ.get("FNQ3_GLX_RUNTIME_GATE") == "rc-proof" and
+              (
+                  os.environ.get("FNQ3_GLX_APPROVE_SCREENSHOT_BASELINES") == "true" or
+                  os.environ.get("FNQ3_GLX_APPROVE_PERFORMANCE_BASELINE") == "true"
+              )
+          ):
+              print(
+                  "rc-proof compares reviewed baselines; approve refreshed baselines in a separate rc-parity run.",
+                  file=sys.stderr,
+              )
+              sys.exit(2)
+          if (
+              os.environ.get("FNQ3_GLX_RUNTIME_GATE") == "rc-proof" and
+              not os.environ.get("FNQ3_GLX_PROOF_DIR") and
+              not (
+                  os.environ.get("FNQ3_GLX_SCREENSHOT_BASELINE_DIR") and
+                  os.environ.get("FNQ3_GLX_PERFORMANCE_BASELINE")
+              )
+          ):
+              print(
+                  "rc-proof requires proof_dir or both screenshot_baseline_dir and performance_baseline.",
                   file=sys.stderr,
               )
               sys.exit(2)
@@ -215,6 +261,7 @@ jobs:
         shell: python
         env:
           FNQ3_GLX_RUNTIME_GATE: ${{ inputs.runtime_gate }}
+          FNQ3_GLX_PROOF_DIR: ${{ inputs.proof_dir }}
           FNQ3_GLX_RUNTIME_EXE: ${{ inputs.runtime_exe }}
           FNQ3_GLX_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath }}
           FNQ3_GLX_SCREENSHOT_BASELINE_DIR: ${{ inputs.screenshot_baseline_dir }}
@@ -248,22 +295,36 @@ jobs:
               "--summary-markdown",
               str(summary_path),
           ]
+          proof_dir = os.environ.get("FNQ3_GLX_PROOF_DIR", "")
+          if proof_dir:
+              command.extend(["--proof-dir", proof_dir])
+
           baseline_dir = os.environ.get("FNQ3_GLX_SCREENSHOT_BASELINE_DIR", "")
           if baseline_dir:
               command.extend(
                   [
                       "--screenshot-baseline-dir",
                       baseline_dir,
-                      "--screenshot-diff-dir",
-                      str(output_dir / "diffs"),
+                  ]
+              )
+              if not proof_dir:
+                  command.extend(
+                      [
+                          "--screenshot-diff-dir",
+                          str(output_dir / "diffs"),
+                      ]
+                  )
+          if baseline_dir or proof_dir:
+              command.extend(
+                  [
                       "--screenshot-max-rms",
                       os.environ["FNQ3_GLX_SCREENSHOT_MAX_RMS"],
                       "--screenshot-max-pixel-ratio",
                       os.environ["FNQ3_GLX_SCREENSHOT_MAX_PIXEL_RATIO"],
                   ]
               )
-              if os.environ.get("FNQ3_GLX_APPROVE_SCREENSHOT_BASELINES") == "true":
-                  command.append("--approve-screenshot-baselines")
+          if os.environ.get("FNQ3_GLX_APPROVE_SCREENSHOT_BASELINES") == "true":
+              command.append("--approve-screenshot-baselines")
 
           performance_budget = os.environ.get("FNQ3_GLX_PERFORMANCE_BUDGET", "")
           if performance_budget:
@@ -275,12 +336,17 @@ jobs:
                   [
                       "--performance-baseline",
                       performance_baseline,
+                  ]
+              )
+          if performance_baseline or proof_dir:
+              command.extend(
+                  [
                       "--performance-max-growth-ratio",
                       os.environ["FNQ3_GLX_PERFORMANCE_MAX_GROWTH_RATIO"],
                   ]
               )
-              if os.environ.get("FNQ3_GLX_APPROVE_PERFORMANCE_BASELINE") == "true":
-                  command.append("--approve-performance-baseline")
+          if os.environ.get("FNQ3_GLX_APPROVE_PERFORMANCE_BASELINE") == "true":
+              command.append("--approve-performance-baseline")
 
           subprocess.check_call(command)
 

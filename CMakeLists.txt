@@ -159,6 +159,11 @@ IF(FNQ3_AUDIO_LOOPBACK_TESTS)
 	target_include_directories(fnq3_audio_recovery_tests PRIVATE code/audio)
 	add_test(NAME fnq3_audio_recovery COMMAND fnq3_audio_recovery_tests)
 
+	ADD_EXECUTABLE(fnq3_audio_occlusion_tests tests/audio/occlusion_policy_tests.cpp)
+	target_compile_features(fnq3_audio_occlusion_tests PRIVATE cxx_std_17)
+	target_include_directories(fnq3_audio_occlusion_tests PRIVATE code/audio)
+	add_test(NAME fnq3_audio_occlusion COMMAND fnq3_audio_occlusion_tests)
+
 	ADD_EXECUTABLE(fnq3_audio_loopback_tests tests/audio/openal_loopback_tests.cpp)
 	target_compile_features(fnq3_audio_loopback_tests PRIVATE cxx_std_17)
 	target_include_directories(fnq3_audio_loopback_tests PRIVATE code/openal/include)

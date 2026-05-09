@@ -9,6 +9,7 @@ namespace glx {
 static constexpr unsigned int GLX_MATERIAL_FEATURE_NONE = 0x0000;
 static constexpr unsigned int GLX_MATERIAL_FEATURE_TEXMOD = 0x0001;
 static constexpr unsigned int GLX_MATERIAL_FEATURE_ENVIRONMENT = 0x0002;
+static constexpr unsigned int GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT = 0x0004;
 
 enum class MaterialProgramMode {
 	SingleTexture,
@@ -23,6 +24,29 @@ struct MaterialProgramKey {
 	MaterialProgramMode mode;
 	unsigned int features;
 };
+
+static ID_INLINE qboolean GLX_Material_FeaturesAllowedForMode( MaterialProgramMode mode,
+	unsigned int features )
+{
+	const unsigned int singleTextureFeatures = GLX_MATERIAL_FEATURE_TEXMOD |
+		GLX_MATERIAL_FEATURE_ENVIRONMENT | GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT;
+	const unsigned int multitextureFeatures = GLX_MATERIAL_FEATURE_TEXMOD |
+		GLX_MATERIAL_FEATURE_ENVIRONMENT;
+
+	switch ( mode ) {
+	case MaterialProgramMode::SingleTexture:
+		return ( features & ~singleTextureFeatures ) == 0 ? qtrue : qfalse;
+	case MaterialProgramMode::MultiModulate:
+	case MaterialProgramMode::MultiAdd:
+	case MaterialProgramMode::MultiReplace:
+	case MaterialProgramMode::MultiDecal:
+		return ( features & ~multitextureFeatures ) == 0 ? qtrue : qfalse;
+	case MaterialProgramMode::Fog:
+		return features == GLX_MATERIAL_FEATURE_NONE ? qtrue : qfalse;
+	default:
+		return qfalse;
+	}
+}
 
 static ID_INLINE qboolean GLX_Material_ModeForInputs( int flags, int materialCombine,
 	qboolean fogPass, MaterialProgramMode *mode )
@@ -74,6 +98,9 @@ static ID_INLINE unsigned int GLX_Material_FeaturesForInputs( int flags,
 	if ( flags & GLX_STAGE_ENVIRONMENT ) {
 		features |= GLX_MATERIAL_FEATURE_ENVIRONMENT;
 	}
+	if ( flags & GLX_STAGE_DEPTH_FRAGMENT ) {
+		features |= GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT;
+	}
 
 	return features;
 }
@@ -89,6 +116,9 @@ static ID_INLINE qboolean GLX_Material_KeyForInputs( int flags, int materialComb
 
 	key->mode = mode;
 	key->features = GLX_Material_FeaturesForInputs( flags, texMods0, texMods1, fogPass );
+	if ( !GLX_Material_FeaturesAllowedForMode( key->mode, key->features ) ) {
+		return qfalse;
+	}
 	return qtrue;
 }
 

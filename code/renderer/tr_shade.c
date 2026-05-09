@@ -57,6 +57,13 @@ shaderCommands_t	tess;
 static qboolean	setArraysOnce;
 
 #ifdef RENDERER_GLX
+static qboolean GLX_StreamDrawStageMaterialAllowed( const shaderStage_t *pStage, int materialFlags )
+{
+	return GLX_CompatStreamDrawAllowsMaterial( materialFlags, pStage->stateBits,
+		pStage->rgbGen, pStage->alphaGen, pStage->bundle[0].tcGen,
+		pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods );
+}
+
 static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const shaderStage_t *pStage, qboolean multitexture, GLint multitextureEnv )
 {
 	glxStreamReservation_t reservation;
@@ -87,11 +94,15 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_BAD_INPUT );
 		return qfalse;
 	}
+
+	materialFlags = GLX_CompatMaterialStageFlags( pStage );
 	if ( multitexture && !GLX_CompatStreamDrawMultitextureEnabled() ) {
+		GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags );
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MULTITEXTURE );
 		return qfalse;
 	}
 	if ( pStage->depthFragment && ( multitexture || !GLX_CompatStreamDrawDepthFragmentEnabled() ) ) {
+		GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags );
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_DEPTH_FRAGMENT );
 		return qfalse;
 	}
@@ -108,10 +119,7 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		return qfalse;
 	}
 
-	materialFlags = GLX_CompatMaterialStageFlags( pStage );
-	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, pStage->stateBits,
-		pStage->rgbGen, pStage->alphaGen, pStage->bundle[0].tcGen,
-		pStage->bundle[0].numTexMods, pStage->bundle[1].numTexMods ) ) {
+	if ( !GLX_StreamDrawStageMaterialAllowed( pStage, materialFlags ) ) {
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_KEY );
 		return qfalse;
 	}

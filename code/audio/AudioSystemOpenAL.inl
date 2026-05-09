@@ -1240,6 +1240,11 @@ void OpenALDevice::PrintCapabilityMatrix() const {
 	Com_Printf( "  AL_SOFT_source_latency: %s (alGetSourcedvSOFT %s)\n",
 		AvailableUnavailable( caps.sourceLatency ),
 		LoadedMissing( caps.alGetSourcedvSOFT ) );
+	Com_Printf( "  EFX: %s (filters %s, reverb send %s, aux sends %d)\n",
+		AvailableUnavailable( efxAvailable_ ),
+		AvailableUnavailable( filterAvailable_ ),
+		reverbEnabled_ ? "enabled" : "disabled",
+		maxAuxSends_ );
 	Com_Printf( "  AL_SOFT_events: %s (event control %s, callback %s)\n",
 		AvailableUnavailable( caps.sourceEvents ),
 		LoadedMissing( caps.alEventControlSOFT ),

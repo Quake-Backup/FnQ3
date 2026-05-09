@@ -1159,10 +1159,10 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 		}
 		occlusion = voice.occlusion;
 		const float distanceMix = ClampFloat( distance / 512.0f, 0.0f, 1.0f );
-		directGain = ClampFloat( 1.0f - occlusion * kOcclusionDirectAttenuation, kOcclusionDirectGainMinimum, 1.0f );
-		directToneHF = ClampFloat( environment_.directHF * ( 1.0f - occlusion * kOcclusionDirectHFCut ), kOcclusionDirectHFMinimum, 1.0f );
-		wetGain = ClampFloat( environment_.baseWet * ( 0.35f + distanceMix * 0.65f ) + occlusion * kOcclusionWetBoost, 0.0f, 1.0f );
-		wetGainHF = ClampFloat( environment_.wetHF * ( 1.0f - occlusion * kOcclusionWetHFCut ), kOcclusionWetHFMinimum, 1.0f );
+		directGain = occ::DirectGain( occlusion );
+		directToneHF = occ::DirectHF( environment_.directHF, occlusion );
+		wetGain = occ::WetGain( environment_.baseWet, distanceMix, occlusion );
+		wetGainHF = occ::WetHF( environment_.wetHF, occlusion );
 	} else {
 		ResetVoiceOcclusion( voice, 0.0f, now );
 	}

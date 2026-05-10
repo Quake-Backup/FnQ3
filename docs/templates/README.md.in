@@ -57,6 +57,7 @@ Fappin' and Fraggin'
 
 - [Build Guide](BUILD.md) if you want to compile FnQuake3 yourself.
 - [Display Guide](docs/DISPLAY.md) for renderer choice, video modes, render scaling, HDR, anti-aliasing, and bloom tuning.
+- [GLx Renderer Guide](docs/GLX.md) for the canonical OpenGL-lineage renderer, migration notes, diagnostics, and troubleshooting.
 - [Visuals Guide](docs/VISUALS.md) for player highlighting and the current visual presentation controls.
 - [Aspect Correction Guide](docs/ASPECT_CORRECTION.md) for HUD, menu, and cinematic presentation options.
 - [Audio Guide](docs/AUDIO.md) for backend defaults, device/HRTF selection, volume, music, spatial audio, fallback behavior, and troubleshooting tools.

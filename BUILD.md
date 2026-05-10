@@ -10,7 +10,7 @@ Install Visual Studio Community Edition 2017 or later, then open and build the `
 
 The resulting executable is written to `code/win32/msvc2017/output`.
 
-If you want the Vulkan backend, clean the solution, right-click the `fnquake3` project, open `Project Dependencies`, and select `renderervk` instead of `renderer`. If you want the experimental GLx backend, select the separate `rendererglx` project instead.
+If you want the Vulkan backend, clean the solution, right-click the `fnquake3` project, open `Project Dependencies`, and select `renderervk` instead of `renderer`. If you want a single-renderer GLx test build, select the separate `rendererglx` project instead.
 
 ---
 
@@ -121,7 +121,7 @@ Several Makefile options are available for Linux, MinGW, and macOS builds:
 
 `USE_VULKAN=1` - build vulkan modular renderer, enabled by default
 
-`USE_GLX=1` - build the experimental GLx modular renderer, disabled by default while the renderer is being brought up. GLx currently reuses the compatibility OpenGL renderer as its rendering baseline while adding GLx-owned capability detection, debug callbacks, GPU timing, static-world telemetry, and stream strategy selection.
+`USE_GLX=1` - build the GLx modular renderer, enabled by default for dynamic renderer builds. GLx is the canonical OpenGL-lineage renderer path for capability tiers, debug callbacks, GPU timing, static-world acceleration, dynamic streaming, material execution, postprocess parity, and promotion proof.
 
 `USE_OPENGL=1` - build opengl modular renderer, enabled by default
 
@@ -133,12 +133,14 @@ Several Makefile options are available for Linux, MinGW, and macOS builds:
 
 Choosing `RENDERER_DEFAULT=glx` also enables `USE_GLX=1` so the selected renderer is actually included in the build.
 
+Release builds must not promote GLx as the default or alias `opengl` to GLx until `python scripts/glx_promotion.py --proof-root <reviewed-glx-proof-root> --require-ready` passes. Local `RENDERER_DEFAULT=glx` builds remain useful for explicit developer testing, but the repository default stays `opengl` until the promotion gate is green.
+
 `USE_SYSTEM_JPEG=0` - use current system JPEG library, disabled by default
 
 Example:
 
 `make BUILD_SERVER=0 USE_RENDERER_DLOPEN=0 RENDERER_DEFAULT=vulkan` - build the client with a single static Vulkan renderer and skip the dedicated server binary
 
-`make BUILD_SERVER=0 USE_GLX=1` - include the experimental GLx renderer module so it can be selected with `\cl_renderer glx` after a `\vid_restart`
+`make BUILD_SERVER=0 USE_GLX=1` - include the GLx renderer module so it can be selected with `\cl_renderer glx` after a `\vid_restart`
 
-For CMake/Ninja or CMake/Visual Studio builds, pass `-DUSE_GLX=ON` to include the experimental GLx modular renderer.
+For CMake/Ninja or CMake/Visual Studio builds, pass `-DUSE_GLX=ON` to include the GLx modular renderer.

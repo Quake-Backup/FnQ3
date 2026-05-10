@@ -8,11 +8,11 @@ For HUD, menu, and cinematic layout on widescreen displays, use the separate [As
 
 `cl_renderer` selects the rendering backend and requires `vid_restart`.
 
-- `cl_renderer opengl`: Best choice if you want the full bloom feature set. OpenGL exposes the extra bloom shape controls, the lens reflection effect, and the HUD-inclusive `r_bloom 2` mode.
-- `cl_renderer glx`: Experimental OpenGL-lineage renderer available only in builds made with `USE_GLX=1` or `-DUSE_GLX=ON`. It preserves the OpenGL display and bloom surface while GLx-owned capability, streaming, static-world, material, and profiling paths are brought up behind compatibility fallbacks.
+- `cl_renderer opengl`: Legacy OpenGL renderer and current compatibility default.
+- `cl_renderer glx`: Canonical OpenGL-lineage renderer module. Normal modular builds include it, and it preserves the OpenGL display and bloom surface while adding GLx-owned capability tiers, streaming, static-world, material, postprocess, output, and profiling paths.
 - `cl_renderer vulkan`: Modern backend with the same core display path controls for FBO rendering, HDR, multisampling, supersampling, render scaling, gamma, and greyscale. Bloom is available here too, but the exposed control set is smaller.
 
-If you are tuning bloom heavily, start on `opengl`. Use `glx` for renderer parity testing or GLx diagnostics. If you want the simpler cross-platform path and do not need the OpenGL-only bloom extras, `vulkan` is fine.
+Use `glx` for OpenGL-lineage validation, GLx diagnostics, and the renderer path intended for promotion once [GLX_PROMOTION.md](fnquake3/GLX_PROMOTION.md) is green. Use `opengl` when you need the current legacy default for comparison or rollback. If you want the simpler cross-platform path and do not need the OpenGL-only bloom extras, `vulkan` is fine. See [GLX.md](GLX.md) for GLx migration and troubleshooting notes.
 
 ## Display Modes And Window Behavior
 
@@ -180,7 +180,7 @@ Bloom extracts bright areas from the rendered frame, blurs them through a downsa
 
 - `r_fbo 1` is required.
 - OpenGL and Vulkan both support bloom.
-- OpenGL exposes the largest bloom control set. GLx preserves that same control surface while it is experimental.
+- OpenGL exposes the largest bloom control set. GLx preserves that same control surface as the canonical OpenGL-lineage renderer.
 - Vulkan currently exposes the shared extraction and intensity controls, but not the OpenGL-only shape controls.
 
 ### Shared Bloom Controls
@@ -214,7 +214,7 @@ Recommended tuning order:
 
 ### OpenGL And GLx Bloom Controls
 
-These settings are currently specific to the OpenGL-lineage renderers, `opengl` and experimental `glx`.
+These settings are currently specific to the OpenGL-lineage renderers, `opengl` and `glx`.
 
 - `r_bloom_passes`: Number of downsampled bloom levels used in the effect. More passes generally create a wider haze and cost more GPU time. The engine may clamp the effective chain length based on hardware limits or very small internal render sizes.
 - `r_bloom_blend_base`: Which downsampled level to start blending from. Higher values skip the tighter levels and bias the result toward a broader, softer haze.

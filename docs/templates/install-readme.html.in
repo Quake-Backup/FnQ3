@@ -312,6 +312,7 @@
       <ul>
         <li><a href="../BUILD.md">Build Guide</a> if you want to compile FnQuake3 yourself.</li>
         <li><a href="../docs/DISPLAY.md">Display Guide</a> for renderer choice, video modes, render scaling, HDR, anti-aliasing, and bloom tuning.</li>
+        <li><a href="../docs/GLX.md">GLx Renderer Guide</a> for the canonical OpenGL-lineage renderer, migration notes, diagnostics, and troubleshooting.</li>
         <li><a href="../docs/VISUALS.md">Visuals Guide</a> for player highlighting and the current visual presentation controls.</li>
         <li><a href="../docs/ASPECT_CORRECTION.md">Aspect Correction Guide</a> for HUD, menu, and cinematic presentation options.</li>
         <li><a href="../docs/AUDIO.md">Audio Guide</a> for backend defaults, device/HRTF selection, volume, music, spatial audio, fallback behavior, and troubleshooting tools.</li>

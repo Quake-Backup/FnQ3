@@ -215,25 +215,35 @@ The current workflow has strong logic tests and optional runtime sweeps. Make GP
 **Contract:** [Promotion Rules](../fnquake3/GLX_FINAL_CONTRACT.md#promotion-rules).  
 **Done when:** screenshot baselines, performance baselines, and proof artifacts are required, not optional side runs. fileciteturn8file1 fileciteturn8file2
 
+**Implemented by:** `glx_runtime_sweep.py` now writes stable `proofPlatform` metadata, exposes a release proof-root validator, and re-evaluates non-dry-run `rc-smoke`, `rc-parity`, and `rc-proof` manifests for the blocking `windows-x64` and `linux-x86_64` matrix. `release.py --channel release` requires `--glx-proof-root` and refuses tagged packaging unless that validator passes, while `glx-verification.yml` runs a scheduled self-hosted `rc-parity` sweep for mainline and preserves manual proof-gate dispatch for reviewed baselines. Docs and tests now describe and enforce the mandatory proof policy.
+
 **Task U — Expand the current counters into hard budgets**  
 Use the existing profiler surface to define per-tier budgets for draw calls, upload volume, fallback counts, shader binds, static packet misses, same-frame stream wrap rejects, and GPU frame time.  
 **Contract:** [Product Tier Matrix](../fnquake3/GLX_FINAL_CONTRACT.md#product-tier-matrix), [Tier Feature Matrix](../fnquake3/GLX_FINAL_CONTRACT.md#tier-feature-matrix), and [Promotion Rules](../fnquake3/GLX_FINAL_CONTRACT.md#promotion-rules).  
 **Done when:** CI and RC proof jobs fail when the renderer regresses outside approved thresholds. fileciteturn9file0 fileciteturn8file1
+
+**Implemented by:** `glx_runtime_sweep.py` now parses numeric GPU frame time, shader/material bind pressure, stream upload volume, same-frame wrap rejects, static draw packet misses, static queue packet misses, and static packet lookup misses from `r_speeds 7` GLx captures. The built-in performance budget now has global zero-tolerance fallback/error limits plus per-tier hard budgets for `GL12`, `GL2X`, `GL3X`, `GL41`, and `GL46`; modern tiers also require a numeric GPU frame-time sample. Budget overrides merge by tier, runtime gate manifests record the active budget, and `evaluate_gate` fails RC proof jobs when aggregate samples exceed those thresholds.
 
 **Task V — Add deterministic image and demo parity gates**  
 Create screenshot, demo playback, HUD, shadow, bloom, and cel-shading parity suites. Keep absolute scene lists versioned in the repo.  
 **Contract:** [Pass Order](../fnquake3/GLX_FINAL_CONTRACT.md#pass-order) and [Promotion Rules](../fnquake3/GLX_FINAL_CONTRACT.md#promotion-rules).  
 **Done when:** “fully compatible” is backed by artifact evidence, not manual confidence.
 
+**Implemented by:** The GLx proof corpus now carries versioned screenshot, demo-playback, HUD, shadow, bloom, and cel-shading parity suites with fixed scene IDs and suite-specific cvar overrides for stencil-shadow and cel/outline captures. `rc-proof` and `rc-stress` require those suite records in their manifests, the sweep validates suite versions/tags/scene membership during gate evaluation and release proof-root checks, screenshot entries identify their parity suites and suite cvars, and docs/tests freeze the suite contract so artifact evidence cannot silently drift from the promotion rules.
+
 **Task W — Promote GLx only after passing the full matrix**  
 Do not alias `opengl` to `glx` until the feature matrix is green, the five tiers are real, runtime proof is mandatory, and the legacy dependency is gone.  
 **Contract:** [Promotion Rules](../fnquake3/GLX_FINAL_CONTRACT.md#promotion-rules).  
 **Done when:** `opengl` can safely become a migration alias and `opengl2` can move behind a legacy flag with a rollback package. fileciteturn18file0 fileciteturn18file1
 
+**Implemented by:** GLx promotion is now a separate machine-readable gate in `scripts/glx_promotion.py`. It requires an all-covered feature matrix, the five product tiers, passing release proof for the blocking runtime matrix, passing `glx-ownership` proof with zero legacy delegation, and the migration/rollback contract in `GLX_PROMOTION.md`. Release packaging records the promotion report and refuses a source tree that has already promoted renderer defaults before the gate reports ready, while CI publishes the current blocked-but-policy-compliant promotion report beside the GLx gate plans.
+
 **Task X — Finish the productization work**  
 Update build defaults, help text, docs, migration notes, and troubleshooting so GLx is described as the canonical OpenGL-lineage renderer, not an experiment.  
 **Contract:** [Promotion Rules](../fnquake3/GLX_FINAL_CONTRACT.md#promotion-rules) and [Consequences](../fnquake3/GLX_FINAL_CONTRACT.md#consequences).  
 **Done when:** the docs and build system stop calling GLx experimental. fileciteturn16file0 fileciteturn14file0
+
+**Implemented by:** GLx is now productized as the canonical OpenGL-lineage renderer while remaining promotion-gated for default selection. Make and CMake include the GLx modular renderer by default without changing `RENDERER_DEFAULT=opengl`, current user docs link a GLx renderer guide with migration and troubleshooting notes, build/help text no longer labels GLx experimental, release packages include the GLx guide and promotion policy, and tests freeze the split between “built and documented as canonical” and “not aliased/default until promotion proof is ready.”
 
 ## Release gates and open questions
 

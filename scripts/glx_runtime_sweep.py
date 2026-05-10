@@ -27,6 +27,10 @@ GLX_EXPECTED_PASS_SCHEDULE = (
 GLX_EXPECTED_PASS_SCHEDULE_COUNT = 9
 GLX_EXPECTED_PASS_SCHEDULE_HASH = "0c6d7632"
 GLX_PRODUCT_TIERS = {"GL12", "GL2X", "GL3X", "GL41", "GL46"}
+GLX_BLOCKING_RELEASE_PLATFORMS = ("windows-x64", "linux-x86_64")
+GLX_RELEASE_REQUIRED_GATES = ("rc-smoke", "rc-parity", "rc-proof")
+GLX_RELEASE_PROOF_VERSION = 1
+PROOF_PLATFORM_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "batches",
     "draws",
@@ -87,10 +91,23 @@ PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "gl46StaticMdiCalls",
     "gl46StaticMdiAttempts",
     "gl46StaticMdiIndexes",
+    "gpuFrameMs",
+    "materialBinds",
+    "materialBindAttempts",
+    "materialSwitches",
+    "materialCacheMisses",
+    "streamSameFrameWrapRejects",
+    "streamDrawMegabytes",
+    "streamDrawIndexMegabytes",
+    "streamDrawTex1Megabytes",
+    "staticDrawPacketMisses",
+    "staticQueuePacketMisses",
+    "staticPacketLookupMisses",
 )
 DEFAULT_PERFORMANCE_BUDGET = {
     "max": {
         "streamRejects": 0,
+        "streamSameFrameWrapRejects": 0,
         "materialCompileFailures": 0,
         "materialLinkFailures": 0,
         "materialPrecacheFailures": 0,
@@ -103,6 +120,82 @@ DEFAULT_PERFORMANCE_BUDGET = {
         "staticMdiErrors": 0,
         "gl3xUnsupportedPersistentUploads": 0,
         "gl41UnsupportedPersistentUploads": 0,
+        "staticPacketLookupOverflows": 0,
+    },
+    "tiers": {
+        "GL12": {
+            "max": {
+                "draws": 20000,
+                "drawIndexes": 4000000,
+                "streamMegabytes": 8.0,
+                "streamDrawMegabytes": 8.0,
+                "materialBinds": 0,
+                "materialSwitches": 0,
+                "staticDrawPacketMisses": 20000,
+                "staticQueuePacketMisses": 20000,
+                "staticPacketLookupMisses": 20000,
+                "gpuFrameMs": 66.7,
+            },
+        },
+        "GL2X": {
+            "max": {
+                "draws": 12000,
+                "drawIndexes": 4000000,
+                "streamMegabytes": 128.0,
+                "streamDrawMegabytes": 128.0,
+                "materialBinds": 12000,
+                "materialSwitches": 12000,
+                "staticDrawPacketMisses": 12000,
+                "staticQueuePacketMisses": 12000,
+                "staticPacketLookupMisses": 12000,
+                "gpuFrameMs": 50.0,
+            },
+        },
+        "GL3X": {
+            "required": ("gpuFrameMs",),
+            "max": {
+                "draws": 10000,
+                "drawIndexes": 3500000,
+                "streamMegabytes": 96.0,
+                "streamDrawMegabytes": 96.0,
+                "materialBinds": 10000,
+                "materialSwitches": 10000,
+                "staticDrawPacketMisses": 10000,
+                "staticQueuePacketMisses": 10000,
+                "staticPacketLookupMisses": 10000,
+                "gpuFrameMs": 40.0,
+            },
+        },
+        "GL41": {
+            "required": ("gpuFrameMs",),
+            "max": {
+                "draws": 9000,
+                "drawIndexes": 3000000,
+                "streamMegabytes": 96.0,
+                "streamDrawMegabytes": 96.0,
+                "materialBinds": 9000,
+                "materialSwitches": 9000,
+                "staticDrawPacketMisses": 9000,
+                "staticQueuePacketMisses": 9000,
+                "staticPacketLookupMisses": 9000,
+                "gpuFrameMs": 33.4,
+            },
+        },
+        "GL46": {
+            "required": ("gpuFrameMs",),
+            "max": {
+                "draws": 8000,
+                "drawIndexes": 2500000,
+                "streamMegabytes": 96.0,
+                "streamDrawMegabytes": 96.0,
+                "materialBinds": 8000,
+                "materialSwitches": 8000,
+                "staticDrawPacketMisses": 8000,
+                "staticQueuePacketMisses": 8000,
+                "staticPacketLookupMisses": 8000,
+                "gpuFrameMs": 25.0,
+            },
+        },
     },
 }
 TIMEDEMO_FPS_RE = re.compile(
@@ -524,10 +617,36 @@ GLX_STREAM_CATEGORY_SUMMARY_RE = re.compile(
     r"special\s+(?P<specialDraws>\d+)/(?P<specialAttempts>\d+)",
     re.IGNORECASE,
 )
+GLX_STREAM_RESERVATION_SUMMARY_RE = re.compile(
+    r"glx:\s*stream reservation last\s+(?P<lastBytes>\d+)\s+bytes\s+at\s+"
+    r"(?P<lastOffset>\d+)\s+using\s+(?P<strategy>\S+),\s*"
+    r"largest\s+(?P<largestBytes>\d+)\s+bytes,\s*"
+    r"same-frame wrap rejects\s+(?P<sameFrameRejects>\d+)",
+    re.IGNORECASE,
+)
 GLX_STATIC_DRAW_SUMMARY_RE = re.compile(
     r"glx:\s*static draw\s+(?P<calls>\d+)/(?P<attempts>\d+)\s+calls,\s*"
-    r"(?P<indexes>\d+)\s+idx,.*fallbacks\s+(?P<fallbacks>\d+),\s*"
+    r"(?P<indexes>\d+)\s+idx,\s*packets\s+(?P<packetFull>\d+)\s+full/"
+    r"(?P<packetPartial>\d+)\s+partial/(?P<packetMisses>\d+)\s+miss,\s*"
+    r"manifest\s+(?P<manifestCalls>\d+)/(?P<manifestIndexes>\d+)\s+idx,\s*"
+    r"soft\s+(?P<softCalls>\d+)/(?P<softAttempts>\d+)\s+calls/"
+    r"(?P<softIndexes>\d+)\s+idx,\s*arena\s+(?P<arenaCalls>\d+),\s*"
+    r"legacy\s+(?P<legacyCalls>\d+),\s*fallbacks\s+(?P<fallbacks>\d+),\s*"
     r"policy skips\s+(?P<policySkips>\d+)",
+    re.IGNORECASE,
+)
+GLX_STATIC_QUEUE_PACKETS_SUMMARY_RE = re.compile(
+    r"glx:\s*static queue packets last\s+(?P<lastFull>\d+)\s+full/"
+    r"(?P<lastPartial>\d+)\s+partial/(?P<lastMisses>\d+)\s+miss/"
+    r"(?P<lastMismatches>\d+)\s+mismatch,\s*total\s+(?P<full>\d+)\s+full/"
+    r"(?P<partial>\d+)\s+partial/(?P<misses>\d+)\s+miss",
+    re.IGNORECASE,
+)
+GLX_STATIC_PACKET_LOOKUP_SUMMARY_RE = re.compile(
+    r"glx:\s*static packet lookup\s+(?P<mapped>\d+)\s+mapped/max\s+"
+    r"(?P<maxItem>-?\d+),\s*hits\s+(?P<hits>\d+),\s*"
+    r"misses\s+(?P<misses>\d+),\s*fallbacks\s+(?P<fallbacks>\d+),\s*"
+    r"mismatches\s+(?P<mismatches>\d+),\s*overflows\s+(?P<overflows>\d+)",
     re.IGNORECASE,
 )
 GLX_STATIC_MDI_SUMMARY_RE = re.compile(
@@ -704,8 +823,9 @@ PROFILE_CVARS = {
     },
 }
 
-GLX_PROOF_CORPUS_VERSION = "2026-05-09-task-r"
+GLX_PROOF_CORPUS_VERSION = "2026-05-10-task-v"
 GLX_PROOF_CORPUS_DOC = "docs/fnquake3/GLX_PROOF_CORPUS.md"
+GLX_PARITY_SUITE_VERSION = "2026-05-10-task-v"
 
 GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
     "stock-q3dm1-hud": {
@@ -716,6 +836,8 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "stock-map",
             "baseline-map",
             "ui-hud-sensitive",
+            "screenshot-parity",
+            "hud-parity",
             "lightmap",
         ),
         "description": "Small retail map used for renderer-switch, weapon/HUD, and baseline-lighting comparisons.",
@@ -729,6 +851,8 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "open-map",
             "shader-heavy",
             "sky",
+            "screenshot-parity",
+            "bloom-parity",
             "tone-map-proof",
         ),
         "description": "Open retail arena that keeps sky, portal-culling, and broad visibility paths in the RC set.",
@@ -741,6 +865,8 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "stock-map",
             "high-geometry",
             "large-map",
+            "screenshot-parity",
+            "shadow-parity",
             "performance-comparison",
         ),
         "description": "Retail large-map geometry probe for static-world packet and draw-pressure comparisons.",
@@ -753,6 +879,9 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "stock-map",
             "shader-heavy",
             "material-stage",
+            "screenshot-parity",
+            "cel-shading-parity",
+            "outline-parity",
             "color-grade-proof",
             "tone-map-proof",
         ),
@@ -766,6 +895,7 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "stock-map",
             "fog-heavy",
             "visibility",
+            "screenshot-parity",
             "color-grade-proof",
         ),
         "description": "Retail fog/visibility probe that keeps fog-sensitive world and stream paths represented.",
@@ -778,6 +908,7 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "modern-map",
             "high-geometry",
             "large-map",
+            "screenshot-parity",
             "performance-comparison",
         ),
         "description": "Optional GLx proof-corpus stress map for dense modern static-world geometry.",
@@ -790,6 +921,9 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "modern-map",
             "shader-heavy",
             "material-stage",
+            "screenshot-parity",
+            "cel-shading-parity",
+            "outline-parity",
         ),
         "description": "Optional GLx proof-corpus stress map for broad shader-stage and material-key coverage.",
     },
@@ -801,6 +935,7 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "modern-map",
             "fog-heavy",
             "visibility",
+            "screenshot-parity",
         ),
         "description": "Optional GLx proof-corpus stress map for layered fog and visibility comparisons.",
     },
@@ -810,6 +945,7 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
         "assetTier": "retail-baseq3",
         "tags": (
             "stock-demo",
+            "demo-playback-parity",
             "performance-comparison",
         ),
         "description": "Retail timedemo used for legacy OpenGL versus GLx performance comparisons.",
@@ -820,6 +956,7 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
         "assetTier": "glx-proof-corpus",
         "tags": (
             "particle-heavy-demo",
+            "demo-playback-parity",
             "modern-map",
             "performance-comparison",
         ),
@@ -855,6 +992,91 @@ GLX_GATE_CORPUS_SCENES = {
         "modern-fnq3glx-fog01",
         "timedemo-demo1",
         "timedemo-fnq3glx-particles01",
+    ),
+}
+
+GLX_PARITY_SUITES: dict[str, dict[str, object]] = {
+    "screenshot": {
+        "artifact": "screenshot",
+        "sceneIds": (
+            "stock-q3dm1-hud",
+            "stock-q3dm17-open",
+            "stock-q3dm6-geometry",
+            "stock-q3dm11-shader",
+            "stock-q3dm15-fog",
+        ),
+        "requiredTags": ("screenshot-parity",),
+        "cvars": {},
+        "description": "Retail map screenshot suite used for OpenGL versus GLx image parity baselines.",
+    },
+    "demo-playback": {
+        "artifact": "timedemo",
+        "sceneIds": ("timedemo-demo1",),
+        "requiredTags": ("demo-playback-parity", "stock-demo"),
+        "cvars": {},
+        "description": "Retail demo playback suite used for deterministic timedemo parity and performance floors.",
+    },
+    "hud": {
+        "artifact": "screenshot",
+        "sceneIds": ("stock-q3dm1-hud",),
+        "requiredTags": ("hud-parity", "ui-hud-sensitive"),
+        "cvars": {},
+        "description": "HUD and 2D stretch-pic suite anchored to the small retail renderer-switch map.",
+    },
+    "shadow": {
+        "artifact": "screenshot",
+        "sceneIds": ("stock-q3dm6-geometry",),
+        "requiredTags": ("shadow-parity",),
+        "cvars": {
+            "cg_shadows": "2",
+        },
+        "description": "Stencil shadow parity suite using a retail geometry-heavy map and explicit shadow cvar state.",
+    },
+    "bloom": {
+        "artifact": "screenshot",
+        "sceneIds": ("stock-q3dm17-open",),
+        "requiredTags": ("bloom-parity",),
+        "cvars": {},
+        "description": "Final-pass bloom parity suite on an open retail scene with the RC bloom profile enabled.",
+    },
+    "cel-shading": {
+        "artifact": "screenshot",
+        "sceneIds": ("stock-q3dm11-shader",),
+        "requiredTags": ("cel-shading-parity", "outline-parity"),
+        "cvars": {
+            "r_celShading": "1",
+            "r_celOutline": "1",
+            "r_celShadingSteps": "4",
+        },
+        "description": "Cel-shading and outline parity suite with explicit banding and outline cvars.",
+    },
+}
+
+GLX_PARITY_CVAR_DEFAULTS = {
+    "cg_shadows": "1",
+    "r_celShading": "0",
+    "r_celOutline": "1",
+    "r_celShadingSteps": "4",
+}
+
+GLX_GATE_PARITY_SUITES = {
+    "rc-smoke": (),
+    "rc-parity": (),
+    "rc-proof": (
+        "screenshot",
+        "demo-playback",
+        "hud",
+        "shadow",
+        "bloom",
+        "cel-shading",
+    ),
+    "rc-stress": (
+        "screenshot",
+        "demo-playback",
+        "hud",
+        "shadow",
+        "bloom",
+        "cel-shading",
     ),
 }
 
@@ -926,6 +1148,70 @@ def corpus_scene_records(scene_ids: Iterable[str]) -> list[dict[str, object]]:
     return records
 
 
+def validate_parity_suite_ids(suite_ids: Iterable[str]) -> list[str]:
+    suite_list = [str(suite_id).strip() for suite_id in suite_ids if str(suite_id).strip()]
+    unknown = [suite_id for suite_id in suite_list if suite_id not in GLX_PARITY_SUITES]
+    if unknown:
+        raise ValueError(
+            "Unknown GLx parity suite id(s): " + ", ".join(unknown)
+        )
+    return suite_list
+
+
+def parity_suite_records(suite_ids: Iterable[str]) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for suite_id in validate_parity_suite_ids(suite_ids):
+        suite = GLX_PARITY_SUITES[suite_id]
+        records.append(
+            {
+                "id": suite_id,
+                "artifact": suite["artifact"],
+                "sceneIds": list(validate_corpus_scene_ids(suite.get("sceneIds", ()))),
+                "requiredTags": list(suite.get("requiredTags", ())),
+                "cvars": dict(suite.get("cvars", {})),
+                "description": suite["description"],
+            }
+        )
+    return records
+
+
+def parity_suite_ids_for_scene_ids(
+    scene_ids: Iterable[str],
+    suite_ids: Iterable[str],
+) -> list[str]:
+    selected_scene_ids = set(validate_corpus_scene_ids(scene_ids))
+    matched_suite_ids: list[str] = []
+    for suite_id in validate_parity_suite_ids(suite_ids):
+        suite_scene_ids = set(validate_corpus_scene_ids(GLX_PARITY_SUITES[suite_id].get("sceneIds", ())))
+        if selected_scene_ids.intersection(suite_scene_ids):
+            matched_suite_ids.append(suite_id)
+    return matched_suite_ids
+
+
+def parity_suite_cvars_for_scene_ids(
+    scene_ids: Iterable[str],
+    suite_ids: Iterable[str],
+) -> dict[str, str]:
+    cvars: dict[str, str] = {}
+    for suite_id in parity_suite_ids_for_scene_ids(scene_ids, suite_ids):
+        suite_cvars = GLX_PARITY_SUITES[suite_id].get("cvars", {})
+        if not isinstance(suite_cvars, dict):
+            continue
+        for name, value in suite_cvars.items():
+            cvar_name = str(name).strip()
+            cvar_value = str(value)
+            if not cvar_name:
+                continue
+            existing = cvars.get(cvar_name)
+            if existing is not None and existing != cvar_value:
+                raise ValueError(
+                    "Conflicting GLx parity suite cvar "
+                    f"{cvar_name}: {existing} versus {cvar_value}."
+                )
+            cvars[cvar_name] = cvar_value
+    return cvars
+
+
 def corpus_scene_ids_for_profile(profile: str) -> tuple[str, ...]:
     return tuple(GLX_PROFILE_CORPUS_SCENES.get(profile, ("stock-q3dm1-hud",)))
 
@@ -949,8 +1235,10 @@ def corpus_scene_ids_for_target(scene_ids: Iterable[str], kind: str, target: str
 def proof_corpus_manifest(
     scene_ids: Iterable[str],
     required_tags: Iterable[str] = (),
+    required_parity_suites: Iterable[str] = (),
 ) -> dict[str, object]:
     selected_scene_ids = validate_corpus_scene_ids(scene_ids)
+    selected_parity_suite_ids = validate_parity_suite_ids(required_parity_suites)
     return {
         "version": GLX_PROOF_CORPUS_VERSION,
         "document": GLX_PROOF_CORPUS_DOC,
@@ -958,6 +1246,9 @@ def proof_corpus_manifest(
         "selectedScenes": corpus_scene_records(selected_scene_ids),
         "selectedTags": corpus_tags(selected_scene_ids),
         "requiredTags": sorted(set(str(tag) for tag in required_tags if str(tag).strip())),
+        "paritySuiteVersion": GLX_PARITY_SUITE_VERSION,
+        "paritySuiteIds": selected_parity_suite_ids,
+        "paritySuites": parity_suite_records(selected_parity_suite_ids),
         "allSceneIds": sorted(GLX_PROOF_CORPUS_SCENES),
     }
 
@@ -972,7 +1263,61 @@ def release_corpus_manifest() -> dict[str, object]:
             gate: list(scene_ids)
             for gate, scene_ids in sorted(GLX_GATE_CORPUS_SCENES.items())
         },
+        "paritySuiteVersion": GLX_PARITY_SUITE_VERSION,
+        "paritySuites": parity_suite_records(GLX_PARITY_SUITES.keys()),
+        "gateParitySuiteIds": {
+            gate: list(suite_ids)
+            for gate, suite_ids in sorted(GLX_GATE_PARITY_SUITES.items())
+        },
         "tags": corpus_tags(GLX_PROOF_CORPUS_SCENES.keys()),
+    }
+
+
+def normalize_proof_platform(value: str) -> str:
+    platform_id = value.strip().lower().replace("amd64", "x64")
+    if not PROOF_PLATFORM_RE.match(platform_id):
+        raise ValueError(
+            "Proof platform must be a stable id such as windows-x64 or linux-x86_64."
+        )
+    return platform_id
+
+
+def runtime_platform_id(
+    system_name: str | None = None,
+    machine_name: str | None = None,
+) -> str:
+    system_value = (system_name or platform.system() or "unknown").strip().lower()
+    machine_value = (machine_name or platform.machine() or "unknown").strip().lower()
+    machine_aliases = {
+        "amd64": "x64",
+        "x86_64": "x86_64",
+        "i386": "x86",
+        "i686": "x86",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+    }
+    arch = machine_aliases.get(machine_value, re.sub(r"[^a-z0-9_]+", "-", machine_value))
+    if system_value.startswith("win"):
+        os_id = "windows"
+        if arch == "x86_64":
+            arch = "x64"
+    elif system_value.startswith("linux"):
+        os_id = "linux"
+    elif system_value.startswith("darwin") or system_value.startswith("mac"):
+        os_id = "macos"
+    else:
+        os_id = re.sub(r"[^a-z0-9_]+", "-", system_value) or "unknown"
+    return normalize_proof_platform(f"{os_id}-{arch}")
+
+
+def host_platform_manifest() -> dict[str, object]:
+    return {
+        "system": platform.system(),
+        "release": platform.release(),
+        "version": platform.version(),
+        "machine": platform.machine(),
+        "proofPlatform": runtime_platform_id(),
+        "python": platform.python_version(),
     }
 
 
@@ -1020,6 +1365,8 @@ RC_GATE_PRESETS = {
             "required_corpus_tags": (
                 "stock-map",
                 "ui-hud-sensitive",
+                "screenshot-parity",
+                "hud-parity",
             ),
             "require_screenshots": True,
             "require_glx_diagnostics": True,
@@ -1044,6 +1391,10 @@ RC_GATE_PRESETS = {
                 "stock-map",
                 "stock-demo",
                 "ui-hud-sensitive",
+                "screenshot-parity",
+                "demo-playback-parity",
+                "hud-parity",
+                "bloom-parity",
                 "performance-comparison",
             ),
             "require_screenshots": True,
@@ -1079,8 +1430,16 @@ RC_GATE_PRESETS = {
                 "color-grade-proof",
                 "tone-map-proof",
                 "ui-hud-sensitive",
+                "screenshot-parity",
+                "demo-playback-parity",
+                "hud-parity",
+                "shadow-parity",
+                "bloom-parity",
+                "cel-shading-parity",
+                "outline-parity",
                 "performance-comparison",
             ),
+            "required_parity_suites": GLX_GATE_PARITY_SUITES["rc-proof"],
             "require_screenshots": True,
             "require_visual_baseline": True,
             "require_performance_baseline": True,
@@ -1118,8 +1477,16 @@ RC_GATE_PRESETS = {
                 "tone-map-proof",
                 "particle-heavy-demo",
                 "ui-hud-sensitive",
+                "screenshot-parity",
+                "demo-playback-parity",
+                "hud-parity",
+                "shadow-parity",
+                "bloom-parity",
+                "cel-shading-parity",
+                "outline-parity",
                 "performance-comparison",
             ),
+            "required_parity_suites": GLX_GATE_PARITY_SUITES["rc-stress"],
             "require_screenshots": True,
             "require_timedemo_metrics": True,
             "screenshot_max_rms": 2.0,
@@ -1236,6 +1603,13 @@ def parse_args() -> argparse.Namespace:
             "baselines to <dir>/screenshots, the performance baseline to "
             "<dir>/performance-baseline.json, screenshot diffs to the run artifacts, "
             "and the summary to summary.md."
+        ),
+    )
+    parser.add_argument(
+        "--proof-platform",
+        help=(
+            "Stable runtime proof platform id to write into the manifest, such as "
+            "windows-x64 or linux-x86_64. Defaults to the current host platform."
         ),
     )
     parser.add_argument(
@@ -1369,6 +1743,15 @@ def print_gate_list() -> None:
                 f"scenes={','.join(corpus_scene_ids)} "
                 f"tags={','.join(corpus_tags(corpus_scene_ids))}"
             )
+        parity_suite_ids = validate_parity_suite_ids(
+            requirements.get("required_parity_suites", ())  # type: ignore[union-attr]
+        )
+        if parity_suite_ids:
+            print(
+                "    "
+                f"parity-suites={GLX_PARITY_SUITE_VERSION} "
+                f"suites={','.join(parity_suite_ids)}"
+            )
         if "min_timedemo_fps_ratio" in requirements:
             print(
                 "    "
@@ -1381,12 +1764,24 @@ def print_gate_list() -> None:
 def print_corpus_list() -> None:
     print(f"GLx proof corpus: {GLX_PROOF_CORPUS_VERSION}")
     print(f"Document: {GLX_PROOF_CORPUS_DOC}")
+    print(f"Parity suite version: {GLX_PARITY_SUITE_VERSION}")
     print("Scenes:")
     for scene_id, scene in sorted(GLX_PROOF_CORPUS_SCENES.items()):
         print(
             "  "
             f"{scene_id}: kind={scene['kind']} target={scene['target']} "
             f"assetTier={scene['assetTier']} tags={','.join(scene.get('tags', ())) }"
+        )
+    print("Parity suites:")
+    for suite_id, suite in sorted(GLX_PARITY_SUITES.items()):
+        scene_ids = validate_corpus_scene_ids(suite.get("sceneIds", ()))
+        tags = [str(tag) for tag in suite.get("requiredTags", ()) if str(tag).strip()]
+        cvars = dict(suite.get("cvars", {}))
+        cvar_text = ",".join(f"{name}={value}" for name, value in sorted(cvars.items()))
+        print(
+            "  "
+            f"{suite_id}: artifact={suite['artifact']} scenes={','.join(scene_ids)} "
+            f"tags={','.join(tags)} cvars={cvar_text or '-'}"
         )
 
 
@@ -1594,10 +1989,18 @@ def build_switch_cfg(
     switch_sequence: list[str],
     run_id: str,
     corpus_scene_ids: Iterable[str] = (),
+    parity_suite_ids: Iterable[str] = (),
 ) -> tuple[str, list[dict[str, object]]]:
     lines = cfg_preamble(cvars, "renderer switch screenshot sweep")
     expected_shots: list[dict[str, object]] = []
     selected_corpus_scene_ids = validate_corpus_scene_ids(corpus_scene_ids)
+    selected_parity_suite_ids = validate_parity_suite_ids(parity_suite_ids)
+    selected_parity_cvar_names = {
+        str(cvar_name)
+        for suite_id in selected_parity_suite_ids
+        for cvar_name in dict(GLX_PARITY_SUITES[suite_id].get("cvars", {}))
+        if str(cvar_name).strip()
+    }
 
     lines.append(f"wait {args.startup_wait}")
     for map_index, map_name in enumerate(maps, start=1):
@@ -1607,6 +2010,20 @@ def build_switch_cfg(
             "map",
             map_name,
         )
+        map_parity_suite_ids = parity_suite_ids_for_scene_ids(
+            map_corpus_scene_ids,
+            selected_parity_suite_ids,
+        )
+        map_parity_cvars = parity_suite_cvars_for_scene_ids(
+            map_corpus_scene_ids,
+            selected_parity_suite_ids,
+        )
+        if selected_parity_cvar_names:
+            for cvar_name, cvar_value in sorted(GLX_PARITY_CVAR_DEFAULTS.items()):
+                if cvar_name in selected_parity_cvar_names:
+                    lines.append(f"set {cvar_name} \"{cvar_value}\"")
+            for cvar_name, cvar_value in sorted(map_parity_cvars.items()):
+                lines.append(f"set {cvar_name} \"{cvar_value}\"")
         lines.append(f"map {map_name}")
         lines.append(f"wait {args.map_wait}")
 
@@ -1646,6 +2063,8 @@ def build_switch_cfg(
                         "switchStep": switch_index,
                         "corpusSceneIds": map_corpus_scene_ids,
                         "corpusTags": corpus_tags(map_corpus_scene_ids),
+                        "paritySuiteIds": map_parity_suite_ids,
+                        "parityCvars": map_parity_cvars,
                     }
                 )
 
@@ -3135,6 +3554,13 @@ def perf_record_match_numbers_prefixed(
         perf_record_numeric(performance, prefixed_key(prefix, name), int_group(match, name))
 
 
+def parse_gpu_milliseconds(text: str) -> float | None:
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*ms\b", text, re.IGNORECASE)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
 def analyze_glx_performance(log_path: Path) -> dict[str, object]:
     performance: dict[str, object] = {
         "log": str(log_path),
@@ -3163,6 +3589,9 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             perf_record_string(performance, "streamStrategy", match.group("streamStrategy"))
             perf_record_string(performance, "streamReady", match.group("streamReady"))
             perf_record_string(performance, "gpu", match.group("gpu").strip())
+            gpu_ms = parse_gpu_milliseconds(match.group("gpu"))
+            if gpu_ms is not None:
+                perf_record_numeric(performance, "gpuFrameMs", gpu_ms)
             perf_record_string(performance, "arenaReady", match.group("arenaReady"))
             for key in (
                 "batches",
@@ -3180,6 +3609,7 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 "staticIndexes",
             ):
                 perf_record_numeric(performance, key, int_group(match, key))
+            perf_record_numeric(performance, "streamSameFrameWrapRejects", int_group(match, "streamRejects"))
             for key in ("streamMegabytes", "staticMegabytes", "arenaMegabytes"):
                 perf_record_numeric(performance, key, float(match.group(key)))
             continue
@@ -3343,13 +3773,66 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 )
             continue
 
+        match = GLX_STREAM_RESERVATION_SUMMARY_RE.search(line)
+        if match:
+            perf_record_string(performance, "streamReservationStrategy", match.group("strategy"))
+            perf_record_numeric(performance, "streamReservationLastBytes", int_group(match, "lastBytes"))
+            perf_record_numeric(performance, "streamReservationLargestBytes", int_group(match, "largestBytes"))
+            perf_record_numeric(performance, "streamSameFrameWrapRejects", int_group(match, "sameFrameRejects"))
+            continue
+
         match = GLX_STATIC_DRAW_SUMMARY_RE.search(line)
         if match:
             perf_record_match_numbers_prefixed(
                 performance,
                 match,
                 "staticDraw",
-                ("calls", "attempts", "indexes", "fallbacks", "policySkips"),
+                (
+                    "calls",
+                    "attempts",
+                    "indexes",
+                    "packetFull",
+                    "packetPartial",
+                    "packetMisses",
+                    "manifestCalls",
+                    "manifestIndexes",
+                    "softCalls",
+                    "softAttempts",
+                    "softIndexes",
+                    "arenaCalls",
+                    "legacyCalls",
+                    "fallbacks",
+                    "policySkips",
+                ),
+            )
+            continue
+
+        match = GLX_STATIC_QUEUE_PACKETS_SUMMARY_RE.search(line)
+        if match:
+            perf_record_match_numbers_prefixed(
+                performance,
+                match,
+                "staticQueuePackets",
+                (
+                    "lastFull",
+                    "lastPartial",
+                    "lastMisses",
+                    "lastMismatches",
+                    "full",
+                    "partial",
+                    "misses",
+                ),
+            )
+            perf_record_numeric(performance, "staticQueuePacketMisses", int_group(match, "misses"))
+            continue
+
+        match = GLX_STATIC_PACKET_LOOKUP_SUMMARY_RE.search(line)
+        if match:
+            perf_record_match_numbers_prefixed(
+                performance,
+                match,
+                "staticPacketLookup",
+                ("mapped", "maxItem", "hits", "misses", "fallbacks", "mismatches", "overflows"),
             )
             continue
 
@@ -3430,16 +3913,39 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
 
 def merge_budget(base: dict[str, object], override: dict[str, object]) -> dict[str, object]:
     merged: dict[str, object] = {}
-    for section in ("max", "min"):
+    for section in ("max", "min", "required"):
         values: dict[str, object] = {}
         base_section = base.get(section)
         override_section = override.get(section)
+        if section == "required":
+            required_values: list[object] = []
+            if isinstance(base_section, (list, tuple)):
+                required_values.extend(base_section)
+            if isinstance(override_section, (list, tuple)):
+                required_values.extend(override_section)
+            if required_values:
+                merged[section] = list(dict.fromkeys(required_values))
+            continue
         if isinstance(base_section, dict):
             values.update(base_section)
         if isinstance(override_section, dict):
             values.update(override_section)
         if values:
             merged[section] = values
+
+    tiers: dict[str, object] = {}
+    base_tiers = base.get("tiers")
+    override_tiers = override.get("tiers")
+    if isinstance(base_tiers, dict):
+        tiers.update(base_tiers)
+    if isinstance(override_tiers, dict):
+        for tier, tier_budget in override_tiers.items():
+            if isinstance(tier_budget, dict) and isinstance(tiers.get(str(tier)), dict):
+                tiers[str(tier)] = merge_budget(tiers[str(tier)], tier_budget)  # type: ignore[arg-type]
+            else:
+                tiers[str(tier)] = tier_budget
+    if tiers:
+        merged["tiers"] = tiers
     return merged
 
 
@@ -3504,31 +4010,66 @@ def numeric_metric(aggregate: dict[str, object], key: str) -> float | None:
     return None
 
 
-def evaluate_performance_budget(
+def performance_budget_tier(aggregate: dict[str, object]) -> str:
+    latest = aggregate.get("latest", {})
+    value: object | None = None
+    if isinstance(latest, dict):
+        value = latest.get("productTier", latest.get("tier"))
+    if value is None:
+        value = aggregate.get("productTier", aggregate.get("tier"))
+    return str(value or "").upper()
+
+
+def evaluate_performance_budget_section(
     aggregate: dict[str, object],
-    budget: dict[str, object],
+    section_budget: dict[str, object],
+    label: str = "",
 ) -> list[str]:
     failures: list[str] = []
+    prefix = f"Performance budget {label} " if label else "Performance budget "
 
-    max_budget = budget.get("max", {})
+    required = section_budget.get("required", ())
+    if isinstance(required, (list, tuple)):
+        for key in required:
+            metric_key = str(key)
+            if performance_metric(aggregate, metric_key) is None:
+                failures.append(f"{prefix}required metric {metric_key} is missing.")
+
+    max_budget = section_budget.get("max", {})
     if isinstance(max_budget, dict):
         for key, threshold in sorted(max_budget.items()):
             value = numeric_metric(aggregate, str(key))
             if value is None or not isinstance(threshold, (int, float)):
                 continue
             if value > float(threshold):
-                failures.append(f"Performance budget max {key} exceeded: {value:g} > {float(threshold):g}.")
+                failures.append(f"{prefix}max {key} exceeded: {value:g} > {float(threshold):g}.")
 
-    min_budget = budget.get("min", {})
+    min_budget = section_budget.get("min", {})
     if isinstance(min_budget, dict):
         for key, threshold in sorted(min_budget.items()):
             value = numeric_metric(aggregate, str(key))
             if value is None or not isinstance(threshold, (int, float)):
                 continue
             if value < float(threshold):
-                failures.append(f"Performance budget min {key} missed: {value:g} < {float(threshold):g}.")
+                failures.append(f"{prefix}min {key} missed: {value:g} < {float(threshold):g}.")
 
     return failures
+
+
+def evaluate_performance_budget(
+    aggregate: dict[str, object],
+    budget: dict[str, object],
+) -> list[str]:
+    failures = evaluate_performance_budget_section(aggregate, budget)
+
+    tier = performance_budget_tier(aggregate)
+    tiers = budget.get("tiers", {})
+    if tier and isinstance(tiers, dict):
+        tier_budget = tiers.get(tier)
+        if isinstance(tier_budget, dict):
+            failures.extend(evaluate_performance_budget_section(aggregate, tier_budget, tier))
+
+    return list(dict.fromkeys(failures))
 
 
 def baseline_performance_object(data: dict[str, object]) -> dict[str, object]:
@@ -3734,6 +4275,11 @@ def evaluate_proof_corpus(
             "GLx proof corpus document mismatch: "
             f"{proof_corpus.get('document', '-')}; expected {GLX_PROOF_CORPUS_DOC}."
         )
+    if proof_corpus.get("paritySuiteVersion") != GLX_PARITY_SUITE_VERSION:
+        failures.append(
+            "GLx parity suite version mismatch: "
+            f"{proof_corpus.get('paritySuiteVersion', '-')}; expected {GLX_PARITY_SUITE_VERSION}."
+        )
 
     selected_scene_ids = [
         str(scene_id)
@@ -3773,6 +4319,57 @@ def evaluate_proof_corpus(
             "GLx proof corpus is missing required tag(s): " +
             ", ".join(missing_tags)
         )
+
+    selected_parity_suite_ids = [
+        str(suite_id)
+        for suite_id in proof_corpus.get("paritySuiteIds", [])
+        if str(suite_id).strip()
+    ]
+    try:
+        selected_parity_suite_ids = validate_parity_suite_ids(selected_parity_suite_ids)
+    except ValueError as exc:
+        failures.append(str(exc))
+        selected_parity_suite_ids = []
+
+    required_parity_suite_ids = {
+        str(suite_id)
+        for suite_id in requirements.get("required_parity_suites", [])
+        if str(suite_id).strip()
+    }
+    missing_parity_suite_ids = sorted(required_parity_suite_ids.difference(selected_parity_suite_ids))
+    if missing_parity_suite_ids:
+        failures.append(
+            "GLx parity suite(s) missing from proof corpus: " +
+            ", ".join(missing_parity_suite_ids)
+        )
+
+    actual_suite_records = proof_corpus.get("paritySuites", [])
+    expected_suite_records = parity_suite_records(selected_parity_suite_ids)
+    if actual_suite_records != expected_suite_records:
+        failures.append("GLx parity suite records do not match the versioned suite registry.")
+
+    selected_scene_id_set = set(selected_scene_ids)
+    for suite_id in selected_parity_suite_ids:
+        suite = GLX_PARITY_SUITES[suite_id]
+        suite_scene_ids = validate_corpus_scene_ids(suite.get("sceneIds", ()))
+        missing_suite_scene_ids = sorted(set(suite_scene_ids).difference(selected_scene_id_set))
+        if missing_suite_scene_ids:
+            failures.append(
+                f"GLx parity suite {suite_id} scene(s) not selected: " +
+                ", ".join(missing_suite_scene_ids)
+            )
+
+        suite_required_tags = {
+            str(tag)
+            for tag in suite.get("requiredTags", ())
+            if str(tag).strip()
+        }
+        missing_suite_tags = sorted(suite_required_tags.difference(selected_tags))
+        if missing_suite_tags:
+            failures.append(
+                f"GLx parity suite {suite_id} is missing required tag(s): " +
+                ", ".join(missing_suite_tags)
+            )
 
     manifest_maps = {
         str(map_name).lower()
@@ -4081,6 +4678,196 @@ def run_status(manifest: dict[str, object]) -> str:
     return "passed"
 
 
+def infer_proof_platform_from_path(manifest_path: Path) -> str:
+    for part in reversed(manifest_path.resolve().parts):
+        candidate = part.strip().lower()
+        if not candidate:
+            continue
+        try:
+            candidate = normalize_proof_platform(candidate)
+        except ValueError:
+            continue
+        if candidate in GLX_BLOCKING_RELEASE_PLATFORMS:
+            return candidate
+    return ""
+
+
+def proof_platform_for_manifest(
+    manifest: dict[str, object],
+    manifest_path: Path,
+) -> str:
+    platform_value = str(manifest.get("proofPlatform", "")).strip()
+    if platform_value:
+        return normalize_proof_platform(platform_value)
+    return infer_proof_platform_from_path(manifest_path)
+
+
+def release_proof_manifest_failures(
+    manifest: dict[str, object],
+    manifest_path: Path,
+) -> list[str]:
+    gate = str(manifest.get("gate", ""))
+    failures: list[str] = []
+
+    if manifest.get("dryRun"):
+        failures.append(f"{manifest_path}: dry-run manifests do not count as release proof.")
+    if gate not in GLX_RELEASE_REQUIRED_GATES:
+        failures.append(f"{manifest_path}: unsupported release proof gate '{gate or '-'}'.")
+
+    gate_failures = evaluate_gate(manifest)
+    if gate_failures:
+        failures.extend(f"{manifest_path}: {failure}" for failure in gate_failures)
+
+    status = run_status(manifest)
+    if status != "passed":
+        failures.append(f"{manifest_path}: gate status is {status}, expected passed.")
+
+    if gate == "rc-proof":
+        proof = proof_status(manifest)
+        visual = proof.get("visual", {}) if isinstance(proof.get("visual"), dict) else {}
+        performance_result = (
+            proof.get("performance", {})
+            if isinstance(proof.get("performance"), dict)
+            else {}
+        )
+        if proof.get("status") != "passed":
+            failures.append(
+                f"{manifest_path}: rc-proof status is {proof.get('status')}, expected passed."
+            )
+        if visual.get("status") != "passed":
+            failures.append(
+                f"{manifest_path}: rc-proof visual status is {visual.get('status')}, expected passed."
+            )
+        if performance_result.get("status") != "passed":
+            failures.append(
+                f"{manifest_path}: rc-proof performance status is "
+                f"{performance_result.get('status')}, expected passed."
+            )
+
+    return list(dict.fromkeys(failures))
+
+
+def release_proof_manifest_record(
+    manifest: dict[str, object],
+    manifest_path: Path,
+    proof_root: Path,
+) -> dict[str, object]:
+    proof = proof_status(manifest)
+    relative_path = (
+        manifest_path.resolve().relative_to(proof_root.resolve()).as_posix()
+        if manifest_path.resolve().is_relative_to(proof_root.resolve())
+        else str(manifest_path.resolve())
+    )
+    return {
+        "platform": proof_platform_for_manifest(manifest, manifest_path),
+        "gate": str(manifest.get("gate", "")),
+        "path": relative_path,
+        "runId": str(manifest.get("runId", "")),
+        "createdUtc": str(manifest.get("createdUtc", "")),
+        "status": run_status(manifest),
+        "proofStatus": proof.get("status", "not-configured")
+        if isinstance(proof, dict)
+        else "not-configured",
+        "proofCorpusVersion": (
+            manifest.get("proofCorpus", {}).get("version", "")
+            if isinstance(manifest.get("proofCorpus"), dict)
+            else ""
+        ),
+        "paritySuiteVersion": (
+            manifest.get("proofCorpus", {}).get("paritySuiteVersion", "")
+            if isinstance(manifest.get("proofCorpus"), dict)
+            else ""
+        ),
+    }
+
+
+def validate_release_proof_root(
+    proof_root: Path,
+    required_platforms: Iterable[str] = GLX_BLOCKING_RELEASE_PLATFORMS,
+    required_gates: Iterable[str] = GLX_RELEASE_REQUIRED_GATES,
+) -> dict[str, object]:
+    root = proof_root.resolve()
+    required_platform_list = [normalize_proof_platform(platform_id) for platform_id in required_platforms]
+    required_gate_list = [str(gate) for gate in required_gates]
+    summary: dict[str, object] = {
+        "version": GLX_RELEASE_PROOF_VERSION,
+        "status": "failed",
+        "root": str(root),
+        "requiredPlatforms": required_platform_list,
+        "requiredGates": required_gate_list,
+        "manifests": [],
+        "failures": [],
+    }
+    failures: list[str] = []
+
+    if not root.exists():
+        summary["failures"] = [f"GLx proof root does not exist: {root}"]
+        return summary
+    if not root.is_dir():
+        summary["failures"] = [f"GLx proof root is not a directory: {root}"]
+        return summary
+
+    candidates: dict[tuple[str, str], list[tuple[Path, dict[str, object], list[str]]]] = {}
+    for manifest_path in sorted(root.rglob("manifest.json")):
+        try:
+            manifest = load_json_file(manifest_path)
+        except Exception as exc:
+            failures.append(f"{manifest_path}: could not read manifest: {exc}")
+            continue
+        if not isinstance(manifest, dict):
+            failures.append(f"{manifest_path}: manifest root must be a JSON object.")
+            continue
+        gate = str(manifest.get("gate", ""))
+        if gate not in required_gate_list:
+            continue
+        try:
+            proof_platform = proof_platform_for_manifest(manifest, manifest_path)
+        except ValueError as exc:
+            failures.append(f"{manifest_path}: {exc}")
+            continue
+        if proof_platform not in required_platform_list:
+            continue
+        manifest_failures = release_proof_manifest_failures(manifest, manifest_path)
+        candidates.setdefault((proof_platform, gate), []).append(
+            (manifest_path, manifest, manifest_failures)
+        )
+
+    selected_records: list[dict[str, object]] = []
+    for platform_id in required_platform_list:
+        for gate in required_gate_list:
+            gate_candidates = candidates.get((platform_id, gate), [])
+            if not gate_candidates:
+                failures.append(f"Missing GLx {gate} runtime proof for {platform_id}.")
+                continue
+            passing = [
+                (manifest_path, manifest, manifest_failures)
+                for manifest_path, manifest, manifest_failures in gate_candidates
+                if not manifest_failures
+            ]
+            if not passing:
+                failures.append(f"No passing GLx {gate} runtime proof for {platform_id}.")
+                for manifest_path, _manifest, manifest_failures in gate_candidates[:2]:
+                    failures.extend(
+                        manifest_failures
+                        or [f"{manifest_path}: manifest did not pass release proof validation."]
+                    )
+                continue
+            chosen_path, chosen_manifest, _chosen_failures = sorted(
+                passing,
+                key=lambda item: (
+                    str(item[1].get("createdUtc", "")),
+                    str(item[1].get("runId", "")),
+                    str(item[0]),
+                ),
+            )[-1]
+            selected_records.append(release_proof_manifest_record(chosen_manifest, chosen_path, root))
+
+    summary["manifests"] = selected_records
+    summary["failures"] = list(dict.fromkeys(failures))
+    summary["status"] = "passed" if not failures else "failed"
+    return summary
+
+
 def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
     runs = [run for run in manifest.get("runs", []) if isinstance(run, dict)]
     screenshots = [
@@ -4115,6 +4902,7 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
         f"- Gate: `{gate}`",
         f"- Profile: `{profile}`",
         f"- Dry run: `{str(bool(manifest.get('dryRun'))).lower()}`",
+        f"- Proof platform: `{manifest.get('proofPlatform', '-')}`",
         f"- Manifest: `{manifest_path}`",
         f"- Renderers: `{', '.join(str(item) for item in manifest.get('renderers', []))}`",
         f"- Maps: `{', '.join(str(item) for item in manifest.get('maps', [])) or '-'}`",
@@ -4139,6 +4927,11 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
             for tag in proof_corpus.get("requiredTags", [])
             if str(tag).strip()
         ]
+        parity_suite_ids = [
+            str(suite_id)
+            for suite_id in proof_corpus.get("paritySuiteIds", [])
+            if str(suite_id).strip()
+        ]
         lines.append("## GLx Proof Corpus")
         lines.append("")
         lines.append(f"- Version: `{proof_corpus.get('version', '-')}`")
@@ -4147,6 +4940,8 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
         lines.append(f"- Tags: `{', '.join(selected_tags) or '-'}`")
         if required_tags:
             lines.append(f"- Required tags: `{', '.join(required_tags)}`")
+        lines.append(f"- Parity suite version: `{proof_corpus.get('paritySuiteVersion', '-')}`")
+        lines.append(f"- Parity suites: `{', '.join(parity_suite_ids) or '-'}`")
         lines.append("")
 
     gate_failures = manifest.get("gateFailures", [])
@@ -4485,6 +5280,11 @@ def main() -> int:
     screenshot_baseline_dir = args.screenshot_baseline_dir.resolve() if args.screenshot_baseline_dir else None
     screenshot_diff_dir = args.screenshot_diff_dir.resolve() if args.screenshot_diff_dir else None
     proof_dir = args.proof_dir.resolve() if args.proof_dir else None
+    proof_platform = (
+        normalize_proof_platform(args.proof_platform)
+        if args.proof_platform
+        else runtime_platform_id()
+    )
     screenshot_max_rms = float(args.screenshot_max_rms)
     screenshot_max_pixel_ratio = float(args.screenshot_max_pixel_ratio)
     if args.approve_screenshot_baselines and screenshot_baseline_dir is None:
@@ -4516,6 +5316,10 @@ def main() -> int:
     proof_corpus = proof_corpus_manifest(
         corpus_scene_ids,
         gate_requirements.get("required_corpus_tags", ()),  # type: ignore[union-attr]
+        gate_requirements.get("required_parity_suites", ()),  # type: ignore[union-attr]
+    )
+    parity_suite_ids = validate_parity_suite_ids(
+        gate_requirements.get("required_parity_suites", ())  # type: ignore[union-attr]
     )
 
     if not args.no_switch_sweep and maps:
@@ -4527,6 +5331,7 @@ def main() -> int:
             switch_sequence,
             run_id,
             corpus_scene_ids,
+            parity_suite_ids,
         )
         cfg_path = write_cfg(homepath, args.fs_game, switch_cfg_name, switch_cfg)
         command = base_launch_args(
@@ -4623,6 +5428,8 @@ def main() -> int:
         "basepath": str(basepath),
         "homepath": str(homepath),
         "fsGame": args.fs_game,
+        "hostPlatform": host_platform_manifest(),
+        "proofPlatform": proof_platform,
         "profile": args.profile,
         "cvars": cvars,
         "startupCvars": startup_cvars,
@@ -4723,11 +5530,17 @@ def main() -> int:
         print(f"Gate: {args.gate} ({gate_status})")
         for failure in gate_failures:
             print(f"  - {failure}")
+    print(f"Proof platform: {proof_platform}")
     print(
         "Corpus: "
         f"{GLX_PROOF_CORPUS_VERSION} "
         f"({len(corpus_scene_ids)} selected scene{'s' if len(corpus_scene_ids) != 1 else ''})"
     )
+    if parity_suite_ids:
+        print(
+            "Parity suites: "
+            f"{GLX_PARITY_SUITE_VERSION} ({', '.join(parity_suite_ids)})"
+        )
     print(f"Manifest: {manifest_path}")
     print(f"Runs: {passed_runs}/{run_count} passed or planned")
     if screenshots:

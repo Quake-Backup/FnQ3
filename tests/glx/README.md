@@ -17,8 +17,11 @@ The harness currently checks:
 - The frozen RC/stress sweep profiles matching the runtime `r_glxProfile` table in `code/rendererglx/glx_module.cpp`.
 - The RC profile promoting shipped static-world arena, dispatcher, packet-batch, multidraw, and capability-gated indirect/MDI span paths while leaving compact MDI uploads in the stress profile.
 - The checked-in GLx feature-closure matrix using only exact `covered`, `partially covered`, and `missing` statuses with no ambiguous rows.
-- The official GLx proof corpus covering stock maps, high-geometry maps, shader-heavy maps, fog-heavy maps, modern-map stress scenes, particle-heavy demos, UI/HUD-sensitive scenes, and shared artifact metadata.
+- The official GLx proof corpus covering stock maps, high-geometry maps, shader-heavy maps, fog-heavy maps, modern-map stress scenes, particle-heavy demos, UI/HUD-sensitive scenes, and named screenshot, demo-playback, HUD, shadow, bloom, and cel-shading parity suites.
 - Hard proof-gate policy requiring reviewed screenshot baselines and compared performance baselines for `rc-proof`.
+- Release-proof validation requiring passing non-dry-run `rc-smoke`, `rc-parity`, and `rc-proof` manifests for the blocking Windows/Linux runtime matrix before tagged release packaging.
+- Promotion-gate validation that keeps `opengl` from becoming a GLx alias until the feature matrix, runtime proof, ownership proof, migration notes, and rollback policy are all green.
+- Built-in global and per-tier performance budgets for draw pressure, upload volume, fallback/error counters, shader binds, static packet misses, same-frame stream wrap rejects, and GPU frame time.
 - The broad `r_glxStreamDrawKeyMode 2` developer escape hatch staying behind hard multitexture and depth-fragment gates.
 - Capability version/extension parsing and tier selection.
 - Dynamic-stream strategy selection across persistent, map-range, and orphan/subdata fallbacks.

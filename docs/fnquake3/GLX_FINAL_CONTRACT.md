@@ -51,8 +51,8 @@ The final GLx renderer has these non-negotiable properties:
   bloom, grading, tone mapping, and explicit output transforms, not only
   framebuffer bit depth.
 - Proof before promotion: GLx becomes the OpenGL-lineage default only after
-  the feature matrix, tier matrix, screenshot/demo parity, and performance
-  gates are green.
+  the feature matrix, tier matrix, versioned parity suites for screenshots,
+  demos, HUD, shadows, bloom, and cel-shading, and performance gates are green.
 
 ## ABI Contract
 
@@ -199,11 +199,17 @@ migration alias to GLx, until all of these are true:
 - the checked-in [feature matrix](GLX_FEATURE_MATRIX.md) has no ambiguous rows;
 - runtime GLx rendering no longer depends on legacy OpenGL draw ownership;
 - screenshot, demo, HUD, fog, bloom, shadow, cel-shading, cinematic, and
-  screenshot/export parity evidence is archived for the release candidate;
-- performance budgets for draw pressure, upload volume, fallback counts,
-  shader binds, static packet misses, stream wrap rejects, and GPU frame time
-  pass on the blocking runtime matrix;
+  screenshot/export parity evidence is archived for the release candidate, with
+  `rc-proof` carrying the current proof-corpus and parity-suite versions;
+- tagged release packaging has revalidated non-dry-run `rc-smoke`,
+  `rc-parity`, and `rc-proof` manifests for the blocking Windows and Linux
+  runtime platforms through the GLx proof-root validator;
+- per-tier performance budgets for draw pressure, upload volume, fallback
+  counts, shader binds, static packet misses, stream wrap rejects, and GPU
+  frame time pass on the blocking runtime matrix;
 - migration notes and rollback instructions exist before default changes ship.
+
+The machine-readable promotion guard is `python scripts/glx_promotion.py --require-ready --proof-root <dir>`. It must report `ready` before build defaults, renderer aliases, or legacy OpenGL packaging rules are changed for promotion.
 
 ## Consequences
 

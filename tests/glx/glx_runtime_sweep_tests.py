@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SWEEP_PATH = ROOT / "scripts" / "glx_runtime_sweep.py"
+PROMOTION_PATH = ROOT / "scripts" / "glx_promotion.py"
 FEATURE_MATRIX_PATH = ROOT / "docs" / "fnquake3" / "GLX_FEATURE_MATRIX.md"
 COLORSPACE_AUDIT_PATH = ROOT / "docs" / "fnquake3" / "GLX_COLORSPACE_AUDIT.md"
 FEATURE_MATRIX_ALLOWED_STATUSES = {"covered", "partially covered", "missing"}
@@ -77,6 +80,13 @@ assert spec is not None
 glx_runtime_sweep = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(glx_runtime_sweep)
+sys.path.insert(0, str(ROOT / "scripts"))
+
+promotion_spec = importlib.util.spec_from_file_location("glx_promotion", PROMOTION_PATH)
+assert promotion_spec is not None
+glx_promotion = importlib.util.module_from_spec(promotion_spec)
+assert promotion_spec.loader is not None
+promotion_spec.loader.exec_module(glx_promotion)
 
 
 def parse_runtime_glx_profiles() -> dict[str, dict[str, str]]:
@@ -130,7 +140,113 @@ def proof_corpus_for_gate(gate: str) -> dict[str, object]:
     return glx_runtime_sweep.proof_corpus_manifest(
         glx_runtime_sweep.GLX_GATE_CORPUS_SCENES[gate],
         requirements.get("required_corpus_tags", ()),
+        requirements.get("required_parity_suites", ()),
     )
+
+
+def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
+    manifest = {
+        "runId": f"{platform_id}-{gate}",
+        "createdUtc": "2026-05-10T12:00:00+00:00",
+        "gate": gate,
+        "dryRun": False,
+        "proofPlatform": platform_id,
+        "maps": glx_runtime_sweep.corpus_targets(
+            glx_runtime_sweep.GLX_GATE_CORPUS_SCENES[gate],
+            "map",
+        ),
+        "demos": glx_runtime_sweep.corpus_targets(
+            glx_runtime_sweep.GLX_GATE_CORPUS_SCENES[gate],
+            "demo",
+        ),
+        "renderers": ["opengl", "glx"],
+        "proofCorpus": proof_corpus_for_gate(gate),
+        "performanceFailures": [],
+        "runs": [
+            {
+                "type": "switch-screenshots",
+                "status": "passed",
+                "screenshots": [
+                    {
+                        "name": "shot",
+                        "found": True,
+                        "baselineKey": f"{gate}-{platform_id}-shot",
+                        "baselineStatus": "passed" if gate == "rc-proof" else "not-compared",
+                        "comparison": {"status": "passed"} if gate == "rc-proof" else {},
+                    },
+                ],
+                "diagnostics": {"found": True, "failures": []},
+                "performance": locked_performance_sample(),
+            },
+        ],
+    }
+    for demo in manifest["demos"]:
+        manifest["runs"].extend(
+            [
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "renderer": "opengl",
+                    "demo": demo,
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "renderer": "glx",
+                    "demo": demo,
+                    "timedemoMetrics": {"fps": 95.0},
+                },
+            ]
+        )
+    if gate == "rc-proof":
+        manifest.update(
+            {
+                "screenshotBaselineDir": "proof/screenshots",
+                "performanceBaselinePath": "proof/performance-baseline.json",
+                "performanceBaselineStatus": "compared",
+                "performanceComparisons": [{"metric": "draws", "status": "passed"}],
+                "performanceAggregate": {"sampleCount": 1, "latest": {}, "max": {}},
+            }
+        )
+    return manifest
+
+
+def ownership_proof_manifest(platform_id: str, calls: int = 0, items: int = 0) -> dict[str, object]:
+    return {
+        "runId": f"{platform_id}-glx-ownership",
+        "createdUtc": "2026-05-10T12:30:00+00:00",
+        "gate": "",
+        "profile": "glx-ownership",
+        "dryRun": False,
+        "proofPlatform": platform_id,
+        "maps": ["q3dm1", "q3dm17"],
+        "demos": [],
+        "renderers": ["opengl", "glx"],
+        "performanceFailures": [],
+        "runs": [
+            {
+                "type": "switch-screenshots",
+                "status": "passed",
+                "screenshots": [
+                    {
+                        "name": "ownership-shot",
+                        "found": True,
+                    },
+                ],
+                "diagnostics": {
+                    "found": True,
+                    "failures": [],
+                    "metrics": {
+                        "ownership": {
+                            "calls": calls,
+                            "items": items,
+                        },
+                    },
+                },
+            },
+        ],
+    }
 
 
 def parse_glx_feature_matrix() -> list[dict[str, str]]:
@@ -229,6 +345,31 @@ class GlxArchitecturalCutoverPlanTests(unittest.TestCase):
         section = self._plan_section("### HDR, color grading, and output tasks", "### Performance, testing, and release tasks")
 
         self.assert_tasks_are_implemented(section, ("Task S",))
+
+    def test_task_t_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Performance, testing, and release tasks", "**Task U")
+
+        self.assert_tasks_are_implemented(section, ("Task T",))
+
+    def test_task_u_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Performance, testing, and release tasks", "**Task V")
+
+        self.assert_tasks_are_implemented(section, ("Task U",))
+
+    def test_task_v_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Performance, testing, and release tasks", "**Task W")
+
+        self.assert_tasks_are_implemented(section, ("Task V",))
+
+    def test_task_w_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Performance, testing, and release tasks", "**Task X")
+
+        self.assert_tasks_are_implemented(section, ("Task W",))
+
+    def test_task_x_is_marked_implemented(self) -> None:
+        section = self._plan_section("### Performance, testing, and release tasks", "## Release gates")
+
+        self.assert_tasks_are_implemented(section, ("Task X",))
 
     def test_feature_closure_matrix_has_zero_ambiguous_rows(self) -> None:
         rows = parse_glx_feature_matrix()
@@ -419,6 +560,105 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("output backend", glx_runtime_sweep.__dict__["GLX_OUTPUT_BACKEND_RE"].pattern)
         for cvar in ("r_outputBackend", "r_outputAllowExperimentalLinuxHDR"):
             self.assertIn(cvar, display_doc)
+
+    def test_task_t_release_proof_policy_sources_are_covered(self) -> None:
+        sweep_script = SWEEP_PATH.read_text(encoding="utf-8")
+        release_script = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "glx-verification.yml").read_text(encoding="utf-8")
+        rc_gates = (ROOT / "docs" / "fnquake3" / "GLX_RC_GATES.md").read_text(encoding="utf-8")
+
+        for text in (
+            "GLX_BLOCKING_RELEASE_PLATFORMS",
+            "GLX_RELEASE_REQUIRED_GATES",
+            "validate_release_proof_root",
+            "proofPlatform",
+            "performance_budget_tier",
+            "gpuFrameMs",
+            "staticDrawPacketMisses",
+            "streamSameFrameWrapRejects",
+        ):
+            self.assertIn(text, sweep_script)
+        self.assertIn("--glx-proof-root", release_script)
+        self.assertIn("resolve_glx_runtime_proof", release_script)
+        self.assertIn("glx_runtime_proof", release_script)
+        self.assertIn("cron: '35 4 * * 1'", workflow)
+        self.assertIn("FNQ3_GLX_PROOF_PLATFORM", workflow)
+        self.assertIn("Release Proof Root", rc_gates)
+
+    def test_task_v_parity_suite_sources_are_covered(self) -> None:
+        sweep_script = SWEEP_PATH.read_text(encoding="utf-8")
+        corpus_doc = (ROOT / glx_runtime_sweep.GLX_PROOF_CORPUS_DOC).read_text(encoding="utf-8")
+        rc_gates = (ROOT / "docs" / "fnquake3" / "GLX_RC_GATES.md").read_text(encoding="utf-8")
+
+        for text in (
+            "GLX_PARITY_SUITES",
+            "GLX_GATE_PARITY_SUITES",
+            "GLX_PARITY_SUITE_VERSION",
+            "required_parity_suites",
+            "paritySuiteVersion",
+            "paritySuiteIds",
+            "paritySuites",
+            "cg_shadows",
+            "r_celShading",
+        ):
+            self.assertIn(text, sweep_script)
+
+        for suite_id in ("screenshot", "demo-playback", "hud", "shadow", "bloom", "cel-shading"):
+            self.assertIn(f"`{suite_id}`", corpus_doc)
+            self.assertIn(suite_id, rc_gates)
+
+    def test_task_w_promotion_policy_sources_are_covered(self) -> None:
+        promotion_script = PROMOTION_PATH.read_text(encoding="utf-8")
+        release_script = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "glx-verification.yml").read_text(encoding="utf-8")
+        promotion_doc = (ROOT / "docs" / "fnquake3" / "GLX_PROMOTION.md").read_text(encoding="utf-8")
+        final_contract = (ROOT / "docs" / "fnquake3" / "GLX_FINAL_CONTRACT.md").read_text(encoding="utf-8")
+
+        for text in (
+            "PROMOTION_REQUIRED_TIERS",
+            "PROMOTION_OWNERSHIP_PROFILE",
+            "check_feature_matrix",
+            "check_release_proof_root",
+            "check_ownership_proof",
+            "check_renderer_source_policy",
+            "policyViolation",
+        ):
+            self.assertIn(text, promotion_script)
+
+        self.assertIn("promotion_report", release_script)
+        self.assertIn("glx_promotion", release_script)
+        self.assertIn("scripts/glx_promotion.py", workflow)
+        self.assertIn("glx-promotion.json", workflow)
+        for text in ("Migration Alias Plan", "OpenGL2 Legacy Flag Plan", "Rollback Package Contract"):
+            self.assertIn(text, promotion_doc)
+        self.assertIn("scripts/glx_promotion.py --require-ready", final_contract)
+
+    def test_task_x_productization_sources_are_covered(self) -> None:
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        build_doc = (ROOT / "BUILD.md").read_text(encoding="utf-8")
+        display_doc = (ROOT / "docs" / "DISPLAY.md").read_text(encoding="utf-8")
+        screenshots_doc = (ROOT / "docs" / "SCREENSHOTS.md").read_text(encoding="utf-8")
+        glx_doc = (ROOT / "docs" / "GLX.md").read_text(encoding="utf-8")
+        renderer_doc = (ROOT / "docs" / "fnquake3" / "GLX_RENDERER.md").read_text(encoding="utf-8")
+        readme_template = (ROOT / "docs" / "templates" / "README.md.in").read_text(encoding="utf-8")
+        release_script = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
+
+        self.assertIn('OPTION(USE_GLX "Build the GLx OpenGL-lineage renderer module" ON)', cmake)
+        self.assertRegex(makefile, r"(?m)^USE_GLX\s*=\s*1$")
+        for text in (
+            "canonical OpenGL-lineage renderer",
+            "GLx Renderer Guide",
+        ):
+            self.assertIn(text, glx_doc)
+        self.assertIn("troubleshooting", glx_doc.lower())
+        self.assertIn("Canonical OpenGL-lineage renderer", display_doc)
+        self.assertIn("canonical OpenGL-lineage renderer", renderer_doc)
+        self.assertIn("docs/GLX.md", readme_template)
+        self.assertIn('ROOT / "docs" / "GLX.md"', release_script)
+        for current_text in (build_doc, display_doc, screenshots_doc, renderer_doc, glx_doc):
+            self.assertNotRegex(current_text, r"(?i)\bexperimental\s+glx\b")
+            self.assertNotRegex(current_text, r"(?i)glx\s+is\s+an\s+experimental")
 
 
 class GlxRuntimeSweepImageTests(unittest.TestCase):
@@ -1142,6 +1382,13 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                 "ui-hud-sensitive",
                 "color-grade-proof",
                 "tone-map-proof",
+                "screenshot-parity",
+                "demo-playback-parity",
+                "hud-parity",
+                "shadow-parity",
+                "bloom-parity",
+                "cel-shading-parity",
+                "outline-parity",
                 "performance-comparison",
             }.issubset(all_tags)
         )
@@ -1157,6 +1404,76 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             "q3dm17,q3dm11,q3dm15",
         )
         self.assertEqual(glx_runtime_sweep.PROFILE_CVARS["glx-color"]["r_colorGrade"], "3")
+
+    def test_task_v_parity_suites_are_versioned_and_gate_enforced(self) -> None:
+        required_suites = (
+            "screenshot",
+            "demo-playback",
+            "hud",
+            "shadow",
+            "bloom",
+            "cel-shading",
+        )
+        self.assertEqual(set(glx_runtime_sweep.GLX_PARITY_SUITES), set(required_suites))
+
+        proof_corpus = proof_corpus_for_gate("rc-proof")
+        self.assertEqual(
+            proof_corpus["paritySuiteVersion"],
+            glx_runtime_sweep.GLX_PARITY_SUITE_VERSION,
+        )
+        self.assertEqual(
+            set(proof_corpus["paritySuiteIds"]),
+            set(glx_runtime_sweep.GLX_GATE_PARITY_SUITES["rc-proof"]),
+        )
+        self.assertTrue(
+            all(
+                set(record["sceneIds"]).issubset(set(proof_corpus["selectedSceneIds"]))
+                for record in proof_corpus["paritySuites"]
+            )
+        )
+
+        switch_args = argparse.Namespace(
+            startup_wait=1,
+            map_wait=1,
+            switch_wait=1,
+            screenshot_wait=1,
+            perf_sample_wait=0,
+            switch_rounds=1,
+            profile="glx-parity",
+            no_perf_samples=True,
+        )
+        switch_cfg, expected_shots = glx_runtime_sweep.build_switch_cfg(
+            switch_args,
+            {},
+            ["q3dm6", "q3dm11"],
+            ["opengl", "glx"],
+            "parity-suite-test",
+            glx_runtime_sweep.GLX_GATE_CORPUS_SCENES["rc-proof"],
+            glx_runtime_sweep.GLX_GATE_PARITY_SUITES["rc-proof"],
+        )
+        self.assertIn('set cg_shadows "2"', switch_cfg)
+        self.assertIn('set r_celShading "1"', switch_cfg)
+        q3dm6_shots = [shot for shot in expected_shots if shot["map"] == "q3dm6"]
+        q3dm11_shots = [shot for shot in expected_shots if shot["map"] == "q3dm11"]
+        self.assertTrue(all("shadow" in shot["paritySuiteIds"] for shot in q3dm6_shots))
+        self.assertTrue(all("cel-shading" in shot["paritySuiteIds"] for shot in q3dm11_shots))
+
+        broken = dict(proof_corpus)
+        broken["paritySuiteIds"] = ["screenshot"]
+        broken["paritySuites"] = glx_runtime_sweep.parity_suite_records(["screenshot"])
+        manifest = {
+            "proofCorpus": broken,
+            "maps": glx_runtime_sweep.corpus_targets(
+                glx_runtime_sweep.GLX_GATE_CORPUS_SCENES["rc-proof"],
+                "map",
+            ),
+            "demos": ["demo1"],
+        }
+        failures = glx_runtime_sweep.evaluate_proof_corpus(
+            manifest,
+            glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"],
+        )
+        self.assertTrue(any("parity suite(s) missing" in failure for failure in failures))
 
     def test_gate_presets_derive_scene_targets_from_proof_corpus(self) -> None:
         for gate, scene_ids in glx_runtime_sweep.GLX_GATE_CORPUS_SCENES.items():
@@ -1413,11 +1730,59 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
         self.assertTrue(any("not approve" in failure for failure in failures))
 
+    def test_release_proof_root_requires_all_blocking_platform_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+                for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
+                    manifest_dir = root / platform_id / gate / "run"
+                    manifest_dir.mkdir(parents=True)
+                    (manifest_dir / "manifest.json").write_text(
+                        json.dumps(release_proof_manifest(gate, platform_id), indent=2),
+                        encoding="utf-8",
+                    )
+
+            summary = glx_runtime_sweep.validate_release_proof_root(root)
+
+            self.assertEqual(summary["status"], "passed")
+            self.assertEqual(summary["failures"], [])
+            self.assertEqual(
+                len(summary["manifests"]),
+                len(glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS)
+                * len(glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES),
+            )
+
+    def test_release_proof_root_rejects_missing_platform_or_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
+                manifest = release_proof_manifest(gate, "windows-x64")
+                if gate == "rc-proof":
+                    manifest["dryRun"] = True
+                manifest_dir = root / "windows-x64" / gate / "run"
+                manifest_dir.mkdir(parents=True)
+                (manifest_dir / "manifest.json").write_text(
+                    json.dumps(manifest, indent=2),
+                    encoding="utf-8",
+                )
+
+            summary = glx_runtime_sweep.validate_release_proof_root(root)
+            failures = "\n".join(str(failure) for failure in summary["failures"])
+
+            self.assertEqual(summary["status"], "failed")
+            self.assertIn("Missing GLx rc-smoke runtime proof for linux-x86_64", failures)
+            self.assertIn("No passing GLx rc-proof runtime proof for windows-x64", failures)
+            self.assertIn("dry-run manifests do not count as release proof", failures)
+
 
 class GlxWorkflowTests(unittest.TestCase):
     def test_runtime_workflow_proof_dir_preserves_threshold_inputs(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "glx-verification.yml").read_text(encoding="utf-8")
 
+        self.assertIn("cron: '35 4 * * 1'", workflow)
+        self.assertIn("github.event_name == 'schedule'", workflow)
+        self.assertIn("FNQ3_GLX_PROOF_PLATFORM", workflow)
+        self.assertIn("--proof-platform", workflow)
         self.assertIn("if baseline_dir or proof_dir:", workflow)
         self.assertIn('"--screenshot-max-rms",', workflow)
         self.assertIn('os.environ["FNQ3_GLX_SCREENSHOT_MAX_RMS"]', workflow)
@@ -1436,7 +1801,94 @@ class GlxWorkflowTests(unittest.TestCase):
         self.assertIn("GLX_PROOF_CORPUS.md", workflow)
         self.assertIn("release_corpus_manifest", release_script)
         self.assertIn("glx_proof_corpus", release_script)
+        self.assertIn("--glx-proof-root", release_script)
+        self.assertIn("validate_release_proof_root", release_script)
+        self.assertIn("glx_runtime_proof", release_script)
+        self.assertIn("GLX_PROMOTION.md", workflow)
+        self.assertIn("glx-promotion.json", workflow)
+        self.assertIn("glx_promotion", release_script)
         self.assertIn(glx_runtime_sweep.GLX_PROOF_CORPUS_VERSION, corpus_doc)
+
+
+class GlxPromotionTests(unittest.TestCase):
+    def write_manifest(
+        self,
+        root: Path,
+        platform_id: str,
+        name: str,
+        manifest: dict[str, object],
+    ) -> None:
+        manifest_dir = root / platform_id / name / "run"
+        manifest_dir.mkdir(parents=True)
+        (manifest_dir / "manifest.json").write_text(
+            json.dumps(manifest, indent=2),
+            encoding="utf-8",
+        )
+
+    def write_complete_proof_root(self, root: Path) -> None:
+        for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+            for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
+                self.write_manifest(
+                    root,
+                    platform_id,
+                    gate,
+                    release_proof_manifest(gate, platform_id),
+                )
+            self.write_manifest(
+                root,
+                platform_id,
+                "glx-ownership",
+                ownership_proof_manifest(platform_id),
+            )
+
+    def test_current_tree_is_blocked_but_not_promoted(self) -> None:
+        report = glx_promotion.promotion_report()
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertFalse(report["policyViolation"])
+        self.assertEqual(report["sourcePolicy"]["cmakeDefault"], "opengl")
+        self.assertEqual(report["sourcePolicy"]["makeDefault"], "opengl")
+        self.assertEqual(report["sourcePolicy"]["cmakeUseGlxDefault"], "ON")
+        self.assertEqual(report["sourcePolicy"]["makeUseGlxDefault"], "1")
+        checks = {check["name"]: check for check in report["checks"]}
+        self.assertEqual(checks["feature-matrix-green"]["status"], "blocked")
+        self.assertGreater(len(checks["feature-matrix-green"]["blockers"]), 0)
+        self.assertEqual(checks["migration-and-rollback-doc"]["status"], "passed")
+
+    def test_complete_runtime_and_ownership_proof_still_waits_for_green_matrix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_complete_proof_root(root)
+
+            report = glx_promotion.promotion_report(root)
+            checks = {check["name"]: check for check in report["checks"]}
+
+            self.assertEqual(checks["blocking-runtime-proof"]["status"], "passed")
+            self.assertEqual(checks["ownership-proof"]["status"], "passed")
+            self.assertEqual(checks["feature-matrix-green"]["status"], "blocked")
+            self.assertEqual(report["status"], "blocked")
+
+    def test_ownership_proof_requires_zero_legacy_delegation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+                self.write_manifest(
+                    root,
+                    platform_id,
+                    "glx-ownership",
+                    ownership_proof_manifest(
+                        platform_id,
+                        calls=1 if platform_id == "windows-x64" else 0,
+                        items=4 if platform_id == "windows-x64" else 0,
+                    ),
+                )
+
+            proof = glx_promotion.check_ownership_proof(root)
+            failures = "\n".join(str(failure) for failure in proof["blockers"])
+
+            self.assertEqual(proof["status"], "blocked")
+            self.assertIn("windows-x64", failures)
+            self.assertNotIn("linux-x86_64 did not report zero", failures)
 
 
 class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
@@ -1468,6 +1920,9 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                         "glx: output backend request hdr10-pq selected hdr10-pq native windows-scrgb hardware yes experimental no display-hdr yes headroom 4.00 sdr-white 203 display-max 812 icc yes/2048",
                         "glx: stream draws 7/8 attempts, 90 idx, 0.50MB/index 0.10MB/tex1 0.20MB, mt 1, fog 2, depthfrag 3, texmod 4, env 5, dlight 0, screen 0, video 0, shadow 2, beam 3, post 4, fallbacks 0, skips 1",
                         "glx: stream categories entity 2/2, particle 1/1, poly 1/1, mark 1/1, weapon 1/1, ui 1/1, beam 3/3, special 4/4",
+                        "glx: stream reservation last 256 bytes at 1024 using map-range, largest 4096 bytes, same-frame wrap rejects 0",
+                        "glx: static queue packets last 1 full/2 partial/3 miss/4 mismatch, total 5 full/6 partial/7 miss",
+                        "glx: static packet lookup 64 mapped/max 63, hits 30, misses 9, fallbacks 2, mismatches 1, overflows 0",
                         "glx: static draw 11/12 calls, 130 idx, packets 1 full/2 partial/3 miss, manifest 4/5 idx, soft 6/7 calls/8 idx, arena 9, legacy 10, fallbacks 0, policy skips 1",
                         "glx: static MDI 1/2 calls, 3 runs/4 idx, fallbacks 0, skips 5, errors 0, largest 6",
                         "glx: GL3X performance draws 14 sync-uploads 3 static-buffers 2 dynamic-buffers 5 materials 7 fbo-post 4 unsupported persistent-upload 0",
@@ -1484,6 +1939,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["tier"], "GL2X")
             self.assertEqual(performance["latest"]["productTier"], "GL2X")
             self.assertEqual(performance["latest"]["drawIndexes"], 300)
+            self.assertEqual(performance["latest"]["gpuFrameMs"], 0.27)
             self.assertEqual(performance["latest"]["passScheduleValid"], 1)
             self.assertEqual(performance["latest"]["passScheduleCount"], 9)
             self.assertEqual(performance["latest"]["passScheduleHash"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH)
@@ -1518,6 +1974,8 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["outputHeadroom"], 4.0)
             self.assertEqual(performance["latest"]["outputIccProfileBytes"], 2048)
             self.assertEqual(performance["latest"]["streamDrawAttempts"], 8)
+            self.assertEqual(performance["latest"]["streamDrawMegabytes"], 0.5)
+            self.assertEqual(performance["latest"]["streamSameFrameWrapRejects"], 0)
             self.assertEqual(performance["latest"]["streamDrawMultitexture"], 1)
             self.assertEqual(performance["latest"]["streamDrawFog"], 2)
             self.assertEqual(performance["latest"]["streamDrawDepthFragment"], 3)
@@ -1537,6 +1995,11 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["streamCategoryUiDraws"], 1)
             self.assertEqual(performance["latest"]["streamCategoryBeamDraws"], 3)
             self.assertEqual(performance["latest"]["streamCategorySpecialDraws"], 4)
+            self.assertEqual(performance["latest"]["staticDrawPacketMisses"], 3)
+            self.assertEqual(performance["latest"]["staticQueuePacketMisses"], 7)
+            self.assertEqual(performance["latest"]["staticPacketLookupMisses"], 9)
+            self.assertEqual(performance["latest"]["staticPacketLookupFallbacks"], 2)
+            self.assertEqual(performance["latest"]["staticPacketLookupOverflows"], 0)
             self.assertEqual(performance["latest"]["gl3xDraws"], 14)
             self.assertEqual(performance["latest"]["gl3xSyncUploads"], 3)
             self.assertEqual(performance["latest"]["gl3xStaticBuffers"], 2)
@@ -1664,13 +2127,14 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
     def test_performance_budget_flags_fallback_counters(self) -> None:
         aggregate = {
             "sampleCount": 1,
-            "latest": {},
+            "latest": {"productTier": "GL2X"},
             "max": {
                 "streamDrawFallbacks": 2,
                 "streamDrawDynamicLights": 1,
                 "streamDrawScreenMaps": 0,
                 "streamDrawVideoMaps": 0,
                 "staticDrawFallbacks": 0,
+                "streamSameFrameWrapRejects": 1,
             },
         }
         budget = glx_runtime_sweep.merge_budget(
@@ -1682,7 +2146,75 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
 
         self.assertTrue(any("streamDrawFallbacks" in failure for failure in failures))
         self.assertTrue(any("streamDrawDynamicLights" in failure for failure in failures))
+        self.assertTrue(any("streamSameFrameWrapRejects" in failure for failure in failures))
         self.assertFalse(any("staticDrawFallbacks" in failure for failure in failures))
+
+    def test_performance_budget_applies_tier_draw_upload_bind_miss_and_gpu_limits(self) -> None:
+        aggregate = {
+            "sampleCount": 1,
+            "latest": {"productTier": "GL2X"},
+            "max": {
+                "draws": 12001,
+                "streamMegabytes": 129.0,
+                "materialBinds": 12001,
+                "staticDrawPacketMisses": 12001,
+                "staticQueuePacketMisses": 12001,
+                "staticPacketLookupMisses": 12001,
+                "gpuFrameMs": 51.0,
+            },
+        }
+
+        failures = glx_runtime_sweep.evaluate_performance_budget(
+            aggregate,
+            glx_runtime_sweep.DEFAULT_PERFORMANCE_BUDGET,
+        )
+
+        for key in (
+            "GL2X max draws",
+            "GL2X max streamMegabytes",
+            "GL2X max materialBinds",
+            "GL2X max staticDrawPacketMisses",
+            "GL2X max staticQueuePacketMisses",
+            "GL2X max staticPacketLookupMisses",
+            "GL2X max gpuFrameMs",
+        ):
+            self.assertTrue(any(key in failure for failure in failures), key)
+
+    def test_performance_budget_requires_gpu_time_on_modern_tiers(self) -> None:
+        aggregate = {
+            "sampleCount": 1,
+            "latest": {"productTier": "GL46"},
+            "max": {
+                "draws": 1,
+                "streamMegabytes": 1.0,
+                "materialBinds": 1,
+                "staticDrawPacketMisses": 0,
+            },
+        }
+
+        failures = glx_runtime_sweep.evaluate_performance_budget(
+            aggregate,
+            glx_runtime_sweep.DEFAULT_PERFORMANCE_BUDGET,
+        )
+
+        self.assertTrue(any("GL46 required metric gpuFrameMs is missing" in failure for failure in failures))
+
+    def test_performance_budget_merges_tier_overrides(self) -> None:
+        budget = glx_runtime_sweep.merge_budget(
+            glx_runtime_sweep.DEFAULT_PERFORMANCE_BUDGET,
+            {
+                "tiers": {
+                    "GL2X": {
+                        "max": {
+                            "draws": 5,
+                        }
+                    }
+                }
+            },
+        )
+
+        self.assertEqual(budget["tiers"]["GL2X"]["max"]["draws"], 5)  # type: ignore[index]
+        self.assertEqual(budget["tiers"]["GL2X"]["max"]["materialBinds"], 12000)  # type: ignore[index]
 
     def test_performance_baseline_approval_then_compare(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

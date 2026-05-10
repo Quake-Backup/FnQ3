@@ -43,7 +43,7 @@ USE_SYSTEM_OGG    = 0
 USE_SYSTEM_VORBIS = 0
 
 USE_VULKAN       = 1
-USE_GLX          = 0
+USE_GLX          = 1
 USE_OPENGL       = 1
 USE_OPENGL2      = 0
 USE_OPENGL_API   = 1

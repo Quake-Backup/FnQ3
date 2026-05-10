@@ -11,7 +11,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fnq3_meta import ROOT, channel_metadata, package_archive_name
-from glx_runtime_sweep import GLX_PROOF_CORPUS_DOC, release_corpus_manifest
+from glx_runtime_sweep import (
+    GLX_PROOF_CORPUS_DOC,
+    release_corpus_manifest,
+    validate_release_proof_root,
+)
+from glx_promotion import PROMOTION_DOC_PATH, promotion_report
 
 
 DEFAULT_DOCS = [
@@ -20,6 +25,14 @@ DEFAULT_DOCS = [
     (
         ROOT / GLX_PROOF_CORPUS_DOC,
         Path(GLX_PROOF_CORPUS_DOC),
+    ),
+    (
+        PROMOTION_DOC_PATH,
+        Path("docs") / "fnquake3" / "GLX_PROMOTION.md",
+    ),
+    (
+        ROOT / "docs" / "GLX.md",
+        Path("docs") / "GLX.md",
     ),
     (ROOT / ".install" / "README.html", Path("README.html")),
 ]
@@ -35,6 +48,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--build-number", type=int)
     parser.add_argument("--commit")
     parser.add_argument("--ref-name")
+    parser.add_argument(
+        "--glx-proof-root",
+        type=Path,
+        help=(
+            "Directory containing non-dry-run GLx runtime proof manifests. "
+            "Required for tagged release packaging."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -63,6 +84,31 @@ def copy_docs(stage_root: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def resolve_glx_runtime_proof(args: argparse.Namespace) -> dict[str, object]:
+    if args.glx_proof_root is None:
+        if args.channel == "release":
+            raise ValueError(
+                "--glx-proof-root is required for --channel release; "
+                "tagged releases need reviewed non-dry-run GLx runtime proof."
+            )
+        return {
+            "required": False,
+            "status": "not-required",
+            "reason": "nightly packaging records the corpus but does not promote GLx.",
+        }
+
+    proof = validate_release_proof_root(args.glx_proof_root)
+    proof["required"] = args.channel == "release"
+    if proof.get("status") != "passed":
+        failures = proof.get("failures", [])
+        detail = "; ".join(str(item) for item in failures[:8]) if isinstance(failures, list) else ""
+        raise ValueError(
+            "GLx runtime proof validation failed"
+            + (f": {detail}" if detail else ".")
+        )
+    return proof
+
+
 def build_archives(args: argparse.Namespace) -> dict[str, object]:
     subprocess.run([sys.executable, str(ROOT / "scripts" / "generate_docs.py")], check=True)
 
@@ -73,6 +119,13 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         commit=args.commit,
         ref_name=args.ref_name,
     )
+    glx_runtime_proof = resolve_glx_runtime_proof(args)
+    glx_promotion = promotion_report(args.glx_proof_root)
+    if glx_promotion.get("policyViolation"):
+        raise ValueError(
+            "GLx promotion policy failed: renderer defaults were promoted "
+            "before the promotion gate passed."
+        )
 
     artifact_root = args.artifact_root.resolve()
     if not artifact_root.exists():
@@ -121,6 +174,8 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         "build_date": meta["build_date"],
         "commit": meta["commit"],
         "glx_proof_corpus": release_corpus_manifest(),
+        "glx_runtime_proof": glx_runtime_proof,
+        "glx_promotion": glx_promotion,
         "archives": archives,
     }
 

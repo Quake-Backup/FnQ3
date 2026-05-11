@@ -1180,12 +1180,13 @@ class GlxArchitecturalCutoverPlanTests(unittest.TestCase):
 
 
 class GlxRuntimeSweepExecutableTests(unittest.TestCase):
-    def test_default_executable_candidates_do_not_include_opengl_wrappers(self) -> None:
+    def test_default_executable_candidates_use_unified_client_names(self) -> None:
         names = glx_runtime_sweep.candidate_exe_names()
 
-        self.assertTrue(any(name.startswith("fnquake3.glx") for name in names))
-        self.assertTrue(any(not name.startswith("fnquake3.glx") for name in names))
-        self.assertFalse(any("opengl" in name for name in names))
+        self.assertTrue(any(name.startswith("fnquake3") for name in names))
+        self.assertFalse(any(".glx" in name for name in names))
+        self.assertFalse(any(".opengl" in name for name in names))
+        self.assertFalse(any(".vulkan" in name for name in names))
 
     def test_launch_args_enable_engine_logfile_by_default(self) -> None:
         command = glx_runtime_sweep.base_launch_args(
@@ -1248,29 +1249,30 @@ class GlxRuntimeSweepExecutableTests(unittest.TestCase):
             self.assertIn("stdout metadata", text)
             self.assertIn("engine color metadata", text)
 
-    def test_default_executable_resolution_does_not_pick_opengl_wrapper(self) -> None:
+    def test_default_executable_resolution_ignores_renderer_wrappers(self) -> None:
         old_output = glx_runtime_sweep.DEFAULT_OUTPUT
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             names = glx_runtime_sweep.candidate_exe_names()
-            neutral_name = next(name for name in names if not name.startswith("fnquake3.glx"))
-            opengl_name = (
-                "fnquake3.opengl.x64.exe"
+            unified_name = names[0]
+            stale_names = (
+                ["fnquake3.glx.x64.exe", "fnquake3.opengl.x64.exe"]
                 if glx_runtime_sweep.os.name == "nt"
-                else "fnquake3.opengl"
+                else ["fnquake3.glx", "fnquake3.opengl"]
             )
 
             glx_runtime_sweep.DEFAULT_OUTPUT = root
             try:
-                (root / opengl_name).touch()
+                for stale_name in stale_names:
+                    (root / stale_name).touch()
                 with self.assertRaises(FileNotFoundError):
                     glx_runtime_sweep.resolve_exe(None)
 
-                (root / neutral_name).touch()
+                (root / unified_name).touch()
                 self.assertEqual(
                     glx_runtime_sweep.resolve_exe(None),
-                    (root / neutral_name).resolve(),
+                    (root / unified_name).resolve(),
                 )
             finally:
                 glx_runtime_sweep.DEFAULT_OUTPUT = old_output
@@ -1755,6 +1757,8 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
     def test_task_x_productization_sources_are_covered(self) -> None:
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        meson_options = (ROOT / "meson_options.txt").read_text(encoding="utf-8")
+        meson_build = (ROOT / "meson.build").read_text(encoding="utf-8")
         build_doc = (ROOT / "BUILD.md").read_text(encoding="utf-8")
         display_doc = (ROOT / "docs" / "DISPLAY.md").read_text(encoding="utf-8")
         screenshots_doc = (ROOT / "docs" / "SCREENSHOTS.md").read_text(encoding="utf-8")
@@ -1765,6 +1769,10 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
 
         self.assertIn('OPTION(USE_GLX "Build the GLx OpenGL-lineage renderer module" ON)', cmake)
         self.assertRegex(makefile, r"(?m)^USE_GLX\s*=\s*1$")
+        self.assertIn("'glx'", meson_options)
+        self.assertIn("renderer_prefix + '_glx_'", meson_build)
+        self.assertIn("renderer_gl_src + renderer_glx_src", meson_build)
+        self.assertIn("single client executable", build_doc)
         for text in (
             "canonical OpenGL-lineage renderer",
             "GLx Renderer Guide",

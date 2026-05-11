@@ -11,12 +11,15 @@ on:
     paths:
       - '.github/workflows/glx-verification.yml'
       - 'CMakeLists.txt'
+      - 'meson.build'
+      - 'meson_options.txt'
       - 'code/renderer/**'
       - 'code/renderercommon/**'
       - 'code/rendererglx/**'
       - 'docs/fnquake3/GLX_*.md'
       - 'scripts/glx_promotion.py'
       - 'scripts/glx_runtime_sweep.py'
+      - 'scripts/stringify_shader.py'
       - 'tests/glx/**'
   push:
     branches:
@@ -24,12 +27,15 @@ on:
     paths:
       - '.github/workflows/glx-verification.yml'
       - 'CMakeLists.txt'
+      - 'meson.build'
+      - 'meson_options.txt'
       - 'code/renderer/**'
       - 'code/renderercommon/**'
       - 'code/rendererglx/**'
       - 'docs/fnquake3/GLX_*.md'
       - 'scripts/glx_promotion.py'
       - 'scripts/glx_runtime_sweep.py'
+      - 'scripts/stringify_shader.py'
       - 'tests/glx/**'
   schedule:
     - cron: '35 4 * * 1'
@@ -118,7 +124,7 @@ on:
 
 jobs:
   glx-logic-tests:
-    name: GLx logic and boundary tests
+    name: GLx Meson logic and boundary tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -126,23 +132,26 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get -qq update
-          sudo apt-get install -y cmake ninja-build g++ libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
+          sudo apt-get install -y meson ninja-build g++ libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
 
-      - name: Configure focused test build
+      - name: Configure focused Meson test build
         run: |
-          cmake -S . -B .tmp/cmake-glx-verification -G Ninja \
-            -DUSE_SDL=OFF \
-            -DUSE_CURL=OFF \
-            -DUSE_VULKAN=OFF \
-            -DUSE_GLX=ON \
-            -DFNQ3_AUDIO_LOOPBACK_TESTS=OFF \
-            -DFNQ3_GLX_LOGIC_TESTS=ON
+          meson setup .tmp/meson-glx-verification \
+            --buildtype=debugoptimized \
+            -Dsdl=disabled \
+            -Dcurl=disabled \
+            -Drenderer-dlopen=true \
+            -Drenderers=opengl,glx \
+            -Dbuild-client=false \
+            -Dbuild-server=false \
+            -Daudio-tests=false \
+            -Dglx-tests=true
 
       - name: Build GLx logic tests
-        run: cmake --build .tmp/cmake-glx-verification --target fnq3_glx_logic_tests
+        run: meson compile -C .tmp/meson-glx-verification fnq3_glx_logic_tests
 
       - name: Run GLx logic and boundary tests
-        run: ctest --test-dir .tmp/cmake-glx-verification -R "fnq3_glx_(logic|header_boundary)" --output-on-failure
+        run: meson test -C .tmp/meson-glx-verification -R "fnq3_glx_(logic|header_boundary)" --print-errorlogs
 
   glx-gate-plans:
     name: GLx RC gate plans
@@ -177,7 +186,7 @@ jobs:
             python scripts/glx_runtime_sweep.py \
               --gate "$gate" \
               --dry-run \
-              --exe ".tmp/glx-gate-plans/fnquake3.glx" \
+              --exe ".tmp/glx-gate-plans/fnquake3" \
               --basepath ".tmp/glx-gate-plans/basepath" \
               --output-dir ".tmp/glx-gate-plans" \
               --summary-markdown ".tmp/glx-gate-plans/${gate}.md" \

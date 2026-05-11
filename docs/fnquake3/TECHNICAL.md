@@ -38,7 +38,7 @@ That header feeds:
 
 - runtime version strings via [`code/qcommon/q_shared.h`](../../code/qcommon/q_shared.h)
 - Windows resource metadata via [`code/win32/win_resource.rc`](../../code/win32/win_resource.rc)
-- Make and CMake version reporting
+- Meson, Make, and CMake version reporting
 - documentation rendering
 - nightly and tagged release archive naming
 

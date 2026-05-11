@@ -11,11 +11,14 @@ on:
     paths:
       - '.github/workflows/vulkan-verification.yml'
       - 'CMakeLists.txt'
+      - 'meson.build'
+      - 'meson_options.txt'
       - 'code/renderercommon/**'
       - 'code/renderervk/**'
       - 'docs/fnquake3/TECHNICAL.md'
       - 'docs/fnquake3/VK_*.md'
       - 'scripts/vk_runtime_sweep.py'
+      - 'scripts/stringify_shader.py'
       - 'tests/vulkan/**'
   push:
     branches:
@@ -23,11 +26,14 @@ on:
     paths:
       - '.github/workflows/vulkan-verification.yml'
       - 'CMakeLists.txt'
+      - 'meson.build'
+      - 'meson_options.txt'
       - 'code/renderercommon/**'
       - 'code/renderervk/**'
       - 'docs/fnquake3/TECHNICAL.md'
       - 'docs/fnquake3/VK_*.md'
       - 'scripts/vk_runtime_sweep.py'
+      - 'scripts/stringify_shader.py'
       - 'tests/vulkan/**'
   workflow_dispatch:
     inputs:
@@ -63,7 +69,7 @@ on:
 
 jobs:
   vulkan-renderer-build:
-    name: Vulkan renderer build
+    name: Vulkan Meson renderer build
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -71,21 +77,23 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get -qq update
-          sudo apt-get install -y cmake ninja-build gcc g++ libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
+          sudo apt-get install -y meson ninja-build gcc g++ libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
 
-      - name: Configure focused Vulkan build
+      - name: Configure focused Meson Vulkan build
         run: |
-          cmake -S . -B .tmp/cmake-vk-verification -G Ninja \
-            -DUSE_SDL=OFF \
-            -DUSE_CURL=OFF \
-            -DUSE_VULKAN=ON \
-            -DUSE_GLX=OFF \
-            -DUSE_RENDERER_DLOPEN=ON \
-            -DFNQ3_AUDIO_LOOPBACK_TESTS=OFF \
-            -DFNQ3_GLX_LOGIC_TESTS=OFF
+          meson setup .tmp/meson-vk-verification \
+            --buildtype=debugoptimized \
+            -Dsdl=disabled \
+            -Dcurl=disabled \
+            -Drenderer-dlopen=true \
+            -Drenderers=vulkan \
+            -Dbuild-client=false \
+            -Dbuild-server=false \
+            -Daudio-tests=false \
+            -Dglx-tests=false
 
       - name: Build Vulkan renderer
-        run: cmake --build .tmp/cmake-vk-verification --target fnquake3_vulkan_x86_64
+        run: meson compile -C .tmp/meson-vk-verification fnquake3_vulkan_x86_64
 
   vulkan-gate-plans:
     name: Vulkan RC gate plans

@@ -1,7 +1,13 @@
 build/
+meson/build/
 output/
 .vs/
-.vscode/
+.vscode/*
+!.vscode/build-release.ps1
+!.vscode/launch-release.ps1
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/tasks.json
 *.user
 cmake-*
 .idea

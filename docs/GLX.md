@@ -31,11 +31,12 @@ That command exercises the same shutdown/startup surface used by `vid_restart`, 
 
 ## Build Availability
 
-Normal Make and CMake modular builds include GLx by default. The renderer remains selectable rather than forced as the default until `python scripts/glx_promotion.py --proof-root <reviewed-glx-proof-root> --require-ready` reports `ready`.
+Normal Meson modular builds include GLx by default, alongside the single client executable. Legacy Make and CMake modular builds also include GLx by default. The renderer remains selectable rather than forced as the default until `python scripts/glx_promotion.py --proof-root <reviewed-glx-proof-root> --require-ready` reports `ready`.
 
 Useful build selections:
 
 ```sh
+meson setup meson/build -Drenderer-dlopen=true -Drenderers=opengl,glx,vulkan
 make BUILD_SERVER=0 USE_GLX=1
 cmake -S . -B .tmp/cmake-glx -DUSE_GLX=ON
 ```
@@ -43,6 +44,7 @@ cmake -S . -B .tmp/cmake-glx -DUSE_GLX=ON
 For single-renderer static test builds, select GLx explicitly:
 
 ```sh
+meson setup meson/build-glx-static -Drenderer-dlopen=false -Drenderer-default=glx
 make BUILD_SERVER=0 USE_RENDERER_DLOPEN=0 RENDERER_DEFAULT=glx
 cmake -S . -B .tmp/cmake-glx-static -DUSE_RENDERER_DLOPEN=OFF -DRENDERER_DEFAULT=glx
 ```

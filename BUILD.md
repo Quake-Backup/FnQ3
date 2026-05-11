@@ -1,6 +1,32 @@
 ## Build Instructions
 
-Pick the section that matches your platform or toolchain. In most cases the built binaries end up in a `build` or platform-specific output directory, and you can either copy them into your Quake III folder or use the provided `make install DESTDIR=<path_to_game_files>` flow where available.
+Meson is the preferred build path. It builds a single client executable and places external renderer modules beside it, so renderer selection stays a runtime `\cl_renderer` choice instead of a reason to produce separate client executables.
+
+### meson/ninja
+
+Install Meson, Ninja, a C/C++ toolchain, and the platform dependencies listed below. Configure the default build directory from the repository root:
+
+`meson setup meson/build`
+
+Then build and run tests:
+
+`meson compile -C meson/build`
+
+`meson test -C meson/build`
+
+The default Meson build produces one client executable (`fnquake3` with the platform suffix where applicable), one dedicated server executable, and renderer modules named `fnquake3_opengl_<arch>`, `fnquake3_glx_<arch>`, and `fnquake3_vulkan_<arch>`.
+
+Useful Meson options:
+
+`-Drenderer-dlopen=true` - build external renderer modules and one unified client executable, enabled by default
+
+`-Drenderers=opengl,glx,vulkan` - choose which external renderer modules are built
+
+`-Drenderer-default=opengl` - set the default value for `\cl_renderer`
+
+`-Drenderer-dlopen=false -Drenderer-default=vulkan` - explicit compatibility/testing mode for linking one renderer into the client
+
+Legacy Make, CMake, and MSVC project files remain available while CI and packaging finish migrating, but new local work should prefer `meson/build`.
 
 ### windows/msvc
 
@@ -8,9 +34,7 @@ Install Visual Studio Community Edition 2017 or later, then open and build the `
 
 `code/win32/msvc2017/fnquake3.sln`
 
-The resulting executable is written to `code/win32/msvc2017/output`.
-
-If you want the Vulkan backend, clean the solution, right-click the `fnquake3` project, open `Project Dependencies`, and select `renderervk` instead of `renderer`. If you want a single-renderer GLx test build, select the separate `rendererglx` project instead.
+The resulting executable and renderer modules are written to `code/win32/msvc2017/output`. Build renderer projects as external modules next to the one `fnquake3` client executable; do not create renderer-named client executables for normal testing.
 
 ---
 
@@ -143,4 +167,4 @@ Example:
 
 `make BUILD_SERVER=0 USE_GLX=1` - include the GLx renderer module so it can be selected with `\cl_renderer glx` after a `\vid_restart`
 
-For CMake/Ninja or CMake/Visual Studio builds, pass `-DUSE_GLX=ON` to include the GLx modular renderer.
+For CMake/Ninja or CMake/Visual Studio builds, pass `-DUSE_RENDERER_DLOPEN=ON -DUSE_GLX=ON` to include the GLx modular renderer beside the unified client executable.

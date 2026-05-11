@@ -1,0 +1,75 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Meson: Launch FnQuake3 OpenGL",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
+      "args": [
+        "+set",
+        "cl_renderer",
+        "opengl"
+      ],
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "preLaunchTask": "meson: build"
+    },
+    {
+      "name": "Meson: Launch FnQuake3 GLx",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
+      "args": [
+        "+set",
+        "cl_renderer",
+        "glx"
+      ],
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "preLaunchTask": "meson: build"
+    },
+    {
+      "name": "Meson: Launch FnQuake3 renderer2",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
+      "args": [
+        "+set",
+        "cl_renderer",
+        "opengl2"
+      ],
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "preLaunchTask": "meson: build"
+    },
+    {
+      "name": "Meson: Launch FnQuake3 Vulkan",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
+      "args": [
+        "+set",
+        "cl_renderer",
+        "vulkan"
+      ],
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "preLaunchTask": "meson: build"
+    },
+    {
+      "name": "Meson: Launch FnQuake3 Dedicated",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnquake3.ded.x64.exe",
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "preLaunchTask": "meson: build"
+    }
+  ]
+}

@@ -80,10 +80,10 @@ From the repository root:
 python scripts/glx_runtime_sweep.py --list-gates
 python scripts/glx_runtime_sweep.py --list-profiles
 python scripts/glx_runtime_sweep.py --list-corpus
-python scripts/glx_runtime_sweep.py --gate rc-smoke --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root
-python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root
-python scripts/glx_runtime_sweep.py --gate rc-proof --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root --proof-dir .tmp/glx-proof/windows-x64
-python scripts/glx_runtime_sweep.py --gate rc-stress --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root
+python scripts/glx_runtime_sweep.py --gate rc-smoke --exe path/to/fnquake3.x64.exe --basepath path/to/game/root
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnquake3.x64.exe --basepath path/to/game/root
+python scripts/glx_runtime_sweep.py --gate rc-proof --exe path/to/fnquake3.x64.exe --basepath path/to/game/root --proof-dir .tmp/glx-proof/windows-x64
+python scripts/glx_runtime_sweep.py --gate rc-stress --exe path/to/fnquake3.x64.exe --basepath path/to/game/root
 ```
 
 Use `--dry-run` to generate the configs and manifest without requiring a built executable or retail assets. Dry runs are useful for reviewing the expanded cvars, startup cvars, corpus scene IDs, maps, demos, and commands, but they do not count as gate evidence.
@@ -95,13 +95,13 @@ The sweep can compare captured PNG screenshots against an approved baseline dire
 To deliberately approve a new local baseline set:
 
 ```sh
-python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x64 --approve-screenshot-baselines
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnquake3.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x64 --approve-screenshot-baselines
 ```
 
 To compare a candidate run against that baseline and write difference PNGs:
 
 ```sh
-python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnquake3.glx.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x64 --screenshot-diff-dir .tmp/glx-diffs/windows-x64 --screenshot-max-rms 2.0 --screenshot-max-pixel-ratio 0.005
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnquake3.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x64 --screenshot-diff-dir .tmp/glx-diffs/windows-x64 --screenshot-max-rms 2.0 --screenshot-max-pixel-ratio 0.005
 ```
 
 The initial thresholds are intentionally tight and should be adjusted only with reviewed evidence. Missing baselines or failed comparisons fail a non-dry-run gate when a baseline directory is supplied.

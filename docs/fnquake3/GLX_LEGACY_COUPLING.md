@@ -7,7 +7,7 @@ module and classifies the reason each one remains in the compatibility substrate
 The ledger is intentionally conservative. A source listed here is not a removal
 approval; it is a tracked dependency that must either shrink, move behind a
 narrower bridge, or stay documented as retained compatibility work. The
-promotion check compares this table with the CMake, Make, and MSVC GLx build
+promotion check compares this table with the Meson, CMake, Make, and MSVC GLx build
 inputs and fails if the build files drift or if an unclassified legacy source is
 added.
 

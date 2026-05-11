@@ -17,7 +17,7 @@ from typing import Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = ROOT / "code" / "win32" / "msvc2017" / "output"
+DEFAULT_OUTPUT = ROOT / "meson" / "build"
 DEFAULT_SWEEP_ROOT = ROOT / ".tmp" / "runtime-sweeps"
 TEXTURE_CLASSIFICATION_MANIFEST_PATH = ROOT / "docs" / "fnquake3" / "GLX_TEXTURE_CLASSIFICATION_MANIFEST.json"
 RENDERER_NAME_RE = re.compile(r"^[A-Za-z1-9]+$")
@@ -2859,19 +2859,29 @@ def command_to_string(command: list[str]) -> str:
 def candidate_exe_names() -> list[str]:
     machine = platform.machine().lower()
     if os.name == "nt":
-        arch_suffixes = ["x64"] if machine in {"amd64", "x86_64"} else [machine, "x64"]
-        names: list[str] = []
-        for arch in arch_suffixes:
-            names.extend(
-                [
-                    f"fnquake3.glx.{arch}.exe",
-                    f"fnquake3.{arch}.exe",
-                ]
-            )
+        if machine in {"amd64", "x86_64"}:
+            arch_suffixes = ["x64", "x86_64"]
+        elif machine in {"arm64", "aarch64"}:
+            arch_suffixes = ["arm64", "aarch64"]
+        elif machine in {"x86", "i386", "i686"}:
+            arch_suffixes = ["x86"]
+        else:
+            arch_suffixes = [machine]
+        names = [f"fnquake3.{arch}.exe" for arch in arch_suffixes]
         names.append("fnquake3.exe")
         return names
 
-    return ["fnquake3.glx", "fnquake3"]
+    if machine in {"amd64", "x86_64"}:
+        arch_suffixes = ["x86_64", "x64"]
+    elif machine in {"arm64", "aarch64"}:
+        arch_suffixes = ["aarch64", "arm64"]
+    elif machine.startswith("arm"):
+        arch_suffixes = ["arm"]
+    elif machine in {"ppc64le", "ppc64"}:
+        arch_suffixes = [machine]
+    else:
+        arch_suffixes = [machine]
+    return [f"fnquake3.{arch}" for arch in arch_suffixes] + ["fnquake3"]
 
 
 def resolve_exe(explicit: Path | None, allow_missing: bool = False) -> Path:

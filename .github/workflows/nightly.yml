@@ -184,6 +184,40 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
+  meson-validation:
+    if: github.event_name == 'push' || needs.prepare.outputs.should_build == 'true'
+    needs: [prepare]
+    name: Meson build validation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -y install meson ninja-build gcc g++ libcurl4-openssl-dev mesa-common-dev libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Stamp nightly build version
+        run: python scripts/nightly.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+
+      - name: Configure Meson build
+        run: |
+          meson setup meson/build \
+            --buildtype=release \
+            -Dsdl=disabled \
+            -Dcurl=disabled \
+            -Drenderer-dlopen=true \
+            -Drenderers=opengl,glx,vulkan,opengl2 \
+            -Drenderer-default=opengl
+
+      - name: Build Meson targets
+        run: meson compile -C meson/build
+
+      - name: Run Meson tests
+        run: meson test -C meson/build --print-errorlogs
+
   ubuntu-x86:
     if: github.event_name == 'push' || needs.prepare.outputs.should_build == 'true'
     needs: [prepare]
@@ -294,7 +328,7 @@ jobs:
 
   push-build-validation:
     if: github.event_name == 'push' && always()
-    needs: [prepare, windows-msys32, windows-msvc, ubuntu-x86, ubuntu-arm64, macos-x86]
+    needs: [prepare, windows-msys32, windows-msvc, meson-validation, ubuntu-x86, ubuntu-arm64, macos-x86]
     runs-on: ubuntu-latest
     steps:
       - name: Check platform build results
@@ -323,7 +357,7 @@ jobs:
 
   publish:
     if: github.event_name != 'push' && needs.prepare.outputs.should_build == 'true'
-    needs: [prepare, windows-msys32, windows-msvc, ubuntu-x86, ubuntu-arm64, macos-x86]
+    needs: [prepare, windows-msys32, windows-msvc, meson-validation, ubuntu-x86, ubuntu-arm64, macos-x86]
     runs-on: ubuntu-latest
     permissions:
       contents: write

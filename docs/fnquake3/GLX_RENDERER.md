@@ -10,7 +10,7 @@ The final replacement contract is defined in [GLX_FINAL_CONTRACT.md](GLX_FINAL_C
 
 The current feature-closure ledger is [GLX_FEATURE_MATRIX.md](GLX_FEATURE_MATRIX.md). It records whether each legacy OpenGL and FnQ3 feature surface is `covered`, `partially covered`, or `missing`, along with the evidence and closure gate for each row.
 
-The current source-coupling ledger is [GLX_LEGACY_COUPLING.md](GLX_LEGACY_COUPLING.md). It records every legacy `code/renderer/*.c` translation unit still compiled into GLx, the compatibility role that keeps it there, and the extraction target that should shrink it. The promotion script checks the ledger against CMake, Make, and MSVC build inputs so P2 source-coupling reduction can be ratcheted instead of guessed.
+The current source-coupling ledger is [GLX_LEGACY_COUPLING.md](GLX_LEGACY_COUPLING.md). It records every legacy `code/renderer/*.c` translation unit still compiled into GLx, the compatibility role that keeps it there, and the extraction target that should shrink it. The promotion script checks the ledger against Meson, CMake, Make, and MSVC build inputs so P2 source-coupling reduction can be ratcheted instead of guessed.
 
 ## Decision
 
@@ -19,7 +19,7 @@ GLx keeps FnQuake3's existing renderer ABI intact:
 - `REF_API_VERSION` stays at 8.
 - `GetRefAPI` remains the only exported renderer entry point.
 - The engine continues to communicate through `refimport_t` and `refexport_t`.
-- `cl_renderer glx` loads a separate modular renderer named `fnquake3_glx_<arch>`.
+- `cl_renderer glx` loads the external renderer module named `fnquake3_glx_<arch>` from the single FnQuake3 client executable.
 
 The first implementation slice deliberately reuses the compatibility-proven OpenGL renderer as the rendering baseline and compiles it with `RENDERER_GLX`. GLx-specific code lives in `code/rendererglx/` and starts with capability detection, debug callback wiring, timer-query profiling, static-world cache telemetry, dynamic-stream strategy selection, and build-system integration.
 
@@ -185,7 +185,7 @@ as proof.
 Typical local run from the repository root:
 
 ```sh
-python scripts/glx_runtime_sweep.py --exe code/win32/msvc2017/output/fnquake3.glx.x64.exe --basepath code/win32/msvc2017/output --renderers opengl,glx --switch-sequence opengl,glx,opengl,glx --maps q3dm1 --demos demo1
+python scripts/glx_runtime_sweep.py --exe meson/build/fnquake3.x64.exe --basepath meson/build --renderers opengl,glx --switch-sequence opengl,glx,opengl,glx --maps q3dm1 --demos demo1
 ```
 
 Use `--profile baseline` for a conservative renderer-switch check, `--profile glx-parity` for the current RC candidate surface backed by `r_glxProfile rc`, `--profile glx-ownership` for the same RC surface with `r_glxRequireOwnership 1` and hard failure on any legacy draw delegation, or `--profile glx-stress` to include compact static-world MDI uploads through `r_glxProfile stress`. Unless `--maps` is provided, the ownership and stress profiles capture both `q3dm1` and `q3dm17` so the sweep covers a small stock map and a larger static-geometry scene. `--dry-run` writes the configs and manifest without launching the engine, which is useful on machines without retail assets installed. The manifest records both the full expanded profile cvars and the smaller startup/config cvar sets used to launch the client. `--list-profiles` prints the frozen profile contracts, and `--proof-dir` wires reviewed screenshot/performance baselines plus diff and summary outputs for hard RC evidence. VS Code also has a `Release: Runtime Sweep x64 GLx` task that builds the x64 GLx client and runs the default `q3dm1` screenshot switch sweep.
@@ -194,8 +194,8 @@ The same tool also exposes named RC gate presets:
 
 ```sh
 python scripts/glx_runtime_sweep.py --list-gates
-python scripts/glx_runtime_sweep.py --gate rc-smoke --exe code/win32/msvc2017/output/fnquake3.glx.x64.exe --basepath code/win32/msvc2017/output
-python scripts/glx_runtime_sweep.py --gate rc-parity --exe code/win32/msvc2017/output/fnquake3.glx.x64.exe --basepath code/win32/msvc2017/output
+python scripts/glx_runtime_sweep.py --gate rc-smoke --exe meson/build/fnquake3.x64.exe --basepath meson/build
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe meson/build/fnquake3.x64.exe --basepath meson/build
 ```
 
 `rc-smoke` proves renderer lifecycle and screenshot capture. `rc-parity` is the conservative blocking RC gate and fails if the renderer-switch lifecycle lacks an `opengl -> glx -> opengl -> glx` round trip, if versioned `worldProofEvidence` does not prove the stock-map/lightmap GLx screenshot and static-world counter floor, or if GLx timedemo FPS drops below 90% of the legacy `opengl` run for the same demo on the same machine. `rc-proof` is the hard evidence gate: it runs the same RC surface but requires reviewed screenshot baselines, a compared performance baseline, the same versioned renderer-switch lifecycle evidence, the broader world proof for high-geometry, fog-heavy, and visibility maps, versioned `materialProofEvidence` for material-stage/tcgen telemetry plus guarded dynamic-light/screen-map/video-map stream state, versioned `dynamicProofEvidence` for entity/weapon categories, dynamic-light guards, shadow stream evidence, required dynamic-scene screenshots or timedemos, versioned `postProofEvidence` for greyscale/render-scale FBO, frame, dimension, color-contract evidence, and post shader direct-final diagnostics, plus the versioned screenshot, demo-playback, HUD, shadow, bloom, cel-shading, greyscale, and render-scale parity suites from [GLX_PROOF_CORPUS.md](GLX_PROOF_CORPUS.md). `glx-ownership` profile runs are promotion evidence rather than RC gates; their manifests write versioned `ownershipProofEvidence` so promotion review can verify zero legacy delegation, GL3X+ tier diagnostics, executable GLx-owned post/output counts, post/output fingerprints, and direct-final shader diagnostics from one artifact field. `rc-stress` exercises compact static-world MDI command uploads plus staged animated-image, screen-map, and video-map material proof, staged particle/poly/mark/beam dynamic proof, and the same postprocess proof before those aggressive paths are considered for default use.

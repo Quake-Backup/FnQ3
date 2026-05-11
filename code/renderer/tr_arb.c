@@ -391,6 +391,23 @@ static void FBO_BindColorGradeLut( void )
 	}
 }
 
+#ifdef RENDERER_GLX
+static void FBO_PrepareGlxPostShaderColorGradeLut( void )
+{
+	int lutSize = 16;
+	float lutScale = FBO_ColorGradeLutScale();
+	const qboolean lutActive = FBO_ColorGradeLutActive();
+
+	if ( lutActive ) {
+		(void)FBO_ColorGradeLutImage( &lutSize );
+		FBO_BindColorGradeLut();
+	} else {
+		lutScale = 4.0f;
+	}
+	GLX_CompatRecordColorGradeLut( lutActive, lutSize, lutScale );
+}
+#endif
+
 static float FBO_OutputOverbrightScale( float obScale )
 {
 	return FBO_HdrSceneLinearMode() ? 1.0f : obScale;
@@ -411,6 +428,7 @@ static void FBO_SetOutputTransformParams( float gamma, float obScale )
 		Com_Clamp( 1000.0f, 40000.0f, r_colorGradeAdaptWhitePoint->value ) : 6504.0f;
 	int lutSize = 16;
 	float lutScale = FBO_ColorGradeLutScale();
+	qboolean lutActive;
 
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, gamma, gamma, gamma, outputScale );
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 2, exposure, exposure, exposure, 1.0f );
@@ -436,11 +454,15 @@ static void FBO_SetOutputTransformParams( float gamma, float obScale )
 	} else {
 		FBO_SetIdentity3x3( whitePointMatrix );
 	}
-	if ( !FBO_ColorGradeLutActive() ) {
+	lutActive = FBO_ColorGradeLutActive();
+	if ( !lutActive ) {
 		lutScale = 4.0f;
 	} else {
 		(void)FBO_ColorGradeLutImage( &lutSize );
 	}
+#ifdef RENDERER_GLX
+	GLX_CompatRecordColorGradeLut( lutActive, lutSize, lutScale );
+#endif
 
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 4, lift[0], lift[1], lift[2], 0.0f );
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 5, invGradeGamma[0], invGradeGamma[1], invGradeGamma[2], 1.0f );
@@ -2867,13 +2889,33 @@ void FBO_PostProcess( void )
 
 	// check if we can perform final draw directly into back buffer
 	if ( backEnd.screenshotMask == 0 && !windowAdjusted && !minimized ) {
+#ifdef RENDERER_GLX
+		qboolean glxPostShaderBound = qfalse;
+#endif
+
 		FBO_Bind( GL_FRAMEBUFFER, 0 );
 		GL_BindTexture( 0, frameBuffers[ fboReadIndex ].color );
+#ifdef RENDERER_GLX
+		FBO_PrepareGlxPostShaderColorGradeLut();
+		glxPostShaderBound = GLX_CompatTryBindPostShaderDirectFinal();
+		if ( !glxPostShaderBound ) {
+#endif
 		ARB_ProgramEnable( DUMMY_VERTEX, GAMMA_FRAGMENT );
 		FBO_SetOutputTransformParams( gamma, obScale );
 		FBO_BindColorGradeLut();
+#ifdef RENDERER_GLX
+		}
+#endif
 		RenderQuad( w, h );
+#ifdef RENDERER_GLX
+		if ( glxPostShaderBound ) {
+			GLX_CompatUnbindPostShader();
+		} else {
+			ARB_ProgramDisable();
+		}
+#else
 		ARB_ProgramDisable();
+#endif
 #ifdef RENDERER_GLX
 		GLX_CompatRecordPostProcessResult( GLX_POSTPROCESS_RESULT_GAMMA_DIRECT );
 #endif

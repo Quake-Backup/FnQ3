@@ -84,8 +84,8 @@ These settings control the render path behind the display output.
   - `2`: Request Windows scRGB output on an HDR/Advanced Color display path.
   - `3`: Request HDR10/PQ output. Vulkan maps this to an HDR10 swapchain when the surface exposes `VK_COLOR_SPACE_HDR10_ST2084_EXT`.
   - `4`: Request macOS extended-linear-sRGB/EDR output when SDL reports EDR headroom.
-  - `5`: Request Linux experimental HDR output, gated by `r_outputAllowExperimentalLinuxHDR` plus explicit SDL compositor/protocol HDR checks.
-- `r_outputAllowExperimentalLinuxHDR`: Allows the Linux experimental HDR backend only when the platform reports HDR headroom and an explicit compositor/protocol path. Leave this disabled unless you are validating a known HDR-capable Wayland path.
+  - `5`: Request Linux experimental HDR telemetry/prototype output, gated by `r_outputAllowExperimentalLinuxHDR` plus explicit SDL compositor/protocol HDR checks.
+- `r_outputAllowExperimentalLinuxHDR`: Allows the Linux experimental HDR telemetry/prototype backend only when the platform reports HDR headroom and an explicit compositor/protocol path. Leave this disabled unless you are validating a known HDR-capable Wayland path.
 - On SDR output, GLx treats paper white as the max output reference for the final transform. HDR-only max-luminance headroom is used only when a hardware HDR/EDR backend is actually active.
 - `r_ext_multisample`: Geometry-edge anti-aliasing. The practical values are `0`, `2`, `4`, `6`, and `8`.
 - `r_ext_supersample`: Enables supersample anti-aliasing.

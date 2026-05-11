@@ -524,12 +524,39 @@ static ID_INLINE void GLX_CompatRecordPostProcessFrame( qboolean minimized,
 #endif
 }
 
+static ID_INLINE qboolean GLX_CompatTryBindPostShaderDirectFinal( void )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_TryBindPostShaderDirectFinal();
+#else
+	return qfalse;
+#endif
+}
+
+static ID_INLINE void GLX_CompatUnbindPostShader( void )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_UnbindPostShader();
+#endif
+}
+
 static ID_INLINE void GLX_CompatRecordPostProcessResult( int result )
 {
 #ifdef RENDERER_GLX
 	GLX_Renderer_RecordPostProcessResult( result );
 #else
 	(void)result;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordColorGradeLut( qboolean active, int size, float scale )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordColorGradeLut( active, size, scale );
+#else
+	(void)active;
+	(void)size;
+	(void)scale;
 #endif
 }
 

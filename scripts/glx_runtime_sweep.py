@@ -35,11 +35,12 @@ GLX_RELEASE_PROOF_VERSION = 1
 GLX_COLOR_CONTRACT_VERSION = "2026-05-10-p0"
 GLX_VISUAL_DOSSIER_VERSION = "2026-05-10-visual-dossier-v1"
 GLX_SWITCH_LIFECYCLE_VERSION = 1
-GLX_OWNERSHIP_PROOF_VERSION = 1
+GLX_OWNERSHIP_PROOF_VERSION = 3
 GLX_WORLD_PROOF_VERSION = 1
 GLX_MATERIAL_PROOF_VERSION = 1
 GLX_DYNAMIC_PROOF_VERSION = 1
-GLX_POST_PROOF_VERSION = 1
+GLX_POST_PROOF_VERSION = 2
+GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED = 0x00000400
 GLX_PRODUCT_TIER_ORDER = ("GL12", "GL2X", "GL3X", "GL41", "GL46")
 GLX_WORLD_PROOF_TAGS = ("stock-map", "high-geometry", "lightmap", "fog-heavy", "visibility")
 GLX_MATERIAL_PROOF_TAGS = (
@@ -199,6 +200,8 @@ PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "materialInvalidParameterBlocks",
     "postOutputPostNodes",
     "postOutputOutputs",
+    "postOutputExecutableNodes",
+    "postOutputExecutableOutputs",
     "postOutputPostHash",
     "postOutputOutputHash",
     "streamSameFrameWrapRejects",
@@ -657,10 +660,41 @@ GLX_POST_OUTPUT_OWNERSHIP_RE = re.compile(
     r"(?:glx:\s*)?post/output ownership:?\s*"
     r"mode\s+(?P<mode>[A-Za-z0-9_-]+),?\s+post nodes\s+(?P<postNodes>\d+),?\s+"
     r"outputs\s+(?P<outputs>\d+),?\s+legacy fallback\s+(?P<legacyFallback>\w+)"
+    r"(?:,?\s+executable nodes\s+(?P<executableNodes>\d+),?\s+"
+    r"executable outputs\s+(?P<executableOutputs>\d+))?"
     r"(?:,?\s+post hash\s+0x(?P<postHash>[0-9a-fA-F]+),?\s+"
     r"output hash\s+0x(?P<outputHash>[0-9a-fA-F]+))?"
     r"(?:,?\s+plan hash\s+0x(?P<planHash>[0-9a-fA-F]+),?\s+"
     r"fallback\s+0x(?P<fallbackMask>[0-9a-fA-F]+))?",
+    re.IGNORECASE,
+)
+GLX_POST_SHADER_PLAN_RE = re.compile(
+    r"(?:glx:\s*)?post shader plan:?\s*"
+    r"valid\s+(?P<valid>\w+),?\s+features\s+0x(?P<features>[0-9a-fA-F]+),?\s+"
+    r"hash\s+0x(?P<hash>[0-9a-fA-F]+),?\s+textures\s+(?P<textures>\d+),?\s+"
+    r"uniforms\s+(?P<uniforms>\d+)"
+    r"(?:,?\s+frames\s+(?P<frames>\d+),?\s+invalid\s+(?P<invalidFrames>\d+))?",
+    re.IGNORECASE,
+)
+GLX_POST_SHADER_CACHE_RE = re.compile(
+    r"(?:glx:\s*)?post shader cache:?\s*"
+    r"ready\s+(?P<ready>\w+),?\s+programs\s+(?P<programs>\d+)/(?P<programLimit>\d+),?\s+"
+    r"plans\s+(?P<validPlans>\d+)\s+valid/(?P<invalidPlans>\d+)\s+invalid,?\s+"
+    r"cache\s+(?P<cacheHits>\d+)\s+hits/(?P<cacheMisses>\d+)\s+misses,?\s+"
+    r"compile\s+(?P<compileAttempts>\d+)\s+attempts/(?P<compileFailures>\d+)\s+failures,?\s+"
+    r"link failures\s+(?P<linkFailures>\d+),?\s+source failures\s+(?P<sourceFailures>\d+),?\s+"
+    r"source hash\s+0x(?P<sourceHash>[0-9a-fA-F]+),?\s+program\s+(?P<program>\d+)",
+    re.IGNORECASE,
+)
+GLX_POST_SHADER_DIRECT_FINAL_RE = re.compile(
+    r"(?:glx:\s*)?post shader direct-final:?\s*"
+    r"execute\s+(?P<execute>\w+),?\s+eligible\s+(?P<eligible>\w+),?\s+"
+    r"bound\s+(?P<bound>\w+),?\s+reject\s+0x(?P<reject>[0-9a-fA-F]+),?\s+"
+    r"candidates\s+(?P<candidates>\d+),?\s+eligible frames\s+(?P<eligibleFrames>\d+),?\s+"
+    r"attempts\s+(?P<attempts>\d+),?\s+binds\s+(?P<binds>\d+),?\s+"
+    r"fallbacks\s+(?P<fallbacks>\d+),?\s+rejects\s+(?P<rejects>\d+)"
+    r"(?:,?\s+program misses\s+(?P<programMisses>\d+),?\s+"
+    r"uniform failures\s+(?P<uniformFailures>\d+))?",
     re.IGNORECASE,
 )
 POSTPROCESS_FBO_RE = re.compile(
@@ -901,6 +935,14 @@ GLX_COLOR_GRADE_RE = re.compile(
     r"white-point\s+(?P<whiteSource>-?\d+(?:\.\d+)?)->(?P<whiteTarget>-?\d+(?:\.\d+)?)\s*(?:K)?,?\s+"
     r"lut-size\s+(?P<lutSize>-?\d+(?:\.\d+)?),?\s+"
     r"lut-scale\s+(?P<lutScale>-?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+GLX_OUTPUT_COLORIMETRY_RE = re.compile(
+    r"(?:glx:\s*)?output colorimetry:?\s*"
+    r"primaries\s+(?P<primaries>[A-Za-z0-9_-]+),?\s+"
+    r"gamut-map\s+(?P<gamutMap>[A-Za-z0-9_-]+),?\s+"
+    r"precision(?:-| )request(?:ed)?\s+(?P<precisionRequest>-?\d+),?\s+"
+    r"(?:precision-)?resolved\s+(?P<precisionResolved>-?\d+)",
     re.IGNORECASE,
 )
 GLX_COLOR_AUDIT_RE = re.compile(
@@ -4385,6 +4427,20 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 "legacyFallback",
                 1 if q3_bool(match.group("legacyFallback")) else 0,
             )
+            if match.group("executableNodes") is not None:
+                record_metric_max(
+                    metrics,
+                    "postOutputOwnership",
+                    "executableNodes",
+                    int_group(match, "executableNodes"),
+                )
+            if match.group("executableOutputs") is not None:
+                record_metric_max(
+                    metrics,
+                    "postOutputOwnership",
+                    "executableOutputs",
+                    int_group(match, "executableOutputs"),
+                )
             if match.group("postHash") is not None:
                 record_metric_max(metrics, "postOutputOwnership", "postHash", int(match.group("postHash"), 16))
             if match.group("outputHash") is not None:
@@ -4393,6 +4449,60 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 record_metric_max(metrics, "postOutputOwnership", "planHash", int(match.group("planHash"), 16))
             if match.group("fallbackMask") is not None:
                 record_metric_max(metrics, "postOutputOwnership", "fallbackMask", int(match.group("fallbackMask"), 16))
+            continue
+
+        match = GLX_POST_SHADER_PLAN_RE.search(line)
+        if match:
+            record_metric_max(metrics, "postShaderPlan", "valid", 1 if q3_bool(match.group("valid")) else 0)
+            record_metric_max(metrics, "postShaderPlan", "features", int(match.group("features"), 16))
+            record_metric_max(metrics, "postShaderPlan", "hash", int(match.group("hash"), 16))
+            record_metric_max(metrics, "postShaderPlan", "textures", int_group(match, "textures"))
+            record_metric_max(metrics, "postShaderPlan", "uniforms", int_group(match, "uniforms"))
+            if match.group("frames") is not None:
+                record_metric_max(metrics, "postShaderPlan", "frames", int_group(match, "frames"))
+            if match.group("invalidFrames") is not None:
+                record_metric_max(metrics, "postShaderPlan", "invalidFrames", int_group(match, "invalidFrames"))
+            continue
+
+        match = GLX_POST_SHADER_CACHE_RE.search(line)
+        if match:
+            record_metric_max(metrics, "postShaderCache", "ready", 1 if q3_bool(match.group("ready")) else 0)
+            for key in (
+                "programs",
+                "programLimit",
+                "validPlans",
+                "invalidPlans",
+                "cacheHits",
+                "cacheMisses",
+                "compileAttempts",
+                "compileFailures",
+                "linkFailures",
+                "sourceFailures",
+                "program",
+            ):
+                record_metric_max(metrics, "postShaderCache", key, int_group(match, key))
+            record_metric_max(metrics, "postShaderCache", "sourceHash", int(match.group("sourceHash"), 16))
+            continue
+
+        match = GLX_POST_SHADER_DIRECT_FINAL_RE.search(line)
+        if match:
+            record_metric_max(metrics, "postShaderDirectFinal", "execute", 1 if q3_bool(match.group("execute")) else 0)
+            record_metric_max(metrics, "postShaderDirectFinal", "eligible", 1 if q3_bool(match.group("eligible")) else 0)
+            record_metric_max(metrics, "postShaderDirectFinal", "bound", 1 if q3_bool(match.group("bound")) else 0)
+            record_metric_max(metrics, "postShaderDirectFinal", "reject", int(match.group("reject"), 16))
+            for key in (
+                "candidates",
+                "eligibleFrames",
+                "attempts",
+                "binds",
+                "fallbacks",
+                "rejects",
+            ):
+                record_metric_max(metrics, "postShaderDirectFinal", key, int_group(match, key))
+            if match.group("programMisses") is not None:
+                record_metric_max(metrics, "postShaderDirectFinal", "programMisses", int_group(match, "programMisses"))
+            if match.group("uniformFailures") is not None:
+                record_metric_max(metrics, "postShaderDirectFinal", "uniformFailures", int_group(match, "uniformFailures"))
             continue
 
         match = POSTPROCESS_FBO_RE.search(line)
@@ -4999,6 +5109,8 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         render_products = metric_section(metrics, "renderIRProducts")
         post_nodes = post_output.get("postNodes", render_products.get("postNodes"))
         outputs = post_output.get("outputs", render_products.get("outputs"))
+        executable_nodes = post_output.get("executableNodes")
+        executable_outputs = post_output.get("executableOutputs")
         post_hash = post_output.get("postHash")
         output_hash = post_output.get("outputHash")
         plan_hash = post_output.get("planHash")
@@ -5009,6 +5121,14 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             failures.append("GLx post/output ownership still reports legacy fallback on a modern tier.")
         if fallback_mask not in (0, None):
             failures.append("GLx post/output ownership plan reports a fallback reason on a modern tier.")
+        if executable_nodes is not None and (
+            not isinstance(executable_nodes, int) or executable_nodes <= 0
+        ):
+            failures.append("GLx post/output ownership did not report executable GLx post nodes on a modern tier.")
+        if executable_outputs is not None and (
+            not isinstance(executable_outputs, int) or executable_outputs <= 0
+        ):
+            failures.append("GLx post/output ownership did not report executable GLx output transforms on a modern tier.")
         if not isinstance(post_nodes, int) or post_nodes <= 0:
             failures.append("GLx ownership proof did not execute any GLx post nodes on a modern tier.")
         if not isinstance(outputs, int) or outputs <= 0:
@@ -5197,6 +5317,10 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             perf_record_numeric(performance, "postOutputOutputs", int_group(match, "outputs"))
             perf_record_numeric(performance, "postOutputLegacyFallback",
                 1 if q3_bool(match.group("legacyFallback")) else 0)
+            if match.group("executableNodes") is not None:
+                perf_record_numeric(performance, "postOutputExecutableNodes", int_group(match, "executableNodes"))
+            if match.group("executableOutputs") is not None:
+                perf_record_numeric(performance, "postOutputExecutableOutputs", int_group(match, "executableOutputs"))
             if match.group("postHash") is not None:
                 perf_record_numeric(performance, "postOutputPostHash", int(match.group("postHash"), 16))
             if match.group("outputHash") is not None:
@@ -5205,6 +5329,60 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 perf_record_numeric(performance, "postOutputPlanHash", int(match.group("planHash"), 16))
             if match.group("fallbackMask") is not None:
                 perf_record_numeric(performance, "postOutputFallbackMask", int(match.group("fallbackMask"), 16))
+            continue
+
+        match = GLX_POST_SHADER_PLAN_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "postShaderPlanValid", 1 if q3_bool(match.group("valid")) else 0)
+            perf_record_numeric(performance, "postShaderFeatures", int(match.group("features"), 16))
+            perf_record_numeric(performance, "postShaderHash", int(match.group("hash"), 16))
+            perf_record_numeric(performance, "postShaderTextures", int_group(match, "textures"))
+            perf_record_numeric(performance, "postShaderUniforms", int_group(match, "uniforms"))
+            if match.group("frames") is not None:
+                perf_record_numeric(performance, "postShaderFrames", int_group(match, "frames"))
+            if match.group("invalidFrames") is not None:
+                perf_record_numeric(performance, "postShaderInvalidFrames", int_group(match, "invalidFrames"))
+            continue
+
+        match = GLX_POST_SHADER_CACHE_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "postShaderCacheReady", 1 if q3_bool(match.group("ready")) else 0)
+            for key, metric in (
+                ("programs", "postShaderPrograms"),
+                ("programLimit", "postShaderProgramLimit"),
+                ("validPlans", "postShaderValidPlans"),
+                ("invalidPlans", "postShaderInvalidPlans"),
+                ("cacheHits", "postShaderCacheHits"),
+                ("cacheMisses", "postShaderCacheMisses"),
+                ("compileAttempts", "postShaderCompileAttempts"),
+                ("compileFailures", "postShaderCompileFailures"),
+                ("linkFailures", "postShaderLinkFailures"),
+                ("sourceFailures", "postShaderSourceFailures"),
+                ("program", "postShaderProgram"),
+            ):
+                perf_record_numeric(performance, metric, int_group(match, key))
+            perf_record_numeric(performance, "postShaderSourceHash", int(match.group("sourceHash"), 16))
+            continue
+
+        match = GLX_POST_SHADER_DIRECT_FINAL_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "postShaderDirectFinalExecute", 1 if q3_bool(match.group("execute")) else 0)
+            perf_record_numeric(performance, "postShaderDirectFinalEligible", 1 if q3_bool(match.group("eligible")) else 0)
+            perf_record_numeric(performance, "postShaderDirectFinalBound", 1 if q3_bool(match.group("bound")) else 0)
+            perf_record_numeric(performance, "postShaderDirectFinalReject", int(match.group("reject"), 16))
+            for key, metric in (
+                ("candidates", "postShaderDirectFinalCandidates"),
+                ("eligibleFrames", "postShaderDirectFinalEligibleFrames"),
+                ("attempts", "postShaderDirectFinalAttempts"),
+                ("binds", "postShaderDirectFinalBinds"),
+                ("fallbacks", "postShaderDirectFinalFallbacks"),
+                ("rejects", "postShaderDirectFinalRejects"),
+            ):
+                perf_record_numeric(performance, metric, int_group(match, key))
+            if match.group("programMisses") is not None:
+                perf_record_numeric(performance, "postShaderDirectFinalProgramMisses", int_group(match, "programMisses"))
+            if match.group("uniformFailures") is not None:
+                perf_record_numeric(performance, "postShaderDirectFinalUniformFailures", int_group(match, "uniformFailures"))
             continue
 
         match = GLX_MATERIAL_RENDERER_SUMMARY_RE.search(line)
@@ -5382,6 +5560,14 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             perf_record_numeric(performance, "colorGradeWhiteTarget", float(match.group("whiteTarget")))
             perf_record_numeric(performance, "colorGradeLutSize", float(match.group("lutSize")))
             perf_record_numeric(performance, "colorGradeLutScale", float(match.group("lutScale")))
+            continue
+
+        match = GLX_OUTPUT_COLORIMETRY_RE.search(line)
+        if match:
+            perf_record_string(performance, "outputPrimaries", match.group("primaries").lower())
+            perf_record_string(performance, "gamutMap", match.group("gamutMap").lower())
+            perf_record_numeric(performance, "hdrPrecisionRequested", int_group(match, "precisionRequest"))
+            perf_record_numeric(performance, "hdrPrecisionResolved", int_group(match, "precisionResolved"))
             continue
 
         match = GLX_COLOR_AUDIT_RE.search(line)
@@ -8290,11 +8476,28 @@ def post_proof_evidence(
         "mode": "",
         "postNodes": 0,
         "outputs": 0,
+        "executableNodes": 0,
+        "executableOutputs": 0,
         "legacyFallback": 0,
         "postHash": 0,
         "outputHash": 0,
         "planHash": 0,
         "fallbackMask": 0,
+    }
+    post_shader_direct = {
+        "found": False,
+        "execute": 0,
+        "eligible": 0,
+        "bound": 0,
+        "reject": 0,
+        "candidates": 0,
+        "eligibleFrames": 0,
+        "attempts": 0,
+        "binds": 0,
+        "fallbacks": 0,
+        "rejects": 0,
+        "programMisses": 0,
+        "uniformFailures": 0,
     }
     color_contract = 0
     source_runs: set[str] = set()
@@ -8343,8 +8546,40 @@ def post_proof_evidence(
         ownership = metrics.get("postOutputOwnership")
         if isinstance(ownership, dict):
             post_output["mode"] = str(ownership.get("mode", post_output["mode"]))
-            for key in ("postNodes", "outputs", "legacyFallback", "postHash", "outputHash", "planHash", "fallbackMask"):
+            for key in (
+                "postNodes",
+                "outputs",
+                "executableNodes",
+                "executableOutputs",
+                "legacyFallback",
+                "postHash",
+                "outputHash",
+                "planHash",
+                "fallbackMask",
+            ):
                 post_output[key] = max(int_metric(post_output.get(key)), int_metric(ownership.get(key)))
+
+        direct_final = metrics.get("postShaderDirectFinal")
+        if isinstance(direct_final, dict):
+            post_shader_direct["found"] = True
+            for key in (
+                "execute",
+                "eligible",
+                "bound",
+                "reject",
+                "candidates",
+                "eligibleFrames",
+                "attempts",
+                "binds",
+                "fallbacks",
+                "rejects",
+                "programMisses",
+                "uniformFailures",
+            ):
+                post_shader_direct[key] = max(
+                    int_metric(post_shader_direct.get(key)),
+                    int_metric(direct_final.get(key)),
+                )
 
         audit = metrics.get("colorAudit")
         if isinstance(audit, dict):
@@ -8375,11 +8610,45 @@ def post_proof_evidence(
             post_output["mode"] = str(mode)
         post_output["postNodes"] = max(post_output["postNodes"], performance_numeric_value(performance, "postOutputPostNodes"))
         post_output["outputs"] = max(post_output["outputs"], performance_numeric_value(performance, "postOutputOutputs"))
+        post_output["executableNodes"] = max(
+            post_output["executableNodes"],
+            performance_numeric_value(performance, "postOutputExecutableNodes"),
+        )
+        post_output["executableOutputs"] = max(
+            post_output["executableOutputs"],
+            performance_numeric_value(performance, "postOutputExecutableOutputs"),
+        )
         post_output["legacyFallback"] = max(post_output["legacyFallback"], performance_numeric_value(performance, "postOutputLegacyFallback"))
         post_output["postHash"] = max(post_output["postHash"], performance_numeric_value(performance, "postOutputPostHash"))
         post_output["outputHash"] = max(post_output["outputHash"], performance_numeric_value(performance, "postOutputOutputHash"))
         post_output["planHash"] = max(post_output["planHash"], performance_numeric_value(performance, "postOutputPlanHash"))
         post_output["fallbackMask"] = max(post_output["fallbackMask"], performance_numeric_value(performance, "postOutputFallbackMask"))
+        if any(
+            performance_metric(performance, key) is not None for key in (
+                "postShaderDirectFinalExecute",
+                "postShaderDirectFinalCandidates",
+                "postShaderDirectFinalBinds",
+            )
+        ):
+            post_shader_direct["found"] = True
+        for metric_key, target_key in (
+            ("postShaderDirectFinalExecute", "execute"),
+            ("postShaderDirectFinalEligible", "eligible"),
+            ("postShaderDirectFinalBound", "bound"),
+            ("postShaderDirectFinalReject", "reject"),
+            ("postShaderDirectFinalCandidates", "candidates"),
+            ("postShaderDirectFinalEligibleFrames", "eligibleFrames"),
+            ("postShaderDirectFinalAttempts", "attempts"),
+            ("postShaderDirectFinalBinds", "binds"),
+            ("postShaderDirectFinalFallbacks", "fallbacks"),
+            ("postShaderDirectFinalRejects", "rejects"),
+            ("postShaderDirectFinalProgramMisses", "programMisses"),
+            ("postShaderDirectFinalUniformFailures", "uniformFailures"),
+        ):
+            post_shader_direct[target_key] = max(
+                int_metric(post_shader_direct.get(target_key)),
+                performance_numeric_value(performance, metric_key),
+            )
         color_contract = max(color_contract, performance_numeric_value(performance, "colorOutputContract"))
 
     runs = manifest.get("runs", [])
@@ -8518,6 +8787,7 @@ def post_proof_evidence(
         "featureEvidence": feature_evidence,
         "target": dict(target),
         "postOutputOwnership": dict(post_output),
+        "postShaderDirectFinal": dict(post_shader_direct),
         "colorContract": color_contract,
         "sourceRuns": sorted(source_runs),
         "failures": list(dict.fromkeys(failures)),
@@ -8626,11 +8896,29 @@ def ownership_proof_evidence(manifest: dict[str, object]) -> dict[str, object]:
     post_output_modes: set[str] = set()
     post_nodes = 0
     outputs = 0
+    executable_nodes = 0
+    executable_outputs = 0
+    executable_counts_found = False
     legacy_fallback = 0
     fallback_mask = 0
     post_hash = 0
     output_hash = 0
     plan_hash = 0
+    post_shader_direct = {
+        "found": False,
+        "execute": 0,
+        "eligible": 0,
+        "bound": 0,
+        "reject": 0,
+        "candidates": 0,
+        "eligibleFrames": 0,
+        "attempts": 0,
+        "binds": 0,
+        "fallbacks": 0,
+        "rejects": 0,
+        "programMisses": 0,
+        "uniformFailures": 0,
+    }
     diagnostic_failures = 0
     max_calls = 0
     max_items = 0
@@ -8657,14 +8945,18 @@ def ownership_proof_evidence(manifest: dict[str, object]) -> dict[str, object]:
         transform_hash: object = None,
         graph_hash: object = None,
         mask: object = None,
+        executable_node_count: object = None,
+        executable_output_count: object = None,
     ) -> None:
+        nonlocal executable_counts_found, executable_nodes, executable_outputs
         nonlocal post_output_found, post_nodes, outputs, legacy_fallback
         nonlocal fallback_mask, post_hash, output_hash, plan_hash
 
         if (
             mode is None and node_count is None and output_count is None and
             fallback is None and node_hash is None and transform_hash is None and
-            graph_hash is None and mask is None
+            graph_hash is None and mask is None and executable_node_count is None and
+            executable_output_count is None
         ):
             return
         post_output_found = True
@@ -8672,6 +8964,10 @@ def ownership_proof_evidence(manifest: dict[str, object]) -> dict[str, object]:
             post_output_modes.add(str(mode).strip().lower())
         post_nodes = max(post_nodes, int_metric(node_count))
         outputs = max(outputs, int_metric(output_count))
+        if executable_node_count is not None or executable_output_count is not None:
+            executable_counts_found = True
+        executable_nodes = max(executable_nodes, int_metric(executable_node_count))
+        executable_outputs = max(executable_outputs, int_metric(executable_output_count))
         legacy_fallback = max(legacy_fallback, int_metric(fallback))
         fallback_mask = max(fallback_mask, int_metric(mask))
         post_hash = max(post_hash, int_metric(node_hash))
@@ -8725,7 +9021,31 @@ def ownership_proof_evidence(manifest: dict[str, object]) -> dict[str, object]:
                     post_output.get("outputHash"),
                     post_output.get("planHash"),
                     post_output.get("fallbackMask"),
+                    post_output.get("executableNodes"),
+                    post_output.get("executableOutputs"),
                 )
+
+            direct_final = metrics.get("postShaderDirectFinal")
+            if isinstance(direct_final, dict):
+                post_shader_direct["found"] = True
+                for key in (
+                    "execute",
+                    "eligible",
+                    "bound",
+                    "reject",
+                    "candidates",
+                    "eligibleFrames",
+                    "attempts",
+                    "binds",
+                    "fallbacks",
+                    "rejects",
+                    "programMisses",
+                    "uniformFailures",
+                ):
+                    post_shader_direct[key] = max(
+                        int_metric(post_shader_direct.get(key)),
+                        int_metric(direct_final.get(key)),
+                    )
 
             performance = run.get("performance")
             if isinstance(performance, dict):
@@ -8741,7 +9061,35 @@ def ownership_proof_evidence(manifest: dict[str, object]) -> dict[str, object]:
                         latest.get("postOutputOutputHash"),
                         latest.get("postOutputPlanHash"),
                         latest.get("postOutputFallbackMask"),
+                        latest.get("postOutputExecutableNodes"),
+                        latest.get("postOutputExecutableOutputs"),
                     )
+                    if any(
+                        latest.get(key) is not None for key in (
+                            "postShaderDirectFinalExecute",
+                            "postShaderDirectFinalCandidates",
+                            "postShaderDirectFinalBinds",
+                        )
+                    ):
+                        post_shader_direct["found"] = True
+                    for metric_key, target_key in (
+                        ("postShaderDirectFinalExecute", "execute"),
+                        ("postShaderDirectFinalEligible", "eligible"),
+                        ("postShaderDirectFinalBound", "bound"),
+                        ("postShaderDirectFinalReject", "reject"),
+                        ("postShaderDirectFinalCandidates", "candidates"),
+                        ("postShaderDirectFinalEligibleFrames", "eligibleFrames"),
+                        ("postShaderDirectFinalAttempts", "attempts"),
+                        ("postShaderDirectFinalBinds", "binds"),
+                        ("postShaderDirectFinalFallbacks", "fallbacks"),
+                        ("postShaderDirectFinalRejects", "rejects"),
+                        ("postShaderDirectFinalProgramMisses", "programMisses"),
+                        ("postShaderDirectFinalUniformFailures", "uniformFailures"),
+                    ):
+                        post_shader_direct[target_key] = max(
+                            int_metric(post_shader_direct.get(target_key)),
+                            int_metric(latest.get(metric_key)),
+                        )
 
     modern_tier = bool(product_tiers.intersection({"GL3X", "GL41", "GL46"}))
     modern_tier_diagnostics_found = any(bool(record.get("found")) for record in tier_records)
@@ -8754,6 +9102,7 @@ def ownership_proof_evidence(manifest: dict[str, object]) -> dict[str, object]:
         and outputs > 0
         and legacy_fallback == 0
         and fallback_mask == 0
+        and (not executable_counts_found or (executable_nodes > 0 and executable_outputs > 0))
         and post_hash > 0
         and output_hash > 0
         and plan_hash > 0
@@ -8787,6 +9136,10 @@ def ownership_proof_evidence(manifest: dict[str, object]) -> dict[str, object]:
             failures.append("Ownership proof post/output still reported legacy fallback.")
         if fallback_mask:
             failures.append(f"Ownership proof post/output plan reported fallback mask 0x{fallback_mask:08x}.")
+        if executable_counts_found and executable_nodes <= 0:
+            failures.append("Ownership proof did not report executable GLx post nodes.")
+        if executable_counts_found and executable_outputs <= 0:
+            failures.append("Ownership proof did not report executable GLx output transforms.")
         if post_nodes <= 0:
             failures.append("Ownership proof did not execute GLx post nodes.")
         if outputs <= 0:
@@ -8825,12 +9178,16 @@ def ownership_proof_evidence(manifest: dict[str, object]) -> dict[str, object]:
             "modes": sorted(post_output_modes),
             "postNodes": post_nodes,
             "outputs": outputs,
+            "executableCountsFound": executable_counts_found,
+            "executableNodes": executable_nodes,
+            "executableOutputs": executable_outputs,
             "legacyFallback": legacy_fallback,
             "postHash": post_hash,
             "outputHash": output_hash,
             "planHash": plan_hash,
             "fallbackMask": fallback_mask,
         },
+        "postShaderDirectFinal": dict(post_shader_direct),
         "modernPostOutput": modern_post_output,
         "sourceRuns": sorted(set(source_runs)),
         "failures": list(dict.fromkeys(failures)),
@@ -9521,6 +9878,8 @@ def collect_visual_tier_rows(manifest: dict[str, object]) -> list[dict[str, obje
             "postOutputMode": "-",
             "postNodes": "-",
             "outputs": "-",
+            "executableNodes": "-",
+            "executableOutputs": "-",
             "fallbackMask": "-",
             "outputTransfer": "-",
             "gpuFrameMs": "-",
@@ -9548,6 +9907,8 @@ def collect_visual_tier_rows(manifest: dict[str, object]) -> list[dict[str, obje
                     record["postOutputMode"] = post.get("mode", record["postOutputMode"])
                     record["postNodes"] = post.get("postNodes", record["postNodes"])
                     record["outputs"] = post.get("outputs", record["outputs"])
+                    record["executableNodes"] = post.get("executableNodes", record["executableNodes"])
+                    record["executableOutputs"] = post.get("executableOutputs", record["executableOutputs"])
                     record["fallbackMask"] = post.get("fallbackMask", record["fallbackMask"])
                 for prefix, label in (
                     ("gl3x", "GL3X"),
@@ -9573,6 +9934,8 @@ def collect_visual_tier_rows(manifest: dict[str, object]) -> list[dict[str, obje
                     record["postOutputMode"] = latest.get("postOutputMode", record["postOutputMode"])
                     record["postNodes"] = latest.get("postOutputPostNodes", record["postNodes"])
                     record["outputs"] = latest.get("postOutputOutputs", record["outputs"])
+                    record["executableNodes"] = latest.get("postOutputExecutableNodes", record["executableNodes"])
+                    record["executableOutputs"] = latest.get("postOutputExecutableOutputs", record["executableOutputs"])
                     record["fallbackMask"] = latest.get("postOutputFallbackMask", record["fallbackMask"])
                     record["outputTransfer"] = latest.get("outputTransfer", record["outputTransfer"])
                     record["gpuFrameMs"] = latest.get("gpuFrameMs", latest.get("gpu", record["gpuFrameMs"]))
@@ -9910,8 +10273,8 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
         [
             "## Driver Tier Matrix",
             "",
-            "| Tier | Observed | Executor | Modern Post | Scene Linear | Post/Output | Nodes | Outputs | Fallback Mask | Transfer | GPU ms |",
-            "|---|---:|---:|---:|---:|---|---:|---:|---:|---|---:|",
+            "| Tier | Observed | Executor | Modern Post | Scene Linear | Post/Output | Nodes | Outputs | Executable Nodes | Executable Outputs | Fallback Mask | Transfer | GPU ms |",
+            "|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---|---:|",
         ]
     )
     for row in tier_rows:
@@ -9925,6 +10288,8 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
             f"{markdown_escape_cell(row['postOutputMode'])} | "
             f"{markdown_escape_cell(row['postNodes'])} | "
             f"{markdown_escape_cell(row['outputs'])} | "
+            f"{markdown_escape_cell(row['executableNodes'])} | "
+            f"{markdown_escape_cell(row['executableOutputs'])} | "
             f"{markdown_escape_cell(row['fallbackMask'])} | "
             f"{markdown_escape_cell(row['outputTransfer'])} | "
             f"{markdown_escape_cell(row['gpuFrameMs'])} |"
@@ -10027,7 +10392,7 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
             "- Compare histogram mid-gray and clipping values before trusting visual parity by eye.",
             "- Use the luma false-color sidecars to spot crushed shadows, clipped highlights, and flat tone mapping.",
             "- Inspect parity diffs for structured changes before accepting screenshot threshold passes.",
-            "- Confirm modern tiers show GLx-owned post/output evidence before treating the run as promotion evidence.",
+            "- Confirm modern tiers show executable GLx-owned post/output evidence before treating the run as promotion evidence.",
             "",
         ]
     )

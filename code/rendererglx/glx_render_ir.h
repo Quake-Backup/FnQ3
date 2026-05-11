@@ -192,11 +192,27 @@ enum class ColorGradeMode {
 	LiftGammaGainLut3D
 };
 
+enum class OutputPrimaries {
+	SrgbBt709,
+	DisplayP3,
+	Bt2020,
+	Native,
+	Unknown
+};
+
+enum class GamutMapMode {
+	None,
+	Clip,
+	CompressToOutput
+};
+
 struct OutputTransform {
 	OutputTransfer transfer;
 	SceneColorSpace sceneColorSpace;
 	ToneMapOperator toneMap;
 	ColorGradeMode grade;
+	OutputPrimaries outputPrimaries;
+	GamutMapMode gamutMap;
 	rendererOutputRequest_t requestedBackend;
 	rendererOutputBackend_t selectedBackend;
 	rendererOutputBackend_t nativeBackend;
@@ -207,6 +223,7 @@ struct OutputTransform {
 	qboolean displayIccProfileAvailable;
 	int displayIccProfileBytes;
 	int hdrMode;
+	int requestedPrecisionMode;
 	int precisionMode;
 	int renderScaleMode;
 	float exposure;
@@ -261,7 +278,8 @@ enum PostOutputFallbackReason : unsigned int {
 	GLX_POST_OUTPUT_FALLBACK_OUTPUT_CONTRACT = 0x00000040u,
 	GLX_POST_OUTPUT_FALLBACK_NO_NODES = 0x00000080u,
 	GLX_POST_OUTPUT_FALLBACK_EXECUTOR_REJECT = 0x00000100u,
-	GLX_POST_OUTPUT_FALLBACK_RESULT_MISMATCH = 0x00000200u
+	GLX_POST_OUTPUT_FALLBACK_RESULT_MISMATCH = 0x00000200u,
+	GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED = 0x00000400u
 };
 
 struct PostOutputPlanInputs {
@@ -286,7 +304,10 @@ struct PostOutputPlan {
 	OutputTransform output;
 	qboolean outputValid;
 	qboolean outputTransformPresent;
+	qboolean outputTransformExecutable;
+	qboolean executorImplemented;
 	qboolean glxOwned;
+	int executableNodeCount;
 	unsigned int fallbackReasons;
 	unsigned int hash;
 	int predictedResult;
@@ -592,6 +613,37 @@ static ID_INLINE const char *GLX_RenderIR_ColorGradeName( ColorGradeMode grade )
 	}
 }
 
+static ID_INLINE const char *GLX_RenderIR_OutputPrimariesName( OutputPrimaries primaries )
+{
+	switch ( primaries ) {
+	case OutputPrimaries::SrgbBt709:
+		return "srgb-bt709";
+	case OutputPrimaries::DisplayP3:
+		return "display-p3";
+	case OutputPrimaries::Bt2020:
+		return "bt2020";
+	case OutputPrimaries::Native:
+		return "native";
+	case OutputPrimaries::Unknown:
+	default:
+		return "unknown";
+	}
+}
+
+static ID_INLINE const char *GLX_RenderIR_GamutMapName( GamutMapMode mode )
+{
+	switch ( mode ) {
+	case GamutMapMode::None:
+		return "none";
+	case GamutMapMode::Clip:
+		return "clip";
+	case GamutMapMode::CompressToOutput:
+		return "compress";
+	default:
+		return "unknown";
+	}
+}
+
 static ID_INLINE RenderProductTier GLX_RenderIR_TierForVersionAndFeatures( int major, int minor,
 	const FeatureSet &features )
 {
@@ -888,6 +940,8 @@ static ID_INLINE unsigned int GLX_RenderIR_HashOutputTransform(
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.sceneColorSpace ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.toneMap ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.grade ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.outputPrimaries ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.gamutMap ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.requestedBackend ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.selectedBackend ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.nativeBackend ) );
@@ -898,6 +952,7 @@ static ID_INLINE unsigned int GLX_RenderIR_HashOutputTransform(
 	hash = GLX_RenderIR_HashValue( hash, transform.displayIccProfileAvailable ? 1u : 0u );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.displayIccProfileBytes ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.hdrMode ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.requestedPrecisionMode ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.precisionMode ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.renderScaleMode ) );
 	hash = GLX_RenderIR_HashFloatValue( hash, transform.exposure );
@@ -942,7 +997,10 @@ static ID_INLINE unsigned int GLX_RenderIR_HashPostOutputPlan( const PostOutputP
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( plan.nodeCount ) );
 	hash = GLX_RenderIR_HashValue( hash, plan.outputValid ? 1u : 0u );
 	hash = GLX_RenderIR_HashValue( hash, plan.outputTransformPresent ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, plan.outputTransformExecutable ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, plan.executorImplemented ? 1u : 0u );
 	hash = GLX_RenderIR_HashValue( hash, plan.glxOwned ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( plan.executableNodeCount ) );
 	hash = GLX_RenderIR_HashValue( hash, plan.fallbackReasons );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( plan.predictedResult ) );
 	hash = GLX_RenderIR_HashValue( hash, GLX_RenderIR_HashOutputTransform( plan.output ) );
@@ -1001,8 +1059,16 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateOutputTransform( const OutputTran
 		transform.precisionMode != 16 ) {
 		return qfalse;
 	}
+	if ( transform.requestedPrecisionMode != -1 && transform.requestedPrecisionMode != 0 &&
+		transform.requestedPrecisionMode != 8 && transform.requestedPrecisionMode != 16 ) {
+		return qfalse;
+	}
 	if ( transform.sceneColorSpace == SceneColorSpace::SceneLinear &&
 		transform.hdrMode <= 0 ) {
+		return qfalse;
+	}
+	if ( transform.sceneColorSpace == SceneColorSpace::SceneLinear &&
+		transform.precisionMode != 16 ) {
 		return qfalse;
 	}
 	if ( transform.outputHardwareActive &&
@@ -1176,6 +1242,52 @@ static ID_INLINE qboolean GLX_RenderIR_ModernPostOutputTier( RenderProductTier t
 		tier == RenderProductTier::GL46 ? qtrue : qfalse;
 }
 
+static ID_INLINE qboolean GLX_RenderIR_PostNodeExecutorImplemented( RenderProductTier tier,
+	const PostNode &node )
+{
+	(void)tier;
+	(void)node;
+
+	/* The modern post graph is currently recorded as IR while execution remains
+	 * in the compatibility-proven shared FBO path. Return true here only when a
+	 * node kind has a real GLx-owned shader/FBO executor behind it. */
+	return qfalse;
+}
+
+static ID_INLINE qboolean GLX_RenderIR_OutputTransformExecutorImplemented( RenderProductTier tier,
+	const OutputTransform &output )
+{
+	(void)tier;
+	(void)output;
+	return qfalse;
+}
+
+static ID_INLINE void GLX_RenderIR_UpdatePostOutputImplementationStatus(
+	PostOutputPlan *plan, RenderProductTier tier )
+{
+	if ( !plan ) {
+		return;
+	}
+
+	plan->executableNodeCount = 0;
+	for ( int i = 0; i < plan->nodeCount && i < GLX_RENDER_IR_MAX_POST_OUTPUT_NODES; i++ ) {
+		if ( GLX_RenderIR_PostNodeExecutorImplemented( tier, plan->nodes[i] ) ) {
+			plan->executableNodeCount++;
+		}
+	}
+	plan->outputTransformExecutable = ( plan->outputTransformPresent &&
+		GLX_RenderIR_OutputTransformExecutorImplemented( tier, plan->output ) ) ? qtrue : qfalse;
+	plan->executorImplemented = ( plan->nodeCount > 0 &&
+		plan->executableNodeCount == plan->nodeCount &&
+		plan->outputTransformPresent &&
+		plan->outputTransformExecutable ) ? qtrue : qfalse;
+
+	if ( plan->outputTransformPresent && plan->nodeCount > 0 &&
+		!plan->executorImplemented ) {
+		plan->fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED;
+	}
+}
+
 static ID_INLINE void GLX_RenderIR_AddPostOutputNode( PostOutputPlan *plan,
 	PostNodeKind kind, int sequence, int inputTarget, int outputTarget,
 	unsigned int flags, const OutputTransform &output )
@@ -1267,8 +1379,9 @@ static ID_INLINE PostOutputPlan GLX_RenderIR_BuildPostOutputPlan(
 	if ( plan.nodeCount <= 0 ) {
 		plan.fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_NO_NODES;
 	}
+	GLX_RenderIR_UpdatePostOutputImplementationStatus( &plan, inputs.tier );
 	plan.glxOwned = ( plan.fallbackReasons == GLX_POST_OUTPUT_FALLBACK_NONE &&
-		plan.outputTransformPresent && plan.nodeCount > 0 ) ? qtrue : qfalse;
+		plan.executorImplemented ) ? qtrue : qfalse;
 	plan.hash = GLX_RenderIR_HashPostOutputPlan( plan );
 	return plan;
 }
@@ -1310,16 +1423,19 @@ static ID_INLINE OutputTransform GLX_RenderIR_DefaultOutputTransform()
 	transform.sceneColorSpace = SceneColorSpace::DisplayReferredSdr;
 	transform.toneMap = ToneMapOperator::Legacy;
 	transform.grade = ColorGradeMode::None;
+	transform.outputPrimaries = OutputPrimaries::SrgbBt709;
+	transform.gamutMap = GamutMapMode::None;
 	transform.requestedBackend = ROUTPUT_REQUEST_AUTO;
 	transform.selectedBackend = ROUTPUT_BACKEND_SDR_SRGB;
 	transform.nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
 	transform.hdrMode = 0;
+	transform.requestedPrecisionMode = 0;
 	transform.precisionMode = 8;
 	transform.exposure = 1.0f;
 	transform.bloomThreshold = 0.75f;
 	transform.bloomSoftKnee = 0.0f;
-	transform.paperWhiteNits = 80.0f;
-	transform.maxOutputNits = 80.0f;
+	transform.paperWhiteNits = 203.0f;
+	transform.maxOutputNits = 203.0f;
 	transform.displayHdrHeadroom = 1.0f;
 	transform.displaySdrWhiteNits = 203.0f;
 	transform.displayMaxNits = 203.0f;

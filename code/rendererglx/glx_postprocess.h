@@ -3,6 +3,7 @@
 
 #include "glx_local.h"
 #include "glx_render_ir.h"
+#include "glx_post_shader_plan.h"
 #include "../renderercommon/tr_glx_public.h"
 
 namespace glx {
@@ -50,6 +51,7 @@ struct PostProcessState {
 	int textureType;
 	int blitFilter;
 	int hdrMode;
+	int hdrPrecisionRequestedMode;
 	int hdrPrecisionMode;
 	int toneMapMode;
 	int renderScaleMode;
@@ -106,6 +108,16 @@ struct PostProcessState {
 	float lastBloomReflection;
 	int lastBloomCreateResult;
 	int lastBloomResult;
+	qboolean colorGradeLutKnown;
+	qboolean colorGradeLutActive;
+	int colorGradeLutSize;
+	int colorGradeLutModificationCount;
+	float colorGradeLutScale;
+	unsigned int lastDisplayOutputQueryFrame;
+	int lastOutputBackendModificationCount;
+	int lastOutputAllowExperimentalModificationCount;
+	int lastDisplayPaperWhiteModificationCount;
+	int lastDisplayMaxLuminanceModificationCount;
 	char reason[128];
 	unsigned int fboInitAttempts;
 	unsigned int fboInitSuccesses;
@@ -151,15 +163,28 @@ struct PostProcessState {
 	unsigned int postOutputFallbackFrames;
 	unsigned int postOutputPlanNodes;
 	unsigned int postOutputPlanOutputs;
+	unsigned int postOutputExecutableNodes;
+	unsigned int postOutputExecutableOutputs;
+	unsigned int postOutputImplementationFallbackFrames;
 	unsigned int postOutputExecutorRejects;
 	unsigned int postOutputResultMismatches;
+	unsigned int postShaderPlanFrames;
+	unsigned int postShaderPlanInvalidFrames;
 	unsigned int lastPostOutputNodeCount;
 	unsigned int lastPostOutputOutputCount;
+	unsigned int lastPostOutputExecutableNodeCount;
+	unsigned int lastPostOutputExecutableOutputCount;
 	unsigned int lastPostOutputPlanHash;
 	unsigned int lastPostOutputFallbackReasons;
+	unsigned int lastPostShaderFeatureMask;
+	unsigned int lastPostShaderPlanHash;
+	unsigned int lastPostShaderTextureCount;
+	unsigned int lastPostShaderUniformVec4Count;
 	int lastPostOutputPredictedResult;
 	int lastPostOutputActualResult;
+	qboolean lastPostOutputExecutorImplemented;
 	qboolean lastPostOutputGlxOwned;
+	qboolean lastPostShaderPlanValid;
 	unsigned int imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_COUNT];
 	unsigned int imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_COUNT];
 	unsigned int imageUnexpectedSrgbDecode;
@@ -181,7 +206,10 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	int hdrMode, int renderScaleMode, float greyscale );
 void GLX_PostProcess_RecordPostOutputPlan( PostProcessState *state, const PostOutputPlan &plan,
 	qboolean executorConsumed );
+void GLX_PostProcess_RecordPostShaderPlan( PostProcessState *state, const PostShaderPlan &plan );
 void GLX_PostProcess_RecordFrameResult( PostProcessState *state, int result );
+void GLX_PostProcess_RecordColorGradeLut( PostProcessState *state, qboolean active,
+	int size, float scale );
 void GLX_PostProcess_RecordBloomCreate( PostProcessState *state, int result,
 	int requestedPasses, int effectivePasses, int textureUnits );
 void GLX_PostProcess_RecordBloom( PostProcessState *state, int result, qboolean finalStage,

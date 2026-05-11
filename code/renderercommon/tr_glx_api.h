@@ -97,7 +97,10 @@ void GLX_Renderer_RecordFboShutdown( void );
 void GLX_Renderer_RecordPostProcessFrame( qboolean minimized, qboolean bloomAvailable,
 	qboolean programReady, int screenshotMask, qboolean windowAdjusted, int fboReadIndex,
 	int hdrMode, int renderScaleMode, float greyscale );
+qboolean GLX_Renderer_TryBindPostShaderDirectFinal( void );
+void GLX_Renderer_UnbindPostShader( void );
 void GLX_Renderer_RecordPostProcessResult( int result );
+void GLX_Renderer_RecordColorGradeLut( qboolean active, int size, float scale );
 void GLX_Renderer_RecordBloomCreate( int result, int requestedPasses,
 	int effectivePasses, int textureUnits );
 void GLX_Renderer_RecordBloom( int result, qboolean finalStage, int bloomMode,

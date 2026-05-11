@@ -539,7 +539,14 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
     post_output_modes: set[str] = set()
     post_output_post_nodes = 0
     post_output_outputs = 0
+    post_output_executable_nodes = 0
+    post_output_executable_outputs = 0
+    post_output_executable_counts_found = False
     post_output_legacy_fallback = 0
+    post_shader_direct_found = False
+    post_shader_direct_bound = 0
+    post_shader_direct_binds = 0
+    post_shader_direct_reject = 0
     product_tiers: set[str] = set()
     modern_tier_diagnostics_found = False
     modern_tier_diagnostics_ok = False
@@ -571,7 +578,16 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
                 post_output_modes.update(str(mode).strip().lower() for mode in modes if str(mode).strip())
             post_output_post_nodes = int_metric(post_output.get("postNodes", 0))
             post_output_outputs = int_metric(post_output.get("outputs", 0))
+            post_output_executable_counts_found = bool(post_output.get("executableCountsFound"))
+            post_output_executable_nodes = int_metric(post_output.get("executableNodes", 0))
+            post_output_executable_outputs = int_metric(post_output.get("executableOutputs", 0))
             post_output_legacy_fallback = int_metric(post_output.get("legacyFallback", 0))
+        post_shader_direct = evidence.get("postShaderDirectFinal")
+        if isinstance(post_shader_direct, dict):
+            post_shader_direct_found = bool(post_shader_direct.get("found"))
+            post_shader_direct_bound = int_metric(post_shader_direct.get("bound", 0))
+            post_shader_direct_binds = int_metric(post_shader_direct.get("binds", 0))
+            post_shader_direct_reject = int_metric(post_shader_direct.get("reject", 0))
         modern_tier_diagnostics_found = bool(evidence.get("modernTierDiagnosticsFound"))
         modern_tier_diagnostics_ok = bool(evidence.get("modernTierDiagnosticsOk"))
 
@@ -587,7 +603,14 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
             "postOutputMode": ",".join(sorted(post_output_modes)),
             "postOutputPostNodes": post_output_post_nodes,
             "postOutputOutputs": post_output_outputs,
+            "postOutputExecutableCountsFound": post_output_executable_counts_found,
+            "postOutputExecutableNodes": post_output_executable_nodes,
+            "postOutputExecutableOutputs": post_output_executable_outputs,
             "postOutputLegacyFallback": post_output_legacy_fallback,
+            "postShaderDirectFinalFound": post_shader_direct_found,
+            "postShaderDirectFinalBound": post_shader_direct_bound,
+            "postShaderDirectFinalBinds": post_shader_direct_binds,
+            "postShaderDirectFinalReject": post_shader_direct_reject,
             "productTiers": ",".join(sorted(product_tiers)),
             "modernPostOutputTier": modern_post_output_tier,
             "modernTierDiagnosticsFound": modern_tier_diagnostics_found,
@@ -599,20 +622,58 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
             "evidenceFailures": evidence_failures,
         }
 
-    def record_post_output(mode: object, post_nodes: object, outputs: object, legacy_fallback: object) -> None:
+    def record_post_output(
+        mode: object,
+        post_nodes: object,
+        outputs: object,
+        legacy_fallback: object,
+        executable_nodes: object = None,
+        executable_outputs: object = None,
+    ) -> None:
         nonlocal post_output_found
         nonlocal post_output_post_nodes
         nonlocal post_output_outputs
+        nonlocal post_output_executable_counts_found
+        nonlocal post_output_executable_nodes
+        nonlocal post_output_executable_outputs
         nonlocal post_output_legacy_fallback
 
-        if mode is None and post_nodes is None and outputs is None and legacy_fallback is None:
+        if (
+            mode is None and post_nodes is None and outputs is None and
+            legacy_fallback is None and executable_nodes is None and
+            executable_outputs is None
+        ):
             return
         post_output_found = True
         if mode is not None:
             post_output_modes.add(str(mode).strip().lower())
         post_output_post_nodes = max(post_output_post_nodes, int_metric(post_nodes))
         post_output_outputs = max(post_output_outputs, int_metric(outputs))
+        if executable_nodes is not None or executable_outputs is not None:
+            post_output_executable_counts_found = True
+        post_output_executable_nodes = max(post_output_executable_nodes, int_metric(executable_nodes))
+        post_output_executable_outputs = max(post_output_executable_outputs, int_metric(executable_outputs))
         post_output_legacy_fallback = max(post_output_legacy_fallback, int_metric(legacy_fallback))
+
+    def record_post_shader_direct(
+        found: object,
+        bound: object,
+        binds: object,
+        reject: object,
+    ) -> None:
+        nonlocal post_shader_direct_found
+        nonlocal post_shader_direct_bound
+        nonlocal post_shader_direct_binds
+        nonlocal post_shader_direct_reject
+
+        if found is not None:
+            post_shader_direct_found = post_shader_direct_found or bool(found)
+        if bound is not None:
+            post_shader_direct_bound = max(post_shader_direct_bound, int_metric(bound))
+        if binds is not None:
+            post_shader_direct_binds = max(post_shader_direct_binds, int_metric(binds))
+        if reject is not None:
+            post_shader_direct_reject = max(post_shader_direct_reject, int_metric(reject))
 
     def record_tier(value: object) -> None:
         tier = str(value or "").strip().upper()
@@ -677,6 +738,16 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
                 post_output.get("postNodes"),
                 post_output.get("outputs"),
                 post_output.get("legacyFallback"),
+                post_output.get("executableNodes"),
+                post_output.get("executableOutputs"),
+            )
+        post_shader_direct = metrics.get("postShaderDirectFinal")
+        if isinstance(post_shader_direct, dict):
+            record_post_shader_direct(
+                True,
+                post_shader_direct.get("bound"),
+                post_shader_direct.get("binds"),
+                post_shader_direct.get("reject"),
             )
         performance = run.get("performance")
         if isinstance(performance, dict):
@@ -687,7 +758,22 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
                     latest.get("postOutputPostNodes"),
                     latest.get("postOutputOutputs"),
                     latest.get("postOutputLegacyFallback"),
+                    latest.get("postOutputExecutableNodes"),
+                    latest.get("postOutputExecutableOutputs"),
                 )
+                if any(
+                    latest.get(key) is not None for key in (
+                        "postShaderDirectFinalBound",
+                        "postShaderDirectFinalBinds",
+                        "postShaderDirectFinalReject",
+                    )
+                ):
+                    record_post_shader_direct(
+                        True,
+                        latest.get("postShaderDirectFinalBound"),
+                        latest.get("postShaderDirectFinalBinds"),
+                        latest.get("postShaderDirectFinalReject"),
+                    )
                 record_tier(latest.get("productTier", latest.get("tier")))
     modern_post_output_tier = bool(product_tiers.intersection(PROMOTION_MODERN_POST_OUTPUT_TIERS))
     modern_post_output = (
@@ -695,6 +781,9 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
         and post_output_modes == {"glx-owned"}
         and post_output_post_nodes > 0
         and post_output_outputs > 0
+        and post_output_executable_counts_found
+        and post_output_executable_nodes > 0
+        and post_output_executable_outputs > 0
         and post_output_legacy_fallback == 0
         and modern_post_output_tier
     )
@@ -708,7 +797,14 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
         "postOutputMode": ",".join(sorted(post_output_modes)),
         "postOutputPostNodes": post_output_post_nodes,
         "postOutputOutputs": post_output_outputs,
+        "postOutputExecutableCountsFound": post_output_executable_counts_found,
+        "postOutputExecutableNodes": post_output_executable_nodes,
+        "postOutputExecutableOutputs": post_output_executable_outputs,
         "postOutputLegacyFallback": post_output_legacy_fallback,
+        "postShaderDirectFinalFound": post_shader_direct_found,
+        "postShaderDirectFinalBound": post_shader_direct_bound,
+        "postShaderDirectFinalBinds": post_shader_direct_binds,
+        "postShaderDirectFinalReject": post_shader_direct_reject,
         "productTiers": ",".join(sorted(product_tiers)),
         "modernPostOutputTier": modern_post_output_tier,
         "modernTierDiagnosticsFound": modern_tier_diagnostics_found,
@@ -810,7 +906,7 @@ def check_ownership_proof(
             )
         if not isinstance(ownership, dict) or not ownership.get("modernPostOutput"):
             blockers.append(
-                f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} did not prove GLx-owned modern post/output."
+                f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} did not prove executable GLx-owned modern post/output."
             )
         if not isinstance(ownership, dict) or not ownership.get("modernPostOutputTier"):
             blockers.append(

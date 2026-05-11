@@ -125,6 +125,9 @@
     <ClCompile Include="..\..\rendererglx\glx_module.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\rendererglx\glx_post_shader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\rendererglx\glx_postprocess.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -181,6 +184,9 @@
     <ClInclude Include="..\..\rendererglx\glx_caps_logic.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_color_math.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\rendererglx\glx_debug.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -196,7 +202,22 @@
     <ClInclude Include="..\..\rendererglx\glx_material.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_material_key.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\rendererglx\glx_module.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_post_output_reference.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_post_shader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_post_shader_plan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\rendererglx\glx_post_shader_source.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\rendererglx\glx_postprocess.h">

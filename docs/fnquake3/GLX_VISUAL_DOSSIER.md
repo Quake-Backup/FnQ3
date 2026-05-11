@@ -71,8 +71,9 @@ Each dossier contains:
   positive, render/capture dimensions prove the requested scale, minimized
   output is absent, and the output color contract remains valid.
 - Use the ownership-proof table on `glx-ownership` artifacts to confirm that
-  zero legacy delegation and GLx-owned post/output fingerprints were captured
-  before treating the artifact as promotion evidence.
+  zero legacy delegation, executable GLx-owned post/output counts, and
+  post/output fingerprints were captured before treating the artifact as
+  promotion evidence.
 - Use the backend/state overlay to confirm that `r_outputBackend`, scene color
   space, transfer, framebuffer-sRGB, and final-encode state match the intended
   run.
@@ -84,7 +85,9 @@ Each dossier contains:
 - Use parity diffs to distinguish acceptable threshold noise from structured
   image changes.
 - Treat modern-tier promotion evidence as incomplete unless the tier matrix
-  shows GLx-owned post/output products and no modern-tier fallback mask.
+  shows executable GLx-owned post/output products and no modern-tier fallback
+  mask. Planned-only products with the implementation-not-ready fallback are
+  useful review evidence, not promotion evidence.
 
 ## Packaging
 

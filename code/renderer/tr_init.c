@@ -2476,11 +2476,11 @@ static void R_Register( void )
 	r_outputBackend = ri.Cvar_Get( "r_outputBackend", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_outputBackend, "0", "5", CV_INTEGER );
 	ri.Cvar_SetDescription( r_outputBackend,
-		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR. Non-SDR output requires r_hdr 1 and platform support." );
+		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR telemetry/prototype. Non-SDR output requires r_hdr 1 and platform support." );
 	ri.Cvar_SetGroup( r_outputBackend, CVG_RENDERER );
 	r_outputAllowExperimentalLinuxHDR = ri.Cvar_Get( "r_outputAllowExperimentalLinuxHDR", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_outputAllowExperimentalLinuxHDR, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_outputAllowExperimentalLinuxHDR, "Allows Linux HDR output only when SDL reports HDR headroom and an explicit compositor/protocol path." );
+	ri.Cvar_SetDescription( r_outputAllowExperimentalLinuxHDR, "Allows Linux HDR telemetry/prototype output only when SDL reports HDR headroom and an explicit compositor/protocol path." );
 	ri.Cvar_SetGroup( r_outputAllowExperimentalLinuxHDR, CVG_RENDERER );
 	r_tonemap = ri.Cvar_Get( "r_tonemap", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_tonemap, "0", "2", CV_INTEGER );

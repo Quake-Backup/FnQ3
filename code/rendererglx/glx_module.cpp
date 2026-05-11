@@ -5,6 +5,7 @@
 #include "glx_executor.h"
 #include "glx_material.h"
 #include "glx_postprocess.h"
+#include "glx_post_shader.h"
 #include "glx_profiler.h"
 #include "glx_static_world.h"
 #include "glx_stream.h"
@@ -478,7 +479,10 @@ public:
 	void RecordPostProcessFrame( qboolean minimized, qboolean bloomAvailable, qboolean programReady,
 		int screenshotMask, qboolean windowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
 		float greyscale );
+	qboolean TryBindPostShaderDirectFinal();
+	void UnbindPostShader();
 	void RecordPostProcessResult( int result );
+	void RecordColorGradeLut( qboolean active, int size, float scale );
 	void RecordBloomCreate( int result, int requestedPasses, int effectivePasses, int textureUnits );
 	void RecordBloom( int result, qboolean finalStage, int bloomMode, int requestedPasses,
 		int effectivePasses, int blendBase, int filterSize, int textureUnits, int thresholdMode,
@@ -522,6 +526,7 @@ private:
 	ExecutorState executor_ {};
 	MaterialState material_ {};
 	PostProcessState postprocess_ {};
+	PostShaderState postShader_ {};
 	ProfilerState profiler_ {};
 	cvar_t *profile_ {};
 	cvar_t *requireOwnership_ {};
@@ -551,6 +556,7 @@ void RendererModule::RegisterCommands()
 	GLX_Debug_RegisterCvars( &debug_ );
 	GLX_Material_RegisterCvars( &material_ );
 	GLX_PostProcess_RegisterCvars( &postprocess_ );
+	GLX_PostShader_RegisterCvars( &postShader_ );
 	GLX_Profiler_RegisterCvars( &profiler_ );
 	GLX_StaticWorld_RegisterCvars( &staticWorld_ );
 	GLX_Stream_RegisterCvars( &stream_ );
@@ -583,16 +589,18 @@ void RendererModule::OnOpenGLReady( const glconfig_t *config, const char *extens
 	GLX_Debug_OnOpenGLReady( &debug_, caps_ );
 	GLX_Material_OnOpenGLReady( &material_, caps_ );
 	GLX_PostProcess_OnOpenGLReady( &postprocess_, caps_ );
+	GLX_PostShader_OnOpenGLReady( &postShader_, caps_ );
 	GLX_Stream_OnOpenGLReady( &stream_, caps_ );
 	GLX_StaticWorld_SetCapabilities( &staticWorld_, caps_.features.drawIndirect, caps_.features.multiDrawIndirect );
 	GLX_Debug_LabelObject( debug_, GL_BUFFER, stream_.buffer, "GLx dynamic stream ring" );
 	GLX_Profiler_OnOpenGLReady( &profiler_, caps_ );
 
-	RI().Printf( PRINT_ALL, "GLx renderer bootstrap: product tier %s, hint %s, executor %s/%s, GL %i.%i, material %s, stream %s, timer query %s, debug output %s\n",
+	RI().Printf( PRINT_ALL, "GLx renderer bootstrap: product tier %s, hint %s, executor %s/%s, GL %i.%i, material %s, post-shader %s, stream %s, timer query %s, debug output %s\n",
 		GLX_Caps_TierName( caps_.tier ), GLX_Caps_HintName( caps_.hint ),
 		GLX_Executor_TierName( executor_ ), GLX_Executor_ModeName( executor_ ),
 		caps_.major, caps_.minor,
 		BoolName( GLX_Material_Active( material_ ) ),
+		BoolName( GLX_PostShader_Ready( postShader_ ) ),
 		GLX_Stream_StrategyName( stream_.strategy ),
 		BoolName( GLX_Profiler_TimerReady( profiler_ ) ),
 		BoolName( GLX_Debug_CallbackInstalled( debug_ ) ) );
@@ -608,6 +616,7 @@ void RendererModule::Shutdown( int code )
 	(void)code;
 
 	GLX_Material_Shutdown( &material_, qtrue );
+	GLX_PostShader_Shutdown( &postShader_, qtrue );
 	if ( code == REF_KEEP_CONTEXT ) {
 		postprocess_.glReady = qfalse;
 	} else {
@@ -678,6 +687,7 @@ void RendererModule::FrameComplete()
 {
 	GLX_Profiler_FrameComplete( &profiler_ );
 	GLX_Material_FrameComplete( &material_ );
+	GLX_PostShader_FrameComplete( &postShader_ );
 	GLX_Stream_FrameComplete( &stream_ );
 }
 
@@ -721,20 +731,53 @@ void RendererModule::PrintCaps() const
 		BoolName( material_.ready ),
 		material_.glslVersion[0] ? material_.glslVersion : "unknown",
 		material_.programCount );
+	RI().Printf( PRINT_ALL, "  post shader cache: ready %s, programs %i/%i, compile %u attempts/%u failures, link failures %u, source hash 0x%08x\n",
+		BoolName( GLX_PostShader_Ready( postShader_ ) ),
+		postShader_.programCount, GLX_POST_SHADER_PROGRAM_LIMIT,
+		postShader_.compileAttempts, postShader_.compileFailures,
+		postShader_.linkFailures, postShader_.lastSourceHash );
 	RI().Printf( PRINT_ALL, "  postprocess FBO: %s, render %ix%i, capture %ix%i, bloom %i, passes %i/%i, last %s\n",
 		BoolName( postprocess_.fboReady ), postprocess_.vidWidth, postprocess_.vidHeight,
 		postprocess_.captureWidth, postprocess_.captureHeight, postprocess_.bloomMode,
 		postprocess_.lastBloomEffectivePasses, postprocess_.lastBloomRequestedPasses,
 		GLX_PostProcess_ResultName( postprocess_.lastResult ) );
-	RI().Printf( PRINT_ALL, "  post/output ownership: mode %s, post nodes %u, outputs %u, legacy fallback %s, post hash 0x%08x, output hash 0x%08x, plan hash 0x%08x, fallback 0x%08x\n",
+	RI().Printf( PRINT_ALL, "  post/output ownership: mode %s, post nodes %u, outputs %u, legacy fallback %s, executable nodes %u, executable outputs %u, post hash 0x%08x, output hash 0x%08x, plan hash 0x%08x, fallback 0x%08x\n",
 		GLX_PostProcess_PostOutputModeName( postprocess_.lastPostOutputGlxOwned ),
 		executor_.postNodes,
 		executor_.outputTransforms,
 		BoolName( postprocess_.lastPostOutputGlxOwned ? qfalse : qtrue ),
+		postprocess_.lastPostOutputExecutableNodeCount,
+		postprocess_.lastPostOutputExecutableOutputCount,
 		executor_.lastPostNodeHash,
 		executor_.lastOutputTransformHash,
 		postprocess_.lastPostOutputPlanHash,
 		postprocess_.lastPostOutputFallbackReasons );
+	RI().Printf( PRINT_ALL, "  post shader plan: valid %s, features 0x%08x, hash 0x%08x, textures %u, uniforms %u, frames %u, invalid %u\n",
+		BoolName( postprocess_.lastPostShaderPlanValid ),
+		postprocess_.lastPostShaderFeatureMask,
+		postprocess_.lastPostShaderPlanHash,
+		postprocess_.lastPostShaderTextureCount,
+		postprocess_.lastPostShaderUniformVec4Count,
+		postprocess_.postShaderPlanFrames,
+		postprocess_.postShaderPlanInvalidFrames );
+	RI().Printf( PRINT_ALL, "  post shader source: valid %s, truncated %s, hash 0x%08x, vertex bytes %i, fragment bytes %i, last program %u\n",
+		BoolName( postShader_.lastSource.valid ),
+		BoolName( postShader_.lastSource.truncated ),
+		postShader_.lastSourceHash,
+		postShader_.lastSource.vertexBytes,
+		postShader_.lastSource.fragmentBytes,
+		postShader_.lastProgram );
+	RI().Printf( PRINT_ALL, "  post shader direct-final: execute %s, eligible %s, bound %s, reject 0x%08x, candidates %u, eligible frames %u, attempts %u, binds %u, fallbacks %u, rejects %u\n",
+		BoolName( postShader_.r_glxPostShaderExecute && postShader_.r_glxPostShaderExecute->integer ? qtrue : qfalse ),
+		BoolName( postShader_.lastDirectFinalEligible ),
+		BoolName( postShader_.lastDirectFinalBound ),
+		postShader_.lastDirectFinalRejectMask,
+		postShader_.directFinalCandidates,
+		postShader_.directFinalEligibleFrames,
+		postShader_.directFinalAttempts,
+		postShader_.directFinalBinds,
+		postShader_.directFinalFallbacks,
+		postShader_.directFinalRejects );
 	RI().Printf( PRINT_ALL, "  static world GLx arena: %s, %.2f MB\n",
 		BoolName( staticWorld_.arenaReady ),
 		( staticWorld_.arenaVertexBytes + staticWorld_.arenaIndexBytes ) / ( 1024.0f * 1024.0f ) );
@@ -912,6 +955,7 @@ void RendererModule::PrintInfo() const
 {
 	PrintCaps();
 	GLX_Material_PrintInfo( material_ );
+	GLX_PostShader_PrintInfo( postShader_ );
 	GLX_PostProcess_PrintInfo( postprocess_ );
 	GLX_Executor_PrintInfo( executor_ );
 	GLX_Profiler_PrintInfo( profiler_ );
@@ -1085,15 +1129,52 @@ void RendererModule::PrintFrameCounters() const
 		executor_.postNodes,
 		executor_.outputTransforms,
 		executor_.rejectedProducts );
-	RI().Printf( PRINT_ALL, "glx: post/output ownership mode %s, post nodes %u, outputs %u, legacy fallback %s, post hash 0x%08x, output hash 0x%08x, plan hash 0x%08x, fallback 0x%08x\n",
+	RI().Printf( PRINT_ALL, "glx: post/output ownership mode %s, post nodes %u, outputs %u, legacy fallback %s, executable nodes %u, executable outputs %u, post hash 0x%08x, output hash 0x%08x, plan hash 0x%08x, fallback 0x%08x\n",
 		GLX_PostProcess_PostOutputModeName( postprocess_.lastPostOutputGlxOwned ),
 		executor_.postNodes,
 		executor_.outputTransforms,
 		BoolName( postprocess_.lastPostOutputGlxOwned ? qfalse : qtrue ),
+		postprocess_.lastPostOutputExecutableNodeCount,
+		postprocess_.lastPostOutputExecutableOutputCount,
 		executor_.lastPostNodeHash,
 		executor_.lastOutputTransformHash,
 		postprocess_.lastPostOutputPlanHash,
 		postprocess_.lastPostOutputFallbackReasons );
+	RI().Printf( PRINT_ALL, "glx: post shader plan valid %s, features 0x%08x, hash 0x%08x, textures %u, uniforms %u, frames %u, invalid %u\n",
+		BoolName( postprocess_.lastPostShaderPlanValid ),
+		postprocess_.lastPostShaderFeatureMask,
+		postprocess_.lastPostShaderPlanHash,
+		postprocess_.lastPostShaderTextureCount,
+		postprocess_.lastPostShaderUniformVec4Count,
+		postprocess_.postShaderPlanFrames,
+		postprocess_.postShaderPlanInvalidFrames );
+	RI().Printf( PRINT_ALL, "glx: post shader cache ready %s, programs %i/%i, plans %u valid/%u invalid, cache %u hits/%u misses, compile %u attempts/%u failures, link failures %u, source failures %u, source hash 0x%08x, program %u\n",
+		BoolName( GLX_PostShader_Ready( postShader_ ) ),
+		postShader_.programCount,
+		GLX_POST_SHADER_PROGRAM_LIMIT,
+		postShader_.validPlansObserved,
+		postShader_.invalidPlansObserved,
+		postShader_.cacheHits,
+		postShader_.cacheMisses,
+		postShader_.compileAttempts,
+		postShader_.compileFailures,
+		postShader_.linkFailures,
+		postShader_.sourceFailures,
+		postShader_.lastSourceHash,
+		postShader_.lastProgram );
+	RI().Printf( PRINT_ALL, "glx: post shader direct-final execute %s, eligible %s, bound %s, reject 0x%08x, candidates %u, eligible frames %u, attempts %u, binds %u, fallbacks %u, rejects %u, program misses %u, uniform failures %u\n",
+		BoolName( postShader_.r_glxPostShaderExecute && postShader_.r_glxPostShaderExecute->integer ? qtrue : qfalse ),
+		BoolName( postShader_.lastDirectFinalEligible ),
+		BoolName( postShader_.lastDirectFinalBound ),
+		postShader_.lastDirectFinalRejectMask,
+		postShader_.directFinalCandidates,
+		postShader_.directFinalEligibleFrames,
+		postShader_.directFinalAttempts,
+		postShader_.directFinalBinds,
+		postShader_.directFinalFallbacks,
+		postShader_.directFinalRejects,
+		postShader_.directFinalProgramMisses,
+		postShader_.directFinalUniformFailures );
 	if ( caps_.tier == RenderProductTier::GL12 ) {
 		RI().Printf( PRINT_ALL, "glx: GL12 fixed-function draws %u client-memory %u unsupported stream %u post %u output %u\n",
 			executor_.fixedFunctionDraws,
@@ -1210,6 +1291,11 @@ void RendererModule::PrintFrameCounters() const
 		GLX_RenderIR_ColorGradeName( postprocess_.lastOutput.grade ),
 		postprocess_.lastOutput.paperWhiteNits,
 		postprocess_.lastOutput.maxOutputNits );
+	RI().Printf( PRINT_ALL, "glx: output colorimetry primaries %s gamut-map %s precision-request %i precision-resolved %i\n",
+		GLX_RenderIR_OutputPrimariesName( postprocess_.lastOutput.outputPrimaries ),
+		GLX_RenderIR_GamutMapName( postprocess_.lastOutput.gamutMap ),
+		postprocess_.lastOutput.requestedPrecisionMode,
+		postprocess_.lastOutput.precisionMode );
 	RI().Printf( PRINT_ALL, "glx: output backend request %s selected %s native %s hardware %s experimental %s display-hdr %s headroom %.2f sdr-white %.0f display-max %.0f icc %s/%i\n",
 		RendererOutputRequestName( postprocess_.lastOutput.requestedBackend ),
 		RendererOutputBackendName( postprocess_.lastOutput.selectedBackend ),
@@ -1799,6 +1885,8 @@ void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomA
 		( windowAdjusted ? 0x4u : 0u ) | ( screenshotMask ? 0x8u : 0u );
 
 	PostOutputPlan plan = GLX_RenderIR_BuildPostOutputPlan( inputs );
+	PostShaderPlan shaderPlan = GLX_PostShader_BuildPlan( output );
+	GLX_PostShader_RecordPlan( &postShader_, shaderPlan );
 	qboolean consumed = qtrue;
 	for ( int i = 0; i < plan.nodeCount; i++ ) {
 		if ( !GLX_Executor_ConsumePostNode( &executor_, plan.nodes[i] ) ) {
@@ -1809,6 +1897,21 @@ void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomA
 		consumed = qfalse;
 	}
 	GLX_PostProcess_RecordPostOutputPlan( &postprocess_, plan, consumed );
+	GLX_PostProcess_RecordPostShaderPlan( &postprocess_, shaderPlan );
+}
+
+qboolean RendererModule::TryBindPostShaderDirectFinal()
+{
+	const OutputTransform output = GLX_Module_OutputTransformIR( postprocess_ );
+	const PostShaderPlan shaderPlan = GLX_PostShader_BuildPlan( output );
+
+	return GLX_PostShader_TryBindDirectFinal( &postShader_, shaderPlan, output,
+		postprocess_.lastGreyscale );
+}
+
+void RendererModule::UnbindPostShader()
+{
+	GLX_PostShader_Unbind( &postShader_ );
 }
 
 void RendererModule::RecordPostProcessResult( int result )
@@ -1835,6 +1938,11 @@ void RendererModule::RecordPostProcessResult( int result )
 
 	GLX_PostProcess_RecordFrameResult( &postprocess_, result );
 	GLX_Executor_ConsumePostNode( &executor_, node );
+}
+
+void RendererModule::RecordColorGradeLut( qboolean active, int size, float scale )
+{
+	GLX_PostProcess_RecordColorGradeLut( &postprocess_, active, size, scale );
 }
 
 void RendererModule::RecordBloomCreate( int result, int requestedPasses, int effectivePasses, int textureUnits )
@@ -2311,9 +2419,24 @@ extern "C" void GLX_Renderer_RecordPostProcessFrame( qboolean minimized, qboolea
 		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
 }
 
+extern "C" qboolean GLX_Renderer_TryBindPostShaderDirectFinal( void )
+{
+	return glx::g_module.TryBindPostShaderDirectFinal();
+}
+
+extern "C" void GLX_Renderer_UnbindPostShader( void )
+{
+	glx::g_module.UnbindPostShader();
+}
+
 extern "C" void GLX_Renderer_RecordPostProcessResult( int result )
 {
 	glx::g_module.RecordPostProcessResult( result );
+}
+
+extern "C" void GLX_Renderer_RecordColorGradeLut( qboolean active, int size, float scale )
+{
+	glx::g_module.RecordColorGradeLut( active, size, scale );
 }
 
 extern "C" void GLX_Renderer_RecordBloomCreate( int result, int requestedPasses,

@@ -5,6 +5,8 @@
 
 namespace glx {
 
+static constexpr unsigned int GLX_POSTPROCESS_DISPLAY_QUERY_INTERVAL_FRAMES = 15u;
+
 static void GLX_PostProcess_SetReason( PostProcessState *state, const char *reason )
 {
 	if ( !state ) {
@@ -28,6 +30,43 @@ static float GLX_PostProcess_ClampFloat( float value, float minValue, float maxV
 		return maxValue;
 	}
 	return value;
+}
+
+static int GLX_PostProcess_CvarModificationCount( const cvar_t *cvar )
+{
+	return cvar ? cvar->modificationCount : 0;
+}
+
+static void GLX_PostProcess_RecordDisplayOutputCvarCounts( PostProcessState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->lastOutputBackendModificationCount =
+		GLX_PostProcess_CvarModificationCount( state->r_outputBackend );
+	state->lastOutputAllowExperimentalModificationCount =
+		GLX_PostProcess_CvarModificationCount( state->r_outputAllowExperimentalLinuxHDR );
+	state->lastDisplayPaperWhiteModificationCount =
+		GLX_PostProcess_CvarModificationCount( state->r_hdrDisplayPaperWhite );
+	state->lastDisplayMaxLuminanceModificationCount =
+		GLX_PostProcess_CvarModificationCount( state->r_hdrDisplayMaxLuminance );
+}
+
+static qboolean GLX_PostProcess_DisplayOutputCvarsChanged( const PostProcessState *state )
+{
+	if ( !state ) {
+		return qfalse;
+	}
+
+	return ( state->lastOutputBackendModificationCount !=
+		GLX_PostProcess_CvarModificationCount( state->r_outputBackend ) ||
+		state->lastOutputAllowExperimentalModificationCount !=
+		GLX_PostProcess_CvarModificationCount( state->r_outputAllowExperimentalLinuxHDR ) ||
+		state->lastDisplayPaperWhiteModificationCount !=
+		GLX_PostProcess_CvarModificationCount( state->r_hdrDisplayPaperWhite ) ||
+		state->lastDisplayMaxLuminanceModificationCount !=
+		GLX_PostProcess_CvarModificationCount( state->r_hdrDisplayMaxLuminance ) ) ? qtrue : qfalse;
 }
 
 static void GLX_PostProcess_InitDisplayOutput( rendererDisplayOutput_t *output )
@@ -57,6 +96,8 @@ static void GLX_PostProcess_QueryDisplayOutput( PostProcessState *state )
 	if ( RI().GLimp_QueryDisplayOutput ) {
 		RI().GLimp_QueryDisplayOutput( &state->displayOutput );
 	}
+	state->lastDisplayOutputQueryFrame = state->frames;
+	GLX_PostProcess_RecordDisplayOutputCvarCounts( state );
 }
 
 static rendererOutputRequest_t GLX_PostProcess_OutputRequestForMode( int mode )
@@ -152,6 +193,50 @@ static OutputTransfer GLX_PostProcess_OutputTransferForBackend( rendererOutputBa
 	}
 }
 
+static OutputPrimaries GLX_PostProcess_OutputPrimariesForBackend( rendererOutputBackend_t backend )
+{
+	switch ( backend ) {
+	case ROUTPUT_BACKEND_HDR10_PQ:
+		return OutputPrimaries::Bt2020;
+	case ROUTPUT_BACKEND_MACOS_EDR:
+		return OutputPrimaries::DisplayP3;
+	case ROUTPUT_BACKEND_LINUX_EXPERIMENTAL_HDR:
+		return OutputPrimaries::Unknown;
+	case ROUTPUT_BACKEND_WINDOWS_SCRGB:
+	case ROUTPUT_BACKEND_SDR_SRGB:
+	default:
+		return OutputPrimaries::SrgbBt709;
+	}
+}
+
+static GamutMapMode GLX_PostProcess_GamutMapForBackend( rendererOutputBackend_t backend )
+{
+	switch ( backend ) {
+	case ROUTPUT_BACKEND_HDR10_PQ:
+	case ROUTPUT_BACKEND_MACOS_EDR:
+		return GamutMapMode::CompressToOutput;
+	case ROUTPUT_BACKEND_LINUX_EXPERIMENTAL_HDR:
+		return GamutMapMode::None;
+	case ROUTPUT_BACKEND_WINDOWS_SCRGB:
+	case ROUTPUT_BACKEND_SDR_SRGB:
+	default:
+		return GamutMapMode::None;
+	}
+}
+
+static int GLX_PostProcess_RequestedHdrPrecisionMode( const PostProcessState *state )
+{
+	const int precision = ( state && state->r_hdrPrecision ) ? state->r_hdrPrecision->integer : 0;
+
+	if ( precision == -1 || precision == 0 || precision == 8 || precision == 16 ) {
+		return precision;
+	}
+	if ( state && state->r_hdr && state->r_hdr->integer < 0 ) {
+		return -1;
+	}
+	return 0;
+}
+
 static int GLX_PostProcess_HdrPrecisionMode( const PostProcessState *state, int hdrMode )
 {
 	const int precision = ( state && state->r_hdrPrecision ) ? state->r_hdrPrecision->integer : 0;
@@ -166,6 +251,30 @@ static int GLX_PostProcess_HdrPrecisionMode( const PostProcessState *state, int 
 		return -1;
 	}
 	return 8;
+}
+
+static qboolean GLX_PostProcess_ColorGradeUsesLut( ColorGradeMode grade )
+{
+	return ( grade == ColorGradeMode::Lut3D ||
+		grade == ColorGradeMode::LiftGammaGainLut3D ) ? qtrue : qfalse;
+}
+
+static void GLX_PostProcess_InvalidateColorGradeLutIfModified( PostProcessState *state )
+{
+	int modificationCount;
+
+	if ( !state || !state->r_colorGradeLUT ) {
+		return;
+	}
+
+	modificationCount = state->r_colorGradeLUT->modificationCount;
+	if ( modificationCount != state->colorGradeLutModificationCount ) {
+		state->colorGradeLutKnown = qfalse;
+		state->colorGradeLutActive = qfalse;
+		state->colorGradeLutSize = 0;
+		state->colorGradeLutScale = 4.0f;
+		state->colorGradeLutModificationCount = modificationCount;
+	}
 }
 
 static void GLX_PostProcess_ParseVec3Cvar( const cvar_t *cvar, float fallback0,
@@ -233,6 +342,9 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 		sceneLinear, outputRequest );
 	const qboolean outputHardwareActive = ( sceneLinear &&
 		selectedBackend != ROUTPUT_BACKEND_SDR_SRGB ) ? qtrue : qfalse;
+	qboolean gradeUsesLut;
+
+	GLX_PostProcess_InvalidateColorGradeLutIfModified( state );
 
 	if ( maxOutput < paperWhite ) {
 		maxOutput = paperWhite;
@@ -256,6 +368,10 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 	output.sceneColorSpace = sceneLinear ? SceneColorSpace::SceneLinear : SceneColorSpace::DisplayReferredSdr;
 	output.toneMap = GLX_PostProcess_ToneMapOperatorForMode( toneMapMode );
 	output.grade = GLX_PostProcess_ColorGradeForMode( gradeMode );
+	output.outputPrimaries = outputHardwareActive ?
+		GLX_PostProcess_OutputPrimariesForBackend( selectedBackend ) : OutputPrimaries::SrgbBt709;
+	output.gamutMap = outputHardwareActive ?
+		GLX_PostProcess_GamutMapForBackend( selectedBackend ) : GamutMapMode::None;
 	output.requestedBackend = outputRequest;
 	output.selectedBackend = selectedBackend;
 	output.nativeBackend = state ? state->displayOutput.nativeBackend : ROUTPUT_BACKEND_SDR_SRGB;
@@ -266,6 +382,7 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 	output.displayIccProfileAvailable = ( state && state->displayOutput.iccProfileAvailable ) ? qtrue : qfalse;
 	output.displayIccProfileBytes = state ? state->displayOutput.iccProfileBytes : 0;
 	output.hdrMode = sceneLinear ? 1 : 0;
+	output.requestedPrecisionMode = GLX_PostProcess_RequestedHdrPrecisionMode( state );
 	output.precisionMode = GLX_PostProcess_HdrPrecisionMode( state, hdrMode );
 	output.renderScaleMode = renderScaleMode;
 	output.exposure = exposure;
@@ -289,8 +406,19 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 		GLX_PostProcess_ClampFloat( state->r_colorGradeAdaptWhitePoint->value, 1000.0f, 40000.0f ) : 6504.0f;
 	output.lutScale = ( sceneLinear && state && state->r_colorGradeLUTScale ) ?
 		GLX_PostProcess_ClampFloat( state->r_colorGradeLUTScale->value, 1.0f, 32.0f ) : 4.0f;
-	output.lutSize = ( output.grade == ColorGradeMode::Lut3D ||
-		output.grade == ColorGradeMode::LiftGammaGainLut3D ) ? 16.0f : 0.0f;
+	gradeUsesLut = GLX_PostProcess_ColorGradeUsesLut( output.grade );
+	if ( gradeUsesLut ) {
+		if ( state && state->colorGradeLutKnown ) {
+			output.lutSize = ( state->colorGradeLutActive && state->colorGradeLutSize > 1 ) ?
+				static_cast<float>( state->colorGradeLutSize ) : 0.0f;
+			output.lutScale = ( state->colorGradeLutActive && state->colorGradeLutScale > 0.0f ) ?
+				state->colorGradeLutScale : 4.0f;
+		} else {
+			output.lutSize = 16.0f;
+		}
+	} else {
+		output.lutSize = 0.0f;
+	}
 	if ( output.grade == ColorGradeMode::None || output.grade == ColorGradeMode::Lut3D ) {
 		output.gradeLift[0] = output.gradeLift[1] = output.gradeLift[2] = 0.0f;
 		output.gradeGamma[0] = output.gradeGamma[1] = output.gradeGamma[2] = 1.0f;
@@ -446,7 +574,26 @@ static void GLX_PostProcess_CopyOutputDetails( PostProcessState *state )
 	state->lastDisplayHdrHeadroom = state->lastOutput.displayHdrHeadroom;
 	state->lastDisplaySdrWhiteNits = state->lastOutput.displaySdrWhiteNits;
 	state->lastDisplayMaxNits = state->lastOutput.displayMaxNits;
+	state->hdrPrecisionRequestedMode = state->lastOutput.requestedPrecisionMode;
 	GLX_PostProcess_UpdateOutputContract( state );
+}
+
+static qboolean GLX_PostProcess_ShouldRefreshDisplayOutput( const PostProcessState *state )
+{
+	if ( !state ) {
+		return qfalse;
+	}
+	if ( state->frames <= 1u ) {
+		return qtrue;
+	}
+	if ( GLX_PostProcess_DisplayOutputCvarsChanged( state ) ) {
+		return qtrue;
+	}
+	if ( state->frames - state->lastDisplayOutputQueryFrame >=
+		GLX_POSTPROCESS_DISPLAY_QUERY_INTERVAL_FRAMES ) {
+		return qtrue;
+	}
+	return qfalse;
 }
 
 const char *GLX_PostProcess_ResultName( int result )
@@ -564,10 +711,10 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 		"Display/output maximum luminance in nits for tone scale and HDR metadata." );
 	state->r_outputBackend = RI().Cvar_Get( "r_outputBackend", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	RI().Cvar_SetDescription( state->r_outputBackend,
-		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR." );
+		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR telemetry/prototype." );
 	state->r_outputAllowExperimentalLinuxHDR = RI().Cvar_Get( "r_outputAllowExperimentalLinuxHDR", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	RI().Cvar_SetDescription( state->r_outputAllowExperimentalLinuxHDR,
-		"Allow Linux HDR output only when SDL reports HDR headroom and an explicit compositor/protocol path." );
+		"Allow Linux HDR telemetry/prototype output only when SDL reports HDR headroom and an explicit compositor/protocol path." );
 	state->r_bloom_threshold = RI().Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
 	state->r_bloom_threshold_mode = RI().Cvar_Get( "r_bloom_threshold_mode", "0", CVAR_ARCHIVE_ND );
 	state->r_bloom_soft_knee = RI().Cvar_Get( "r_bloom_soft_knee", "0.0", CVAR_ARCHIVE_ND );
@@ -716,7 +863,7 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	state->lastGreyscale = greyscale;
 	state->textureSrgbDecode = ( state->r_srgbTextures && state->r_srgbTextures->integer &&
 		state->textureSrgbAvailable && hdrMode > 0 ) ? qtrue : qfalse;
-	if ( state->frames == 1 || ( state->frames % 120u ) == 0u ) {
+	if ( GLX_PostProcess_ShouldRefreshDisplayOutput( state ) ) {
 		GLX_PostProcess_QueryDisplayOutput( state );
 	}
 	state->lastOutput = GLX_PostProcess_MakeOutputTransform( state,
@@ -725,7 +872,6 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	state->toneMapMode = static_cast<int>( state->lastOutput.toneMap );
 	state->bloomThresholdMode = state->r_bloom_threshold_mode ? state->r_bloom_threshold_mode->integer : 0;
 	GLX_PostProcess_CopyOutputDetails( state );
-	GLX_PostProcess_PrintColorFrameDump( state );
 
 	if ( minimized ) {
 		state->minimizedFrames++;
@@ -775,20 +921,49 @@ void GLX_PostProcess_RecordPostOutputPlan( PostProcessState *state, const PostOu
 	state->postOutputPlanFrames++;
 	state->postOutputPlanNodes += static_cast<unsigned int>( plan.nodeCount > 0 ? plan.nodeCount : 0 );
 	state->postOutputPlanOutputs += plan.outputTransformPresent ? 1u : 0u;
+	state->postOutputExecutableNodes += static_cast<unsigned int>(
+		plan.executableNodeCount > 0 ? plan.executableNodeCount : 0 );
+	state->postOutputExecutableOutputs += plan.outputTransformExecutable ? 1u : 0u;
 	state->lastPostOutputNodeCount = static_cast<unsigned int>( plan.nodeCount > 0 ? plan.nodeCount : 0 );
 	state->lastPostOutputOutputCount = plan.outputTransformPresent ? 1u : 0u;
+	state->lastPostOutputExecutableNodeCount = static_cast<unsigned int>(
+		plan.executableNodeCount > 0 ? plan.executableNodeCount : 0 );
+	state->lastPostOutputExecutableOutputCount = plan.outputTransformExecutable ? 1u : 0u;
 	state->lastPostOutputPlanHash = plan.hash;
 	state->lastPostOutputFallbackReasons = fallbackReasons;
 	state->lastPostOutputPredictedResult = plan.predictedResult;
 	state->lastPostOutputActualResult = GLX_POSTPROCESS_RESULT_NONE;
+	state->lastPostOutputExecutorImplemented = plan.executorImplemented;
+	if ( ( fallbackReasons & GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED ) != 0u ) {
+		state->postOutputImplementationFallbackFrames++;
+	}
 	state->lastPostOutputGlxOwned = ( plan.glxOwned && executorConsumed &&
-		fallbackReasons == GLX_POST_OUTPUT_FALLBACK_NONE ) ? qtrue : qfalse;
+		plan.executorImplemented && fallbackReasons == GLX_POST_OUTPUT_FALLBACK_NONE ) ? qtrue : qfalse;
 
 	if ( state->lastPostOutputGlxOwned ) {
 		state->postOutputOwnedFrames++;
 	} else {
 		state->postOutputFallbackFrames++;
 	}
+}
+
+void GLX_PostProcess_RecordPostShaderPlan( PostProcessState *state, const PostShaderPlan &plan )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->postShaderPlanFrames++;
+	if ( !plan.valid ) {
+		state->postShaderPlanInvalidFrames++;
+	}
+	state->lastPostShaderPlanValid = plan.valid;
+	state->lastPostShaderFeatureMask = plan.featureMask;
+	state->lastPostShaderPlanHash = plan.hash;
+	state->lastPostShaderTextureCount = static_cast<unsigned int>(
+		plan.textureCount > 0 ? plan.textureCount : 0 );
+	state->lastPostShaderUniformVec4Count = static_cast<unsigned int>(
+		plan.uniformVec4Count > 0 ? plan.uniformVec4Count : 0 );
 }
 
 void GLX_PostProcess_RecordFrameResult( PostProcessState *state, int result )
@@ -827,6 +1002,29 @@ void GLX_PostProcess_RecordFrameResult( PostProcessState *state, int result )
 		}
 		state->lastPostOutputGlxOwned = qfalse;
 		state->lastPostOutputFallbackReasons |= GLX_POST_OUTPUT_FALLBACK_RESULT_MISMATCH;
+	}
+
+	GLX_PostProcess_PrintColorFrameDump( state );
+}
+
+void GLX_PostProcess_RecordColorGradeLut( PostProcessState *state, qboolean active,
+	int size, float scale )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->colorGradeLutKnown = qtrue;
+	state->colorGradeLutActive = ( active && size > 1 ) ? qtrue : qfalse;
+	state->colorGradeLutSize = state->colorGradeLutActive ? size : 0;
+	state->colorGradeLutScale = state->colorGradeLutActive && scale > 0.0f ? scale : 4.0f;
+
+	if ( GLX_PostProcess_ColorGradeUsesLut( state->lastOutput.grade ) ) {
+		state->lastOutput.lutSize = state->colorGradeLutActive ?
+			static_cast<float>( state->colorGradeLutSize ) : 0.0f;
+		state->lastOutput.lutScale = state->colorGradeLutScale;
+		state->lastColorGradeLutSize = state->lastOutput.lutSize;
+		state->lastColorGradeLutScale = state->lastOutput.lutScale;
 	}
 }
 
@@ -1036,6 +1234,12 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		state.lastOutput.paperWhiteNits,
 		state.lastOutput.maxOutputNits );
 	RI().Printf( PRINT_ALL,
+		"  output colorimetry: primaries %s, gamut-map %s, precision requested %i resolved %i\n",
+		GLX_RenderIR_OutputPrimariesName( state.lastOutput.outputPrimaries ),
+		GLX_RenderIR_GamutMapName( state.lastOutput.gamutMap ),
+		state.lastOutput.requestedPrecisionMode,
+		state.lastOutput.precisionMode );
+	RI().Printf( PRINT_ALL,
 		"  output backend: request %s, selected %s, native %s, hardware %s, experimental %s, display-hdr %s, headroom %.2f, sdr-white %.0f nits, display-max %.0f nits, icc %s/%i, driver %s, display %s, reason: %s\n",
 		RendererOutputRequestName( state.lastOutput.requestedBackend ),
 		RendererOutputBackendName( state.lastOutput.selectedBackend ),
@@ -1085,17 +1289,29 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		state.gradedFrames, state.renderScaleFrames,
 		state.greyscaleFrames, state.windowAdjustedFrames, state.minimizedFrames );
 	RI().Printf( PRINT_ALL,
-		"  post/output plan: mode %s, frames %u owned/%u fallback, nodes %u last/%u total, outputs %u last/%u total, predicted %s, actual %s, fallback 0x%08x, plan hash 0x%08x, executor rejects %u, result mismatches %u\n",
+		"  post/output plan: mode %s, frames %u owned/%u fallback, nodes %u last/%u total, outputs %u last/%u total, executable nodes %u last/%u total, executable outputs %u last/%u total, predicted %s, actual %s, fallback 0x%08x, plan hash 0x%08x, implementation fallbacks %u, executor rejects %u, result mismatches %u\n",
 		GLX_PostProcess_PostOutputModeName( state.lastPostOutputGlxOwned ),
 		state.postOutputOwnedFrames, state.postOutputFallbackFrames,
 		state.lastPostOutputNodeCount, state.postOutputPlanNodes,
 		state.lastPostOutputOutputCount, state.postOutputPlanOutputs,
+		state.lastPostOutputExecutableNodeCount, state.postOutputExecutableNodes,
+		state.lastPostOutputExecutableOutputCount, state.postOutputExecutableOutputs,
 		GLX_PostProcess_ResultName( state.lastPostOutputPredictedResult ),
 		GLX_PostProcess_ResultName( state.lastPostOutputActualResult ),
 		state.lastPostOutputFallbackReasons,
 		state.lastPostOutputPlanHash,
+		state.postOutputImplementationFallbackFrames,
 		state.postOutputExecutorRejects,
 		state.postOutputResultMismatches );
+	RI().Printf( PRINT_ALL,
+		"  post shader plan: valid %s, features 0x%08x, hash 0x%08x, textures %u, uniforms %u, frames %u, invalid %u\n",
+		BoolName( state.lastPostShaderPlanValid ),
+		state.lastPostShaderFeatureMask,
+		state.lastPostShaderPlanHash,
+		state.lastPostShaderTextureCount,
+		state.lastPostShaderUniformVec4Count,
+		state.postShaderPlanFrames,
+		state.postShaderPlanInvalidFrames );
 	RI().Printf( PRINT_ALL,
 		"  bloom create: last %s, %u/%u ready, texture-unit failures %u, FBO failures %u\n",
 		GLX_PostProcess_BloomCreateResultName( state.lastBloomCreateResult ),

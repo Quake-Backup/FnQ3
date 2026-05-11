@@ -619,6 +619,8 @@ def locked_performance_sample(row: dict[str, object] | None = None) -> dict[str,
             "postOutputMode": "glx-owned",
             "postOutputPostNodes": 2,
             "postOutputOutputs": 1,
+            "postOutputExecutableNodes": 2,
+            "postOutputExecutableOutputs": 1,
             "postOutputLegacyFallback": 0,
             "postOutputPostHash": 0x10203,
             "postOutputOutputHash": 0x40506,
@@ -882,6 +884,8 @@ def ownership_proof_manifest(
     post_mode: str | None = "glx-owned",
     post_nodes: int = 2,
     outputs: int = 1,
+    executable_nodes: int | None = 2,
+    executable_outputs: int | None = 1,
     legacy_fallback: int = 0,
     post_hash: int = 1,
     output_hash: int = 1,
@@ -893,6 +897,18 @@ def ownership_proof_manifest(
         },
         "productTier": {
             "tier": tier,
+        },
+        "postShaderDirectFinal": {
+            "execute": 1,
+            "eligible": 1,
+            "bound": 1,
+            "reject": 0,
+            "candidates": 2,
+            "eligibleFrames": 2,
+            "attempts": 2,
+            "binds": 2,
+            "fallbacks": 0,
+            "rejects": 0,
         },
     }
     if modern_tier_diagnostics and tier == "GL3X":
@@ -932,6 +948,10 @@ def ownership_proof_manifest(
             "planHash": 0x090A0B0C,
             "fallbackMask": 0,
         }
+        if executable_nodes is not None:
+            metrics["postOutputOwnership"]["executableNodes"] = executable_nodes  # type: ignore[index]
+        if executable_outputs is not None:
+            metrics["postOutputOwnership"]["executableOutputs"] = executable_outputs  # type: ignore[index]
 
     manifest = {
         "runId": f"{platform_id}-glx-ownership",
@@ -1416,6 +1436,11 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         renderer_arb = (ROOT / "code" / "renderer" / "tr_arb.c").read_text(encoding="utf-8")
         vulkan_gamma = (ROOT / "code" / "renderervk" / "shaders" / "gamma.frag").read_text(encoding="utf-8")
         vulkan_backend = (ROOT / "code" / "renderervk" / "vk.c").read_text(encoding="utf-8")
+        glx_color_math = (ROOT / "code" / "rendererglx" / "glx_color_math.h").read_text(encoding="utf-8")
+        glx_post_output = (ROOT / "code" / "rendererglx" / "glx_post_output_reference.h").read_text(encoding="utf-8")
+        glx_post_shader_plan = (ROOT / "code" / "rendererglx" / "glx_post_shader_plan.h").read_text(encoding="utf-8")
+        glx_post_shader_source = (ROOT / "code" / "rendererglx" / "glx_post_shader_source.h").read_text(encoding="utf-8")
+        glx_post_shader = (ROOT / "code" / "rendererglx" / "glx_post_shader.cpp").read_text(encoding="utf-8")
         glx_ir = (ROOT / "code" / "rendererglx" / "glx_render_ir.h").read_text(encoding="utf-8")
         glx_module = (ROOT / "code" / "rendererglx" / "glx_module.cpp").read_text(encoding="utf-8")
         display_doc = (ROOT / "docs" / "DISPLAY.md").read_text(encoding="utf-8")
@@ -1433,11 +1458,56 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
             "sampleColorGradeLut",
         ):
             self.assertIn(text, vulkan_gamma)
+        for text in (
+            "GLX_ColorMath_SrgbToLinear",
+            "GLX_ColorMath_ToneMapAcesFitted",
+            "GLX_ColorMath_PqEncodeNits",
+            "GLX_ColorMath_LutAtlasSize",
+            "GLX_ColorMath_AdaptWhitePointBradford",
+            "GLX_ColorMath_BuildBradfordAdaptationMatrix",
+            "GLX_ColorMath_SampleLutAtlas",
+        ):
+            self.assertIn(text, glx_color_math)
+        for text in (
+            "GLX_PostOutputReference_Evaluate",
+            "GLX_PostOutputReference_ApplyColorGrade",
+            "GLX_PostOutputReference_EncodeHdr10Pq",
+            "OutputTransform",
+        ):
+            self.assertIn(text, glx_post_output)
+        for text in (
+            "GLX_PostShader_BuildPlan",
+            "GLX_POST_SHADER_FEATURE_LIFT_GAMMA_GAIN",
+            "GLX_POST_SHADER_FEATURE_ENCODE_HDR10_PQ",
+            "PostShaderPlan",
+        ):
+            self.assertIn(text, glx_post_shader_plan)
+        for text in (
+            "GLX_PostShaderSource_WriteFragment",
+            "glxToneMapAces",
+            "glxPqEncode",
+            "glxSampleLutAtlas",
+            "GLX_POST_SHADER_SOURCE_VERSION",
+        ):
+            self.assertIn(text, glx_post_shader_source)
+        for text in (
+            "GLX_PostShader_RecordPlan",
+            "GLX_PostShader_CacheProgram",
+            "GLX_PostShader_CreateProgram",
+            "GLX_ColorMath_BuildBradfordAdaptationMatrix",
+            "r_glxPostShaderCache",
+            "r_glxPostShaderExecute",
+            "GLX_PostShader_TryBindDirectFinal",
+        ):
+            self.assertIn(text, glx_post_shader)
         self.assertIn("vk_color_grade_lut_descriptor", vulkan_backend)
         self.assertIn("color_grade_mode", vulkan_backend)
         self.assertIn("LiftGammaGainLut3D", glx_ir)
+        self.assertIn("RecordColorGradeLut", glx_module)
         self.assertIn("PostNodeKind::Grade", glx_ir)
         self.assertIn("GLX_RenderIR_BuildPostOutputPlan", glx_module)
+        self.assertIn("TryBindPostShaderDirectFinal", glx_module)
+        self.assertIn("post shader cache", glx_module)
         for cvar in (
             "r_colorGrade",
             "r_colorGradeLift",
@@ -1477,7 +1547,9 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
             self.assertIn(text, sdl_glimp)
         self.assertIn("r_outputBackend", glx_postprocess)
         self.assertIn("outputHardwareActive", glx_ir)
+        self.assertIn("OutputPrimaries::Bt2020", glx_ir)
         self.assertIn("vk_output_request_wants_hdr10", vulkan_backend)
+        self.assertIn("precision-request", (ROOT / "code" / "rendererglx" / "glx_module.cpp").read_text(encoding="utf-8"))
         self.assertIn("output backend", glx_runtime_sweep.__dict__["GLX_OUTPUT_BACKEND_RE"].pattern)
         for cvar in ("r_outputBackend", "r_outputAllowExperimentalLinuxHDR"):
             self.assertIn(cvar, display_doc)
@@ -1527,6 +1599,14 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("MaterialParameterBlock", glx_ir)
         self.assertIn("PostOutputPlan", glx_ir)
         self.assertIn("GLX_POST_OUTPUT_FALLBACK_EXECUTOR_REJECT", glx_ir)
+        self.assertIn("GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED", glx_ir)
+        self.assertIn("GLX_RenderIR_PostNodeExecutorImplemented", glx_ir)
+        self.assertIn("executable nodes", glx_module)
+        self.assertIn("post shader plan", glx_module)
+        self.assertIn("GLX_PostProcess_RecordPostShaderPlan", glx_module)
+        self.assertIn("postShaderFeatures", SWEEP_PATH.read_text(encoding="utf-8"))
+        self.assertIn("postShaderDirectFinalBound", SWEEP_PATH.read_text(encoding="utf-8"))
+        self.assertIn("postOutputExecutableNodes", SWEEP_PATH.read_text(encoding="utf-8"))
         self.assertIn("GLX_RenderIR_HashMaterialParameterBlock", glx_ir)
         self.assertIn("GLX_RenderIR_HashPostNode", glx_ir)
         self.assertIn("GLX_RenderIR_HashOutputTransform", glx_ir)
@@ -1868,7 +1948,10 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         f"  GLx pass schedule: valid 9/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
                         "  pass schedule: invalid 0/00000000 none",
                         "  render IR products: passes 9, world packets 1, dynamic draws 2, materials 3, uploads 4, post nodes 1, outputs 1, rejects 0",
-                        "  post/output ownership: mode legacy-fallback, post nodes 1, outputs 1, legacy fallback yes, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000001",
+                        "  post/output ownership: mode legacy-fallback, post nodes 1, outputs 1, legacy fallback yes, executable nodes 0, executable outputs 0, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000001",
+                        "  post shader plan: valid yes, features 0x000000de, hash 0x0badcafe, textures 2, uniforms 12, frames 3, invalid 0",
+                        "  post shader cache: ready yes, programs 3/32, plans 4 valid/0 invalid, cache 2 hits/3 misses, compile 3 attempts/0 failures, link failures 0, source failures 0, source hash 0x12345678, program 99",
+                        "  post shader direct-final: execute no, eligible yes, bound no, reject 0x00000001, candidates 2, eligible frames 2, attempts 0, binds 0, fallbacks 2, rejects 2, program misses 0, uniform failures 0",
                         "  FBO: requested yes, ready yes, programs yes, framebuffer funcs yes, reason: FBO ready",
                         "  target: render 640x480, capture 640x480, window 640x480, format 0x881a (0x1908:0x140b)",
                         "  controls: scene-linear HDR yes, precision 16, renderScale 1, bloom 2, MSAA no, supersample no, adjusted window yes, greyscale 1.00",
@@ -1916,10 +1999,38 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(diagnostics["metrics"]["materialParameters"]["tcGen1"], 0)
             self.assertEqual(diagnostics["metrics"]["materialParameters"]["features"], 0)
             self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["legacyFallback"], 1)
+            self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["executableNodes"], 0)
+            self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["executableOutputs"], 0)
             self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["postHash"], 0x01020304)
             self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["outputHash"], 0x05060708)
             self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["planHash"], 0x090A0B0C)
             self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["fallbackMask"], 1)
+            self.assertEqual(diagnostics["metrics"]["postShaderPlan"]["valid"], 1)
+            self.assertEqual(diagnostics["metrics"]["postShaderPlan"]["features"], 0x000000DE)
+            self.assertEqual(diagnostics["metrics"]["postShaderPlan"]["hash"], 0x0BADCAFE)
+            self.assertEqual(diagnostics["metrics"]["postShaderPlan"]["textures"], 2)
+            self.assertEqual(diagnostics["metrics"]["postShaderPlan"]["uniforms"], 12)
+            self.assertEqual(diagnostics["metrics"]["postShaderPlan"]["frames"], 3)
+            self.assertEqual(diagnostics["metrics"]["postShaderPlan"]["invalidFrames"], 0)
+            self.assertEqual(diagnostics["metrics"]["postShaderCache"]["ready"], 1)
+            self.assertEqual(diagnostics["metrics"]["postShaderCache"]["programs"], 3)
+            self.assertEqual(diagnostics["metrics"]["postShaderCache"]["programLimit"], 32)
+            self.assertEqual(diagnostics["metrics"]["postShaderCache"]["validPlans"], 4)
+            self.assertEqual(diagnostics["metrics"]["postShaderCache"]["compileFailures"], 0)
+            self.assertEqual(diagnostics["metrics"]["postShaderCache"]["linkFailures"], 0)
+            self.assertEqual(diagnostics["metrics"]["postShaderCache"]["sourceFailures"], 0)
+            self.assertEqual(diagnostics["metrics"]["postShaderCache"]["sourceHash"], 0x12345678)
+            self.assertEqual(diagnostics["metrics"]["postShaderCache"]["program"], 99)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["execute"], 0)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["eligible"], 1)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["bound"], 0)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["reject"], 1)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["candidates"], 2)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["eligibleFrames"], 2)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["attempts"], 0)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["binds"], 0)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["fallbacks"], 2)
+            self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["rejects"], 2)
             stream_draw = diagnostics["metrics"]["streamDraw"]
             self.assertEqual(stream_draw["draws"], 1)
             self.assertEqual(stream_draw["dynamicLights"], 0)
@@ -2127,7 +2238,14 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(evidence["modernTierDiagnosticsOk"])
         self.assertTrue(evidence["modernPostOutput"])
         self.assertEqual(evidence["postOutputOwnership"]["modes"], ["glx-owned"])
+        self.assertTrue(evidence["postOutputOwnership"]["executableCountsFound"])
+        self.assertEqual(evidence["postOutputOwnership"]["executableNodes"], 2)
+        self.assertEqual(evidence["postOutputOwnership"]["executableOutputs"], 1)
         self.assertEqual(evidence["postOutputOwnership"]["fallbackMask"], 0)
+        self.assertTrue(evidence["postShaderDirectFinal"]["found"])
+        self.assertEqual(evidence["postShaderDirectFinal"]["bound"], 1)
+        self.assertEqual(evidence["postShaderDirectFinal"]["binds"], 2)
+        self.assertEqual(evidence["postShaderDirectFinal"]["reject"], 0)
         self.assertEqual(evidence["failures"], [])
 
     def test_ownership_proof_evidence_fails_on_delegation_and_missing_fingerprint(self) -> None:
@@ -4025,7 +4143,7 @@ class GlxPromotionTests(unittest.TestCase):
 
             self.assertEqual(proof["status"], "blocked")
             self.assertIn("windows-x64", failures)
-            self.assertIn("did not prove GLx-owned modern post/output", failures)
+            self.assertIn("did not prove executable GLx-owned modern post/output", failures)
 
     def test_ownership_proof_requires_modern_post_output_tier(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4094,7 +4212,10 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                         "glx: tier GL2X, batches 10, draws 20/300 idx, stream map-range/ready 1.25MB/2wraps/0rejects shadow 3, frames 4, backend queries 5, gpu 0.27 ms, static 6 batches/7 packets/8 surfaces/9 verts/10 indexes 2.50 MB, arena ready 3.75 MB",
                         f"glx: pass schedule valid 9/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
                         "pass schedule: invalid 0/00000000 none",
-                        "glx: post/output ownership mode glx-owned, post nodes 4, outputs 2, legacy fallback no, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000000",
+                        "glx: post/output ownership mode glx-owned, post nodes 4, outputs 2, legacy fallback no, executable nodes 4, executable outputs 2, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000000",
+                        "glx: post shader plan valid yes, features 0x00000d5e, hash 0x0badcafe, textures 2, uniforms 13, frames 4, invalid 0",
+                        "glx: post shader cache ready yes, programs 3/32, plans 4 valid/0 invalid, cache 2 hits/3 misses, compile 3 attempts/0 failures, link failures 0, source failures 0, source hash 0x12345678, program 99",
+                        "glx: post shader direct-final execute yes, eligible yes, bound yes, reject 0x00000000, candidates 4, eligible frames 4, attempts 4, binds 4, fallbacks 0, rejects 0, program misses 0, uniform failures 0",
                         "glx: material renderer on/ready programs 25, binds 12/13 attempts, switches 4, cache 5/6, failures 0 compile/0 link/0 precache/0 bind, labels 8",
                         "glx: material parameters blocks 12 invalid 0 hash 0x1234abcd, last sort 0 passes 1 features 0x0 flags 0x0 state 0x0",
                         "glx: postprocess fbo ready 640x480 capture 640x480 bloom 2, frames 3 final 2 prefinal 1 gamma 0/3, copies 4, msaa 5, ssaa 6, last bloom-final",
@@ -4104,6 +4225,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                         "frame features: 1 bloom-available, 1 scene-linear, 1 tone-mapped, 1 graded, 1 render-scale, 1 greyscale, 1 window-adjusted, 0 minimized",
                         "glx: color pipeline scene-linear precision 16 transfer hdr10-pq tone-map aces exposure 1.00 bloom-threshold 0.75/2 knee 0.50 grade lgg-lut3d paper-white 203 max 812",
                         "glx: color grade mode lgg-lut3d lift 0.01/0.02/0.03 gamma 1.10/1.00/0.95 gain 1.05/1.00/0.98 white-point 6504->6000 lut-size 16 lut-scale 4.00",
+                        "glx: output colorimetry primaries bt2020 gamut-map compress precision-request 0 precision-resolved 16",
                         "glx: color audit srgb-decode yes requested yes available yes framebuffer-srgb no requested yes available yes capture sdr-srgb target-float yes final-encode shader-srgb contract yes",
                         "glx: texture audit srgb 4 decode 4, linear 2 decode 0, data 2 decode 0, unknown 0 decode 0, missing-srgb-decode 0, unexpected-decode 0",
                         'glx: color-frame-json {"frame":1,"backend":"hdr10-pq","space":"scene-linear","transfer":"hdr10-pq","exposure":1.0000,"paperWhiteNits":203.0,"maxOutputNits":812.0,"srgbDecode":true,"framebufferSrgb":false,"internalFormat":"0x881a","textureFormat":"0x1908","textureType":"0x140b","sceneTargetFloat":true,"shaderSrgbEncode":true,"contractValid":true}',
@@ -4138,10 +4260,42 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["postOutputMode"], "glx-owned")
             self.assertEqual(performance["latest"]["postOutputPostNodes"], 4)
             self.assertEqual(performance["latest"]["postOutputOutputs"], 2)
+            self.assertEqual(performance["latest"]["postOutputExecutableNodes"], 4)
+            self.assertEqual(performance["latest"]["postOutputExecutableOutputs"], 2)
             self.assertEqual(performance["latest"]["postOutputPostHash"], 0x01020304)
             self.assertEqual(performance["latest"]["postOutputOutputHash"], 0x05060708)
             self.assertEqual(performance["latest"]["postOutputPlanHash"], 0x090A0B0C)
             self.assertEqual(performance["latest"]["postOutputFallbackMask"], 0)
+            self.assertEqual(performance["latest"]["postShaderPlanValid"], 1)
+            self.assertEqual(performance["latest"]["postShaderFeatures"], 0x00000D5E)
+            self.assertEqual(performance["latest"]["postShaderHash"], 0x0BADCAFE)
+            self.assertEqual(performance["latest"]["postShaderTextures"], 2)
+            self.assertEqual(performance["latest"]["postShaderUniforms"], 13)
+            self.assertEqual(performance["latest"]["postShaderFrames"], 4)
+            self.assertEqual(performance["latest"]["postShaderInvalidFrames"], 0)
+            self.assertEqual(performance["latest"]["postShaderCacheReady"], 1)
+            self.assertEqual(performance["latest"]["postShaderPrograms"], 3)
+            self.assertEqual(performance["latest"]["postShaderProgramLimit"], 32)
+            self.assertEqual(performance["latest"]["postShaderValidPlans"], 4)
+            self.assertEqual(performance["latest"]["postShaderInvalidPlans"], 0)
+            self.assertEqual(performance["latest"]["postShaderCacheHits"], 2)
+            self.assertEqual(performance["latest"]["postShaderCacheMisses"], 3)
+            self.assertEqual(performance["latest"]["postShaderCompileAttempts"], 3)
+            self.assertEqual(performance["latest"]["postShaderCompileFailures"], 0)
+            self.assertEqual(performance["latest"]["postShaderLinkFailures"], 0)
+            self.assertEqual(performance["latest"]["postShaderSourceFailures"], 0)
+            self.assertEqual(performance["latest"]["postShaderSourceHash"], 0x12345678)
+            self.assertEqual(performance["latest"]["postShaderProgram"], 99)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalExecute"], 1)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalEligible"], 1)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalBound"], 1)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalReject"], 0)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalCandidates"], 4)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalEligibleFrames"], 4)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalAttempts"], 4)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalBinds"], 4)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalFallbacks"], 0)
+            self.assertEqual(performance["latest"]["postShaderDirectFinalRejects"], 0)
             self.assertEqual(performance["latest"]["materialPrograms"], 25)
             self.assertEqual(performance["latest"]["materialParameterBlocks"], 12)
             self.assertEqual(performance["latest"]["materialParameterHash"], 0x1234ABCD)
@@ -4162,6 +4316,10 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["colorGradeWhiteTarget"], 6000.0)
             self.assertEqual(performance["latest"]["colorGradeLutSize"], 16.0)
             self.assertEqual(performance["latest"]["colorGradeLutScale"], 4.0)
+            self.assertEqual(performance["latest"]["outputPrimaries"], "bt2020")
+            self.assertEqual(performance["latest"]["gamutMap"], "compress")
+            self.assertEqual(performance["latest"]["hdrPrecisionRequested"], 0)
+            self.assertEqual(performance["latest"]["hdrPrecisionResolved"], 16)
             self.assertEqual(performance["latest"]["paperWhiteNits"], 203.0)
             self.assertEqual(performance["latest"]["maxOutputNits"], 812.0)
             self.assertEqual(performance["latest"]["colorSrgbDecode"], 1)

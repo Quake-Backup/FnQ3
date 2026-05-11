@@ -666,6 +666,35 @@ static ID_INLINE unsigned int GLX_Material_UnsupportedReasonsForIR( const Materi
 	return reasons;
 }
 
+static ID_INLINE unsigned int GLX_Material_UnsupportedReasonsForParameterBlock(
+	const MaterialParameterBlock &block )
+{
+	unsigned int reasons = GLX_RenderIR_ValidateMaterialParameterBlock( block ) ?
+		GLX_MATERIAL_UNSUPPORTED_NONE : GLX_MATERIAL_UNSUPPORTED_INVALID_IR;
+
+	reasons |= GLX_Material_UnsupportedReasonsForInputsFull(
+		block.material.flags,
+		block.material.stateBits,
+		block.material.materialCombine,
+		block.object.rgbGen,
+		block.object.alphaGen,
+		block.object.rgbWaveFunc,
+		block.object.alphaWaveFunc,
+		block.object.tcGen0,
+		block.object.tcGen1,
+		block.material.texMods0,
+		block.material.texMods1,
+		block.material.texModTypes0,
+		block.material.texModTypes1,
+		block.material.texModSequence0,
+		block.material.texModSequence1,
+		block.material.texModWaveFuncs0,
+		block.material.texModWaveFuncs1,
+		block.material.fogAdjust,
+		block.material.fogPass );
+	return reasons;
+}
+
 static ID_INLINE qboolean GLX_Material_StageKeyForIR( const MaterialIR &material,
 	MaterialStageKey *key, unsigned int *unsupportedReasons )
 {
@@ -684,6 +713,30 @@ static ID_INLINE qboolean GLX_Material_StageKeyForIR( const MaterialIR &material
 		material.texModTypes1, material.texModSequence0, material.texModSequence1,
 		material.texModWaveFuncs0, material.texModWaveFuncs1, material.fogAdjust,
 		material.fogPass, key );
+}
+
+static ID_INLINE qboolean GLX_Material_StageKeyForParameterBlock(
+	const MaterialParameterBlock &block, MaterialStageKey *key,
+	unsigned int *unsupportedReasons )
+{
+	const unsigned int reasons = GLX_Material_UnsupportedReasonsForParameterBlock( block );
+
+	if ( unsupportedReasons ) {
+		*unsupportedReasons = reasons;
+	}
+	if ( reasons != GLX_MATERIAL_UNSUPPORTED_NONE ) {
+		return qfalse;
+	}
+	return GLX_Material_StageKeyForInputsFull( block.material.flags,
+		block.material.stateBits, block.material.materialCombine,
+		block.object.rgbGen, block.object.alphaGen,
+		block.object.rgbWaveFunc, block.object.alphaWaveFunc,
+		block.object.tcGen0, block.object.tcGen1,
+		block.material.texMods0, block.material.texMods1,
+		block.material.texModTypes0, block.material.texModTypes1,
+		block.material.texModSequence0, block.material.texModSequence1,
+		block.material.texModWaveFuncs0, block.material.texModWaveFuncs1,
+		block.material.fogAdjust, block.material.fogPass, key );
 }
 
 static ID_INLINE qboolean GLX_Material_StatePlanForTierAndIR( RenderProductTier tier,
@@ -708,6 +761,31 @@ static ID_INLINE qboolean GLX_Material_StatePlanForTierAndIR( RenderProductTier 
 	plan->tier = tier;
 	plan->programmable = policy.materialCompiler;
 	plan->sort = material.sort;
+	plan->stage = stageKey;
+	return qtrue;
+}
+
+static ID_INLINE qboolean GLX_Material_StatePlanForTierAndParameterBlock(
+	RenderProductTier tier, const MaterialParameterBlock &block,
+	MaterialStatePlan *plan, unsigned int *unsupportedReasons )
+{
+	MaterialStageKey stageKey {};
+	const TierExecutionPolicy policy = GLX_RenderIR_TierExecutionPolicy( tier );
+
+	if ( !plan || !GLX_Material_StageKeyForParameterBlock( block, &stageKey,
+		unsupportedReasons ) ) {
+		return qfalse;
+	}
+	if ( !GLX_RenderIR_TierConsumesProduct( tier, RenderProductKind::MaterialIR ) ) {
+		if ( unsupportedReasons ) {
+			*unsupportedReasons |= GLX_MATERIAL_UNSUPPORTED_FEATURE_SET;
+		}
+		return qfalse;
+	}
+
+	plan->tier = tier;
+	plan->programmable = policy.materialCompiler;
+	plan->sort = block.frame.sort;
 	plan->stage = stageKey;
 	return qtrue;
 }

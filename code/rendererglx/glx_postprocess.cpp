@@ -156,13 +156,16 @@ static int GLX_PostProcess_HdrPrecisionMode( const PostProcessState *state, int 
 {
 	const int precision = ( state && state->r_hdrPrecision ) ? state->r_hdrPrecision->integer : 0;
 
+	if ( hdrMode > 0 ) {
+		return 16;
+	}
 	if ( precision == -1 || precision == 8 || precision == 16 ) {
 		return precision;
 	}
 	if ( state && state->r_hdr && state->r_hdr->integer < 0 ) {
 		return -1;
 	}
-	return hdrMode > 0 ? 16 : 8;
+	return 8;
 }
 
 static void GLX_PostProcess_ParseVec3Cvar( const cvar_t *cvar, float fallback0,
@@ -234,9 +237,13 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 	if ( maxOutput < paperWhite ) {
 		maxOutput = paperWhite;
 	}
-	if ( outputHardwareActive && state && state->displayOutput.maxLuminanceNits > 0.0f ) {
-		maxOutput = GLX_PostProcess_ClampFloat( state->displayOutput.maxLuminanceNits,
-			paperWhite, maxOutput );
+	if ( outputHardwareActive ) {
+		if ( state && state->displayOutput.maxLuminanceNits > 0.0f ) {
+			maxOutput = GLX_PostProcess_ClampFloat( state->displayOutput.maxLuminanceNits,
+				paperWhite, maxOutput );
+		}
+	} else {
+		maxOutput = paperWhite;
 	}
 	if ( gradeMode < 0 ) {
 		gradeMode = 0;
@@ -294,6 +301,119 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 	return output;
 }
 
+static qboolean GLX_PostProcess_InternalFormatIsFloat( int internalFormat )
+{
+	return ( internalFormat == GL_RGBA16F || internalFormat == GL_RGB16F ||
+		internalFormat == GL_R11F_G11F_B10F ) ? qtrue : qfalse;
+}
+
+static void GLX_PostProcess_UpdateOutputContract( PostProcessState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->sceneTargetFloat = ( state->lastOutput.hdrMode &&
+		GLX_PostProcess_InternalFormatIsFloat( state->internalFormat ) ) ? qtrue : qfalse;
+	state->finalShaderSrgbEncode = ( state->lastOutput.sceneColorSpace == SceneColorSpace::SceneLinear &&
+		state->lastOutput.transfer == OutputTransfer::SdrSrgb ) ? qtrue : qfalse;
+	state->outputContractValid = qtrue;
+	if ( state->lastOutput.hdrMode && !state->sceneTargetFloat ) {
+		state->outputContractValid = qfalse;
+	}
+	if ( state->finalShaderSrgbEncode && state->framebufferSrgbEnabled ) {
+		state->outputContractValid = qfalse;
+	}
+}
+
+static unsigned int GLX_PostProcess_MissingSrgbDecode( const PostProcessState &state )
+{
+	const unsigned int srgb = state.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB];
+	const unsigned int decoded = state.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB];
+
+	if ( !( state.lastOutput.hdrMode && state.r_srgbTextures && state.r_srgbTextures->integer &&
+		state.textureSrgbAvailable ) ) {
+		return 0u;
+	}
+	return srgb > decoded ? srgb - decoded : 0u;
+}
+
+static void GLX_PostProcess_PrintTextureAuditLine( const PostProcessState &state,
+	const char *prefix )
+{
+	RI().Printf( PRINT_ALL,
+		"%stexture audit: srgb %u decode %u, linear %u decode %u, data %u decode %u, unknown %u decode %u, missing-srgb-decode %u, unexpected-decode %u\n",
+		prefix ? prefix : "",
+		state.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB],
+		state.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB],
+		state.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_LINEAR],
+		state.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_LINEAR],
+		state.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_DATA],
+		state.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_DATA],
+		state.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_UNKNOWN],
+		state.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_UNKNOWN],
+		GLX_PostProcess_MissingSrgbDecode( state ),
+		state.imageUnexpectedSrgbDecode );
+}
+
+static void GLX_PostProcess_PrintColorFrameDump( PostProcessState *state )
+{
+	int mode;
+
+	if ( !state || !state->r_glxColorPipelineDebug ) {
+		return;
+	}
+	mode = state->r_glxColorPipelineDebug->integer;
+	if ( mode <= 0 ) {
+		return;
+	}
+
+	state->colorPipelineDumpFrames++;
+	if ( mode == 1 ) {
+		if ( !state->colorPipelineCsvHeaderPrinted ) {
+			RI().Printf( PRINT_ALL,
+				"glx: color-frame-csv frame,backend,space,transfer,exposure,paperWhiteNits,maxOutputNits,srgbDecode,framebufferSrgb,internalFormat,textureFormat,textureType,sceneTargetFloat,shaderSrgbEncode,contractValid\n" );
+			state->colorPipelineCsvHeaderPrinted = qtrue;
+		}
+		RI().Printf( PRINT_ALL,
+			"glx: color-frame-csv %u,%s,%s,%s,%.4f,%.1f,%.1f,%s,%s,0x%04x,0x%04x,0x%04x,%s,%s,%s\n",
+			state->frames,
+			RendererOutputBackendName( state->lastOutput.selectedBackend ),
+			GLX_RenderIR_SceneColorSpaceName( state->lastOutput.sceneColorSpace ),
+			GLX_RenderIR_OutputTransferName( state->lastOutput.transfer ),
+			state->lastOutput.exposure,
+			state->lastOutput.paperWhiteNits,
+			state->lastOutput.maxOutputNits,
+			BoolName( state->textureSrgbDecode ),
+			BoolName( state->framebufferSrgbEnabled ),
+			state->internalFormat,
+			state->textureFormat,
+			state->textureType,
+			BoolName( state->sceneTargetFloat ),
+			BoolName( state->finalShaderSrgbEncode ),
+			BoolName( state->outputContractValid ) );
+		return;
+	}
+
+	RI().Printf( PRINT_ALL,
+		"glx: color-frame-json {\"frame\":%u,\"backend\":\"%s\",\"space\":\"%s\",\"transfer\":\"%s\",\"exposure\":%.4f,\"paperWhiteNits\":%.1f,\"maxOutputNits\":%.1f,\"srgbDecode\":%s,\"framebufferSrgb\":%s,\"internalFormat\":\"0x%04x\",\"textureFormat\":\"0x%04x\",\"textureType\":\"0x%04x\",\"sceneTargetFloat\":%s,\"shaderSrgbEncode\":%s,\"contractValid\":%s}\n",
+		state->frames,
+		RendererOutputBackendName( state->lastOutput.selectedBackend ),
+		GLX_RenderIR_SceneColorSpaceName( state->lastOutput.sceneColorSpace ),
+		GLX_RenderIR_OutputTransferName( state->lastOutput.transfer ),
+		state->lastOutput.exposure,
+		state->lastOutput.paperWhiteNits,
+		state->lastOutput.maxOutputNits,
+		state->textureSrgbDecode ? "true" : "false",
+		state->framebufferSrgbEnabled ? "true" : "false",
+		state->internalFormat,
+		state->textureFormat,
+		state->textureType,
+		state->sceneTargetFloat ? "true" : "false",
+		state->finalShaderSrgbEncode ? "true" : "false",
+		state->outputContractValid ? "true" : "false" );
+}
+
 static void GLX_PostProcess_CopyOutputDetails( PostProcessState *state )
 {
 	if ( !state ) {
@@ -326,6 +446,7 @@ static void GLX_PostProcess_CopyOutputDetails( PostProcessState *state )
 	state->lastDisplayHdrHeadroom = state->lastOutput.displayHdrHeadroom;
 	state->lastDisplaySdrWhiteNits = state->lastOutput.displaySdrWhiteNits;
 	state->lastDisplayMaxNits = state->lastOutput.displayMaxNits;
+	GLX_PostProcess_UpdateOutputContract( state );
 }
 
 const char *GLX_PostProcess_ResultName( int result )
@@ -374,6 +495,11 @@ const char *GLX_PostProcess_BloomResultName( int result )
 	}
 }
 
+const char *GLX_PostProcess_PostOutputModeName( qboolean glxOwned )
+{
+	return glxOwned ? "glx-owned" : "legacy-fallback";
+}
+
 void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 {
 	if ( !state ) {
@@ -384,12 +510,16 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxPostProcessDebug,
 		"Print GLx framebuffer, render-scale, gamma, and bloom parity diagnostics." );
+	state->r_glxColorPipelineDebug = RI().Cvar_Get( "r_glxColorPipelineDebug", "0",
+		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxColorPipelineDebug,
+		"Print per-frame GLx color-pipeline telemetry: 1 CSV, 2 JSON." );
 	state->r_hdr = RI().Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_hdr,
-		"Selects the scene-linear HDR render pipeline. Internal framebuffer storage precision is controlled by r_hdrPrecision." );
+		"Selects the scene-linear HDR render pipeline. r_hdr 1 requires floating-point scene framebuffer storage." );
 	state->r_hdrPrecision = RI().Cvar_Get( "r_hdrPrecision", "0", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_hdrPrecision,
-		"Internal FBO color precision: 0 automatic, -1 debug 4-bit, 8 force 8-bit, 16 force 16-bit." );
+		"Internal FBO color precision for SDR/debug paths: 0 automatic, -1 debug 4-bit, 8 force 8-bit, 16 force 16-bit. r_hdr 1 always uses RGBA16F." );
 	state->r_srgbTextures = RI().Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	RI().Cvar_SetDescription( state->r_srgbTextures,
 		"Use sRGB texture formats for authored color images in the scene-linear HDR pipeline." );
@@ -466,7 +596,8 @@ void GLX_PostProcess_OnOpenGLReady( PostProcessState *state, const Capabilities 
 	state->hdrPrecisionMode = state->lastOutput.precisionMode;
 	state->toneMapMode = static_cast<int>( state->lastOutput.toneMap );
 	GLX_PostProcess_CopyOutputDetails( state );
-	GLX_PostProcess_SetReason( state, "waiting for FBO initialization" );
+	GLX_PostProcess_SetReason( state,
+		state->fboReady ? "FBO ready" : "waiting for FBO initialization" );
 }
 
 void GLX_PostProcess_Shutdown( PostProcessState *state )
@@ -594,6 +725,7 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	state->toneMapMode = static_cast<int>( state->lastOutput.toneMap );
 	state->bloomThresholdMode = state->r_bloom_threshold_mode ? state->r_bloom_threshold_mode->integer : 0;
 	GLX_PostProcess_CopyOutputDetails( state );
+	GLX_PostProcess_PrintColorFrameDump( state );
 
 	if ( minimized ) {
 		state->minimizedFrames++;
@@ -625,12 +757,47 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	}
 }
 
+void GLX_PostProcess_RecordPostOutputPlan( PostProcessState *state, const PostOutputPlan &plan,
+	qboolean executorConsumed )
+{
+	unsigned int fallbackReasons;
+
+	if ( !state ) {
+		return;
+	}
+
+	fallbackReasons = plan.fallbackReasons;
+	if ( !executorConsumed ) {
+		fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_EXECUTOR_REJECT;
+		state->postOutputExecutorRejects++;
+	}
+
+	state->postOutputPlanFrames++;
+	state->postOutputPlanNodes += static_cast<unsigned int>( plan.nodeCount > 0 ? plan.nodeCount : 0 );
+	state->postOutputPlanOutputs += plan.outputTransformPresent ? 1u : 0u;
+	state->lastPostOutputNodeCount = static_cast<unsigned int>( plan.nodeCount > 0 ? plan.nodeCount : 0 );
+	state->lastPostOutputOutputCount = plan.outputTransformPresent ? 1u : 0u;
+	state->lastPostOutputPlanHash = plan.hash;
+	state->lastPostOutputFallbackReasons = fallbackReasons;
+	state->lastPostOutputPredictedResult = plan.predictedResult;
+	state->lastPostOutputActualResult = GLX_POSTPROCESS_RESULT_NONE;
+	state->lastPostOutputGlxOwned = ( plan.glxOwned && executorConsumed &&
+		fallbackReasons == GLX_POST_OUTPUT_FALLBACK_NONE ) ? qtrue : qfalse;
+
+	if ( state->lastPostOutputGlxOwned ) {
+		state->postOutputOwnedFrames++;
+	} else {
+		state->postOutputFallbackFrames++;
+	}
+}
+
 void GLX_PostProcess_RecordFrameResult( PostProcessState *state, int result )
 {
 	if ( !state ) {
 		return;
 	}
 
+	state->lastPostOutputActualResult = result;
 	state->lastResult = result;
 	switch ( result ) {
 	case GLX_POSTPROCESS_RESULT_BLOOM_FINAL:
@@ -647,6 +814,19 @@ void GLX_PostProcess_RecordFrameResult( PostProcessState *state, int result )
 		break;
 	default:
 		break;
+	}
+
+	if ( state->lastPostOutputPredictedResult != GLX_POSTPROCESS_RESULT_NONE &&
+		state->lastPostOutputPredictedResult != result ) {
+		state->postOutputResultMismatches++;
+		if ( state->lastPostOutputGlxOwned ) {
+			if ( state->postOutputOwnedFrames > 0u ) {
+				state->postOutputOwnedFrames--;
+			}
+			state->postOutputFallbackFrames++;
+		}
+		state->lastPostOutputGlxOwned = qfalse;
+		state->lastPostOutputFallbackReasons |= GLX_POST_OUTPUT_FALLBACK_RESULT_MISMATCH;
 	}
 }
 
@@ -797,6 +977,36 @@ void GLX_PostProcess_RecordBlit( PostProcessState *state, int kind, qboolean dep
 	}
 }
 
+void GLX_PostProcess_ResetImageColorAudit( PostProcessState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	std::memset( state->imageColorSpaceCounts, 0, sizeof( state->imageColorSpaceCounts ) );
+	std::memset( state->imageSrgbDecodeCounts, 0, sizeof( state->imageSrgbDecodeCounts ) );
+	state->imageUnexpectedSrgbDecode = 0u;
+}
+
+void GLX_PostProcess_RecordImageColorAudit( PostProcessState *state, int colorSpace,
+	qboolean srgbDecode )
+{
+	if ( !state ) {
+		return;
+	}
+
+	if ( colorSpace < 0 || colorSpace >= GLX_IMAGE_COLORSPACE_COUNT ) {
+		colorSpace = GLX_IMAGE_COLORSPACE_UNKNOWN;
+	}
+	state->imageColorSpaceCounts[colorSpace]++;
+	if ( srgbDecode ) {
+		state->imageSrgbDecodeCounts[colorSpace]++;
+		if ( colorSpace != GLX_IMAGE_COLORSPACE_SRGB ) {
+			state->imageUnexpectedSrgbDecode++;
+		}
+	}
+}
+
 void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 {
 	RI().Printf( PRINT_ALL, "\nGLx postprocess parity\n" );
@@ -850,13 +1060,17 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		state.lastWhitePointSourceKelvin, state.lastWhitePointTargetKelvin,
 		state.lastColorGradeLutSize, state.lastColorGradeLutScale );
 	RI().Printf( PRINT_ALL,
-		"  color audit: srgb-decode %s requested %s available %s, framebuffer-srgb %s requested %s available %s, capture sdr-srgb\n",
+		"  color audit: srgb-decode %s requested %s available %s, framebuffer-srgb %s requested %s available %s, capture sdr-srgb, target-float %s, final-encode %s, contract %s\n",
 		BoolName( state.textureSrgbDecode ),
 		BoolName( state.r_srgbTextures && state.r_srgbTextures->integer ? qtrue : qfalse ),
 		BoolName( state.textureSrgbAvailable ),
 		BoolName( state.framebufferSrgbEnabled ),
 		BoolName( state.r_framebufferSRGB && state.r_framebufferSRGB->integer ? qtrue : qfalse ),
-		BoolName( state.framebufferSrgbAvailable ) );
+		BoolName( state.framebufferSrgbAvailable ),
+		BoolName( state.sceneTargetFloat ),
+		state.finalShaderSrgbEncode ? "shader-srgb" : "none",
+		BoolName( state.outputContractValid ) );
+	GLX_PostProcess_PrintTextureAuditLine( state, "  " );
 	RI().Printf( PRINT_ALL,
 		"  FBO lifecycle: %u init attempts, %u ready, %u failed, %u disabled, %u shutdowns\n",
 		state.fboInitAttempts, state.fboInitSuccesses, state.fboInitFailures,
@@ -870,6 +1084,18 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		state.bloomAvailableFrames, state.sceneLinearFrames, state.toneMappedFrames,
 		state.gradedFrames, state.renderScaleFrames,
 		state.greyscaleFrames, state.windowAdjustedFrames, state.minimizedFrames );
+	RI().Printf( PRINT_ALL,
+		"  post/output plan: mode %s, frames %u owned/%u fallback, nodes %u last/%u total, outputs %u last/%u total, predicted %s, actual %s, fallback 0x%08x, plan hash 0x%08x, executor rejects %u, result mismatches %u\n",
+		GLX_PostProcess_PostOutputModeName( state.lastPostOutputGlxOwned ),
+		state.postOutputOwnedFrames, state.postOutputFallbackFrames,
+		state.lastPostOutputNodeCount, state.postOutputPlanNodes,
+		state.lastPostOutputOutputCount, state.postOutputPlanOutputs,
+		GLX_PostProcess_ResultName( state.lastPostOutputPredictedResult ),
+		GLX_PostProcess_ResultName( state.lastPostOutputActualResult ),
+		state.lastPostOutputFallbackReasons,
+		state.lastPostOutputPlanHash,
+		state.postOutputExecutorRejects,
+		state.postOutputResultMismatches );
 	RI().Printf( PRINT_ALL,
 		"  bloom create: last %s, %u/%u ready, texture-unit failures %u, FBO failures %u\n",
 		GLX_PostProcess_BloomCreateResultName( state.lastBloomCreateResult ),

@@ -16,7 +16,12 @@ from glx_runtime_sweep import (
     release_corpus_manifest,
     validate_release_proof_root,
 )
-from glx_promotion import PROMOTION_DOC_PATH, promotion_report
+from glx_promotion import (
+    PROMOTION_DOC_PATH,
+    ROLLBACK_PACKAGE_DOC_PATH,
+    check_rollback_package_metadata,
+    promotion_report,
+)
 
 
 DEFAULT_DOCS = [
@@ -29,6 +34,14 @@ DEFAULT_DOCS = [
     (
         PROMOTION_DOC_PATH,
         Path("docs") / "fnquake3" / "GLX_PROMOTION.md",
+    ),
+    (
+        ROLLBACK_PACKAGE_DOC_PATH,
+        Path("docs") / "fnquake3" / "GLX_ROLLBACK_PACKAGE.md",
+    ),
+    (
+        ROOT / "docs" / "fnquake3" / "GLX_VISUAL_DOSSIER.md",
+        Path("docs") / "fnquake3" / "GLX_VISUAL_DOSSIER.md",
     ),
     (
         ROOT / "docs" / "GLX.md",
@@ -54,6 +67,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Directory containing non-dry-run GLx runtime proof manifests. "
             "Required for tagged release packaging."
+        ),
+    )
+    parser.add_argument(
+        "--glx-rollback-metadata",
+        type=Path,
+        help=(
+            "Reviewed JSON metadata describing the promoted-release rollback "
+            "package that keeps the legacy OpenGL renderer available."
         ),
     )
     return parser.parse_args()
@@ -109,6 +130,95 @@ def resolve_glx_runtime_proof(args: argparse.Namespace) -> dict[str, object]:
     return proof
 
 
+def resolve_glx_rollback_package(
+    args: argparse.Namespace,
+    glx_promotion: dict[str, object],
+) -> dict[str, object]:
+    source_policy = glx_promotion.get("sourcePolicy", {})
+    promoted_source = (
+        isinstance(source_policy, dict)
+        and bool(source_policy.get("promoted"))
+    )
+    required = args.channel == "release" and promoted_source
+
+    if args.glx_rollback_metadata is None:
+        return {
+            "required": required,
+            "status": "missing" if required else "not-required",
+            "reason": (
+                "promoted GLx release packaging requires rollback metadata"
+                if required
+                else "current source tree has not promoted GLx as the renderer default"
+            ),
+        }
+
+    rollback = check_rollback_package_metadata(args.glx_rollback_metadata)
+    rollback["required"] = required
+    if rollback.get("status") != "passed":
+        blockers = rollback.get("blockers", [])
+        detail = "; ".join(str(item) for item in blockers[:8]) if isinstance(blockers, list) else ""
+        raise ValueError(
+            "GLx rollback package metadata validation failed"
+            + (f": {detail}" if detail else ".")
+        )
+    return rollback
+
+
+def attach_glx_rollback_archives(
+    glx_rollback_package: dict[str, object],
+    archives: list[dict[str, object]],
+) -> dict[str, object]:
+    if glx_rollback_package.get("status") != "passed":
+        return glx_rollback_package
+
+    archives_by_artifact_dir = {
+        str(archive.get("artifact_dir", "")): archive
+        for archive in archives
+    }
+    archives_by_name = {
+        str(archive.get("archive", "")): archive
+        for archive in archives
+    }
+    matched_archives: list[dict[str, object]] = []
+    blockers: list[str] = []
+
+    for package in glx_rollback_package.get("packages", []):
+        if not isinstance(package, dict):
+            continue
+        package_id = str(package.get("id", "rollback-package"))
+        archive = None
+        artifact_dir = str(package.get("artifactDir", ""))
+        archive_name = str(package.get("archive", ""))
+        if artifact_dir:
+            archive = archives_by_artifact_dir.get(artifact_dir)
+        if archive is None and archive_name:
+            archive = archives_by_name.get(archive_name)
+        if archive is None:
+            blockers.append(
+                f"{package_id} did not match a staged release archive."
+            )
+            continue
+        matched_archives.append(
+            {
+                "package": package_id,
+                "artifact_dir": archive.get("artifact_dir", ""),
+                "archive": archive.get("archive", ""),
+                "path": archive.get("path", ""),
+                "sha256": archive.get("sha256", ""),
+            }
+        )
+
+    if blockers:
+        raise ValueError(
+            "GLx rollback package archive validation failed: "
+            + "; ".join(blockers)
+        )
+
+    glx_rollback_package = dict(glx_rollback_package)
+    glx_rollback_package["matchedArchives"] = matched_archives
+    return glx_rollback_package
+
+
 def build_archives(args: argparse.Namespace) -> dict[str, object]:
     subprocess.run([sys.executable, str(ROOT / "scripts" / "generate_docs.py")], check=True)
 
@@ -120,7 +230,8 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         ref_name=args.ref_name,
     )
     glx_runtime_proof = resolve_glx_runtime_proof(args)
-    glx_promotion = promotion_report(args.glx_proof_root)
+    glx_promotion = promotion_report(args.glx_proof_root, args.glx_rollback_metadata)
+    glx_rollback_package = resolve_glx_rollback_package(args, glx_promotion)
     if glx_promotion.get("policyViolation"):
         raise ValueError(
             "GLx promotion policy failed: renderer defaults were promoted "
@@ -163,6 +274,8 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         )
         print(archive_path.relative_to(ROOT).as_posix())
 
+    glx_rollback_package = attach_glx_rollback_archives(glx_rollback_package, archives)
+
     manifest = {
         "project": meta["project_name"],
         "channel": meta["channel"],
@@ -176,6 +289,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         "glx_proof_corpus": release_corpus_manifest(),
         "glx_runtime_proof": glx_runtime_proof,
         "glx_promotion": glx_promotion,
+        "glx_rollback_package": glx_rollback_package,
         "archives": archives,
     }
 

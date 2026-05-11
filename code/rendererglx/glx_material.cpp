@@ -605,12 +605,16 @@ static void GLX_Material_ResetCounters( MaterialState *state )
 	state->contextlessDeletes = 0;
 	state->compiledMaterialPlans = 0;
 	state->unsupportedMaterialPlans = 0;
+	state->parameterBlocks = 0;
+	state->invalidParameterBlocks = 0;
 	state->unsupportedRequests = 0;
 	state->disabledSkips = 0;
 	state->notReadySkips = 0;
 	state->programLimitSkips = 0;
 	state->lastRequest = {};
 	state->lastMaterial = {};
+	state->lastParameterBlock = {};
+	state->lastParameterBlockHash = 0;
 	state->lastKey = { MaterialProgramMode::SingleTexture, GLX_MATERIAL_FEATURE_NONE };
 	state->lastStageKey = {};
 	state->lastUnsupportedReasons = GLX_MATERIAL_UNSUPPORTED_NONE;
@@ -1776,8 +1780,19 @@ qboolean GLX_Material_BindIR( MaterialState *state, const MaterialIR &material )
 
 	state->bindAttempts++;
 	state->lastMaterial = material;
+	state->lastParameterBlock = GLX_RenderIR_MakeMaterialParameterBlock( material );
+	state->lastParameterBlockHash =
+		GLX_RenderIR_HashMaterialParameterBlock( state->lastParameterBlock );
 	state->lastStageKey = {};
 	state->lastUnsupportedReasons = GLX_MATERIAL_UNSUPPORTED_NONE;
+	state->parameterBlocks++;
+
+	if ( !GLX_RenderIR_ValidateMaterialParameterBlock( state->lastParameterBlock ) ) {
+		state->invalidParameterBlocks++;
+		state->unsupportedRequests++;
+		GLX_Material_SetLastError( state, "invalid material parameter block" );
+		return qfalse;
+	}
 
 	if ( !state->r_glxMaterialRenderer || !state->r_glxMaterialRenderer->integer ) {
 		state->disabledSkips++;
@@ -1787,7 +1802,8 @@ qboolean GLX_Material_BindIR( MaterialState *state, const MaterialIR &material )
 		state->notReadySkips++;
 		return qfalse;
 	}
-	if ( !GLX_Material_StatePlanForTierAndIR( state->tier, material, &plan,
+	if ( !GLX_Material_StatePlanForTierAndParameterBlock( state->tier,
+		state->lastParameterBlock, &plan,
 		&unsupportedReasons ) ) {
 		state->lastUnsupportedReasons = unsupportedReasons;
 		state->unsupportedMaterialPlans++;
@@ -1898,6 +1914,21 @@ void GLX_Material_PrintInfo( const MaterialState &state )
 		state.compiledMaterialPlans, state.unsupportedMaterialPlans,
 		state.lastUnsupportedReasons,
 		GLX_Material_UnsupportedReasonName( state.lastUnsupportedReasons ) );
+	RI().Printf( PRINT_ALL, "  material parameter blocks: blocks %u invalid %u hash 0x%08x, last sort %i passes %i features 0x%x flags 0x%x state 0x%x object rgb %i:%i alpha %i:%i tc %i/%i\n",
+		state.parameterBlocks,
+		state.invalidParameterBlocks,
+		state.lastParameterBlockHash,
+		state.lastParameterBlock.frame.sort,
+		state.lastParameterBlock.frame.shaderStagePasses,
+		state.lastParameterBlock.frame.featureMask,
+		state.lastParameterBlock.material.flags,
+		state.lastParameterBlock.material.stateBits,
+		state.lastParameterBlock.object.rgbGen,
+		state.lastParameterBlock.object.rgbWaveFunc,
+		state.lastParameterBlock.object.alphaGen,
+		state.lastParameterBlock.object.alphaWaveFunc,
+		state.lastParameterBlock.object.tcGen0,
+		state.lastParameterBlock.object.tcGen1 );
 	RI().Printf( PRINT_ALL, "  material last key: %s, flags 0x%x, state 0x%x, rgb %i:%i alpha %i:%i tc %i/%i texmods %i/%i combine %i fog %s\n",
 		lastKeyName, state.lastMaterial.flags, state.lastMaterial.stateBits,
 		state.lastMaterial.rgbGen, state.lastMaterial.rgbWaveFunc,

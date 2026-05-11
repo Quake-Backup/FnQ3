@@ -72,10 +72,10 @@ These settings control the render path behind the display output.
   - `1`: Scene-linear HDR path with exposure, bloom thresholding, tone mapping, color grading, and the selected output transform.
   - `-1`: Legacy debug alias for `r_hdrPrecision -1` without enabling scene-linear HDR.
 - `r_hdrPrecision`: Controls the internal FBO color storage used by the display pipeline.
-  - `0`: Automatic. SDR uses 8-bit storage; `r_hdr 1` uses 16-bit storage.
+  - `0`: Automatic. SDR uses 8-bit normalized storage; `r_hdr 1` uses `RGBA16F` floating-point scene storage.
   - `-1`: Debug 4-bit storage for deliberate banding tests.
   - `8`: Force 8-bit storage.
-  - `16`: Force 16-bit storage.
+  - `16`: Force 16-bit normalized storage for SDR/debug testing; `r_hdr 1` still uses `RGBA16F`.
 - `r_srgbTextures`: Allows authored color textures to use hardware sRGB decode in the scene-linear `r_hdr 1` path. Lightmaps, fog, dynamic-light masks, and data textures remain linear/data.
 - `r_framebufferSRGB`: Allows `GL_FRAMEBUFFER_SRGB` only when the draw target itself is sRGB-encoded. The current OpenGL/GLx SDR final shader keeps it disabled because the shader already writes SDR sRGB output.
 - `r_outputBackend`: Selects the final hardware output backend.
@@ -86,6 +86,7 @@ These settings control the render path behind the display output.
   - `4`: Request macOS extended-linear-sRGB/EDR output when SDL reports EDR headroom.
   - `5`: Request Linux experimental HDR output, gated by `r_outputAllowExperimentalLinuxHDR` plus explicit SDL compositor/protocol HDR checks.
 - `r_outputAllowExperimentalLinuxHDR`: Allows the Linux experimental HDR backend only when the platform reports HDR headroom and an explicit compositor/protocol path. Leave this disabled unless you are validating a known HDR-capable Wayland path.
+- On SDR output, GLx treats paper white as the max output reference for the final transform. HDR-only max-luminance headroom is used only when a hardware HDR/EDR backend is actually active.
 - `r_ext_multisample`: Geometry-edge anti-aliasing. The practical values are `0`, `2`, `4`, `6`, and `8`.
 - `r_ext_supersample`: Enables supersample anti-aliasing.
 - `r_renderWidth` and `r_renderHeight`: Internal render resolution when `r_renderScale > 0`.

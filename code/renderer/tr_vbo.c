@@ -882,6 +882,12 @@ void VBO_PushData( int itemIndex, shaderCommands_t *input )
 static GLuint curr_index_bind = 0;
 static GLuint curr_vertex_bind = 0;
 
+static void VBO_BindBufferTracked( GLenum target, GLuint buffer )
+{
+	qglBindBufferARB( target, buffer );
+	GLX_CompatRecordStreamBufferBind( (unsigned int)target, (unsigned int)buffer );
+}
+
 int VBO_Active( void )
 {
 	return curr_vertex_bind;
@@ -904,7 +910,7 @@ static qboolean VBO_BindData( void )
 	}
 #endif
 
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, vertexBuffer );
+	VBO_BindBufferTracked( GL_ARRAY_BUFFER_ARB, vertexBuffer );
 	curr_vertex_bind = vertexBuffer;
 	return qtrue;
 }
@@ -916,7 +922,7 @@ static void VBO_BindIndex( qboolean enable )
 	{
 		if ( curr_index_bind )
 		{
-			qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, 0 );
+			VBO_BindBufferTracked( GL_ELEMENT_ARRAY_BUFFER_ARB, 0 );
 			curr_index_bind = 0;
 		}
 	}
@@ -931,7 +937,7 @@ static void VBO_BindIndex( qboolean enable )
 				indexBuffer = glxArenaBuffer;
 			}
 #endif
-			qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, indexBuffer );
+			VBO_BindBufferTracked( GL_ELEMENT_ARRAY_BUFFER_ARB, indexBuffer );
 			curr_index_bind = indexBuffer;
 		}
 	}
@@ -942,13 +948,13 @@ void VBO_UnBind( void )
 {
 	if ( curr_index_bind )
 	{
-		qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, 0 );
+		VBO_BindBufferTracked( GL_ELEMENT_ARRAY_BUFFER_ARB, 0 );
 		curr_index_bind = 0;
 	}
 
 	if ( curr_vertex_bind )
 	{
-		qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+		VBO_BindBufferTracked( GL_ARRAY_BUFFER_ARB, 0 );
 		curr_vertex_bind = 0;
 	}
 

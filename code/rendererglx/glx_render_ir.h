@@ -32,6 +32,7 @@ enum class FramePassKind {
 static constexpr int GLX_RENDER_IR_PASS_COUNT = 9;
 static constexpr int GLX_RENDER_IR_PRODUCT_COUNT = 7;
 static constexpr int GLX_RENDER_IR_PASS_SCHEDULE_TEXT_BYTES = 192;
+static constexpr int GLX_RENDER_IR_MAX_POST_OUTPUT_NODES = 6;
 
 struct FramePass {
 	FramePassKind kind;
@@ -92,6 +93,43 @@ struct MaterialIR {
 	int materialCombine;
 	qboolean fogPass;
 	int shaderStagePasses;
+};
+
+struct MaterialFrameParameters {
+	int sort;
+	int shaderStagePasses;
+	unsigned int featureMask;
+};
+
+struct MaterialObjectParameters {
+	int rgbGen;
+	int alphaGen;
+	int rgbWaveFunc;
+	int alphaWaveFunc;
+	int tcGen0;
+	int tcGen1;
+};
+
+struct MaterialStageParameters {
+	int flags;
+	unsigned int stateBits;
+	int texMods0;
+	int texMods1;
+	unsigned int texModTypes0;
+	unsigned int texModTypes1;
+	unsigned int texModSequence0;
+	unsigned int texModSequence1;
+	unsigned int texModWaveFuncs0;
+	unsigned int texModWaveFuncs1;
+	int fogAdjust;
+	int materialCombine;
+	qboolean fogPass;
+};
+
+struct MaterialParameterBlock {
+	MaterialFrameParameters frame;
+	MaterialObjectParameters object;
+	MaterialStageParameters material;
 };
 
 struct WorldPacket {
@@ -210,6 +248,48 @@ struct PostNode {
 	int outputTarget;
 	unsigned int flags;
 	OutputTransform output;
+};
+
+enum PostOutputFallbackReason : unsigned int {
+	GLX_POST_OUTPUT_FALLBACK_NONE = 0x00000000u,
+	GLX_POST_OUTPUT_FALLBACK_TIER = 0x00000001u,
+	GLX_POST_OUTPUT_FALLBACK_FBO_NOT_READY = 0x00000002u,
+	GLX_POST_OUTPUT_FALLBACK_PROGRAM_NOT_READY = 0x00000004u,
+	GLX_POST_OUTPUT_FALLBACK_FRAMEBUFFER_FNS = 0x00000008u,
+	GLX_POST_OUTPUT_FALLBACK_MINIMIZED = 0x00000010u,
+	GLX_POST_OUTPUT_FALLBACK_INVALID_OUTPUT = 0x00000020u,
+	GLX_POST_OUTPUT_FALLBACK_OUTPUT_CONTRACT = 0x00000040u,
+	GLX_POST_OUTPUT_FALLBACK_NO_NODES = 0x00000080u,
+	GLX_POST_OUTPUT_FALLBACK_EXECUTOR_REJECT = 0x00000100u,
+	GLX_POST_OUTPUT_FALLBACK_RESULT_MISMATCH = 0x00000200u
+};
+
+struct PostOutputPlanInputs {
+	RenderProductTier tier;
+	OutputTransform output;
+	qboolean fboReady;
+	qboolean programReady;
+	qboolean framebufferFnsReady;
+	qboolean outputContractValid;
+	qboolean bloomAvailable;
+	qboolean minimized;
+	qboolean windowAdjusted;
+	int screenshotMask;
+	int fboReadIndex;
+	int sequenceBase;
+	unsigned int flags;
+};
+
+struct PostOutputPlan {
+	PostNode nodes[GLX_RENDER_IR_MAX_POST_OUTPUT_NODES];
+	int nodeCount;
+	OutputTransform output;
+	qboolean outputValid;
+	qboolean outputTransformPresent;
+	qboolean glxOwned;
+	unsigned int fallbackReasons;
+	unsigned int hash;
+	int predictedResult;
 };
 
 struct FrameProducts {
@@ -656,6 +736,26 @@ static ID_INLINE unsigned int GLX_RenderIR_HashScheduleText( const char *text )
 	return hash;
 }
 
+static ID_INLINE unsigned int GLX_RenderIR_HashValue(
+	unsigned int hash, unsigned int value )
+{
+	hash ^= value;
+	hash *= 16777619u;
+	return hash;
+}
+
+static ID_INLINE unsigned int GLX_RenderIR_HashFloatValue(
+	unsigned int hash, float value )
+{
+	union {
+		float f;
+		unsigned int u;
+	} bits;
+
+	bits.f = value;
+	return GLX_RenderIR_HashValue( hash, bits.u );
+}
+
 static ID_INLINE unsigned int GLX_RenderIR_PassScheduleHash( const FramePass *passes,
 	int count )
 {
@@ -689,6 +789,167 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateUploadPlan( const UploadPlan &pla
 static ID_INLINE qboolean GLX_RenderIR_ValidateMaterial( const MaterialIR &material )
 {
 	return material.shaderStagePasses >= 0 ? qtrue : qfalse;
+}
+
+static ID_INLINE unsigned int GLX_RenderIR_MaterialFeatureMask( const MaterialIR &material )
+{
+	unsigned int mask = 0;
+
+	mask |= ( material.flags & ( GLX_STAGE_MULTITEXTURE | GLX_STAGE_DEPTH_FRAGMENT |
+		GLX_STAGE_LIGHTMAP | GLX_STAGE_TEXMOD | GLX_STAGE_ENVIRONMENT |
+		GLX_STAGE_DLIGHT_MAP | GLX_STAGE_SCREEN_MAP | GLX_STAGE_VIDEO_MAP |
+		GLX_STAGE_SHADOW_PASS | GLX_STAGE_BEAM_PASS | GLX_STAGE_POSTPROCESS_PASS ) );
+	if ( material.texMods0 > 0 || material.texMods1 > 0 ) {
+		mask |= GLX_STAGE_TEXMOD;
+	}
+	return mask;
+}
+
+static ID_INLINE MaterialParameterBlock GLX_RenderIR_MakeMaterialParameterBlock(
+	const MaterialIR &material )
+{
+	MaterialParameterBlock block {};
+
+	block.frame.sort = material.sort;
+	block.frame.shaderStagePasses = material.shaderStagePasses;
+	block.frame.featureMask = GLX_RenderIR_MaterialFeatureMask( material );
+	block.object.rgbGen = material.rgbGen;
+	block.object.alphaGen = material.alphaGen;
+	block.object.rgbWaveFunc = material.rgbWaveFunc;
+	block.object.alphaWaveFunc = material.alphaWaveFunc;
+	block.object.tcGen0 = material.tcGen0;
+	block.object.tcGen1 = material.tcGen1;
+	block.material.flags = material.flags;
+	block.material.stateBits = material.stateBits;
+	block.material.texMods0 = material.texMods0;
+	block.material.texMods1 = material.texMods1;
+	block.material.texModTypes0 = material.texModTypes0;
+	block.material.texModTypes1 = material.texModTypes1;
+	block.material.texModSequence0 = material.texModSequence0;
+	block.material.texModSequence1 = material.texModSequence1;
+	block.material.texModWaveFuncs0 = material.texModWaveFuncs0;
+	block.material.texModWaveFuncs1 = material.texModWaveFuncs1;
+	block.material.fogAdjust = material.fogAdjust;
+	block.material.materialCombine = material.materialCombine;
+	block.material.fogPass = material.fogPass;
+	return block;
+}
+
+static ID_INLINE qboolean GLX_RenderIR_ValidateMaterialParameterBlock(
+	const MaterialParameterBlock &block )
+{
+	return block.frame.shaderStagePasses >= 0 &&
+		block.material.texMods0 >= 0 &&
+		block.material.texMods1 >= 0 ? qtrue : qfalse;
+}
+
+static ID_INLINE unsigned int GLX_RenderIR_HashMaterialParameterValue(
+	unsigned int hash, unsigned int value )
+{
+	return GLX_RenderIR_HashValue( hash, value );
+}
+
+static ID_INLINE unsigned int GLX_RenderIR_HashMaterialParameterBlock(
+	const MaterialParameterBlock &block )
+{
+	unsigned int hash = 2166136261u;
+
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.frame.sort ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.frame.shaderStagePasses ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, block.frame.featureMask );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.object.rgbGen ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.object.alphaGen ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.object.rgbWaveFunc ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.object.alphaWaveFunc ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.object.tcGen0 ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.object.tcGen1 ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.material.flags ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, block.material.stateBits );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.material.texMods0 ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.material.texMods1 ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, block.material.texModTypes0 );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, block.material.texModTypes1 );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, block.material.texModSequence0 );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, block.material.texModSequence1 );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, block.material.texModWaveFuncs0 );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, block.material.texModWaveFuncs1 );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.material.fogAdjust ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, static_cast<unsigned int>( block.material.materialCombine ) );
+	hash = GLX_RenderIR_HashMaterialParameterValue( hash, block.material.fogPass ? 1u : 0u );
+	return hash ? hash : 1u;
+}
+
+static ID_INLINE unsigned int GLX_RenderIR_HashOutputTransform(
+	const OutputTransform &transform )
+{
+	unsigned int hash = 2166136261u;
+
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.transfer ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.sceneColorSpace ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.toneMap ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.grade ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.requestedBackend ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.selectedBackend ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.nativeBackend ) );
+	hash = GLX_RenderIR_HashValue( hash, transform.outputHardwareActive ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, transform.outputExperimental ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, transform.displayHdrEnabled ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, transform.displayHdrHeadroomValid ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, transform.displayIccProfileAvailable ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.displayIccProfileBytes ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.hdrMode ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.precisionMode ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( transform.renderScaleMode ) );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.exposure );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.bloomThreshold );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.bloomSoftKnee );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.paperWhiteNits );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.maxOutputNits );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.displayHdrHeadroom );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.displaySdrWhiteNits );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.displayMaxNits );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.greyscale );
+	for ( int i = 0; i < 3; i++ ) {
+		hash = GLX_RenderIR_HashFloatValue( hash, transform.gradeLift[i] );
+		hash = GLX_RenderIR_HashFloatValue( hash, transform.gradeGamma[i] );
+		hash = GLX_RenderIR_HashFloatValue( hash, transform.gradeGain[i] );
+	}
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.whitePointSourceKelvin );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.whitePointTargetKelvin );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.lutSize );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.lutScale );
+	return hash ? hash : 1u;
+}
+
+static ID_INLINE unsigned int GLX_RenderIR_HashPostNode( const PostNode &node )
+{
+	unsigned int hash = 2166136261u;
+
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( node.kind ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( node.pass ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( node.sequence ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( node.inputTarget ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( node.outputTarget ) );
+	hash = GLX_RenderIR_HashValue( hash, node.flags );
+	hash = GLX_RenderIR_HashValue( hash, GLX_RenderIR_HashOutputTransform( node.output ) );
+	return hash ? hash : 1u;
+}
+
+static ID_INLINE unsigned int GLX_RenderIR_HashPostOutputPlan( const PostOutputPlan &plan )
+{
+	unsigned int hash = 2166136261u;
+
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( plan.nodeCount ) );
+	hash = GLX_RenderIR_HashValue( hash, plan.outputValid ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, plan.outputTransformPresent ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, plan.glxOwned ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, plan.fallbackReasons );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( plan.predictedResult ) );
+	hash = GLX_RenderIR_HashValue( hash, GLX_RenderIR_HashOutputTransform( plan.output ) );
+	for ( int i = 0; i < plan.nodeCount && i < GLX_RENDER_IR_MAX_POST_OUTPUT_NODES; i++ ) {
+		hash = GLX_RenderIR_HashValue( hash, GLX_RenderIR_HashPostNode( plan.nodes[i] ) );
+	}
+	return hash ? hash : 1u;
 }
 
 static ID_INLINE qboolean GLX_RenderIR_ValidateWorldPacket( const WorldPacket &packet )
@@ -906,6 +1167,110 @@ static ID_INLINE qboolean GLX_RenderIR_TierSupportsPostNode( RenderProductTier t
 	default:
 		return qfalse;
 	}
+}
+
+static ID_INLINE qboolean GLX_RenderIR_ModernPostOutputTier( RenderProductTier tier )
+{
+	return tier == RenderProductTier::GL3X ||
+		tier == RenderProductTier::GL41 ||
+		tier == RenderProductTier::GL46 ? qtrue : qfalse;
+}
+
+static ID_INLINE void GLX_RenderIR_AddPostOutputNode( PostOutputPlan *plan,
+	PostNodeKind kind, int sequence, int inputTarget, int outputTarget,
+	unsigned int flags, const OutputTransform &output )
+{
+	if ( !plan || plan->nodeCount >= GLX_RENDER_IR_MAX_POST_OUTPUT_NODES ) {
+		if ( plan ) {
+			plan->fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_NO_NODES;
+		}
+		return;
+	}
+
+	PostNode &node = plan->nodes[plan->nodeCount++];
+	node.kind = kind;
+	node.pass = FramePassKind::PostProcess;
+	node.sequence = sequence;
+	node.inputTarget = inputTarget;
+	node.outputTarget = outputTarget;
+	node.flags = flags;
+	node.output = output;
+}
+
+static ID_INLINE PostOutputPlan GLX_RenderIR_BuildPostOutputPlan(
+	const PostOutputPlanInputs &inputs )
+{
+	PostOutputPlan plan {};
+	const qboolean directBackBuffer = ( inputs.screenshotMask == 0 &&
+		!inputs.windowAdjusted && !inputs.minimized ) ? qtrue : qfalse;
+	int sequence = inputs.sequenceBase < 0 ? 0 : inputs.sequenceBase;
+
+	plan.output = inputs.output;
+	plan.outputValid = GLX_RenderIR_ValidateOutputTransform( inputs.output );
+	plan.outputTransformPresent = plan.outputValid;
+	plan.predictedResult = GLX_POSTPROCESS_RESULT_NONE;
+
+	if ( !GLX_RenderIR_ModernPostOutputTier( inputs.tier ) ) {
+		plan.fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_TIER;
+	}
+	if ( !inputs.fboReady ) {
+		plan.fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_FBO_NOT_READY;
+	}
+	if ( !inputs.programReady ) {
+		plan.fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_PROGRAM_NOT_READY;
+	}
+	if ( !inputs.framebufferFnsReady ) {
+		plan.fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_FRAMEBUFFER_FNS;
+	}
+	if ( inputs.minimized ) {
+		plan.fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_MINIMIZED;
+	}
+	if ( !plan.outputValid ) {
+		plan.fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_INVALID_OUTPUT;
+	}
+	if ( !inputs.outputContractValid ) {
+		plan.fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_OUTPUT_CONTRACT;
+	}
+
+	if ( inputs.bloomAvailable ) {
+		const PostNodeKind bloomKind = directBackBuffer ? PostNodeKind::BloomFinal :
+			PostNodeKind::BloomPrefinal;
+		GLX_RenderIR_AddPostOutputNode( &plan, bloomKind, sequence++,
+			inputs.fboReadIndex, directBackBuffer ? 0 : 1, inputs.flags, inputs.output );
+	}
+
+	if ( plan.outputValid && inputs.output.grade != ColorGradeMode::None ) {
+		GLX_RenderIR_AddPostOutputNode( &plan, PostNodeKind::Grade, sequence++,
+			inputs.bloomAvailable ? 1 : inputs.fboReadIndex, 1, inputs.flags, inputs.output );
+	}
+	if ( plan.outputValid && inputs.output.toneMap != ToneMapOperator::Legacy ) {
+		GLX_RenderIR_AddPostOutputNode( &plan, PostNodeKind::ToneMap, sequence++,
+			inputs.bloomAvailable ? 1 : inputs.fboReadIndex, 1, inputs.flags, inputs.output );
+	}
+
+	if ( inputs.minimized ) {
+		plan.predictedResult = GLX_POSTPROCESS_RESULT_MINIMIZED;
+		GLX_RenderIR_AddPostOutputNode( &plan, PostNodeKind::Resolve, sequence++,
+			inputs.fboReadIndex, 1, inputs.flags, inputs.output );
+	} else if ( inputs.bloomAvailable && directBackBuffer ) {
+		plan.predictedResult = GLX_POSTPROCESS_RESULT_BLOOM_FINAL;
+	} else if ( directBackBuffer ) {
+		plan.predictedResult = GLX_POSTPROCESS_RESULT_GAMMA_DIRECT;
+		GLX_RenderIR_AddPostOutputNode( &plan, PostNodeKind::GammaDirect, sequence++,
+			inputs.fboReadIndex, 0, inputs.flags, inputs.output );
+	} else {
+		plan.predictedResult = GLX_POSTPROCESS_RESULT_GAMMA_BLIT;
+		GLX_RenderIR_AddPostOutputNode( &plan, PostNodeKind::GammaBlit, sequence++,
+			inputs.bloomAvailable ? 1 : inputs.fboReadIndex, 0, inputs.flags, inputs.output );
+	}
+
+	if ( plan.nodeCount <= 0 ) {
+		plan.fallbackReasons |= GLX_POST_OUTPUT_FALLBACK_NO_NODES;
+	}
+	plan.glxOwned = ( plan.fallbackReasons == GLX_POST_OUTPUT_FALLBACK_NONE &&
+		plan.outputTransformPresent && plan.nodeCount > 0 ) ? qtrue : qfalse;
+	plan.hash = GLX_RenderIR_HashPostOutputPlan( plan );
+	return plan;
 }
 
 static ID_INLINE UploadPlan GLX_RenderIR_MakeUploadPlan( UploadPlanKind kind,

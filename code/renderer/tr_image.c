@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 // tr_image.c
 #include "tr_local.h"
+#include "tr_glx_compat.h"
 
 static byte	s_intensitytable[256];
 static byte	s_gammatable[256];
@@ -574,6 +575,21 @@ static qboolean R_ImageWantsSrgbDecode( imageColorSpace_t colorSpace )
 #endif
 }
 
+static int R_ImageGLXColorSpace( imageColorSpace_t colorSpace )
+{
+	switch ( colorSpace ) {
+	case IMAGE_COLORSPACE_SRGB:
+		return GLX_IMAGE_COLORSPACE_SRGB;
+	case IMAGE_COLORSPACE_LINEAR:
+		return GLX_IMAGE_COLORSPACE_LINEAR;
+	case IMAGE_COLORSPACE_DATA:
+		return GLX_IMAGE_COLORSPACE_DATA;
+	case IMAGE_COLORSPACE_UNKNOWN:
+	default:
+		return GLX_IMAGE_COLORSPACE_UNKNOWN;
+	}
+}
+
 static GLint RawImage_GetInternalFormat( const byte *scan, int numPixels, qboolean lightMap, qboolean allowCompression, qboolean srgbDecode )
 {
 	GLint internalFormat;
@@ -863,6 +879,7 @@ image_t *R_CreateImage( const char *name, const char *name2, byte *pic, int widt
 		image->colorSpace = IMAGE_COLORSPACE_LINEAR;
 	}
 	image->srgbDecode = R_ImageWantsSrgbDecode( image->colorSpace );
+	GLX_CompatRecordImageColorAudit( R_ImageGLXColorSpace( image->colorSpace ), image->srgbDecode );
 
 	if ( ( flags & IMGFLAG_RGB ) && image->srgbDecode )
 		image->internalFormat = GL_SRGB8;
@@ -1523,6 +1540,7 @@ void R_InitImages( void ) {
 		s_gammatable_linear[i] = (unsigned char)i;
 
 	Com_Memset( hashTable, 0, sizeof( hashTable ) );
+	GLX_CompatResetImageColorAudit();
 
 	// build brightness translation tables
 	R_SetColorMappings();

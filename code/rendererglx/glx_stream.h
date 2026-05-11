@@ -44,10 +44,14 @@ struct StreamState {
 	void *mappedPtr;
 	void *frameSync;
 	GLuint buffer;
+	GLuint arrayBufferBinding;
+	GLuint elementArrayBufferBinding;
 	qboolean ready;
 	qboolean persistentMapped;
 	qboolean syncReady;
 	qboolean frameTouched;
+	qboolean arrayBufferBindingKnown;
+	qboolean elementArrayBufferBindingKnown;
 	unsigned int fallbackCount;
 	unsigned int allocationFailures;
 	unsigned int mapFailures;
@@ -66,6 +70,11 @@ struct StreamState {
 	unsigned int syncFailures;
 	unsigned int syncFenceSkips;
 	unsigned int selfTests;
+	unsigned int arrayBufferBindingQueries;
+	unsigned int arrayBufferBindingCacheHits;
+	unsigned int arrayBufferBindingRestores;
+	unsigned int arrayBufferBindingInvalidations;
+	unsigned int bufferBindingExternalUpdates;
 	unsigned int shadowTessUploads;
 	unsigned int shadowTessSkips;
 	unsigned int shadowTessFailures;
@@ -129,6 +138,12 @@ qboolean GLX_Stream_Upload( StreamState *state, StreamReservation *reservation, 
 qboolean GLX_Stream_UploadAt( StreamState *state, StreamReservation *reservation, size_t relativeOffset,
 	const void *data, size_t bytes );
 void GLX_Stream_Commit( StreamState *state, StreamReservation *reservation );
+GLuint GLX_Stream_BindArrayBufferCached( StreamState *state, GLuint buffer );
+void GLX_Stream_RestoreArrayBufferCached( StreamState *state, GLuint buffer );
+GLuint GLX_Stream_BindElementArrayBufferCached( StreamState *state, GLuint buffer );
+void GLX_Stream_RestoreElementArrayBufferCached( StreamState *state, GLuint buffer );
+void GLX_Stream_InvalidateArrayBufferCache( StreamState *state );
+void GLX_Stream_RecordExternalBufferBind( StreamState *state, unsigned int target, GLuint buffer );
 qboolean GLX_Stream_DrawEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawMultitextureEnabled( const StreamState &state );
 qboolean GLX_Stream_DrawFogEnabled( const StreamState &state );

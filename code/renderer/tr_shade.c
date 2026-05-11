@@ -97,8 +97,8 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 	int totalBytes;
 	int materialFlags;
 	unsigned int categoryMask;
-	GLint oldArrayBuffer = 0;
-	GLint oldElementArrayBuffer = 0;
+	unsigned int oldArrayBuffer = 0;
+	unsigned int oldElementArrayBuffer = 0;
 
 	if ( !GLX_CompatStreamDrawEnabled() ) {
 		return qfalse;
@@ -210,11 +210,8 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		}
 	}
 
-	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
-	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
-
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
+	oldElementArrayBuffer = GLX_CompatBindStreamElementArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), (const GLvoid *)(intptr_t)( reservation.offset ) );
@@ -253,8 +250,8 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		GLX_CompatUnbindMaterial();
 	}
 
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GLX_CompatRestoreStreamElementArrayBuffer( oldElementArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( 0 );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
 	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, input->svars.colors[0].rgba );
@@ -266,7 +263,7 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 		GL_ClientState( 1, CLS_NONE );
 		GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
 	}
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
 		totalBytes, indexBytes, tex1Bytes, multitexture, qfalse, pStage->depthFragment,
@@ -288,8 +285,8 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 	int indexOffset;
 	int totalBytes;
 	unsigned int categoryMask;
-	GLint oldArrayBuffer = 0;
-	GLint oldElementArrayBuffer = 0;
+	unsigned int oldArrayBuffer = 0;
+	unsigned int oldElementArrayBuffer = 0;
 
 	if ( !GLX_CompatStreamDrawEnabled() ) {
 		return qfalse;
@@ -358,11 +355,8 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 		}
 	}
 
-	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
-	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
-
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
+	oldElementArrayBuffer = GLX_CompatBindStreamElementArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
@@ -380,14 +374,14 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 		GLX_CompatUnbindMaterial();
 	}
 
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GLX_CompatRestoreStreamElementArrayBuffer( oldElementArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( 0 );
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
 	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, input->svars.colors[0].rgba );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoords[0] );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
 		totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, categoryMask, ok );
@@ -409,8 +403,8 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 	int totalBytes;
 	int materialFlags;
 	unsigned int categoryMask;
-	GLint oldArrayBuffer = 0;
-	GLint oldElementArrayBuffer = 0;
+	unsigned int oldArrayBuffer = 0;
+	unsigned int oldElementArrayBuffer = 0;
 
 	if ( !GLX_CompatStreamDrawEnabled() ) {
 		return qfalse;
@@ -475,11 +469,8 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 		return qfalse;
 	}
 
-	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
-	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
-
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
+	oldElementArrayBuffer = GLX_CompatBindStreamElementArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
@@ -493,14 +484,14 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 		ok = qfalse;
 	}
 
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GLX_CompatRestoreStreamElementArrayBuffer( oldElementArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( 0 );
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
 	qglColorPointer( 4, GL_FLOAT, 0, colors );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, texCoords );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
 		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );

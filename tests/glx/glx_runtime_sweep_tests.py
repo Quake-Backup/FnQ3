@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -13,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SWEEP_PATH = ROOT / "scripts" / "glx_runtime_sweep.py"
 PROMOTION_PATH = ROOT / "scripts" / "glx_promotion.py"
+RELEASE_PATH = ROOT / "scripts" / "release.py"
 FEATURE_MATRIX_PATH = ROOT / "docs" / "fnquake3" / "GLX_FEATURE_MATRIX.md"
 COLORSPACE_AUDIT_PATH = ROOT / "docs" / "fnquake3" / "GLX_COLORSPACE_AUDIT.md"
 FEATURE_MATRIX_ALLOWED_STATUSES = {"covered", "partially covered", "missing"}
@@ -88,6 +91,12 @@ glx_promotion = importlib.util.module_from_spec(promotion_spec)
 assert promotion_spec.loader is not None
 promotion_spec.loader.exec_module(glx_promotion)
 
+release_spec = importlib.util.spec_from_file_location("fnq3_release", RELEASE_PATH)
+assert release_spec is not None
+fnq3_release = importlib.util.module_from_spec(release_spec)
+assert release_spec.loader is not None
+release_spec.loader.exec_module(fnq3_release)
+
 
 def parse_runtime_glx_profiles() -> dict[str, dict[str, str]]:
     source = (ROOT / "code" / "rendererglx" / "glx_module.cpp").read_text(encoding="utf-8")
@@ -126,13 +135,612 @@ def locked_pass_schedule_latest() -> dict[str, object]:
     }
 
 
-def locked_performance_sample() -> dict[str, object]:
+def screenshot_histogram() -> dict[str, object]:
+    return {
+        "status": "passed",
+        "width": 1,
+        "height": 1,
+        "pixels": 1,
+        "meanLuma": 128.0,
+        "meanRed": 128.0,
+        "meanGreen": 128.0,
+        "meanBlue": 128.0,
+        "p01Luma": 128,
+        "p50Luma": 128,
+        "p99Luma": 128,
+        "p50Red": 128,
+        "p50Green": 128,
+        "p50Blue": 128,
+        "clippedBlackRatio": 0.0,
+        "clippedWhiteRatio": 0.0,
+    }
+
+
+def color_diagnostics_metrics() -> dict[str, object]:
+    return {
+        "colorPipeline": {
+            "space": "scene-linear",
+            "transfer": "sdr-srgb",
+            "toneMap": "aces",
+            "grade": "none",
+            "exposure": 1.0,
+            "paperWhite": 203.0,
+            "maxOutput": 203.0,
+        },
+        "colorAudit": {
+            "srgbDecode": 1,
+            "srgbRequested": 1,
+            "srgbAvailable": 1,
+            "framebufferSrgb": 0,
+            "framebufferRequested": 1,
+            "framebufferAvailable": 1,
+            "capture": "sdr-srgb",
+            "targetFloat": 1,
+            "finalEncode": "shader-srgb",
+            "contract": 1,
+        },
+        "outputBackend": {
+            "request": "auto",
+            "selected": "sdr-srgb",
+            "native": "sdr-srgb",
+            "hardware": 0,
+            "experimental": 0,
+            "displayHdr": 0,
+            "headroom": 1.0,
+            "sdrWhite": 203.0,
+            "displayMax": 203.0,
+            "icc": 0,
+            "iccBytes": 0,
+        },
+        "textureAudit": {
+            "srgb": 4,
+            "srgbDecode": 4,
+            "linear": 2,
+            "linearDecode": 0,
+            "data": 2,
+            "dataDecode": 0,
+            "unknown": 0,
+            "unknownDecode": 0,
+            "missingSrgbDecode": 0,
+            "unexpectedDecode": 0,
+        },
+        "targetFormat": {
+            "renderWidth": 512,
+            "renderHeight": 384,
+            "captureWidth": 512,
+            "captureHeight": 384,
+            "windowWidth": 640,
+            "windowHeight": 480,
+            "internalFormat": 0x881A,
+            "textureFormat": 0x1908,
+            "textureType": 0x140B,
+        },
+        "postprocess": {
+            "fboRequested": 1,
+            "fboReady": 1,
+            "fboPrograms": 1,
+            "fboFramebuffer": 1,
+            "fboAttempts": 1,
+            "fboFailed": 0,
+            "lastOutput": "gamma-blit",
+        },
+        "postprocessControls": {
+            "sceneLinearHdr": 1,
+            "precision": 16,
+            "renderScale": 1,
+            "bloom": 2,
+            "msaa": 0,
+            "supersample": 0,
+            "windowAdjusted": 1,
+            "greyscale": 1.0,
+        },
+        "postprocessFrames": {
+            "frames": 3,
+            "bloomFinal": 1,
+            "gammaDirect": 0,
+            "gammaBlit": 3,
+            "minimizedOutput": 0,
+            "screenshots": 1,
+        },
+        "postprocessFrameFeatures": {
+            "bloomAvailable": 1,
+            "sceneLinear": 1,
+            "toneMapped": 1,
+            "graded": 1,
+            "renderScale": 1,
+            "greyscale": 1,
+            "windowAdjusted": 1,
+            "minimized": 0,
+        },
+        "gl12Support": {
+            "lightmaps": 1,
+            "multitexture": 1,
+            "fog": 1,
+            "sprites": 1,
+            "beams": 1,
+            "dynamicLights": 1,
+            "stencilShadows": 1,
+            "screenshots": 1,
+            "demos": 1,
+        },
+        "gl2xSupport": {
+            "commonMaterials": 1,
+            "dynamicEntities": 1,
+            "lightmaps": 1,
+            "multitexture": 1,
+            "fog": 1,
+            "sprites": 1,
+            "beams": 1,
+            "screenshots": 1,
+            "demos": 1,
+        },
+        "staticWorld": {
+            "rendererEnabled": 1,
+            "arenaReady": 1,
+            "packetBatchEnabled": 1,
+            "packetBatchBatches": 4,
+            "indirectBufferReady": 1,
+            "glErrors": 0,
+            "failures": 0,
+        },
+        "streamDraw": {
+            "draws": 3,
+            "attempts": 3,
+            "indexes": 1024,
+            "multitexture": 2,
+            "fog": 2,
+            "depthFragment": 1,
+            "texMods": 2,
+            "environment": 1,
+            "dynamicLights": 0,
+            "screenMaps": 0,
+            "videoMaps": 0,
+            "shadows": 2,
+            "beams": 0,
+            "postprocess": 0,
+            "fallbacks": 0,
+            "skips": 0,
+        },
+        "streamCategory": {
+            "entityDraws": 2,
+            "entityAttempts": 2,
+            "entityObserved": 1,
+            "entityFallbacks": 0,
+            "particleDraws": 0,
+            "particleAttempts": 0,
+            "particleObserved": 0,
+            "particleFallbacks": 0,
+            "polyDraws": 0,
+            "polyAttempts": 0,
+            "polyObserved": 0,
+            "polyFallbacks": 0,
+            "markDraws": 0,
+            "markAttempts": 0,
+            "markObserved": 0,
+            "markFallbacks": 0,
+            "weaponDraws": 1,
+            "weaponAttempts": 1,
+            "weaponObserved": 1,
+            "weaponFallbacks": 0,
+            "uiDraws": 0,
+            "uiAttempts": 0,
+            "uiObserved": 0,
+            "uiFallbacks": 0,
+            "beamDraws": 0,
+            "beamAttempts": 0,
+            "beamObserved": 0,
+            "beamFallbacks": 0,
+            "specialDraws": 0,
+            "specialAttempts": 0,
+            "specialObserved": 0,
+            "specialFallbacks": 0,
+        },
+        "streamDrawSkip": {
+            "program": 0,
+        },
+        "materialParameters": {
+            "blocks": 4,
+            "invalid": 0,
+            "hash": 0x00F00D,
+            "sort": 0,
+            "passes": 2,
+            "features": 0x0C23,
+            "flags": 0x0C23,
+            "state": 0x30,
+            "rgbGen": 2,
+            "rgbWave": 0,
+            "alphaGen": 1,
+            "alphaWave": 0,
+            "tcGen0": 3,
+            "tcGen1": 2,
+        },
+        "material": {
+            "enabled": 1,
+            "ready": 1,
+            "attempts": 24,
+            "compile": 0,
+            "link": 0,
+            "precacheFailures": 0,
+            "precacheAttempts": 24,
+            "bind": 0,
+        },
+        "materialFallbacks": {
+            "unsupported": 0,
+            "disabled": 0,
+            "notReady": 0,
+            "full": 0,
+            "discarded": 0,
+        },
+        "materialCompilerPlans": {
+            "compiled": 12,
+            "unsupported": 0,
+            "lastUnsupported": 0,
+            "lastUnsupportedReason": "none",
+        },
+        "materialLastKey": {
+            "name": "test",
+            "flags": 0x0C23,
+            "state": 0x30,
+            "rgbGen": 2,
+            "rgbWave": 0,
+            "alphaGen": 1,
+            "alphaWave": 0,
+            "tcGen0": 3,
+            "tcGen1": 2,
+            "texMods0": 1,
+            "texMods1": 0,
+            "combine": 1,
+            "fogPass": 0,
+        },
+        "materialLanguage": {
+            "flags": 0x0C23,
+            "state": 0x30,
+            "texModMask0": 0x8,
+            "texModMask1": 0,
+            "texModSequence0": 0x3,
+            "texModSequence1": 0,
+            "texModWaveFuncs0": 0,
+            "texModWaveFuncs1": 0,
+            "fogAdjust": 0,
+        },
+        "streamMaterialGate": {
+            "multitextureEnabled": 1,
+            "multitextureAccepted": 2,
+            "multitextureRejected": 0,
+            "depthFragmentEnabled": 1,
+            "depthFragmentAccepted": 1,
+            "depthFragmentRejected": 0,
+            "texModEnabled": 1,
+            "texModAccepted": 2,
+            "texModRejected": 0,
+            "environmentEnabled": 1,
+            "environmentAccepted": 1,
+            "environmentRejected": 0,
+            "dynamicLightEnabled": 0,
+            "dynamicLightAccepted": 0,
+            "dynamicLightRejected": 0,
+            "screenMapEnabled": 0,
+            "screenMapAccepted": 0,
+            "screenMapRejected": 0,
+            "videoMapEnabled": 0,
+            "videoMapAccepted": 0,
+            "videoMapRejected": 0,
+        },
+        "colorFrame": {
+            "samples": 1,
+            "latest": {
+                "frame": 1,
+                "backend": "sdr-srgb",
+                "space": "scene-linear",
+                "transfer": "sdr-srgb",
+                "exposure": 1.0,
+                "paperWhiteNits": 203.0,
+                "maxOutputNits": 203.0,
+                "srgbDecode": True,
+                "framebufferSrgb": False,
+                "internalFormat": "0x881a",
+                "textureFormat": "0x1908",
+                "textureType": "0x140b",
+                "sceneTargetFloat": True,
+                "shaderSrgbEncode": True,
+                "contractValid": True,
+            },
+        },
+    }
+
+
+def stress_material_diagnostics_metrics() -> dict[str, object]:
+    metrics = copy.deepcopy(color_diagnostics_metrics())
+    material_flags = (
+        0x0C23
+        | glx_runtime_sweep.GLX_MATERIAL_STAGE_FLAGS["animatedImage"]
+        | glx_runtime_sweep.GLX_MATERIAL_STAGE_FLAGS["screenMap"]
+        | glx_runtime_sweep.GLX_MATERIAL_STAGE_FLAGS["videoMap"]
+    )
+    metrics["streamDraw"].update(  # type: ignore[index, union-attr]
+        {
+            "screenMaps": 1,
+            "videoMaps": 1,
+            "beams": 3,
+            "shadows": 2,
+        }
+    )
+    metrics["streamCategory"].update(  # type: ignore[index, union-attr]
+        {
+            "particleDraws": 2,
+            "particleAttempts": 2,
+            "particleObserved": 1,
+            "polyDraws": 2,
+            "polyAttempts": 2,
+            "polyObserved": 1,
+            "markDraws": 1,
+            "markAttempts": 1,
+            "markObserved": 1,
+            "beamDraws": 3,
+            "beamAttempts": 3,
+            "beamObserved": 1,
+        }
+    )
+    metrics["materialParameters"].update(  # type: ignore[index, union-attr]
+        {
+            "features": material_flags,
+            "flags": material_flags,
+        }
+    )
+    metrics["materialLastKey"].update(  # type: ignore[index, union-attr]
+        {
+            "flags": material_flags,
+        }
+    )
+    metrics["materialLanguage"].update(  # type: ignore[index, union-attr]
+        {
+            "flags": material_flags,
+        }
+    )
+    metrics["materialStageFlags"] = {
+        "multitexture": 2,
+        "depthFragment": 1,
+        "blend": 1,
+        "alphaTest": 1,
+        "depthWrite": 1,
+        "lightmap": 2,
+        "animatedImage": 1,
+        "videoMap": 1,
+        "screenMap": 1,
+        "dynamicLightMap": 0,
+        "texMod": 2,
+        "environment": 1,
+        "st0": 2,
+        "st1": 1,
+    }
+    metrics["streamMaterialGate"].update(  # type: ignore[index, union-attr]
+        {
+            "screenMapEnabled": 1,
+            "screenMapAccepted": 1,
+            "screenMapRejected": 0,
+            "videoMapEnabled": 1,
+            "videoMapAccepted": 1,
+            "videoMapRejected": 0,
+        }
+    )
+    return metrics
+
+
+def color_contracts() -> dict[str, object]:
+    return glx_runtime_sweep.color_contract_manifest()
+
+
+def color_diagnostics_metrics_for_row(row: dict[str, object]) -> dict[str, object]:
+    metrics = color_diagnostics_metrics()
+    expect = row.get("expect", {})
+    if isinstance(expect, dict):
+        metrics["colorPipeline"]["space"] = expect.get("space", "scene-linear")  # type: ignore[index]
+        metrics["colorPipeline"]["transfer"] = expect.get("transfer", "sdr-srgb")  # type: ignore[index]
+        metrics["colorPipeline"]["toneMap"] = expect.get("toneMap", "aces")  # type: ignore[index]
+        metrics["colorPipeline"]["exposure"] = expect.get("exposure", 1.0)  # type: ignore[index]
+        metrics["colorAudit"]["targetFloat"] = expect.get("sceneTargetFloat", 1)  # type: ignore[index]
+        metrics["colorAudit"]["finalEncode"] = expect.get("finalEncode", "shader-srgb")  # type: ignore[index]
+        metrics["colorAudit"]["contract"] = expect.get("contract", 1)  # type: ignore[index]
+        metrics["colorAudit"]["framebufferSrgb"] = expect.get("framebufferSrgb", 0)  # type: ignore[index]
+        metrics["colorAudit"]["srgbDecode"] = expect.get("srgbDecode", 1)  # type: ignore[index]
+        metrics["colorAudit"]["srgbRequested"] = expect.get("srgbRequested", 1)  # type: ignore[index]
+        metrics["outputBackend"]["request"] = expect.get("outputRequest", "sdr-srgb")  # type: ignore[index]
+        if "internalFormat" in expect:
+            metrics["targetFormat"]["internalFormat"] = int(str(expect["internalFormat"]), 16)  # type: ignore[index]
+        if "textureFormat" in expect:
+            metrics["targetFormat"]["textureFormat"] = int(str(expect["textureFormat"]), 16)  # type: ignore[index]
+        if "textureType" in expect:
+            metrics["targetFormat"]["textureType"] = int(str(expect["textureType"]), 16)  # type: ignore[index]
+        color_frame = metrics["colorFrame"]["latest"]  # type: ignore[index]
+        color_frame["space"] = metrics["colorPipeline"]["space"]  # type: ignore[index]
+        color_frame["transfer"] = metrics["colorPipeline"]["transfer"]  # type: ignore[index]
+        color_frame["exposure"] = metrics["colorPipeline"]["exposure"]  # type: ignore[index]
+        color_frame["sceneTargetFloat"] = bool(metrics["colorAudit"]["targetFloat"])  # type: ignore[index]
+        color_frame["shaderSrgbEncode"] = metrics["colorAudit"]["finalEncode"] == "shader-srgb"  # type: ignore[index]
+        color_frame["contractValid"] = bool(metrics["colorAudit"]["contract"])  # type: ignore[index]
+        color_frame["framebufferSrgb"] = bool(metrics["colorAudit"]["framebufferSrgb"])  # type: ignore[index]
+        color_frame["srgbDecode"] = bool(metrics["colorAudit"]["srgbDecode"])  # type: ignore[index]
+        color_frame["internalFormat"] = f"0x{int(metrics['targetFormat']['internalFormat']):04x}"  # type: ignore[index]
+        color_frame["textureFormat"] = f"0x{int(metrics['targetFormat']['textureFormat']):04x}"  # type: ignore[index]
+        color_frame["textureType"] = f"0x{int(metrics['targetFormat']['textureType']):04x}"  # type: ignore[index]
+    return metrics
+
+
+def locked_performance_sample(row: dict[str, object] | None = None) -> dict[str, object]:
+    latest = locked_pass_schedule_latest()
+    metrics = color_diagnostics_metrics_for_row(row) if row is not None else color_diagnostics_metrics()
+    color_pipeline = metrics["colorPipeline"]
+    color_audit = metrics["colorAudit"]
+    target_format = metrics["targetFormat"]
+    post_controls = metrics["postprocessControls"]
+    post_frames = metrics["postprocessFrames"]
+    post_features = metrics["postprocessFrameFeatures"]
+    color_frame = metrics["colorFrame"]["latest"]  # type: ignore[index]
+    latest.update(
+        {
+            "colorSpace": color_pipeline["space"],
+            "outputTransfer": color_pipeline["transfer"],
+            "toneMap": color_pipeline["toneMap"],
+            "toneMapExposure": 1.0,
+            "paperWhiteNits": 203.0,
+            "maxOutputNits": color_pipeline["maxOutput"],
+            "colorSrgbDecode": color_audit["srgbDecode"],
+            "colorSrgbRequested": color_audit["srgbRequested"],
+            "colorFramebufferSrgb": color_audit["framebufferSrgb"],
+            "colorSceneTargetFloat": color_audit["targetFloat"],
+            "colorFinalEncode": color_audit["finalEncode"],
+            "colorOutputContract": color_audit["contract"],
+            "outputBackendRequest": metrics["outputBackend"]["request"],  # type: ignore[index]
+            "outputBackendSelected": "sdr-srgb",
+            "textureAuditSrgb": 4,
+            "textureAuditSrgbDecode": 4,
+            "textureAuditMissingSrgbDecode": 0,
+            "textureAuditUnexpectedDecode": 0,
+            "targetInternalFormat": target_format["internalFormat"],
+            "targetTextureFormat": target_format["textureFormat"],
+            "targetTextureType": target_format["textureType"],
+            "targetRenderWidth": target_format["renderWidth"],
+            "targetRenderHeight": target_format["renderHeight"],
+            "targetCaptureWidth": target_format["captureWidth"],
+            "targetCaptureHeight": target_format["captureHeight"],
+            "targetWindowWidth": target_format["windowWidth"],
+            "targetWindowHeight": target_format["windowHeight"],
+            "fbo": "ready",
+            "postprocessRenderScaleMode": post_controls["renderScale"],
+            "postprocessGreyscale": post_controls["greyscale"],
+            "postprocessWindowAdjusted": post_controls["windowAdjusted"],
+            "postprocessFrames": post_frames["frames"],
+            "postprocessScreenshots": post_frames["screenshots"],
+            "postprocessMinimizedOutput": post_frames["minimizedOutput"],
+            "postprocessFeatureRenderScale": post_features["renderScale"],
+            "postprocessFeatureGreyscale": post_features["greyscale"],
+            "postprocessFeatureWindowAdjusted": post_features["windowAdjusted"],
+            "postprocessFeatureMinimized": post_features["minimized"],
+            "postOutputMode": "glx-owned",
+            "postOutputPostNodes": 2,
+            "postOutputOutputs": 1,
+            "postOutputLegacyFallback": 0,
+            "postOutputPostHash": 0x10203,
+            "postOutputOutputHash": 0x40506,
+            "postOutputPlanHash": 0x70809,
+            "postOutputFallbackMask": 0,
+            "colorFrameSamples": 1,
+            "colorFrameBackend": color_frame["backend"],
+            "colorFrameSpace": color_frame["space"],
+            "colorFrameTransfer": color_frame["transfer"],
+            "colorFrameExposure": color_frame["exposure"],
+            "colorFramePaperWhiteNits": color_frame["paperWhiteNits"],
+            "colorFrameMaxOutputNits": color_frame["maxOutputNits"],
+            "colorFrameSrgbDecode": 1 if color_frame["srgbDecode"] else 0,
+            "colorFrameFramebufferSrgb": 1 if color_frame["framebufferSrgb"] else 0,
+            "colorFrameInternalFormat": color_frame["internalFormat"],
+            "colorFrameTextureFormat": color_frame["textureFormat"],
+            "colorFrameTextureType": color_frame["textureType"],
+            "colorFrameSceneTargetFloat": 1 if color_frame["sceneTargetFloat"] else 0,
+            "colorFrameShaderSrgbEncode": 1 if color_frame["shaderSrgbEncode"] else 0,
+            "colorFrameContractValid": 1 if color_frame["contractValid"] else 0,
+            "staticDrawAttempts": 4,
+            "staticDrawIndexes": 2048,
+            "staticDrawFallbacks": 0,
+            "staticDrawPacketFull": 3,
+            "staticDrawPacketPartial": 1,
+            "staticDrawPacketMisses": 0,
+            "staticQueuePacketMisses": 0,
+            "staticPacketLookupMisses": 0,
+            "staticMdiErrors": 0,
+            "draws": 3,
+            "streamDrawAttempts": 3,
+            "streamDrawIndexes": 1024,
+            "streamDrawFog": 2,
+            "streamDrawMultitexture": 2,
+            "streamDrawDepthFragment": 1,
+            "streamDrawTexMods": 2,
+            "streamDrawEnvironment": 1,
+            "streamDrawDynamicLights": 0,
+            "streamDrawScreenMaps": 0,
+            "streamDrawVideoMaps": 0,
+            "streamDrawShadows": 2,
+            "streamDrawBeams": 0,
+            "streamDrawPostProcess": 0,
+            "streamDrawFallbacks": 0,
+            "streamDrawSkips": 0,
+            "streamCategoryEntityDraws": 2,
+            "streamCategoryEntityAttempts": 2,
+            "streamCategoryParticleDraws": 0,
+            "streamCategoryParticleAttempts": 0,
+            "streamCategoryPolyDraws": 0,
+            "streamCategoryPolyAttempts": 0,
+            "streamCategoryMarkDraws": 0,
+            "streamCategoryMarkAttempts": 0,
+            "streamCategoryWeaponDraws": 1,
+            "streamCategoryWeaponAttempts": 1,
+            "streamCategoryUiDraws": 0,
+            "streamCategoryUiAttempts": 0,
+            "streamCategoryBeamDraws": 0,
+            "streamCategoryBeamAttempts": 0,
+            "streamCategorySpecialDraws": 0,
+            "streamCategorySpecialAttempts": 0,
+            "materialRenderer": "enabled",
+            "materialReady": "ready",
+            "materialPrograms": 3,
+            "materialBinds": 4,
+            "materialBindAttempts": 4,
+            "materialSwitches": 2,
+            "materialCacheMisses": 1,
+            "materialCompileFailures": 0,
+            "materialLinkFailures": 0,
+            "materialPrecacheFailures": 0,
+            "materialBindFailures": 0,
+            "materialParameterBlocks": 4,
+            "materialParameterHash": 0x00F00D,
+            "materialInvalidParameterBlocks": 0,
+            "materialParameterFeatures": 0x0C23,
+            "materialParameterFlags": 0x0C23,
+            "materialParameterState": 0x30,
+            "materialParameterTcGen0": 3,
+            "materialParameterTcGen1": 2,
+        }
+    )
     return {
         "found": True,
         "sampleCount": 1,
-        "latest": locked_pass_schedule_latest(),
+        "latest": latest,
         "max": {},
     }
+
+
+def color_sweep_runs(gate: str) -> list[dict[str, object]]:
+    runs: list[dict[str, object]] = []
+    for row in glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX:
+        row = dict(row)
+        row_id = str(row["id"])
+        runs.append(
+            {
+                "type": "color-sweep",
+                "status": "passed",
+                "renderer": "glx",
+                "map": "q3dm1",
+                "colorSweepRow": row,
+                "screenshots": [
+                    {
+                        "name": f"color-{row_id}",
+                        "found": True,
+                        "baselineKey": f"glx-color-{row_id}-q3dm1",
+                        "baselineStatus": "passed" if gate == "rc-proof" else "not-compared",
+                        "comparison": {"status": "passed"} if gate == "rc-proof" else {},
+                        "histogram": screenshot_histogram(),
+                        "falseColor": {"status": "passed"},
+                    }
+                ],
+                "diagnostics": {
+                    "found": True,
+                    "failures": [],
+                    "metrics": color_diagnostics_metrics_for_row(row),
+                },
+                "performance": locked_performance_sample(row),
+            }
+        )
+    return runs
 
 
 def proof_corpus_for_gate(gate: str) -> dict[str, object]:
@@ -145,41 +753,72 @@ def proof_corpus_for_gate(gate: str) -> dict[str, object]:
 
 
 def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
+    maps = glx_runtime_sweep.corpus_targets(
+        glx_runtime_sweep.GLX_GATE_CORPUS_SCENES[gate],
+        "map",
+    )
+    demos = glx_runtime_sweep.corpus_targets(
+        glx_runtime_sweep.GLX_GATE_CORPUS_SCENES[gate],
+        "demo",
+    )
+    switch_sequence = ["opengl", "glx", "opengl", "glx"]
+    diagnostic_metrics = (
+        stress_material_diagnostics_metrics()
+        if gate == "rc-stress"
+        else color_diagnostics_metrics()
+    )
+    switch_screenshots = [
+        {
+            "name": f"{gate}-{platform_id}-map{map_index}-step{switch_index}-{renderer}",
+            "found": True,
+            "renderer": renderer,
+            "map": map_name,
+            "mapIndex": map_index,
+            "round": 1,
+            "switchStep": switch_index,
+            "baselineKey": (
+                f"{gate}-{platform_id}-{map_name}-round1-step{switch_index}-{renderer}"
+            ),
+            "baselineStatus": "passed" if gate == "rc-proof" else "not-compared",
+            "comparison": {"status": "passed"} if gate == "rc-proof" else {},
+            "histogram": screenshot_histogram(),
+        }
+        for map_index, map_name in enumerate(maps, start=1)
+        for switch_index, renderer in enumerate(switch_sequence, start=1)
+    ]
     manifest = {
         "runId": f"{platform_id}-{gate}",
         "createdUtc": "2026-05-10T12:00:00+00:00",
         "gate": gate,
         "dryRun": False,
         "proofPlatform": platform_id,
-        "maps": glx_runtime_sweep.corpus_targets(
-            glx_runtime_sweep.GLX_GATE_CORPUS_SCENES[gate],
-            "map",
-        ),
-        "demos": glx_runtime_sweep.corpus_targets(
-            glx_runtime_sweep.GLX_GATE_CORPUS_SCENES[gate],
-            "demo",
-        ),
+        "maps": maps,
+        "demos": demos,
         "renderers": ["opengl", "glx"],
+        "switchSequence": switch_sequence,
+        "switchRounds": 1,
         "proofCorpus": proof_corpus_for_gate(gate),
+        "colorContracts": color_contracts(),
         "performanceFailures": [],
         "runs": [
             {
                 "type": "switch-screenshots",
                 "status": "passed",
-                "screenshots": [
-                    {
-                        "name": "shot",
-                        "found": True,
-                        "baselineKey": f"{gate}-{platform_id}-shot",
-                        "baselineStatus": "passed" if gate == "rc-proof" else "not-compared",
-                        "comparison": {"status": "passed"} if gate == "rc-proof" else {},
-                    },
-                ],
-                "diagnostics": {"found": True, "failures": []},
+                "restartMode": "fast",
+                "vidRestartEquivalent": True,
+                "vidRestartPath": "CL_Vid_Restart(REF_KEEP_WINDOW)",
+                "screenshots": switch_screenshots,
+                "diagnostics": {
+                    "found": True,
+                    "failures": [],
+                    "metrics": diagnostic_metrics,
+                },
                 "performance": locked_performance_sample(),
             },
         ],
     }
+    if glx_runtime_sweep.RC_GATE_PRESETS[gate]["requirements"].get("require_glx_color_sweep"):
+        manifest["runs"].extend(color_sweep_runs(gate))
     for demo in manifest["demos"]:
         manifest["runs"].extend(
             [
@@ -209,11 +848,92 @@ def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
                 "performanceAggregate": {"sampleCount": 1, "latest": {}, "max": {}},
             }
         )
+    requirements = glx_runtime_sweep.RC_GATE_PRESETS[gate]["requirements"]
+    manifest["rendererSwitchEvidence"] = glx_runtime_sweep.renderer_switch_lifecycle_evidence(manifest)
+    if requirements.get("require_world_proof"):
+        manifest["worldProofEvidence"] = glx_runtime_sweep.world_proof_evidence(
+            manifest,
+            requirements,
+        )
+    if requirements.get("require_material_proof"):
+        manifest["materialProofEvidence"] = glx_runtime_sweep.material_proof_evidence(
+            manifest,
+            requirements,
+        )
+    if requirements.get("require_dynamic_proof"):
+        manifest["dynamicProofEvidence"] = glx_runtime_sweep.dynamic_proof_evidence(
+            manifest,
+            requirements,
+        )
+    if requirements.get("require_post_proof"):
+        manifest["postProofEvidence"] = glx_runtime_sweep.post_proof_evidence(
+            manifest,
+            requirements,
+        )
     return manifest
 
 
-def ownership_proof_manifest(platform_id: str, calls: int = 0, items: int = 0) -> dict[str, object]:
-    return {
+def ownership_proof_manifest(
+    platform_id: str,
+    calls: int = 0,
+    items: int = 0,
+    tier: str = "GL3X",
+    modern_tier_diagnostics: bool = True,
+    post_mode: str | None = "glx-owned",
+    post_nodes: int = 2,
+    outputs: int = 1,
+    legacy_fallback: int = 0,
+    post_hash: int = 1,
+    output_hash: int = 1,
+) -> dict[str, object]:
+    metrics: dict[str, object] = {
+        "ownership": {
+            "calls": calls,
+            "items": items,
+        },
+        "productTier": {
+            "tier": tier,
+        },
+    }
+    if modern_tier_diagnostics and tier == "GL3X":
+        metrics["gl3xExecutor"] = {
+            "active": 1,
+            "fboPostProcess": 1,
+        }
+        metrics["gl3xSupport"] = {
+            "modernPostChain": 1,
+            "sceneLinearOutput": 1,
+        }
+    elif modern_tier_diagnostics and tier == "GL41":
+        metrics["gl41Executor"] = {
+            "active": 1,
+            "fboPostProcess": 1,
+        }
+        metrics["gl41Support"] = {
+            "modernPostChain": 1,
+            "sceneLinearOutput": 1,
+        }
+    elif modern_tier_diagnostics and tier == "GL46":
+        metrics["gl46Executor"] = {
+            "active": 1,
+        }
+        metrics["gl46Support"] = {
+            "modernPostChain": 1,
+            "sceneLinearOutput": 1,
+        }
+    if post_mode is not None:
+        metrics["postOutputOwnership"] = {
+            "mode": post_mode,
+            "postNodes": post_nodes,
+            "outputs": outputs,
+            "legacyFallback": legacy_fallback,
+            "postHash": post_hash,
+            "outputHash": output_hash,
+            "planHash": 0x090A0B0C,
+            "fallbackMask": 0,
+        }
+
+    manifest = {
         "runId": f"{platform_id}-glx-ownership",
         "createdUtc": "2026-05-10T12:30:00+00:00",
         "gate": "",
@@ -232,19 +952,64 @@ def ownership_proof_manifest(platform_id: str, calls: int = 0, items: int = 0) -
                     {
                         "name": "ownership-shot",
                         "found": True,
+                        "histogram": screenshot_histogram(),
                     },
                 ],
                 "diagnostics": {
                     "found": True,
                     "failures": [],
-                    "metrics": {
-                        "ownership": {
-                            "calls": calls,
-                            "items": items,
-                        },
-                    },
+                    "metrics": metrics,
                 },
             },
+        ],
+    }
+    manifest["ownershipProofEvidence"] = glx_runtime_sweep.ownership_proof_evidence(manifest)
+    return manifest
+
+
+def rollback_package_metadata(
+    artifact_dir: str = "fnquake3-legacy-opengl",
+    platforms: list[str] | None = None,
+    legacy_renderers: list[str] | None = None,
+    required_artifacts: dict[str, bool] | None = None,
+    triggers: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "version": glx_promotion.PROMOTION_ROLLBACK_METADATA_VERSION,
+        "status": "reviewed",
+        "promotedRenderer": "glx",
+        "aliasRenderer": "opengl",
+        "migrationInstructions": "Use cl_renderer opengl for the promoted GLx alias.",
+        "rollbackInstructions": "Use the rollback package, set cl_renderer opengl, and run vid_restart.",
+        "requiredArtifacts": required_artifacts
+        if required_artifacts is not None
+        else {
+            "proofCorpus": True,
+            "promotionReport": True,
+            "releaseProofSummary": True,
+            "checksums": True,
+        },
+        "rollbackTriggers": triggers
+        if triggers is not None
+        else [
+            "unexplained demo playback regression",
+            "unexplained screenshot parity regression",
+            "driver startup or presentation regression",
+            "confirmed performance regression",
+        ],
+        "rollbackPackages": [
+            {
+                "id": "fnquake3-legacy-opengl",
+                "type": "rollback",
+                "artifactDir": artifact_dir,
+                "platforms": platforms
+                if platforms is not None
+                else list(glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS),
+                "legacyRenderers": legacy_renderers
+                if legacy_renderers is not None
+                else ["opengl", "opengl2"],
+                "selectionInstructions": "Select the legacy opengl renderer from this package.",
+            }
         ],
     }
 
@@ -402,6 +1167,67 @@ class GlxRuntimeSweepExecutableTests(unittest.TestCase):
         self.assertTrue(any(not name.startswith("fnquake3.glx") for name in names))
         self.assertFalse(any("opengl" in name for name in names))
 
+    def test_launch_args_enable_engine_logfile_by_default(self) -> None:
+        command = glx_runtime_sweep.base_launch_args(
+            Path("fnquake3.exe"),
+            Path("base"),
+            Path("home"),
+            "",
+            "glx",
+            "sweep.cfg",
+            {},
+        )
+
+        logfile_index = command.index("logfile")
+        self.assertEqual(command[logfile_index + 1], "2")
+        developer_index = command.index("developer")
+        self.assertEqual(command[developer_index + 1], "1")
+
+        command = glx_runtime_sweep.base_launch_args(
+            Path("fnquake3.exe"),
+            Path("base"),
+            Path("home"),
+            "",
+            "glx",
+            "sweep.cfg",
+            {"developer": "0", "logfile": "4"},
+        )
+
+        self.assertEqual(command.count("logfile"), 1)
+        logfile_index = command.index("logfile")
+        self.assertEqual(command[logfile_index + 1], "4")
+        self.assertEqual(command.count("developer"), 1)
+        developer_index = command.index("developer")
+        self.assertEqual(command[developer_index + 1], "0")
+
+    def test_run_engine_preserves_qconsole_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            engine_log = root / "home" / "baseq3" / "qconsole.log"
+            artifact_log = root / "artifact.log"
+            script = (
+                "from pathlib import Path\n"
+                "import sys\n"
+                "path = Path(sys.argv[1])\n"
+                "path.parent.mkdir(parents=True, exist_ok=True)\n"
+                "path.write_text('engine color metadata\\n', encoding='utf-8')\n"
+                "print('stdout metadata')\n"
+            )
+
+            result = glx_runtime_sweep.run_engine(
+                [sys.executable, "-c", script, str(engine_log)],
+                root,
+                10.0,
+                artifact_log,
+                False,
+                engine_log,
+            )
+
+            text = artifact_log.read_text(encoding="utf-8")
+            self.assertEqual(result["status"], "passed")
+            self.assertIn("stdout metadata", text)
+            self.assertIn("engine color metadata", text)
+
     def test_default_executable_resolution_does_not_pick_opengl_wrapper(self) -> None:
         old_output = glx_runtime_sweep.DEFAULT_OUTPUT
 
@@ -428,6 +1254,80 @@ class GlxRuntimeSweepExecutableTests(unittest.TestCase):
                 )
             finally:
                 glx_runtime_sweep.DEFAULT_OUTPUT = old_output
+
+    def test_color_sweep_dry_run_plans_all_p0_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SWEEP_PATH),
+                    "--dry-run",
+                    "--exe",
+                    str(root / "fnquake3.exe"),
+                    "--output-dir",
+                    str(root / "sweeps"),
+                    "--profile",
+                    "glx-color",
+                    "--renderers",
+                    "glx",
+                    "--switch-sequence",
+                    "glx",
+                    "--maps",
+                    "q3dm1",
+                    "--demos",
+                    "",
+                    "--no-demo-sweep",
+                    "--color-sweep",
+                ],
+                cwd=str(ROOT),
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+            )
+            manifest_path = next((root / "sweeps").rglob("manifest.json"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            color_runs = [
+                run for run in manifest["runs"] if run.get("type") == "color-sweep"
+            ]
+
+            self.assertEqual(len(color_runs), len(glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX))
+            self.assertEqual(manifest["colorContracts"]["version"], glx_runtime_sweep.GLX_COLOR_CONTRACT_VERSION)
+            self.assertEqual(
+                {run["colorSweepRow"]["id"] for run in color_runs},
+                {row["id"] for row in glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX},
+            )
+            self.assertEqual(
+                manifest["visualDossier"]["version"],
+                glx_runtime_sweep.GLX_VISUAL_DOSSIER_VERSION,
+            )
+            switch_evidence = manifest["rendererSwitchEvidence"]
+            self.assertEqual(
+                switch_evidence["version"],
+                glx_runtime_sweep.GLX_SWITCH_LIFECYCLE_VERSION,
+            )
+            self.assertEqual(switch_evidence["status"], "planned")
+            self.assertEqual(switch_evidence["plannedTransitions"], 1)
+            self.assertIn("renderer-switch-lifecycle", manifest["visualDossier"]["sections"])
+            visual_dossier_path = Path(manifest["visualDossier"]["path"])
+            self.assertTrue(visual_dossier_path.exists())
+            visual_dossier = visual_dossier_path.read_text(encoding="utf-8")
+            self.assertIn("Current Pipeline Flow", visual_dossier)
+            self.assertIn("Target Pipeline Flow", visual_dossier)
+            self.assertIn("Renderer Switch Lifecycle", visual_dossier)
+            self.assertIn("Driver Tier Matrix", visual_dossier)
+            self.assertIn("SDR/HDR Color Sweep Review", visual_dossier)
+            self.assertTrue(
+                any("+set r_srgbTextures 0" in run["commandLine"] for run in color_runs)
+            )
+            self.assertTrue(manifest["runtimeQpathToken"].startswith("gs"))
+            for run in manifest["runs"]:
+                self.assertLess(len(Path(run["config"]).name), glx_runtime_sweep.Q3_MAX_QPATH)
+                self.assertIn("devmap q3dm1", Path(run["config"]).read_text(encoding="utf-8"))
+                for shot in run.get("screenshots", []):
+                    self.assertLess(len(shot["name"]), glx_runtime_sweep.Q3_MAX_QPATH)
 
 
 class GlxRendererSourceCoverageTests(unittest.TestCase):
@@ -480,6 +1380,11 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         vulkan_image = (ROOT / "code" / "renderervk" / "tr_image.c").read_text(encoding="utf-8")
         glx_module = (ROOT / "code" / "rendererglx" / "glx_module.cpp").read_text(encoding="utf-8")
         audit_doc = COLORSPACE_AUDIT_PATH.read_text(encoding="utf-8")
+        texture_manifest = json.loads(
+            (ROOT / "docs" / "fnquake3" / "GLX_TEXTURE_CLASSIFICATION_MANIFEST.json").read_text(
+                encoding="utf-8"
+            )
+        )
 
         self.assertIn("IMGFLAG_COLORSPACE_SRGB", renderer_common)
         self.assertIn("IMAGE_COLORSPACE_SRGB", renderer_common)
@@ -487,10 +1392,25 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("textureSrgbAvailable", renderer_image)
         self.assertIn("GL_FRAMEBUFFER_SRGB", renderer_arb)
         self.assertIn("srgbCutoff", renderer_arb)
+        self.assertIn("GL_RGBA16F", renderer_arb)
         self.assertIn("VK_FORMAT_R8G8B8A8_SRGB", vulkan_image)
         self.assertIn("glx: color audit srgb-decode", glx_module)
-        for text in ("Authored color maps", "Lightmaps", "GL_FRAMEBUFFER_SRGB", "Screenshot/video capture"):
+        self.assertIn("glx: texture audit", glx_module)
+        for text in (
+            "Authored color maps",
+            "Lightmaps",
+            "GL_FRAMEBUFFER_SRGB",
+            "Screenshot/video capture",
+            "r_glxColorPipelineDebug",
+            "RGBA16F",
+        ):
             self.assertIn(text, audit_doc)
+        row_ids = {row["id"] for row in texture_manifest["rows"]}
+        self.assertTrue(set(glx_runtime_sweep.GLX_REQUIRED_TEXTURE_CLASS_ROWS).issubset(row_ids))
+        rows_by_id = {row["id"]: row for row in texture_manifest["rows"]}
+        for row_id, expected in glx_runtime_sweep.GLX_TEXTURE_CLASSIFICATION_CONTRACT.items():
+            self.assertEqual(rows_by_id[row_id]["declaredSpace"], expected["declaredSpace"])
+            self.assertEqual(rows_by_id[row_id]["sceneLinearDecode"], expected["sceneLinearDecode"])
 
     def test_task_r_color_grading_sources_are_covered(self) -> None:
         renderer_arb = (ROOT / "code" / "renderer" / "tr_arb.c").read_text(encoding="utf-8")
@@ -516,7 +1436,8 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("vk_color_grade_lut_descriptor", vulkan_backend)
         self.assertIn("color_grade_mode", vulkan_backend)
         self.assertIn("LiftGammaGainLut3D", glx_ir)
-        self.assertIn("PostNodeKind::Grade", glx_module)
+        self.assertIn("PostNodeKind::Grade", glx_ir)
+        self.assertIn("GLX_RenderIR_BuildPostOutputPlan", glx_module)
         for cvar in (
             "r_colorGrade",
             "r_colorGradeLift",
@@ -561,6 +1482,71 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         for cvar in ("r_outputBackend", "r_outputAllowExperimentalLinuxHDR"):
             self.assertIn(cvar, display_doc)
 
+    def test_p1_glx_ownership_stream_and_material_sources_are_covered(self) -> None:
+        compat = (ROOT / "code" / "renderer" / "tr_glx_compat.h").read_text(encoding="utf-8")
+        tr_arb = (ROOT / "code" / "renderer" / "tr_arb.c").read_text(encoding="utf-8")
+        tr_shade = (ROOT / "code" / "renderer" / "tr_shade.c").read_text(encoding="utf-8")
+        tr_shadows = (ROOT / "code" / "renderer" / "tr_shadows.c").read_text(encoding="utf-8")
+        tr_vbo = (ROOT / "code" / "renderer" / "tr_vbo.c").read_text(encoding="utf-8")
+        bridge = (ROOT / "code" / "renderercommon" / "tr_glx_bridge.h").read_text(encoding="utf-8")
+        api = (ROOT / "code" / "renderercommon" / "tr_glx_api.h").read_text(encoding="utf-8")
+        glx_module = (ROOT / "code" / "rendererglx" / "glx_module.cpp").read_text(encoding="utf-8")
+        glx_stream = (ROOT / "code" / "rendererglx" / "glx_stream.cpp").read_text(encoding="utf-8")
+        glx_ir = (ROOT / "code" / "rendererglx" / "glx_render_ir.h").read_text(encoding="utf-8")
+        glx_material_key = (ROOT / "code" / "rendererglx" / "glx_material_key.h").read_text(encoding="utf-8")
+        glx_material = (ROOT / "code" / "rendererglx" / "glx_material.cpp").read_text(encoding="utf-8")
+
+        for streamed_source in (compat, tr_arb, tr_shade, tr_shadows):
+            self.assertNotIn("qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB", streamed_source)
+            self.assertNotIn("qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB", streamed_source)
+        self.assertIn("GLX_CompatBindStreamArrayBuffer", compat)
+        self.assertIn("GLX_CompatBindStreamElementArrayBuffer", bridge)
+        self.assertIn("GLX_Renderer_BindStreamArrayBuffer", api)
+        self.assertIn("GLX_Renderer_BindStreamElementArrayBuffer", api)
+        self.assertIn("GLX_CompatRestoreStreamArrayBuffer", bridge)
+        self.assertIn("GLX_CompatRestoreStreamElementArrayBuffer", bridge)
+        self.assertIn("GLX_CompatRecordStreamBufferBind", bridge)
+        self.assertIn("GLX_Stream_BindArrayBufferCached", glx_stream)
+        self.assertIn("GLX_Stream_BindElementArrayBufferCached", glx_stream)
+        self.assertIn("GLX_Stream_RecordExternalBufferBind", glx_stream)
+        self.assertIn("bufferBindingExternalUpdates", glx_stream)
+        self.assertIn("GLX_Stream_BindPreserving( StreamState *state", glx_stream)
+        self.assertIn("GLX_Stream_RestoreBinding( StreamState *state", glx_stream)
+        self.assertNotIn("GLX_Stream_BindPreserving( GLuint buffer", glx_stream)
+        self.assertNotIn("GLX_Stream_RestoreBinding( GLint", glx_stream)
+        self.assertNotIn("GL_ARRAY_BUFFER_BINDING, &oldArrayBuffer", glx_stream)
+        self.assertIn("restoreArrayBuffer = oldArrayBuffer == state->buffer ? 0u : oldArrayBuffer", glx_stream)
+        self.assertIn("arrayBufferBindingCacheHits", glx_stream)
+        self.assertIn("elementArrayBufferBindingKnown", glx_stream)
+        self.assertIn("GLX_Renderer_RecordStreamBufferBind", api)
+        self.assertIn("VBO_BindBufferTracked", tr_vbo)
+        self.assertIn("GLX_CompatRecordStreamBufferBind", tr_vbo)
+        self.assertIn("post/output ownership", glx_module)
+        self.assertIn("GLX_RenderIR_BuildPostOutputPlan", glx_module)
+        self.assertIn("GLX_Executor_ConsumeOutputTransform", glx_module)
+        self.assertIn("MaterialParameterBlock", glx_ir)
+        self.assertIn("PostOutputPlan", glx_ir)
+        self.assertIn("GLX_POST_OUTPUT_FALLBACK_EXECUTOR_REJECT", glx_ir)
+        self.assertIn("GLX_RenderIR_HashMaterialParameterBlock", glx_ir)
+        self.assertIn("GLX_RenderIR_HashPostNode", glx_ir)
+        self.assertIn("GLX_RenderIR_HashOutputTransform", glx_ir)
+        self.assertIn("GLX_Material_StatePlanForTierAndParameterBlock", glx_material_key)
+        self.assertIn("material parameter blocks", glx_material)
+        self.assertIn("lastParameterBlockHash", glx_material)
+        self.assertIn("lastPostNodeHash", glx_module)
+        self.assertIn("lastOutputTransformHash", glx_module)
+        self.assertIn("MATERIAL_PARAMETER_BLOCKS_RE", SWEEP_PATH.read_text(encoding="utf-8"))
+
+    def test_keep_window_renderer_restart_reinitializes_glx_caps(self) -> None:
+        source = (ROOT / "code" / "renderer" / "tr_init.c").read_text(encoding="utf-8")
+        init_start = source.index("static void InitOpenGL")
+        first_init = source.index("if ( glConfig.vidWidth == 0 )", init_start)
+        keep_window_start = source.index("else", first_init)
+        keep_window_end = source.index("if ( !qglViewport )", keep_window_start)
+        keep_window_block = source[keep_window_start:keep_window_end]
+
+        self.assertIn("GLX_CompatOnOpenGLReady( &glConfig, gl_extensions );", keep_window_block)
+
     def test_task_t_release_proof_policy_sources_are_covered(self) -> None:
         sweep_script = SWEEP_PATH.read_text(encoding="utf-8")
         release_script = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
@@ -571,6 +1557,32 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
             "GLX_BLOCKING_RELEASE_PLATFORMS",
             "GLX_RELEASE_REQUIRED_GATES",
             "validate_release_proof_root",
+            "GLX_VISUAL_DOSSIER_VERSION",
+            "glx_visual_dossier",
+            "visualDossier",
+            "GLX_SWITCH_LIFECYCLE_VERSION",
+            "renderer_switch_lifecycle_evidence",
+            "evaluate_renderer_switch_lifecycle",
+            "rendererSwitchEvidence",
+            "GLX_WORLD_PROOF_VERSION",
+            "world_proof_evidence",
+            "evaluate_world_proof",
+            "worldProofEvidence",
+            "GLX_MATERIAL_PROOF_VERSION",
+            "material_proof_evidence",
+            "evaluate_material_proof",
+            "materialProofEvidence",
+            "GLX_DYNAMIC_PROOF_VERSION",
+            "dynamic_proof_evidence",
+            "evaluate_dynamic_proof",
+            "dynamicProofEvidence",
+            "GLX_POST_PROOF_VERSION",
+            "post_proof_evidence",
+            "evaluate_post_proof",
+            "postProofEvidence",
+            "GLX_OWNERSHIP_PROOF_VERSION",
+            "ownership_proof_evidence",
+            "ownershipProofEvidence",
             "proofPlatform",
             "performance_budget_tier",
             "gpuFrameMs",
@@ -600,10 +1612,21 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
             "paritySuites",
             "cg_shadows",
             "r_celShading",
+            "r_greyscale",
+            "r_renderScale",
         ):
             self.assertIn(text, sweep_script)
 
-        for suite_id in ("screenshot", "demo-playback", "hud", "shadow", "bloom", "cel-shading"):
+        for suite_id in (
+            "screenshot",
+            "demo-playback",
+            "hud",
+            "shadow",
+            "bloom",
+            "cel-shading",
+            "greyscale",
+            "render-scale",
+        ):
             self.assertIn(f"`{suite_id}`", corpus_doc)
             self.assertIn(suite_id, rc_gates)
 
@@ -617,21 +1640,37 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         for text in (
             "PROMOTION_REQUIRED_TIERS",
             "PROMOTION_OWNERSHIP_PROFILE",
+            "GLX_OWNERSHIP_PROOF_VERSION",
             "check_feature_matrix",
             "check_release_proof_root",
             "check_ownership_proof",
             "check_renderer_source_policy",
+            "check_legacy_coupling_inventory",
+            "check_rollback_package_metadata",
+            "PROMOTION_LEGACY_RENDERER_SOURCE_BUDGET",
+            "PROMOTION_ROLLBACK_METADATA_VERSION",
             "policyViolation",
         ):
             self.assertIn(text, promotion_script)
 
         self.assertIn("promotion_report", release_script)
         self.assertIn("glx_promotion", release_script)
+        self.assertIn("--glx-rollback-metadata", release_script)
+        self.assertIn("glx_rollback_package", release_script)
+        self.assertIn("attach_glx_rollback_archives", release_script)
         self.assertIn("scripts/glx_promotion.py", workflow)
         self.assertIn("glx-promotion.json", workflow)
-        for text in ("Migration Alias Plan", "OpenGL2 Legacy Flag Plan", "Rollback Package Contract"):
+        self.assertIn("GLX_ROLLBACK_PACKAGE.md", workflow)
+        self.assertIn("GLX_VISUAL_DOSSIER.md", workflow)
+        for text in (
+            "Migration Alias Plan",
+            "OpenGL2 Legacy Flag Plan",
+            "Rollback Package Contract",
+            "Rollback Package Metadata",
+            "Legacy Coupling Ledger",
+        ):
             self.assertIn(text, promotion_doc)
-        self.assertIn("scripts/glx_promotion.py --require-ready", final_contract)
+        self.assertIn("scripts/glx_promotion.py --require-ready --proof-root <dir> --rollback-metadata <json>", final_contract)
 
     def test_task_x_productization_sources_are_covered(self) -> None:
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -683,6 +1722,39 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
             comparison = glx_runtime_sweep.compare_png_files(path, path, 0.0, 0.0)
             self.assertEqual(comparison["status"], "passed")
             self.assertEqual(comparison["changedPixels"], 0)
+
+    def test_screenshot_results_attach_color_histogram(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            screenshot = root / "baseq3" / "screenshots" / "proof.png"
+            glx_runtime_sweep.write_png_rgba(
+                screenshot,
+                1,
+                1,
+                bytes((10, 20, 30, 255)),
+            )
+
+            results = glx_runtime_sweep.screenshot_results(
+                root,
+                "",
+                [
+                    {
+                        "name": "proof",
+                    }
+                ],
+            )
+
+            histogram = results[0]["histogram"]
+            self.assertEqual(histogram["status"], "passed")
+            self.assertEqual(histogram["meanRed"], 10.0)
+            self.assertEqual(histogram["meanGreen"], 20.0)
+            self.assertEqual(histogram["meanBlue"], 30.0)
+            self.assertTrue(Path(results[0]["histogramPath"]).exists())
+            self.assertEqual(results[0]["falseColor"]["status"], "passed")
+            false_color_path = Path(results[0]["falseColorPath"])
+            self.assertTrue(false_color_path.exists())
+            width, height, _pixels = glx_runtime_sweep.read_png_rgba(false_color_path)
+            self.assertEqual((width, height), (1, 1))
 
     def test_png_compare_reports_threshold_failure_and_writes_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -757,6 +1829,25 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
             self.assertEqual(screenshots[0]["baselineStatus"], "passed")
             self.assertEqual(screenshots[0]["comparison"]["status"], "passed")
 
+    def test_visual_dossier_summarizes_review_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = release_proof_manifest("rc-parity", "windows-x64")
+            manifest_path = Path(tmp) / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            dossier = glx_runtime_sweep.glx_visual_dossier(manifest, manifest_path)
+
+            self.assertIn("GLx Visual Dossier", dossier)
+            self.assertIn("Current Pipeline Flow", dossier)
+            self.assertIn("Target Pipeline Flow", dossier)
+            self.assertIn("Backend State Overlay", dossier)
+            self.assertIn("Driver Tier Matrix", dossier)
+            self.assertIn("Histogram And False-Color Evidence", dossier)
+            self.assertIn("Parity Diff Sheet", dossier)
+            self.assertIn("SDR/HDR Color Sweep Review", dossier)
+            self.assertIn("scene-linear", dossier)
+            self.assertIn("shader-srgb", dossier)
+
 
 class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
     def test_glx_diagnostics_accept_clean_rc_log(self) -> None:
@@ -769,16 +1860,26 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "  material compiles: 24 attempts, 0 compile failures, 0 link failures, precache 0/24, bind failures 0, labels 0",
                         "  material fallbacks: unsupported 0, disabled 0, not-ready 0, full 0, discarded without GL delete 0",
                         "  material compiler plans: compiled 12, unsupported 0, last unsupported 0x0 (none)",
+                        "  material parameter blocks: blocks 12 invalid 0 hash 0x1234abcd, last sort 0 passes 1 features 0x0 flags 0x0 state 0x0 object rgb 2:0 alpha 1:0 tc 3/0",
                         "  product tier: GL2X",
                         "  GL2X programmable executor: active yes, client-memory fallback yes, stream uploads yes, material compiler yes, postprocess-lite yes, modern post chain no, scene-linear output no",
                         "  GL2X programmable support: common materials yes, dynamic entities yes, lightmaps yes, multitexture yes, fog yes, sprites yes, beams yes, screenshots yes, demos yes",
                         "  glx: ownership legacy delegation 0 calls/0 items, generic 0, vbo-device 0, vbo-soft 0, arrays 0",
-                        f"  pass schedule: valid 9/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
+                        f"  GLx pass schedule: valid 9/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
+                        "  pass schedule: invalid 0/00000000 none",
+                        "  render IR products: passes 9, world packets 1, dynamic draws 2, materials 3, uploads 4, post nodes 1, outputs 1, rejects 0",
+                        "  post/output ownership: mode legacy-fallback, post nodes 1, outputs 1, legacy fallback yes, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000001",
                         "  FBO: requested yes, ready yes, programs yes, framebuffer funcs yes, reason: FBO ready",
+                        "  target: render 640x480, capture 640x480, window 640x480, format 0x881a (0x1908:0x140b)",
+                        "  controls: scene-linear HDR yes, precision 16, renderScale 1, bloom 2, MSAA no, supersample no, adjusted window yes, greyscale 1.00",
+                        "  frames: 3 post, 1 bloom-final, 0 gamma-direct, 3 gamma-blit, 0 minimized output, 1 screenshots",
+                        "  frame features: 1 bloom-available, 1 scene-linear, 1 tone-mapped, 1 graded, 1 render-scale, 1 greyscale, 1 window-adjusted, 0 minimized",
                         "  FBO lifecycle: 1 init attempts, 1 ready, 0 failed, 0 disabled, 0 shutdowns",
-                        "  color pipeline: space scene-linear, transfer sdr-srgb, tone-map aces, exposure 1.00, grade lgg-lut3d, paper-white 203 nits, max 1000 nits",
+                        "  color pipeline: space scene-linear, transfer sdr-srgb, tone-map aces, exposure 1.00, grade lgg-lut3d, paper-white 203 nits, max 203 nits",
                         "  color grade stage: mode lgg-lut3d, lift 0.01/0.02/0.03, gamma 1.10/1.00/0.95, gain 1.05/1.00/0.98, white-point 6504->6000 K, lut-size 16, lut-scale 4.00",
-                        "  color audit: srgb-decode yes requested yes available yes, framebuffer-srgb no requested yes available yes, capture sdr-srgb",
+                        "  color audit: srgb-decode yes requested yes available yes, framebuffer-srgb no requested yes available yes, capture sdr-srgb, target-float yes, final-encode shader-srgb, contract yes",
+                        "  texture audit: srgb 4 decode 4, linear 2 decode 0, data 2 decode 0, unknown 0 decode 0, missing-srgb-decode 0, unexpected-decode 0",
+                        '  glx: color-frame-json {"frame":1,"backend":"sdr-srgb","space":"scene-linear","transfer":"sdr-srgb","exposure":1.0000,"paperWhiteNits":203.0,"maxOutputNits":203.0,"srgbDecode":true,"framebufferSrgb":false,"internalFormat":"0x881a","textureFormat":"0x1908","textureType":"0x140b","sceneTargetFloat":true,"shaderSrgbEncode":true,"contractValid":true}',
                         "  output backend: request auto, selected sdr-srgb, native windows-scrgb, hardware no, experimental no, display-hdr yes, headroom 4.00, sdr-white 203 nits, display-max 812 nits, icc yes/2048, driver windows, display HDR Panel, reason: test",
                         "  bloom create: last success, 1/1 ready, texture-unit failures 0, FBO failures 0",
                         "  bloom passes: calls 1, rendered 1, final 1, pre-final 0, skipped 0, failures 0, mode1 0, mode2 1, reflections 0",
@@ -787,6 +1888,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "  dynamic stream sync: yes, fences 1, waits 0, timeouts 0, failures 0, pending skips 0",
                         "  dynamic stream reservations: 1, commits: 1, wraps: 0, same-frame wrap rejects: 0, orphans: 0",
                         "  dynamic stream uploads: 1 calls, 0.01 MB, failures 0",
+                        "  dynamic stream binding cache: queries 1, hits 3, restores 2, invalidations 1, external 4, array known no buffer 0, element known no buffer 0",
                         "  dynamic stream draws: 1/1 attempts, 3 verts, 3 indexes, 0.01 MB, index 0.01 MB, tex1 0.00 MB, mt 0, fog 0, depthfrag 0, texmod 0, env 0, dlight 0, screen 0, video 0, shadow 0, beam 0, post 0, fallbacks 0",
                         "  dynamic stream categories: entity 1/1, particle 0/0, poly 0/0, mark 0/0, weapon 0/0, ui 0/0, beam 0/0, special 0/0",
                         "  dynamic stream category fallbacks: entity 0, particle 0, poly 0, mark 0, weapon 0, ui 0, beam 0, special 0",
@@ -807,6 +1909,17 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-parity")
             self.assertTrue(diagnostics["found"])
             self.assertEqual(diagnostics["failures"], [])
+            self.assertEqual(diagnostics["metrics"]["materialParameters"]["blocks"], 12)
+            self.assertEqual(diagnostics["metrics"]["materialParameters"]["invalid"], 0)
+            self.assertEqual(diagnostics["metrics"]["materialParameters"]["hash"], 0x1234ABCD)
+            self.assertEqual(diagnostics["metrics"]["materialParameters"]["tcGen0"], 3)
+            self.assertEqual(diagnostics["metrics"]["materialParameters"]["tcGen1"], 0)
+            self.assertEqual(diagnostics["metrics"]["materialParameters"]["features"], 0)
+            self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["legacyFallback"], 1)
+            self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["postHash"], 0x01020304)
+            self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["outputHash"], 0x05060708)
+            self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["planHash"], 0x090A0B0C)
+            self.assertEqual(diagnostics["metrics"]["postOutputOwnership"]["fallbackMask"], 1)
             stream_draw = diagnostics["metrics"]["streamDraw"]
             self.assertEqual(stream_draw["draws"], 1)
             self.assertEqual(stream_draw["dynamicLights"], 0)
@@ -814,6 +1927,10 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(stream_draw["videoMaps"], 0)
             self.assertEqual(stream_draw["shadows"], 0)
             self.assertEqual(stream_draw["skips"], 2)
+            stream_binding = diagnostics["metrics"]["streamBindingCache"]
+            self.assertEqual(stream_binding["queries"], 1)
+            self.assertEqual(stream_binding["hits"], 3)
+            self.assertEqual(stream_binding["external"], 4)
             stream_category = diagnostics["metrics"]["streamCategory"]
             self.assertEqual(stream_category["entityDraws"], 1)
             self.assertEqual(stream_category["entityAttempts"], 1)
@@ -860,7 +1977,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(color_pipeline["grade"], "lgg-lut3d")
             self.assertEqual(color_pipeline["exposure"], 1.0)
             self.assertEqual(color_pipeline["paperWhite"], 203.0)
-            self.assertEqual(color_pipeline["maxOutput"], 1000.0)
+            self.assertEqual(color_pipeline["maxOutput"], 203.0)
             color_grade = diagnostics["metrics"]["colorGrade"]
             self.assertEqual(color_grade["mode"], "lgg-lut3d")
             self.assertEqual(color_grade["liftR"], 0.01)
@@ -877,6 +1994,36 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(color_audit["framebufferRequested"], 1)
             self.assertEqual(color_audit["framebufferAvailable"], 1)
             self.assertEqual(color_audit["capture"], "sdr-srgb")
+            self.assertEqual(color_audit["targetFloat"], 1)
+            self.assertEqual(color_audit["finalEncode"], "shader-srgb")
+            self.assertEqual(color_audit["contract"], 1)
+            texture_audit = diagnostics["metrics"]["textureAudit"]
+            self.assertEqual(texture_audit["srgb"], 4)
+            self.assertEqual(texture_audit["srgbDecode"], 4)
+            self.assertEqual(texture_audit["missingSrgbDecode"], 0)
+            self.assertEqual(texture_audit["unexpectedDecode"], 0)
+            target_format = diagnostics["metrics"]["targetFormat"]
+            self.assertEqual(target_format["internalFormat"], 0x881A)
+            self.assertEqual(target_format["textureFormat"], 0x1908)
+            self.assertEqual(target_format["textureType"], 0x140B)
+            post_controls = diagnostics["metrics"]["postprocessControls"]
+            self.assertEqual(post_controls["renderScale"], 1)
+            self.assertEqual(post_controls["greyscale"], 1.0)
+            self.assertEqual(post_controls["windowAdjusted"], 1)
+            post_frames = diagnostics["metrics"]["postprocessFrames"]
+            self.assertEqual(post_frames["frames"], 3)
+            self.assertEqual(post_frames["screenshots"], 1)
+            self.assertEqual(post_frames["minimizedOutput"], 0)
+            post_features = diagnostics["metrics"]["postprocessFrameFeatures"]
+            self.assertEqual(post_features["renderScale"], 1)
+            self.assertEqual(post_features["greyscale"], 1)
+            self.assertEqual(post_features["windowAdjusted"], 1)
+            self.assertEqual(post_features["minimized"], 0)
+            color_frame = diagnostics["metrics"]["colorFrame"]
+            self.assertEqual(color_frame["samples"], 1)
+            self.assertEqual(color_frame["latest"]["backend"], "sdr-srgb")
+            self.assertEqual(color_frame["latest"]["internalFormat"], "0x881a")
+            self.assertTrue(color_frame["latest"]["contractValid"])
             output_backend = diagnostics["metrics"]["outputBackend"]
             self.assertEqual(output_backend["request"], "auto")
             self.assertEqual(output_backend["selected"], "sdr-srgb")
@@ -885,6 +2032,51 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(output_backend["headroom"], 4.0)
             self.assertEqual(output_backend["displayMax"], 812.0)
             self.assertEqual(output_backend["icc"], 1)
+
+    def test_glx_color_frame_csv_is_gate_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "color.csv.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "glx: color-frame-csv frame,backend,space,transfer,exposure,paperWhiteNits,maxOutputNits,srgbDecode,framebufferSrgb,internalFormat,textureFormat,textureType,sceneTargetFloat,shaderSrgbEncode,contractValid",
+                        "glx: color-frame-csv 7,sdr-srgb,scene-linear,sdr-srgb,1.2500,203.0,203.0,yes,no,0x881a,0x1908,0x140b,yes,yes,yes",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-color")
+            performance = glx_runtime_sweep.analyze_glx_performance(log)
+
+            self.assertTrue(diagnostics["found"])
+            self.assertEqual(diagnostics["failures"], [])
+            color_frame = diagnostics["metrics"]["colorFrame"]
+            self.assertEqual(color_frame["samples"], 1)
+            self.assertEqual(color_frame["latest"]["frame"], 7)
+            self.assertEqual(color_frame["latest"]["space"], "scene-linear")
+            self.assertEqual(color_frame["latest"]["internalFormat"], "0x881a")
+            self.assertTrue(color_frame["latest"]["contractValid"])
+            self.assertEqual(performance["latest"]["colorFrameSamples"], 1)
+            self.assertEqual(performance["latest"]["colorFrameSpace"], "scene-linear")
+            self.assertEqual(performance["latest"]["colorFrameInternalFormat"], "0x881a")
+
+    def test_glx_diagnostics_reject_sdr_output_with_hdr_headroom(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "sdr-headroom.log"
+            log.write_text(
+                "glx: color pipeline scene-linear precision 16 transfer sdr-srgb "
+                "tone-map aces exposure 1.00 bloom-threshold 0.75/2 knee 0.50 "
+                "grade none paper-white 203 max 1000\n",
+                encoding="utf-8",
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-color")
+
+            self.assertTrue(diagnostics["found"])
+            self.assertTrue(
+                any("HDR max-output headroom" in failure for failure in diagnostics["failures"])
+            )
 
     def test_glx_ownership_profile_reports_legacy_delegation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -921,6 +2113,38 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertNotIn("No GLx ownership diagnostic", failures)
             self.assertEqual(ownership["calls"], 2)
             self.assertEqual(ownership["items"], 12)
+
+    def test_ownership_proof_evidence_passes_for_modern_zero_delegation(self) -> None:
+        manifest = ownership_proof_manifest("windows-x64")
+        evidence = manifest["ownershipProofEvidence"]
+
+        self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_OWNERSHIP_PROOF_VERSION)
+        self.assertEqual(evidence["status"], "passed")
+        self.assertTrue(evidence["zeroDelegation"])
+        self.assertEqual(evidence["delegation"]["calls"], 0)
+        self.assertEqual(evidence["delegation"]["items"], 0)
+        self.assertEqual(evidence["productTiers"], ["GL3X"])
+        self.assertTrue(evidence["modernTierDiagnosticsOk"])
+        self.assertTrue(evidence["modernPostOutput"])
+        self.assertEqual(evidence["postOutputOwnership"]["modes"], ["glx-owned"])
+        self.assertEqual(evidence["postOutputOwnership"]["fallbackMask"], 0)
+        self.assertEqual(evidence["failures"], [])
+
+    def test_ownership_proof_evidence_fails_on_delegation_and_missing_fingerprint(self) -> None:
+        manifest = ownership_proof_manifest(
+            "windows-x64",
+            calls=2,
+            items=64,
+            post_hash=0,
+        )
+        evidence = manifest["ownershipProofEvidence"]
+        failures = "\n".join(evidence["failures"])
+
+        self.assertEqual(evidence["status"], "failed")
+        self.assertFalse(evidence["zeroDelegation"])
+        self.assertFalse(evidence["modernPostOutput"])
+        self.assertIn("legacy delegation", failures)
+        self.assertIn("post-node fingerprint", failures)
 
     def test_gl12_diagnostics_report_fixed_function_executor_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1316,11 +2540,12 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                     "type": "switch-screenshots",
                     "status": "passed",
                     "screenshots": [
-                        {"name": "shot", "found": True},
+                        {"name": "shot", "found": True, "histogram": screenshot_histogram()},
                     ],
                     "diagnostics": {
                         "found": True,
                         "failures": ["GLx material compile failures: 1."],
+                        "metrics": color_diagnostics_metrics(),
                     },
                 },
                 {
@@ -1344,6 +2569,716 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
         failures = glx_runtime_sweep.evaluate_gate(manifest)
         self.assertTrue(any("GLx diagnostic failures" in failure for failure in failures))
+
+    def test_gate_evaluation_requires_per_frame_color_metadata(self) -> None:
+        metrics = color_diagnostics_metrics()
+        metrics.pop("colorFrame")
+        manifest = {
+            "gate": "rc-smoke",
+            "dryRun": False,
+            "runs": [
+                {
+                    "type": "switch-screenshots",
+                    "status": "passed",
+                    "screenshots": [
+                        {"name": "shot", "found": True, "histogram": screenshot_histogram()},
+                    ],
+                    "diagnostics": {
+                        "found": True,
+                        "failures": [],
+                        "metrics": metrics,
+                    },
+                    "performance": locked_performance_sample(),
+                },
+            ],
+            "renderers": ["opengl", "glx"],
+            "demos": [],
+        }
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+        self.assertTrue(any("colorFrame" in failure for failure in failures))
+
+    def test_gate_evaluation_requires_detailed_performance_color_frame_metadata(self) -> None:
+        performance = locked_performance_sample()
+        performance["latest"].pop("colorFrameContractValid")
+        manifest = {
+            "gate": "rc-smoke",
+            "dryRun": False,
+            "runs": [
+                {
+                    "type": "switch-screenshots",
+                    "status": "passed",
+                    "screenshots": [
+                        {"name": "shot", "found": True, "histogram": screenshot_histogram()},
+                    ],
+                    "diagnostics": {
+                        "found": True,
+                        "failures": [],
+                        "metrics": color_diagnostics_metrics(),
+                    },
+                    "performance": performance,
+                },
+            ],
+            "renderers": ["opengl", "glx"],
+            "demos": [],
+        }
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("complete color-pipeline metadata" in failure for failure in failures))
+
+    def test_release_gates_require_renderer_switch_lifecycle_evidence(self) -> None:
+        manifest = release_proof_manifest("rc-smoke", "windows-x64")
+        manifest.pop("rendererSwitchEvidence")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(
+            any("No renderer-switch lifecycle evidence" in failure for failure in failures)
+        )
+
+    def test_renderer_switch_lifecycle_requires_completed_transitions(self) -> None:
+        manifest = release_proof_manifest("rc-smoke", "windows-x64")
+        switch_run = next(
+            run for run in manifest["runs"] if run.get("type") == "switch-screenshots"
+        )
+        switch_run["screenshots"][0]["found"] = False
+        manifest["rendererSwitchEvidence"] = (
+            glx_runtime_sweep.renderer_switch_lifecycle_evidence(manifest)
+        )
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(
+            any("did not complete every planned transition" in failure for failure in failures)
+        )
+
+    def test_renderer_switch_lifecycle_requires_round_trip_for_blocking_gates(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        switch_run = next(
+            run for run in manifest["runs"] if run.get("type") == "switch-screenshots"
+        )
+        manifest["switchSequence"] = ["opengl", "glx"]
+        switch_run["switchSequence"] = manifest["switchSequence"]
+        switch_run["screenshots"] = [
+            shot for shot in switch_run["screenshots"] if int(shot["switchStep"]) <= 2
+        ]
+        manifest["rendererSwitchEvidence"] = (
+            glx_runtime_sweep.renderer_switch_lifecycle_evidence(manifest)
+        )
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("switch back out of GLx" in failure for failure in failures))
+
+    def test_renderer_switch_lifecycle_records_restart_and_glx_leg_evidence(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        evidence = manifest["rendererSwitchEvidence"]
+
+        self.assertEqual(evidence["status"], "passed")
+        self.assertEqual(evidence["restartMode"], "fast")
+        self.assertEqual(evidence["vidRestartPath"], "CL_Vid_Restart(REF_KEEP_WINDOW)")
+        self.assertTrue(evidence["vidRestartEquivalent"])
+        self.assertEqual(
+            evidence["plannedTransitions"],
+            len(manifest["maps"]) * manifest["switchRounds"] * len(manifest["switchSequence"]),
+        )
+        self.assertEqual(evidence["completedTransitions"], evidence["plannedTransitions"])
+        self.assertGreater(evidence["transitionsIntoGlx"], 0)
+        self.assertGreater(evidence["transitionsOutOfGlx"], 0)
+        self.assertTrue(evidence["glxDiagnosticsFound"])
+        self.assertGreater(evidence["glxPerformanceSamples"], 0)
+
+    def test_world_proof_evidence_passes_for_blocking_rc_surface(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        evidence = manifest["worldProofEvidence"]
+
+        self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_WORLD_PROOF_VERSION)
+        self.assertEqual(evidence["status"], "passed")
+        self.assertIn("q3dm17", evidence["requiredMaps"])
+        self.assertIn("q3dm15", evidence["requiredMaps"])
+        self.assertIn("q3dm15", evidence["glxScreenshotMaps"])
+        self.assertGreater(evidence["staticWorld"]["drawAttempts"], 0)
+        self.assertEqual(evidence["staticWorld"]["drawFallbacks"], 0)
+        self.assertTrue(evidence["lightmaps"]["ok"])
+        self.assertTrue(evidence["fog"]["ok"])
+        self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
+
+    def test_world_proof_evidence_requires_versioned_object(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        manifest.pop("worldProofEvidence")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("No world proof evidence" in failure for failure in failures))
+
+    def test_world_proof_evidence_rejects_stale_version_and_missing_fog(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
+        for run in manifest["runs"]:
+            diagnostics = run.get("diagnostics")
+            if isinstance(diagnostics, dict) and isinstance(diagnostics.get("metrics"), dict):
+                metrics = diagnostics["metrics"]
+                if isinstance(metrics.get("staticWorld"), dict):
+                    metrics["staticWorld"].update(
+                        {
+                            "rendererEnabled": 0,
+                            "arenaReady": 0,
+                            "packetBatchBatches": 0,
+                        }
+                    )
+                if isinstance(metrics.get("gl2xSupport"), dict):
+                    metrics["gl2xSupport"].update({"lightmaps": 0, "fog": 0})
+                if isinstance(metrics.get("gl12Support"), dict):
+                    metrics["gl12Support"].update({"lightmaps": 0, "fog": 0})
+                if isinstance(metrics.get("streamDraw"), dict):
+                    metrics["streamDraw"]["fog"] = 0
+                if isinstance(metrics.get("materialParameters"), dict):
+                    metrics["materialParameters"].update({"blocks": 0, "hash": 0})
+
+            performance = run.get("performance")
+            if isinstance(performance, dict) and isinstance(performance.get("latest"), dict):
+                performance["latest"].update(
+                    {
+                        "staticDrawAttempts": 0,
+                        "staticDrawIndexes": 0,
+                        "staticDrawPacketFull": 0,
+                        "staticDrawPacketPartial": 0,
+                        "streamDrawFog": 0,
+                        "materialParameterBlocks": 0,
+                        "materialParameterHash": 0,
+                    }
+                )
+
+            for shot in run.get("screenshots", []):
+                if (
+                    isinstance(shot, dict)
+                    and str(shot.get("renderer", "")).lower() == "glx"
+                    and str(shot.get("map", "")).lower() == "q3dm15"
+                ):
+                    shot["found"] = False
+
+        manifest["performanceAggregate"] = {"sampleCount": 1, "latest": {}, "max": {}}
+        manifest["worldProofEvidence"] = glx_runtime_sweep.world_proof_evidence(
+            manifest,
+            requirements,
+        )
+        manifest["worldProofEvidence"]["version"] = 0
+        failures = glx_runtime_sweep.evaluate_world_proof(manifest, requirements)
+        text = "\n".join(failures)
+
+        self.assertIn("unsupported version", text)
+        self.assertIn("static-world renderer", text)
+        self.assertIn("fog-heavy screenshot", text)
+        self.assertIn("fog support", text)
+
+    def test_material_proof_evidence_passes_for_rc_proof_surface(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        evidence = manifest["materialProofEvidence"]
+
+        self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_MATERIAL_PROOF_VERSION)
+        self.assertEqual(evidence["status"], "passed")
+        self.assertIn("q3dm11", evidence["requiredMaps"])
+        self.assertEqual(evidence["renderer"]["enabled"], 1)
+        self.assertEqual(evidence["renderer"]["ready"], 1)
+        self.assertGreater(evidence["renderer"]["programs"], 0)
+        self.assertGreater(evidence["parameters"]["blocks"], 0)
+        self.assertGreater(evidence["parameters"]["hash"], 0)
+        self.assertEqual(evidence["parameters"]["invalid"], 0)
+        self.assertGreater(evidence["streamFeatures"]["multitexture"], 0)
+        self.assertGreater(evidence["streamFeatures"]["depthFragment"], 0)
+        self.assertGreater(evidence["streamFeatures"]["texMod"], 0)
+        self.assertGreater(evidence["streamFeatures"]["environment"], 0)
+        self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
+
+    def test_material_proof_evidence_proves_staged_animated_screen_video_surface(self) -> None:
+        manifest = release_proof_manifest("rc-stress", "windows-x64")
+        evidence = manifest["materialProofEvidence"]
+        stage_flags = evidence["stageFlags"]
+
+        self.assertEqual(evidence["status"], "passed")
+        self.assertIn("animatedImage", evidence["requiredStageFlags"])
+        self.assertIn("screenMap", evidence["requiredStageFlags"])
+        self.assertIn("videoMap", evidence["requiredStageFlags"])
+        self.assertGreater(stage_flags["counts"]["animatedImage"], 0)
+        self.assertGreater(stage_flags["counts"]["screenMap"], 0)
+        self.assertGreater(stage_flags["counts"]["videoMap"], 0)
+        self.assertGreater(evidence["streamFeatures"]["screenMap"], 0)
+        self.assertGreater(evidence["streamFeatures"]["videoMap"], 0)
+        self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
+
+    def test_material_proof_evidence_keeps_screen_video_guarded_out_of_rc_proof(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        evidence = manifest["materialProofEvidence"]
+
+        self.assertIn("screenMap", evidence["forbiddenStreamFeatures"])
+        self.assertIn("videoMap", evidence["forbiddenStreamFeatures"])
+        self.assertEqual(evidence["streamFeatures"]["screenMap"], 0)
+        self.assertEqual(evidence["streamFeatures"]["videoMap"], 0)
+        self.assertEqual(evidence["streamMaterialGates"]["screenMap"]["accepted"], 0)
+        self.assertEqual(evidence["streamMaterialGates"]["videoMap"]["accepted"], 0)
+        self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
+
+    def test_material_proof_evidence_requires_versioned_object(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest.pop("materialProofEvidence")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("No material proof evidence" in failure for failure in failures))
+
+    def test_material_proof_evidence_rejects_stale_version_and_unsafe_counters(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
+        for run in manifest["runs"]:
+            diagnostics = run.get("diagnostics")
+            if isinstance(diagnostics, dict) and isinstance(diagnostics.get("metrics"), dict):
+                metrics = diagnostics["metrics"]
+                if isinstance(metrics.get("material"), dict):
+                    metrics["material"].update(
+                        {
+                            "ready": 0,
+                            "compile": 1,
+                            "link": 1,
+                            "precacheFailures": 1,
+                            "bind": 1,
+                        }
+                    )
+                if isinstance(metrics.get("materialCompilerPlans"), dict):
+                    metrics["materialCompilerPlans"].update(
+                        {"unsupported": 1, "lastUnsupported": 0x80}
+                    )
+                if isinstance(metrics.get("materialFallbacks"), dict):
+                    metrics["materialFallbacks"].update({"disabled": 1})
+                if isinstance(metrics.get("materialParameters"), dict):
+                    metrics["materialParameters"].update(
+                        {"blocks": 0, "invalid": 1, "hash": 0}
+                    )
+                if isinstance(metrics.get("streamDraw"), dict):
+                    metrics["streamDraw"].update(
+                        {
+                            "multitexture": 0,
+                            "depthFragment": 0,
+                            "texMods": 0,
+                            "environment": 0,
+                            "fallbacks": 1,
+                        }
+                    )
+                if isinstance(metrics.get("streamMaterialGate"), dict):
+                    metrics["streamMaterialGate"].update(
+                        {
+                            "multitextureAccepted": 0,
+                            "depthFragmentAccepted": 0,
+                            "texModAccepted": 0,
+                            "environmentAccepted": 0,
+                        }
+                    )
+
+            performance = run.get("performance")
+            if isinstance(performance, dict) and isinstance(performance.get("latest"), dict):
+                performance["latest"].update(
+                    {
+                        "materialReady": "not-ready",
+                        "materialPrograms": 0,
+                        "materialCompileFailures": 1,
+                        "materialLinkFailures": 1,
+                        "materialPrecacheFailures": 1,
+                        "materialBindFailures": 1,
+                        "materialParameterBlocks": 0,
+                        "materialParameterHash": 0,
+                        "materialInvalidParameterBlocks": 1,
+                        "streamDrawMultitexture": 0,
+                        "streamDrawDepthFragment": 0,
+                        "streamDrawTexMods": 0,
+                        "streamDrawEnvironment": 0,
+                        "streamDrawFallbacks": 1,
+                    }
+                )
+
+        manifest["performanceAggregate"] = {"sampleCount": 1, "latest": {}, "max": {}}
+        manifest["materialProofEvidence"] = glx_runtime_sweep.material_proof_evidence(
+            manifest,
+            requirements,
+        )
+        manifest["materialProofEvidence"]["version"] = 0
+        failures = glx_runtime_sweep.evaluate_material_proof(manifest, requirements)
+        text = "\n".join(failures)
+
+        self.assertIn("unsupported version", text)
+        self.assertIn("material renderer ready", text)
+        self.assertIn("material failures", text)
+        self.assertIn("disabled=1", text)
+        self.assertIn("unsupported compiler plans", text)
+        self.assertIn("invalid parameter blocks", text)
+        self.assertIn("stream feature evidence", text)
+
+    def test_material_proof_evidence_rejects_missing_staged_stage_flags_and_guards(self) -> None:
+        manifest = release_proof_manifest("rc-stress", "windows-x64")
+        requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-stress"]["requirements"]
+        for run in manifest["runs"]:
+            diagnostics = run.get("diagnostics")
+            if isinstance(diagnostics, dict) and isinstance(diagnostics.get("metrics"), dict):
+                metrics = diagnostics["metrics"]
+                if isinstance(metrics.get("materialParameters"), dict):
+                    metrics["materialParameters"]["flags"] = 0x0C23
+                    metrics["materialParameters"]["features"] = 0x0C23
+                if isinstance(metrics.get("materialLastKey"), dict):
+                    metrics["materialLastKey"]["flags"] = 0x0C23
+                if isinstance(metrics.get("materialLanguage"), dict):
+                    metrics["materialLanguage"]["flags"] = 0x0C23
+                if isinstance(metrics.get("materialStageFlags"), dict):
+                    metrics["materialStageFlags"]["animatedImage"] = 0
+                    metrics["materialStageFlags"]["screenMap"] = 0
+                    metrics["materialStageFlags"]["videoMap"] = 0
+                if isinstance(metrics.get("streamDraw"), dict):
+                    metrics["streamDraw"]["screenMaps"] = 0
+                    metrics["streamDraw"]["videoMaps"] = 0
+                metrics.pop("streamMaterialGate", None)
+
+        manifest["performanceAggregate"] = {"sampleCount": 1, "latest": {}, "max": {}}
+        manifest["materialProofEvidence"] = glx_runtime_sweep.material_proof_evidence(
+            manifest,
+            requirements,
+        )
+        failures = glx_runtime_sweep.evaluate_material_proof(manifest, requirements)
+        text = "\n".join(failures)
+
+        self.assertIn("stage-flag evidence", text)
+        self.assertIn("animatedImage", text)
+        self.assertIn("screenMap", text)
+        self.assertIn("videoMap", text)
+        self.assertIn("stream feature evidence", text)
+        self.assertIn("stream guard evidence", text)
+
+    def test_dynamic_proof_evidence_passes_for_rc_proof_surface(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        evidence = manifest["dynamicProofEvidence"]
+
+        self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_DYNAMIC_PROOF_VERSION)
+        self.assertEqual(evidence["status"], "passed")
+        self.assertIn("q3dm1", evidence["requiredMaps"])
+        self.assertIn("q3dm6", evidence["requiredMaps"])
+        self.assertIn("demo1", evidence["requiredDemos"])
+        self.assertGreater(evidence["streamCategories"]["entity"]["draws"], 0)
+        self.assertGreater(evidence["streamCategories"]["weapon"]["draws"], 0)
+        self.assertGreater(evidence["streamFeatures"]["shadow"], 0)
+        self.assertEqual(evidence["streamFeatures"]["dynamicLight"], 0)
+        self.assertIn("GL2X", evidence["tierSupport"]["dynamicEntities"])
+        self.assertIn("GL12", evidence["tierSupport"]["dynamicLights"])
+        self.assertEqual(evidence["streamGuards"]["dynamicLight"]["accepted"], 0)
+        self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
+
+    def test_dynamic_proof_evidence_proves_staged_particles_and_beams(self) -> None:
+        manifest = release_proof_manifest("rc-stress", "windows-x64")
+        evidence = manifest["dynamicProofEvidence"]
+
+        self.assertEqual(evidence["status"], "passed")
+        self.assertIn("fnq3_glx_particles01", evidence["requiredDemos"])
+        self.assertGreater(evidence["streamCategories"]["particle"]["draws"], 0)
+        self.assertGreater(evidence["streamCategories"]["poly"]["draws"], 0)
+        self.assertGreater(evidence["streamCategories"]["mark"]["draws"], 0)
+        self.assertGreater(evidence["streamCategories"]["beam"]["draws"], 0)
+        self.assertGreater(evidence["streamFeatures"]["beam"], 0)
+        self.assertEqual(evidence["streamFeatures"]["dynamicLight"], 0)
+        self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
+
+    def test_dynamic_proof_evidence_requires_versioned_object(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest.pop("dynamicProofEvidence")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("No dynamic proof evidence" in failure for failure in failures))
+
+    def test_dynamic_proof_rejects_stale_version_and_unsafe_counters(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
+        for run in manifest["runs"]:
+            diagnostics = run.get("diagnostics")
+            if isinstance(diagnostics, dict) and isinstance(diagnostics.get("metrics"), dict):
+                metrics = diagnostics["metrics"]
+                if isinstance(metrics.get("gl12Support"), dict):
+                    metrics["gl12Support"].update(  # type: ignore[index, union-attr]
+                        {
+                            "sprites": 0,
+                            "dynamicLights": 0,
+                            "stencilShadows": 0,
+                        }
+                    )
+                if isinstance(metrics.get("gl2xSupport"), dict):
+                    metrics["gl2xSupport"].update(  # type: ignore[index, union-attr]
+                        {
+                            "dynamicEntities": 0,
+                            "sprites": 0,
+                        }
+                    )
+                if isinstance(metrics.get("streamDraw"), dict):
+                    metrics["streamDraw"].update(  # type: ignore[index, union-attr]
+                        {
+                            "draws": 0,
+                            "attempts": 0,
+                            "indexes": 0,
+                            "dynamicLights": 1,
+                            "shadows": 0,
+                            "fallbacks": 1,
+                            "skips": 1,
+                        }
+                    )
+                if isinstance(metrics.get("streamCategory"), dict):
+                    metrics["streamCategory"].update(  # type: ignore[index, union-attr]
+                        {
+                            "entityDraws": 0,
+                            "entityAttempts": 0,
+                            "entityFallbacks": 1,
+                            "weaponDraws": 0,
+                            "weaponAttempts": 0,
+                        }
+                    )
+                if isinstance(metrics.get("streamMaterialGate"), dict):
+                    metrics["streamMaterialGate"].update(  # type: ignore[index, union-attr]
+                        {
+                            "dynamicLightEnabled": 1,
+                            "dynamicLightAccepted": 1,
+                            "dynamicLightRejected": 0,
+                        }
+                    )
+
+            performance = run.get("performance")
+            if isinstance(performance, dict) and isinstance(performance.get("latest"), dict):
+                performance["latest"].update(
+                    {
+                        "draws": 0,
+                        "streamDrawAttempts": 0,
+                        "streamDrawIndexes": 0,
+                        "streamDrawDynamicLights": 1,
+                        "streamDrawShadows": 0,
+                        "streamDrawFallbacks": 1,
+                        "streamDrawSkips": 1,
+                        "streamCategoryEntityDraws": 0,
+                        "streamCategoryEntityAttempts": 0,
+                        "streamCategoryWeaponDraws": 0,
+                        "streamCategoryWeaponAttempts": 0,
+                    }
+                )
+
+        manifest["performanceAggregate"] = {"sampleCount": 1, "latest": {}, "max": {}}
+        manifest["dynamicProofEvidence"] = glx_runtime_sweep.dynamic_proof_evidence(
+            manifest,
+            requirements,
+        )
+        manifest["dynamicProofEvidence"]["version"] = 0
+        failures = glx_runtime_sweep.evaluate_dynamic_proof(manifest, requirements)
+        text = "\n".join(failures)
+
+        self.assertIn("unsupported version", text)
+        self.assertIn("stream category evidence", text)
+        self.assertIn("stream feature evidence", text)
+        self.assertIn("tier-support evidence", text)
+        self.assertIn("accepted forbidden", text)
+        self.assertIn("high-risk stream draws", text)
+        self.assertIn("stream draw fallbacks", text)
+        self.assertIn("stream draw skips", text)
+
+    def test_post_proof_evidence_passes_for_rc_proof_surface(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        evidence = manifest["postProofEvidence"]
+
+        self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_POST_PROOF_VERSION)
+        self.assertEqual(evidence["status"], "passed")
+        self.assertIn("q3dm1", evidence["requiredMaps"])
+        self.assertIn("q3dm17", evidence["requiredMaps"])
+        self.assertIn("q3dm1", evidence["glxScreenshotMaps"])
+        self.assertIn("q3dm17", evidence["glxScreenshotMaps"])
+        self.assertEqual(evidence["fbo"]["requested"], 1)
+        self.assertEqual(evidence["fbo"]["ready"], 1)
+        self.assertEqual(evidence["fbo"]["initFailures"], 0)
+        self.assertGreater(evidence["frames"]["post"], 0)
+        self.assertGreater(evidence["frames"]["screenshots"], 0)
+        self.assertEqual(evidence["frames"]["minimizedOutput"], 0)
+        self.assertTrue(evidence["featureEvidence"]["greyscale"]["ok"])
+        self.assertTrue(evidence["featureEvidence"]["renderScale"]["ok"])
+        self.assertTrue(evidence["featureEvidence"]["renderScale"]["dimensionEvidence"])
+        self.assertEqual(evidence["colorContract"], 1)
+        self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
+
+    def test_post_proof_evidence_requires_versioned_object(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest.pop("postProofEvidence")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("No post proof evidence" in failure for failure in failures))
+
+    def test_post_proof_rejects_stale_version_and_missing_feature_evidence(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
+        for run in manifest["runs"]:
+            diagnostics = run.get("diagnostics")
+            if isinstance(diagnostics, dict) and isinstance(diagnostics.get("metrics"), dict):
+                metrics = diagnostics["metrics"]
+                if isinstance(metrics.get("postprocess"), dict):
+                    metrics["postprocess"].update(
+                        {
+                            "fboRequested": 1,
+                            "fboReady": 0,
+                            "fboAttempts": 1,
+                            "fboFailed": 1,
+                            "lastOutput": "minimized",
+                        }
+                    )
+                if isinstance(metrics.get("postprocessControls"), dict):
+                    metrics["postprocessControls"].update(
+                        {
+                            "renderScale": 0,
+                            "greyscale": 0.0,
+                            "windowAdjusted": 0,
+                        }
+                    )
+                if isinstance(metrics.get("postprocessFrames"), dict):
+                    metrics["postprocessFrames"].update(
+                        {
+                            "frames": 0,
+                            "screenshots": 0,
+                            "minimizedOutput": 1,
+                        }
+                    )
+                if isinstance(metrics.get("postprocessFrameFeatures"), dict):
+                    metrics["postprocessFrameFeatures"].update(
+                        {
+                            "renderScale": 0,
+                            "greyscale": 0,
+                            "windowAdjusted": 0,
+                            "minimized": 1,
+                        }
+                    )
+                if isinstance(metrics.get("targetFormat"), dict):
+                    metrics["targetFormat"].update(
+                        {
+                            "renderWidth": 640,
+                            "renderHeight": 480,
+                            "captureWidth": 640,
+                            "captureHeight": 480,
+                            "windowWidth": 640,
+                            "windowHeight": 480,
+                        }
+                    )
+                if isinstance(metrics.get("colorAudit"), dict):
+                    metrics["colorAudit"]["contract"] = 0
+
+            performance = run.get("performance")
+            if isinstance(performance, dict) and isinstance(performance.get("latest"), dict):
+                performance["latest"].update(
+                    {
+                        "fbo": "failed",
+                        "postprocessRenderScaleMode": 0,
+                        "postprocessGreyscale": 0,
+                        "postprocessWindowAdjusted": 0,
+                        "postprocessFrames": 0,
+                        "postprocessScreenshots": 0,
+                        "postprocessMinimizedOutput": 1,
+                        "postprocessFeatureRenderScale": 0,
+                        "postprocessFeatureGreyscale": 0,
+                        "postprocessFeatureWindowAdjusted": 0,
+                        "postprocessFeatureMinimized": 1,
+                        "targetRenderWidth": 640,
+                        "targetRenderHeight": 480,
+                        "targetCaptureWidth": 640,
+                        "targetCaptureHeight": 480,
+                        "targetWindowWidth": 640,
+                        "targetWindowHeight": 480,
+                        "colorOutputContract": 0,
+                    }
+                )
+
+        manifest["postProofEvidence"] = glx_runtime_sweep.post_proof_evidence(
+            manifest,
+            requirements,
+        )
+        manifest["postProofEvidence"]["version"] = 0
+        failures = glx_runtime_sweep.evaluate_post_proof(manifest, requirements)
+        text = "\n".join(failures)
+
+        self.assertIn("unsupported version", text)
+        self.assertIn("ready postprocess FBO", text)
+        self.assertIn("FBO init failures", text)
+        self.assertIn("postprocess frames", text)
+        self.assertIn("feature evidence", text)
+        self.assertIn("greyscale", text)
+        self.assertIn("renderScale", text)
+        self.assertIn("minimized output", text)
+        self.assertIn("valid output color contract", text)
+
+    def test_color_sweep_rejects_frame_dump_that_disagrees_with_row(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        color_run = next(
+            run
+            for run in manifest["runs"]
+            if run.get("type") == "color-sweep"
+            and run["colorSweepRow"]["id"] == "scene-linear-sdr-aces"
+        )
+        color_frame = color_run["diagnostics"]["metrics"]["colorFrame"]["latest"]
+        color_frame["space"] = "display-referred-sdr"
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("colorFrame.space" in failure for failure in failures))
+
+    def test_color_sweep_rejects_invalid_frame_contract(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        color_run = next(
+            run
+            for run in manifest["runs"]
+            if run.get("type") == "color-sweep"
+            and run["colorSweepRow"]["id"] == "scene-linear-sdr-aces"
+        )
+        color_frame = color_run["diagnostics"]["metrics"]["colorFrame"]["latest"]
+        color_frame["contractValid"] = False
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("colorFrame.contractValid" in failure for failure in failures))
+
+    def test_color_sweep_rejects_srgb_decode_state_drift(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        color_run = next(
+            run
+            for run in manifest["runs"]
+            if run.get("type") == "color-sweep"
+            and run["colorSweepRow"]["id"] == "scene-linear-srgb-decode-off"
+        )
+        metrics = color_run["diagnostics"]["metrics"]
+        metrics["colorAudit"]["srgbDecode"] = 1
+        metrics["colorFrame"]["latest"]["srgbDecode"] = True
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("colorAudit.srgbDecode" in failure for failure in failures))
+        self.assertTrue(any("colorFrame.srgbDecode" in failure for failure in failures))
+
+    def test_color_contract_rejects_texture_classification_policy_drift(self) -> None:
+        contracts = color_contracts()
+        manifest_rows = contracts["textureClassificationManifest"]["rows"]
+        authored = next(row for row in manifest_rows if row["id"] == "authored-color")
+        authored["sceneLinearDecode"] = "never"
+
+        failures = glx_runtime_sweep.validate_color_contract_manifest(
+            {"colorContracts": contracts}
+        )
+
+        self.assertTrue(any("authored-color sceneLinearDecode" in failure for failure in failures))
+
+    def test_color_sweep_requires_luma_false_color_sidecars(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        color_run = next(
+            run
+            for run in manifest["runs"]
+            if run.get("type") == "color-sweep"
+        )
+        color_run["screenshots"][0].pop("falseColor")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("luma false-color sidecar" in failure for failure in failures))
 
 
 class GlxRuntimeSweepProfileTests(unittest.TestCase):
@@ -1389,6 +3324,8 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                 "bloom-parity",
                 "cel-shading-parity",
                 "outline-parity",
+                "greyscale-proof",
+                "render-scale-proof",
                 "performance-comparison",
             }.issubset(all_tags)
         )
@@ -1403,6 +3340,10 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             glx_runtime_sweep.PROFILE_MAPS["glx-color"],
             "q3dm17,q3dm11,q3dm15",
         )
+        self.assertEqual(
+            glx_runtime_sweep.PROFILE_MAPS["glx-material"],
+            "q3dm1,q3dm11",
+        )
         self.assertEqual(glx_runtime_sweep.PROFILE_CVARS["glx-color"]["r_colorGrade"], "3")
 
     def test_task_v_parity_suites_are_versioned_and_gate_enforced(self) -> None:
@@ -1413,6 +3354,8 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             "shadow",
             "bloom",
             "cel-shading",
+            "greyscale",
+            "render-scale",
         )
         self.assertEqual(set(glx_runtime_sweep.GLX_PARITY_SUITES), set(required_suites))
 
@@ -1448,6 +3391,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             ["q3dm6", "q3dm11"],
             ["opengl", "glx"],
             "parity-suite-test",
+            "gs12345678",
             glx_runtime_sweep.GLX_GATE_CORPUS_SCENES["rc-proof"],
             glx_runtime_sweep.GLX_GATE_PARITY_SUITES["rc-proof"],
         )
@@ -1522,6 +3466,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(profile["r_glxWorldRenderer"], "1")
         self.assertEqual(profile["r_glxStreamDraw"], "1")
         self.assertEqual(profile["r_glxMaterialRenderer"], "1")
+        self.assertEqual(profile["r_glxMaterialPrecache"], "1")
         self.assertEqual(profile["r_glxStaticWorldArena"], "1")
         self.assertEqual(profile["r_glxStaticWorldArenaDraw"], "1")
         self.assertEqual(profile["r_glxStaticWorldDraw"], "1")
@@ -1540,6 +3485,28 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
         rc_profile["r_glxStaticWorldMultiDrawIndirectCompact"] = "1"
         self.assertEqual(stress_profile, rc_profile)
+
+    def test_material_profile_requests_compile_cache_stress(self) -> None:
+        profile = glx_runtime_sweep.PROFILE_CVARS["glx-material"]
+
+        self.assertEqual(profile["r_glxMaterialRenderer"], "1")
+        self.assertEqual(profile["r_glxMaterialPrecache"], "1")
+        self.assertEqual(profile["r_glxGpuTiming"], "1")
+
+    def test_diagnostic_gates_force_per_frame_color_debug(self) -> None:
+        args = argparse.Namespace(
+            width=640,
+            height=480,
+            profile="glx-parity",
+            gate="rc-smoke",
+            extra_set=[],
+        )
+        cvars = glx_runtime_sweep.make_cvars(args)
+        self.assertEqual(cvars["r_glxColorPipelineDebug"], "2")
+
+        args.extra_set = ["r_glxColorPipelineDebug=0"]
+        cvars = glx_runtime_sweep.make_cvars(args)
+        self.assertEqual(cvars["r_glxColorPipelineDebug"], "0")
 
     def test_ownership_profile_preserves_independent_ownership_cvar(self) -> None:
         profile = dict(glx_runtime_sweep.PROFILE_CVARS["glx-ownership"])
@@ -1637,52 +3604,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(proof["visual"]["status"], "failed")
 
     def test_rc_proof_gate_requires_reviewed_visual_and_performance_baselines(self) -> None:
-        manifest = {
-            "gate": "rc-proof",
-            "dryRun": False,
-            "performanceFailures": [],
-            "runs": [
-                {
-                    "type": "switch-screenshots",
-                    "status": "passed",
-                    "screenshots": [
-                        {
-                            "name": "shot",
-                            "found": True,
-                            "baselineStatus": "passed",
-                            "comparison": {"status": "passed"},
-                        },
-                    ],
-                    "diagnostics": {"found": True, "failures": []},
-                    "performance": locked_performance_sample(),
-                },
-                {
-                    "type": "timedemo",
-                    "status": "passed",
-                    "renderer": "opengl",
-                    "demo": "demo1",
-                    "timedemoMetrics": {"fps": 100.0},
-                },
-                {
-                    "type": "timedemo",
-                    "status": "passed",
-                    "renderer": "glx",
-                    "demo": "demo1",
-                    "timedemoMetrics": {"fps": 95.0},
-                },
-            ],
-            "renderers": ["opengl", "glx"],
-            "maps": glx_runtime_sweep.corpus_targets(
-                glx_runtime_sweep.GLX_GATE_CORPUS_SCENES["rc-proof"],
-                "map",
-            ),
-            "demos": ["demo1"],
-            "proofCorpus": proof_corpus_for_gate("rc-proof"),
-            "screenshotBaselineDir": "proof/screenshots",
-            "performanceBaselinePath": "proof/performance-baseline.json",
-            "performanceBaselineStatus": "compared",
-            "performanceComparisons": [{"metric": "draws", "status": "passed"}],
-        }
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
 
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
         proof = glx_runtime_sweep.proof_status(
@@ -1712,8 +3634,19 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                 {
                     "type": "switch-screenshots",
                     "status": "passed",
-                    "screenshots": [{"name": "shot", "found": True, "baselineStatus": "approved"}],
-                    "diagnostics": {"found": True, "failures": []},
+                    "screenshots": [
+                        {
+                            "name": "shot",
+                            "found": True,
+                            "baselineStatus": "approved",
+                            "histogram": screenshot_histogram(),
+                        }
+                    ],
+                    "diagnostics": {
+                        "found": True,
+                        "failures": [],
+                        "metrics": color_diagnostics_metrics(),
+                    },
                     "performance": locked_performance_sample(),
                 },
             ],
@@ -1807,6 +3740,8 @@ class GlxWorkflowTests(unittest.TestCase):
         self.assertIn("GLX_PROMOTION.md", workflow)
         self.assertIn("glx-promotion.json", workflow)
         self.assertIn("glx_promotion", release_script)
+        self.assertIn("GLX_VISUAL_DOSSIER.md", workflow)
+        self.assertIn("GLX_VISUAL_DOSSIER.md", release_script)
         self.assertIn(glx_runtime_sweep.GLX_PROOF_CORPUS_VERSION, corpus_doc)
 
 
@@ -1841,6 +3776,18 @@ class GlxPromotionTests(unittest.TestCase):
                 ownership_proof_manifest(platform_id),
             )
 
+    def write_rollback_metadata(
+        self,
+        root: Path,
+        metadata: dict[str, object] | None = None,
+    ) -> Path:
+        path = root / "rollback-package.json"
+        path.write_text(
+            json.dumps(metadata or rollback_package_metadata(), indent=2),
+            encoding="utf-8",
+        )
+        return path
+
     def test_current_tree_is_blocked_but_not_promoted(self) -> None:
         report = glx_promotion.promotion_report()
 
@@ -1853,20 +3800,144 @@ class GlxPromotionTests(unittest.TestCase):
         checks = {check["name"]: check for check in report["checks"]}
         self.assertEqual(checks["feature-matrix-green"]["status"], "blocked")
         self.assertGreater(len(checks["feature-matrix-green"]["blockers"]), 0)
+        self.assertEqual(checks["legacy-coupling-inventory"]["status"], "passed")
+        self.assertEqual(checks["rollback-package-metadata"]["status"], "blocked")
         self.assertEqual(checks["migration-and-rollback-doc"]["status"], "passed")
 
     def test_complete_runtime_and_ownership_proof_still_waits_for_green_matrix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.write_complete_proof_root(root)
+            rollback_metadata = self.write_rollback_metadata(root)
 
-            report = glx_promotion.promotion_report(root)
+            report = glx_promotion.promotion_report(root, rollback_metadata)
             checks = {check["name"]: check for check in report["checks"]}
 
             self.assertEqual(checks["blocking-runtime-proof"]["status"], "passed")
             self.assertEqual(checks["ownership-proof"]["status"], "passed")
+            self.assertEqual(checks["rollback-package-metadata"]["status"], "passed")
             self.assertEqual(checks["feature-matrix-green"]["status"], "blocked")
             self.assertEqual(report["status"], "blocked")
+
+    def test_legacy_coupling_inventory_matches_build_systems_and_doc(self) -> None:
+        check = glx_promotion.check_legacy_coupling_inventory()
+
+        self.assertEqual(check["status"], "passed")
+        self.assertEqual(check["remainingLegacyRendererSources"], 24)
+        self.assertEqual(check["ratchetBudget"], 24)
+        self.assertEqual(check["documentedCount"], 24)
+        self.assertEqual(check["blockers"], [])
+        self.assertIn("code/renderer/tr_arb.c", check["sources"])
+        self.assertIn("code/renderer/tr_shade.c", check["sources"])
+
+        builds = check["builds"]
+        self.assertEqual(builds["cmake"]["sources"], check["sources"])
+        self.assertEqual(builds["makefile"]["sources"], check["sources"])
+        self.assertEqual(builds["msvc"]["sources"], check["sources"])
+
+    def test_legacy_coupling_inventory_blocks_missing_doc_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = Path(tmp) / "GLX_LEGACY_COUPLING.md"
+            doc.write_text(
+                "\n".join(
+                    [
+                        "| Source | Compatibility role | Extraction target |",
+                        "|---|---|---|",
+                        "| `code/renderer/tr_arb.c` | FBO substrate. | Split GLx postprocess. |",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            check = glx_promotion.check_legacy_coupling_inventory(doc_path=doc)
+            failures = "\n".join(str(failure) for failure in check["blockers"])
+
+            self.assertEqual(check["status"], "blocked")
+            self.assertIn("Legacy coupling ledger is missing source", failures)
+            self.assertIn("code/renderer/tr_shade.c", failures)
+
+    def test_rollback_package_metadata_validates_platform_artifacts_and_triggers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata_path = self.write_rollback_metadata(Path(tmp))
+
+            check = glx_promotion.check_rollback_package_metadata(metadata_path)
+
+            self.assertEqual(check["status"], "passed")
+            self.assertEqual(check["metadataStatus"], "reviewed")
+            self.assertEqual(
+                check["coveredPlatforms"],
+                sorted(glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS),
+            )
+            self.assertEqual(check["packageCount"], 1)
+            self.assertEqual(check["packages"][0]["artifactDir"], "fnquake3-legacy-opengl")
+            self.assertEqual(check["blockers"], [])
+
+    def test_rollback_package_metadata_blocks_incomplete_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata_path = self.write_rollback_metadata(
+                Path(tmp),
+                rollback_package_metadata(
+                    platforms=["windows-x64"],
+                    legacy_renderers=["glx"],
+                    required_artifacts={"proofCorpus": True},
+                    triggers=["driver regression only"],
+                ),
+            )
+
+            check = glx_promotion.check_rollback_package_metadata(metadata_path)
+            failures = "\n".join(str(failure) for failure in check["blockers"])
+
+            self.assertEqual(check["status"], "blocked")
+            self.assertIn("legacy opengl renderer", failures)
+            self.assertIn("promotionReport", failures)
+            self.assertIn("releaseProofSummary", failures)
+            self.assertIn("checksums", failures)
+            self.assertIn("demo regressions", failures)
+            self.assertIn("screenshot regressions", failures)
+            self.assertIn("performance regressions", failures)
+            self.assertIn("linux-x86_64", failures)
+
+    def test_release_rollback_package_policy_is_not_required_until_source_promotion(self) -> None:
+        args = argparse.Namespace(channel="release", glx_rollback_metadata=None)
+
+        current = fnq3_release.resolve_glx_rollback_package(
+            args,
+            {"sourcePolicy": {"promoted": False}},
+        )
+        promoted = fnq3_release.resolve_glx_rollback_package(
+            args,
+            {"sourcePolicy": {"promoted": True}},
+        )
+
+        self.assertEqual(current["status"], "not-required")
+        self.assertFalse(current["required"])
+        self.assertEqual(promoted["status"], "missing")
+        self.assertTrue(promoted["required"])
+
+    def test_release_rollback_package_metadata_must_match_staged_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata_path = self.write_rollback_metadata(Path(tmp))
+            args = argparse.Namespace(channel="release", glx_rollback_metadata=metadata_path)
+            rollback = fnq3_release.resolve_glx_rollback_package(
+                args,
+                {"sourcePolicy": {"promoted": True}},
+            )
+            archives = [
+                {
+                    "artifact_dir": "fnquake3-legacy-opengl",
+                    "archive": "fnquake3-legacy-opengl.zip",
+                    "path": ".install/packages/fnquake3-legacy-opengl.zip",
+                    "sha256": "abc123",
+                }
+            ]
+
+            rollback = fnq3_release.attach_glx_rollback_archives(rollback, archives)
+
+            self.assertEqual(rollback["matchedArchives"][0]["archive"], "fnquake3-legacy-opengl.zip")
+            self.assertEqual(rollback["matchedArchives"][0]["sha256"], "abc123")
+
+            with self.assertRaisesRegex(ValueError, "did not match a staged release archive"):
+                fnq3_release.attach_glx_rollback_archives(rollback, [])
 
     def test_ownership_proof_requires_zero_legacy_delegation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1890,6 +3961,116 @@ class GlxPromotionTests(unittest.TestCase):
             self.assertIn("windows-x64", failures)
             self.assertNotIn("linux-x86_64 did not report zero", failures)
 
+    def test_ownership_proof_requires_versioned_evidence_object(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+                manifest = ownership_proof_manifest(platform_id)
+                if platform_id == "windows-x64":
+                    manifest.pop("ownershipProofEvidence")
+                self.write_manifest(
+                    root,
+                    platform_id,
+                    "glx-ownership",
+                    manifest,
+                )
+
+            proof = glx_promotion.check_ownership_proof(root)
+            failures = "\n".join(str(failure) for failure in proof["blockers"])
+
+            self.assertEqual(proof["status"], "blocked")
+            self.assertIn("windows-x64", failures)
+            self.assertIn("versioned ownership proof evidence", failures)
+            self.assertNotIn("linux-x86_64 did not include versioned", failures)
+
+    def test_ownership_proof_rejects_stale_evidence_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+                manifest = ownership_proof_manifest(platform_id)
+                if platform_id == "windows-x64":
+                    manifest["ownershipProofEvidence"]["version"] = 0
+                self.write_manifest(
+                    root,
+                    platform_id,
+                    "glx-ownership",
+                    manifest,
+                )
+
+            proof = glx_promotion.check_ownership_proof(root)
+            failures = "\n".join(str(failure) for failure in proof["blockers"])
+
+            self.assertEqual(proof["status"], "blocked")
+            self.assertIn("unsupported ownership proof evidence version", failures)
+
+    def test_ownership_proof_requires_modern_post_output_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+                self.write_manifest(
+                    root,
+                    platform_id,
+                    "glx-ownership",
+                    ownership_proof_manifest(
+                        platform_id,
+                        post_mode="legacy-fallback" if platform_id == "windows-x64" else "glx-owned",
+                        post_nodes=0 if platform_id == "windows-x64" else 2,
+                        outputs=0 if platform_id == "windows-x64" else 1,
+                        legacy_fallback=1 if platform_id == "windows-x64" else 0,
+                    ),
+                )
+
+            proof = glx_promotion.check_ownership_proof(root)
+            failures = "\n".join(str(failure) for failure in proof["blockers"])
+
+            self.assertEqual(proof["status"], "blocked")
+            self.assertIn("windows-x64", failures)
+            self.assertIn("did not prove GLx-owned modern post/output", failures)
+
+    def test_ownership_proof_requires_modern_post_output_tier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+                self.write_manifest(
+                    root,
+                    platform_id,
+                    "glx-ownership",
+                    ownership_proof_manifest(
+                        platform_id,
+                        tier="GL2X" if platform_id == "windows-x64" else "GL3X",
+                    ),
+                )
+
+            proof = glx_promotion.check_ownership_proof(root)
+            failures = "\n".join(str(failure) for failure in proof["blockers"])
+
+            self.assertEqual(proof["status"], "blocked")
+            self.assertIn("windows-x64", failures)
+            self.assertIn("did not prove a GL3X+ modern post/output tier", failures)
+            self.assertNotIn("linux-x86_64 did not prove a GL3X+", failures)
+
+    def test_ownership_proof_requires_modern_tier_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+                self.write_manifest(
+                    root,
+                    platform_id,
+                    "glx-ownership",
+                    ownership_proof_manifest(
+                        platform_id,
+                        modern_tier_diagnostics=platform_id != "windows-x64",
+                    ),
+                )
+
+            proof = glx_promotion.check_ownership_proof(root)
+            failures = "\n".join(str(failure) for failure in proof["blockers"])
+
+            self.assertEqual(proof["status"], "blocked")
+            self.assertIn("windows-x64", failures)
+            self.assertIn("did not prove modern post-chain and scene-linear tier diagnostics", failures)
+            self.assertNotIn("linux-x86_64 did not prove modern post-chain", failures)
+
 
 class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
     def test_rc_profiles_promote_state_only_dynamic_submission(self) -> None:
@@ -1912,15 +4093,25 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                     [
                         "glx: tier GL2X, batches 10, draws 20/300 idx, stream map-range/ready 1.25MB/2wraps/0rejects shadow 3, frames 4, backend queries 5, gpu 0.27 ms, static 6 batches/7 packets/8 surfaces/9 verts/10 indexes 2.50 MB, arena ready 3.75 MB",
                         f"glx: pass schedule valid 9/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
+                        "pass schedule: invalid 0/00000000 none",
+                        "glx: post/output ownership mode glx-owned, post nodes 4, outputs 2, legacy fallback no, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000000",
                         "glx: material renderer on/ready programs 25, binds 12/13 attempts, switches 4, cache 5/6, failures 0 compile/0 link/0 precache/0 bind, labels 8",
+                        "glx: material parameters blocks 12 invalid 0 hash 0x1234abcd, last sort 0 passes 1 features 0x0 flags 0x0 state 0x0",
                         "glx: postprocess fbo ready 640x480 capture 640x480 bloom 2, frames 3 final 2 prefinal 1 gamma 0/3, copies 4, msaa 5, ssaa 6, last bloom-final",
-                        "glx: color pipeline scene-linear precision 16 transfer sdr-srgb tone-map aces exposure 1.00 bloom-threshold 0.75/2 knee 0.50 grade lgg-lut3d paper-white 203 max 1000",
+                        "target: render 640x480, capture 640x480, window 640x480, format 0x881a (0x1908:0x140b)",
+                        "controls: scene-linear HDR yes, precision 16, renderScale 1, bloom 2, MSAA no, supersample no, adjusted window yes, greyscale 1.00",
+                        "frames: 3 post, 1 bloom-final, 0 gamma-direct, 3 gamma-blit, 0 minimized output, 1 screenshots",
+                        "frame features: 1 bloom-available, 1 scene-linear, 1 tone-mapped, 1 graded, 1 render-scale, 1 greyscale, 1 window-adjusted, 0 minimized",
+                        "glx: color pipeline scene-linear precision 16 transfer hdr10-pq tone-map aces exposure 1.00 bloom-threshold 0.75/2 knee 0.50 grade lgg-lut3d paper-white 203 max 812",
                         "glx: color grade mode lgg-lut3d lift 0.01/0.02/0.03 gamma 1.10/1.00/0.95 gain 1.05/1.00/0.98 white-point 6504->6000 lut-size 16 lut-scale 4.00",
-                        "glx: color audit srgb-decode yes requested yes available yes framebuffer-srgb no requested yes available yes capture sdr-srgb",
+                        "glx: color audit srgb-decode yes requested yes available yes framebuffer-srgb no requested yes available yes capture sdr-srgb target-float yes final-encode shader-srgb contract yes",
+                        "glx: texture audit srgb 4 decode 4, linear 2 decode 0, data 2 decode 0, unknown 0 decode 0, missing-srgb-decode 0, unexpected-decode 0",
+                        'glx: color-frame-json {"frame":1,"backend":"hdr10-pq","space":"scene-linear","transfer":"hdr10-pq","exposure":1.0000,"paperWhiteNits":203.0,"maxOutputNits":812.0,"srgbDecode":true,"framebufferSrgb":false,"internalFormat":"0x881a","textureFormat":"0x1908","textureType":"0x140b","sceneTargetFloat":true,"shaderSrgbEncode":true,"contractValid":true}',
                         "glx: output backend request hdr10-pq selected hdr10-pq native windows-scrgb hardware yes experimental no display-hdr yes headroom 4.00 sdr-white 203 display-max 812 icc yes/2048",
                         "glx: stream draws 7/8 attempts, 90 idx, 0.50MB/index 0.10MB/tex1 0.20MB, mt 1, fog 2, depthfrag 3, texmod 4, env 5, dlight 0, screen 0, video 0, shadow 2, beam 3, post 4, fallbacks 0, skips 1",
                         "glx: stream categories entity 2/2, particle 1/1, poly 1/1, mark 1/1, weapon 1/1, ui 1/1, beam 3/3, special 4/4",
                         "glx: stream reservation last 256 bytes at 1024 using map-range, largest 4096 bytes, same-frame wrap rejects 0",
+                        "glx: stream binding cache queries 1 hits 6 restores 8 invalidations 2 external 4 array-known yes array-buffer 0 element-known yes element-buffer 0",
                         "glx: static queue packets last 1 full/2 partial/3 miss/4 mismatch, total 5 full/6 partial/7 miss",
                         "glx: static packet lookup 64 mapped/max 63, hits 30, misses 9, fallbacks 2, mismatches 1, overflows 0",
                         "glx: static draw 11/12 calls, 130 idx, packets 1 full/2 partial/3 miss, manifest 4/5 idx, soft 6/7 calls/8 idx, arena 9, legacy 10, fallbacks 0, policy skips 1",
@@ -1944,10 +4135,20 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["passScheduleCount"], 9)
             self.assertEqual(performance["latest"]["passScheduleHash"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH)
             self.assertEqual(performance["latest"]["passScheduleOrder"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE)
+            self.assertEqual(performance["latest"]["postOutputMode"], "glx-owned")
+            self.assertEqual(performance["latest"]["postOutputPostNodes"], 4)
+            self.assertEqual(performance["latest"]["postOutputOutputs"], 2)
+            self.assertEqual(performance["latest"]["postOutputPostHash"], 0x01020304)
+            self.assertEqual(performance["latest"]["postOutputOutputHash"], 0x05060708)
+            self.assertEqual(performance["latest"]["postOutputPlanHash"], 0x090A0B0C)
+            self.assertEqual(performance["latest"]["postOutputFallbackMask"], 0)
             self.assertEqual(performance["latest"]["materialPrograms"], 25)
+            self.assertEqual(performance["latest"]["materialParameterBlocks"], 12)
+            self.assertEqual(performance["latest"]["materialParameterHash"], 0x1234ABCD)
+            self.assertEqual(performance["latest"]["materialInvalidParameterBlocks"], 0)
             self.assertEqual(performance["latest"]["colorSpace"], "scene-linear")
             self.assertEqual(performance["latest"]["hdrPrecision"], 16)
-            self.assertEqual(performance["latest"]["outputTransfer"], "sdr-srgb")
+            self.assertEqual(performance["latest"]["outputTransfer"], "hdr10-pq")
             self.assertEqual(performance["latest"]["toneMap"], "aces")
             self.assertEqual(performance["latest"]["toneMapExposure"], 1.0)
             self.assertEqual(performance["latest"]["bloomThreshold"], 0.75)
@@ -1962,15 +4163,43 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["colorGradeLutSize"], 16.0)
             self.assertEqual(performance["latest"]["colorGradeLutScale"], 4.0)
             self.assertEqual(performance["latest"]["paperWhiteNits"], 203.0)
-            self.assertEqual(performance["latest"]["maxOutputNits"], 1000.0)
+            self.assertEqual(performance["latest"]["maxOutputNits"], 812.0)
             self.assertEqual(performance["latest"]["colorSrgbDecode"], 1)
             self.assertEqual(performance["latest"]["colorSrgbAvailable"], 1)
             self.assertEqual(performance["latest"]["colorFramebufferSrgb"], 0)
+            self.assertEqual(performance["latest"]["colorSceneTargetFloat"], 1)
+            self.assertEqual(performance["latest"]["colorFinalEncode"], "shader-srgb")
+            self.assertEqual(performance["latest"]["colorOutputContract"], 1)
             self.assertEqual(performance["latest"]["captureColorSpace"], "sdr-srgb")
+            self.assertEqual(performance["latest"]["textureAuditSrgb"], 4)
+            self.assertEqual(performance["latest"]["textureAuditSrgbDecode"], 4)
+            self.assertEqual(performance["latest"]["textureAuditMissingSrgbDecode"], 0)
+            self.assertEqual(performance["latest"]["textureAuditUnexpectedDecode"], 0)
+            self.assertEqual(performance["latest"]["targetInternalFormat"], 0x881A)
+            self.assertEqual(performance["latest"]["targetTextureFormat"], 0x1908)
+            self.assertEqual(performance["latest"]["targetTextureType"], 0x140B)
+            self.assertEqual(performance["latest"]["postprocessRenderScaleMode"], 1)
+            self.assertEqual(performance["latest"]["postprocessGreyscale"], 1.0)
+            self.assertEqual(performance["latest"]["postprocessWindowAdjusted"], 1)
+            self.assertEqual(performance["latest"]["postprocessFrames"], 3)
+            self.assertEqual(performance["latest"]["postprocessScreenshots"], 1)
+            self.assertEqual(performance["latest"]["postprocessMinimizedOutput"], 0)
+            self.assertEqual(performance["latest"]["postprocessFeatureRenderScale"], 1)
+            self.assertEqual(performance["latest"]["postprocessFeatureGreyscale"], 1)
+            self.assertEqual(performance["latest"]["postprocessFeatureWindowAdjusted"], 1)
+            self.assertEqual(performance["latest"]["postprocessFeatureMinimized"], 0)
+            self.assertEqual(performance["latest"]["colorFrameSamples"], 1)
+            self.assertEqual(performance["latest"]["colorFrameBackend"], "hdr10-pq")
+            self.assertEqual(performance["latest"]["colorFrameTransfer"], "hdr10-pq")
+            self.assertEqual(performance["latest"]["colorFrameInternalFormat"], "0x881a")
+            self.assertEqual(performance["latest"]["colorFrameContractValid"], 1)
             self.assertEqual(performance["latest"]["outputBackendRequest"], "hdr10-pq")
             self.assertEqual(performance["latest"]["outputBackendSelected"], "hdr10-pq")
             self.assertEqual(performance["latest"]["outputBackendNative"], "windows-scrgb")
             self.assertEqual(performance["latest"]["outputBackendHardware"], 1)
+            self.assertEqual(performance["latest"]["streamBindingQueries"], 1)
+            self.assertEqual(performance["latest"]["streamBindingCacheHits"], 6)
+            self.assertEqual(performance["latest"]["streamBindingExternalUpdates"], 4)
             self.assertEqual(performance["latest"]["outputHeadroom"], 4.0)
             self.assertEqual(performance["latest"]["outputIccProfileBytes"], 2048)
             self.assertEqual(performance["latest"]["streamDrawAttempts"], 8)
@@ -2040,11 +4269,12 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                     "type": "switch-screenshots",
                     "status": "passed",
                     "screenshots": [
-                        {"name": "shot", "found": True},
+                        {"name": "shot", "found": True, "histogram": screenshot_histogram()},
                     ],
                     "diagnostics": {
                         "found": True,
                         "failures": [],
+                        "metrics": color_diagnostics_metrics(),
                     },
                 },
             ],
@@ -2064,11 +4294,12 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                     "type": "switch-screenshots",
                     "status": "passed",
                     "screenshots": [
-                        {"name": "shot", "found": True},
+                        {"name": "shot", "found": True, "histogram": screenshot_histogram()},
                     ],
                     "diagnostics": {
                         "found": True,
                         "failures": [],
+                        "metrics": color_diagnostics_metrics(),
                     },
                     "performance": {
                         "found": True,
@@ -2099,11 +4330,12 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                     "type": "switch-screenshots",
                     "status": "passed",
                     "screenshots": [
-                        {"name": "shot", "found": True},
+                        {"name": "shot", "found": True, "histogram": screenshot_histogram()},
                     ],
                     "diagnostics": {
                         "found": True,
                         "failures": [],
+                        "metrics": color_diagnostics_metrics(),
                     },
                     "performance": {
                         "found": True,
@@ -2180,7 +4412,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
         ):
             self.assertTrue(any(key in failure for failure in failures), key)
 
-    def test_performance_budget_requires_gpu_time_on_modern_tiers(self) -> None:
+    def test_performance_budget_requires_p1_metrics_on_modern_tiers(self) -> None:
         aggregate = {
             "sampleCount": 1,
             "latest": {"productTier": "GL46"},
@@ -2198,6 +4430,143 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
         )
 
         self.assertTrue(any("GL46 required metric gpuFrameMs is missing" in failure for failure in failures))
+        self.assertTrue(any("GL46 required metric postOutputLegacyFallback is missing" in failure for failure in failures))
+        self.assertTrue(any("GL46 required metric postOutputPostHash is missing" in failure for failure in failures))
+        self.assertTrue(any("GL46 required metric postOutputOutputHash is missing" in failure for failure in failures))
+        self.assertTrue(any("GL46 required metric postOutputPlanHash is missing" in failure for failure in failures))
+        self.assertTrue(any("GL46 required metric postOutputFallbackMask is missing" in failure for failure in failures))
+        self.assertTrue(any("GL46 required metric materialCacheMisses is missing" in failure for failure in failures))
+        self.assertTrue(any("GL46 required metric materialParameterBlocks is missing" in failure for failure in failures))
+        self.assertTrue(any("GL46 required metric materialParameterHash is missing" in failure for failure in failures))
+        self.assertTrue(any("GL46 required metric streamBindingQueries is missing" in failure for failure in failures))
+
+    def test_performance_budget_requires_positive_p1_evidence_on_modern_tiers(self) -> None:
+        aggregate = {
+            "sampleCount": 1,
+            "latest": {
+                "productTier": "GL46",
+                "gpuFrameMs": 1.0,
+                "postOutputPostNodes": 0,
+                "postOutputOutputs": 0,
+                "postOutputLegacyFallback": 0,
+                "postOutputPostHash": 0,
+                "postOutputOutputHash": 0,
+                "postOutputPlanHash": 0,
+                "postOutputFallbackMask": 0,
+                "materialPrograms": 0,
+                "materialBindAttempts": 0,
+                "materialCacheMisses": 0,
+                "materialCompileFailures": 0,
+                "materialLinkFailures": 0,
+                "materialPrecacheFailures": 0,
+                "materialBindFailures": 0,
+                "materialParameterBlocks": 0,
+                "materialParameterHash": 0,
+                "materialInvalidParameterBlocks": 0,
+                "streamBindingQueries": 0,
+                "streamBindingCacheHits": 0,
+                "streamBindingRestores": 0,
+            },
+            "max": {},
+        }
+
+        failures = glx_runtime_sweep.evaluate_performance_budget(
+            aggregate,
+            glx_runtime_sweep.DEFAULT_PERFORMANCE_BUDGET,
+        )
+
+        self.assertTrue(any("GL46 min postOutputPostNodes missed" in failure for failure in failures))
+        self.assertTrue(any("GL46 min postOutputPostHash missed" in failure for failure in failures))
+        self.assertTrue(any("GL46 min postOutputOutputHash missed" in failure for failure in failures))
+        self.assertTrue(any("GL46 min postOutputPlanHash missed" in failure for failure in failures))
+        self.assertTrue(any("GL46 min materialPrograms missed" in failure for failure in failures))
+        self.assertTrue(any("GL46 min materialParameterHash missed" in failure for failure in failures))
+        self.assertTrue(any("GL46 min streamBindingRestores missed" in failure for failure in failures))
+
+    def test_performance_budget_allows_legacy_post_output_fallback_on_gl2x_only(self) -> None:
+        gl2x = {
+            "sampleCount": 1,
+            "latest": {
+                "productTier": "GL2X",
+                "postOutputLegacyFallback": 1,
+            },
+            "max": {},
+        }
+
+        self.assertEqual(
+            glx_runtime_sweep.evaluate_performance_budget(
+                gl2x,
+                glx_runtime_sweep.DEFAULT_PERFORMANCE_BUDGET,
+            ),
+            [],
+        )
+
+        gl46 = {
+            "sampleCount": 1,
+            "latest": {
+                "productTier": "GL46",
+                "gpuFrameMs": 1.0,
+                "postOutputPostNodes": 2,
+                "postOutputOutputs": 1,
+                "postOutputLegacyFallback": 1,
+                "postOutputPostHash": 1,
+                "postOutputOutputHash": 1,
+                "postOutputPlanHash": 1,
+                "postOutputFallbackMask": 1,
+                "materialPrograms": 1,
+                "materialBindAttempts": 1,
+                "materialCacheMisses": 0,
+                "materialCompileFailures": 0,
+                "materialLinkFailures": 0,
+                "materialPrecacheFailures": 0,
+                "materialBindFailures": 0,
+                "materialParameterBlocks": 1,
+                "materialParameterHash": 1,
+                "materialInvalidParameterBlocks": 0,
+                "streamBindingQueries": 1,
+                "streamBindingCacheHits": 1,
+                "streamBindingRestores": 1,
+            },
+            "max": {},
+        }
+
+        failures = glx_runtime_sweep.evaluate_performance_budget(
+            gl46,
+            glx_runtime_sweep.DEFAULT_PERFORMANCE_BUDGET,
+        )
+
+        self.assertTrue(any("GL46 max postOutputLegacyFallback exceeded" in failure for failure in failures))
+        self.assertTrue(any("GL46 max postOutputFallbackMask exceeded" in failure for failure in failures))
+
+    def test_rc_stress_budget_allows_staged_screen_video_material_streams(self) -> None:
+        aggregate = {
+            "sampleCount": 1,
+            "latest": {},
+            "max": {
+                "streamDrawScreenMaps": 2,
+                "streamDrawVideoMaps": 2,
+                "streamDrawDynamicLights": 0,
+            },
+        }
+
+        rc_proof_failures = glx_runtime_sweep.evaluate_performance_budget(
+            aggregate,
+            glx_runtime_sweep.performance_budget_for_gate(
+                "rc-proof",
+                glx_runtime_sweep.DEFAULT_PERFORMANCE_BUDGET,
+            ),
+        )
+        rc_stress_failures = glx_runtime_sweep.evaluate_performance_budget(
+            aggregate,
+            glx_runtime_sweep.performance_budget_for_gate(
+                "rc-stress",
+                glx_runtime_sweep.DEFAULT_PERFORMANCE_BUDGET,
+            ),
+        )
+
+        self.assertTrue(any("streamDrawScreenMaps" in failure for failure in rc_proof_failures))
+        self.assertTrue(any("streamDrawVideoMaps" in failure for failure in rc_proof_failures))
+        self.assertEqual(rc_stress_failures, [])
 
     def test_performance_budget_merges_tier_overrides(self) -> None:
         budget = glx_runtime_sweep.merge_budget(
@@ -2294,11 +4663,12 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                     "type": "switch-screenshots",
                     "status": "passed",
                     "screenshots": [
-                        {"name": "shot", "found": True},
+                        {"name": "shot", "found": True, "histogram": screenshot_histogram()},
                     ],
                     "diagnostics": {
                         "found": True,
                         "failures": [],
+                        "metrics": color_diagnostics_metrics(),
                     },
                     "performance": locked_performance_sample(),
                 },

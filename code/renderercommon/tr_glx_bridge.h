@@ -315,6 +315,23 @@ static ID_INLINE void GLX_CompatRecordStreamDrawSkip( int reason )
 #endif
 }
 
+static ID_INLINE void GLX_CompatResetImageColorAudit( void )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_ResetImageColorAudit();
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordImageColorAudit( int colorSpace, qboolean srgbDecode )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordImageColorAudit( colorSpace, srgbDecode );
+#else
+	(void)colorSpace;
+	(void)srgbDecode;
+#endif
+}
+
 static ID_INLINE qboolean GLX_CompatStreamReserve( int bytes, int alignment,
 	glxStreamReservation_t *reservation )
 {
@@ -348,6 +365,54 @@ static ID_INLINE void GLX_CompatStreamCommit( glxStreamReservation_t *reservatio
 	GLX_Renderer_StreamCommit( reservation );
 #else
 	(void)reservation;
+#endif
+}
+
+static ID_INLINE unsigned int GLX_CompatBindStreamArrayBuffer( unsigned int buffer )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_BindStreamArrayBuffer( buffer );
+#else
+	(void)buffer;
+	return 0u;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRestoreStreamArrayBuffer( unsigned int buffer )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RestoreStreamArrayBuffer( buffer );
+#else
+	(void)buffer;
+#endif
+}
+
+static ID_INLINE unsigned int GLX_CompatBindStreamElementArrayBuffer( unsigned int buffer )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_BindStreamElementArrayBuffer( buffer );
+#else
+	(void)buffer;
+	return 0u;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRestoreStreamElementArrayBuffer( unsigned int buffer )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RestoreStreamElementArrayBuffer( buffer );
+#else
+	(void)buffer;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordStreamBufferBind( unsigned int target, unsigned int buffer )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordStreamBufferBind( target, buffer );
+#else
+	(void)target;
+	(void)buffer;
 #endif
 }
 

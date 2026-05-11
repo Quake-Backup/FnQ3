@@ -73,16 +73,39 @@ static int FBO_HdrPrecisionMode( void )
 {
 	const int precision = r_hdrPrecision ? r_hdrPrecision->integer : 0;
 
+	if ( FBO_HdrSceneLinearMode() ) {
+		return 16;
+	}
 	if ( precision == -1 || precision == 8 || precision == 16 ) {
 		return precision;
 	}
 	if ( r_hdr && r_hdr->integer < 0 ) {
 		return -1;
 	}
-	if ( FBO_HdrSceneLinearMode() ) {
-		return 16;
-	}
 	return 8;
+}
+
+static qboolean FBO_InternalFormatIsFloat( GLint internalFormat )
+{
+	return ( internalFormat == GL_RGBA16F || internalFormat == GL_RGB16F ||
+		internalFormat == GL_R11F_G11F_B10F ) ? qtrue : qfalse;
+}
+
+static GLint FBO_MainInternalFormat( void )
+{
+	if ( FBO_HdrSceneLinearMode() ) {
+		return GL_RGBA16F;
+	}
+
+	switch ( FBO_HdrPrecisionMode() )
+	{
+		case -1:
+			return GL_RGBA4;
+		case 16:
+			return GL_RGBA16;
+		default:
+			return GL_RGBA8;
+	}
 }
 
 static int FBO_ToneMapMode( void )
@@ -590,8 +613,8 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 	int totalBytes;
 	int materialFlags;
 	unsigned int categoryMask;
-	GLint oldArrayBuffer = 0;
-	GLint oldElementArrayBuffer = 0;
+	unsigned int oldArrayBuffer = 0;
+	unsigned int oldElementArrayBuffer = 0;
 
 	if ( !GLX_CompatStreamDrawEnabled() ) {
 		return qfalse;
@@ -659,11 +682,8 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 		return qfalse;
 	}
 
-	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
-	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
-
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
+	oldElementArrayBuffer = GLX_CompatBindStreamElementArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_NORMAL_ARRAY );
@@ -677,14 +697,14 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 		ok = qfalse;
 	}
 
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GLX_CompatRestoreStreamElementArrayBuffer( oldElementArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( 0 );
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_NORMAL_ARRAY );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
 	qglNormalPointer( GL_FLOAT, sizeof( input->normal[0] ), input->normal );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, texCoords );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
 		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );
@@ -1953,6 +1973,8 @@ static const char *glDefToStr( GLint define )
 		CASE_STR(GL_RGBA8);
 		CASE_STR(GL_RGBA12);
 		CASE_STR(GL_RGBA16);
+		CASE_STR(GL_RGBA16F);
+		CASE_STR(GL_RGB16F);
 		CASE_STR(GL_RGB10_A2);
 		CASE_STR(GL_R11F_G11F_B10F);
 		CASE_STR(GL_SRGB);
@@ -1967,6 +1989,7 @@ static const char *glDefToStr( GLint define )
 		CASE_STR(GL_INT);
 		CASE_STR(GL_UNSIGNED_INT);
 		CASE_STR(GL_FLOAT);
+		CASE_STR(GL_HALF_FLOAT);
 		CASE_STR(GL_DOUBLE);
 		CASE_STR(GL_UNSIGNED_SHORT_4_4_4_4);
 		CASE_STR(GL_UNSIGNED_INT_8_8_8_8);
@@ -2003,6 +2026,17 @@ static void getPreferredFormatAndType( GLint format, GLint *pFormat, GLint *pTyp
 	GLint preferredFormat;
 	GLint preferredType;
 
+	if ( format == GL_RGBA16F ) {
+		*pFormat = GL_RGBA;
+		*pType = GL_HALF_FLOAT;
+		return;
+	}
+	if ( format == GL_RGB16F || format == GL_R11F_G11F_B10F ) {
+		*pFormat = GL_RGB;
+		*pType = GL_HALF_FLOAT;
+		return;
+	}
+
 	if ( qglGetInternalformativ && gl_version >= 43 ) {
 		qglGetInternalformativ( GL_TEXTURE_2D, /*GL_RGBA8*/ format, GL_TEXTURE_IMAGE_FORMAT, 1, &preferredFormat );
 		if ( qglGetError() != GL_NO_ERROR ) {
@@ -2015,14 +2049,22 @@ static void getPreferredFormatAndType( GLint format, GLint *pFormat, GLint *pTyp
 		if ( preferredFormat == 0 ) // nVidia ION drivers can do that
 			preferredFormat = GL_RGBA;
 		if ( preferredType == GL_UNSIGNED_NORMALIZED ) { // Intel HD 530 drivers can do that as well
-			if ( format == GL_RGBA12 || format == GL_RGBA16 )
+			if ( format == GL_RGBA16F || format == GL_RGB16F || format == GL_R11F_G11F_B10F )
+				preferredType = GL_HALF_FLOAT;
+			else if ( format == GL_RGBA12 || format == GL_RGBA16 )
 				preferredType = GL_UNSIGNED_SHORT;
 			else
 				preferredType = GL_UNSIGNED_BYTE;
 		}
 	} else {
 __fallback:
-		if ( format == GL_RGBA12 || format == GL_RGBA16 ) {
+		if ( format == GL_RGBA16F ) {
+			preferredFormat = GL_RGBA;
+			preferredType = GL_HALF_FLOAT;
+		} else if ( format == GL_RGB16F || format == GL_R11F_G11F_B10F ) {
+			preferredFormat = GL_RGB;
+			preferredType = GL_HALF_FLOAT;
+		} else if ( format == GL_RGBA12 || format == GL_RGBA16 ) {
 			preferredFormat = GL_RGBA;
 			preferredType = GL_UNSIGNED_SHORT;
 		} else {
@@ -2962,6 +3004,9 @@ void QGL_InitFBO( void )
 	
 	fboEnabled = qfalse;
 	frameBufferMultiSampling = qfalse;
+	fboInternalFormat = FBO_MainInternalFormat();
+	fboTextureFormat = 0;
+	fboTextureType = 0;
 
 	if ( r_fbo->integer && ( !qglGenProgramsARB || !qglGenFramebuffers ) )
 		ri.Printf( PRINT_WARNING, "...FBO is not available\n" );
@@ -2982,11 +3027,13 @@ void QGL_InitFBO( void )
 	else
 		blitClear = 0;
 
-	switch ( FBO_HdrPrecisionMode() )
-	{
-		case -1: fboInternalFormat = GL_RGBA4; break;
-		case 16: fboInternalFormat = GL_RGBA16; break;
-		default: fboInternalFormat = GL_RGBA8; break;
+	if ( FBO_HdrSceneLinearMode() && !FBO_InternalFormatIsFloat( fboInternalFormat ) ) {
+		ri.Printf( PRINT_WARNING, "...r_hdr 1 requires a floating-point scene FBO, got %s\n",
+			glDefToStr( fboInternalFormat ) );
+#ifdef RENDERER_GLX
+		GLX_RecordFboInitState( qtrue, qfalse, qtrue, qtrue );
+#endif
+		return;
 	}
 
 	if ( FBO_CreateMS( &frameBufferMS, w, h ) )

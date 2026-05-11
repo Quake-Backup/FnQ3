@@ -724,6 +724,7 @@ static void InitOpenGL( void )
 #ifdef USE_FBO
 		QGL_SetRenderScale( qfalse );
 #endif
+		GLX_CompatOnOpenGLReady( &glConfig, gl_extensions );
 	}
 
 	if ( !qglViewport ) // might happen after REF_KEEP_WINDOW
@@ -2453,16 +2454,16 @@ static void R_Register( void )
 		" 0: display-referred SDR compatibility path\n"
 		" 1: scene-linear HDR pipeline with exposure, bloom thresholding, tone mapping, and SDR output transform\n"
 		"-1: legacy debug alias for \\r_hdrPrecision -1 without enabling scene-linear HDR\n"
-		"Internal framebuffer storage precision is controlled by \\r_hdrPrecision." );
+		"Scene-linear HDR uses floating-point RGBA16F scene framebuffer storage." );
 	ri.Cvar_SetGroup( r_hdr, CVG_RENDERER );
 	r_hdrPrecision = ri.Cvar_Get( "r_hdrPrecision", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_hdrPrecision, "-1", "16", CV_INTEGER );
 	ri.Cvar_SetDescription( r_hdrPrecision,
 		"Internal FBO color precision for the display pipeline.\n"
-		" 0: automatic (8-bit SDR, 16-bit when \\r_hdr 1)\n"
+		" 0: automatic (8-bit SDR, RGBA16F when \\r_hdr 1)\n"
 		"-1: debug 4-bit storage for banding tests\n"
 		" 8: force 8-bit storage\n"
-		"16: force 16-bit storage" );
+		"16: force 16-bit normalized storage for SDR; \\r_hdr 1 still uses RGBA16F" );
 	ri.Cvar_SetGroup( r_hdrPrecision, CVG_RENDERER );
 	r_srgbTextures = ri.Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_srgbTextures, "0", "1", CV_INTEGER );

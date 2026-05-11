@@ -107,12 +107,16 @@ struct MaterialState {
 	unsigned int contextlessDeletes;
 	unsigned int compiledMaterialPlans;
 	unsigned int unsupportedMaterialPlans;
+	unsigned int parameterBlocks;
+	unsigned int invalidParameterBlocks;
 	unsigned int unsupportedRequests;
 	unsigned int disabledSkips;
 	unsigned int notReadySkips;
 	unsigned int programLimitSkips;
 	MaterialRequest lastRequest;
 	MaterialIR lastMaterial;
+	MaterialParameterBlock lastParameterBlock;
+	unsigned int lastParameterBlockHash;
 	MaterialProgramKey lastKey;
 	MaterialStageKey lastStageKey;
 	unsigned int lastUnsupportedReasons;

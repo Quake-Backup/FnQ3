@@ -167,6 +167,8 @@ jobs:
           cp .tmp/glx-promotion.json .tmp/glx-gate-plans/glx-promotion.json
           cp docs/fnquake3/GLX_PROOF_CORPUS.md .tmp/glx-gate-plans/GLX_PROOF_CORPUS.md
           cp docs/fnquake3/GLX_PROMOTION.md .tmp/glx-gate-plans/GLX_PROMOTION.md
+          cp docs/fnquake3/GLX_ROLLBACK_PACKAGE.md .tmp/glx-gate-plans/GLX_ROLLBACK_PACKAGE.md
+          cp docs/fnquake3/GLX_VISUAL_DOSSIER.md .tmp/glx-gate-plans/GLX_VISUAL_DOSSIER.md
           for gate in rc-smoke rc-parity rc-proof rc-stress; do
             proof_args=""
             if [ "$gate" = "rc-proof" ]; then

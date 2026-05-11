@@ -23,6 +23,8 @@ struct ExecutorState {
 	unsigned int uploadPlans;
 	unsigned int postNodes;
 	unsigned int outputTransforms;
+	unsigned int lastPostNodeHash;
+	unsigned int lastOutputTransformHash;
 	unsigned int rejectedProducts;
 	unsigned int fixedFunctionDraws;
 	unsigned int clientMemoryDraws;

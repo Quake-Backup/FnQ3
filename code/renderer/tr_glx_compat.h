@@ -151,7 +151,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 	qboolean ok = qtrue;
 	int xyzBytes;
 	int totalBytes;
-	GLint oldArrayBuffer = 0;
+	unsigned int oldArrayBuffer = 0;
 
 	if ( !GLX_CompatStreamDrawEnabled() ) {
 		return qfalse;
@@ -185,8 +185,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 		return qfalse;
 	}
 
-	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_NONE );
@@ -197,11 +196,11 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 		ok = qfalse;
 	}
 
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GLX_CompatRestoreStreamArrayBuffer( 0 );
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, xyzStride, xyz );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
 		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );
@@ -229,7 +228,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 	int texcoordBytes;
 	int texcoordOffset;
 	int totalBytes;
-	GLint oldArrayBuffer = 0;
+	unsigned int oldArrayBuffer = 0;
 
 	if ( !GLX_CompatStreamDrawEnabled() ) {
 		return qfalse;
@@ -269,8 +268,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 		return qfalse;
 	}
 
-	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY );
@@ -283,12 +281,12 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 		ok = qfalse;
 	}
 
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GLX_CompatRestoreStreamArrayBuffer( 0 );
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY );
 	qglVertexPointer( 3, GL_FLOAT, xyzStride, xyz );
 	qglTexCoordPointer( 2, GL_FLOAT, texcoordStride, texcoords );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
 		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );
@@ -339,7 +337,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 	int texcoordOffset;
 	int colorOffset;
 	int totalBytes;
-	GLint oldArrayBuffer = 0;
+	unsigned int oldArrayBuffer = 0;
 
 	if ( !GLX_CompatStreamDrawEnabled() ) {
 		return qfalse;
@@ -388,8 +386,7 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 		return qfalse;
 	}
 
-	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
+	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
@@ -404,13 +401,13 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 		ok = qfalse;
 	}
 
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GLX_CompatRestoreStreamArrayBuffer( 0 );
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
 	qglVertexPointer( 3, GL_FLOAT, xyzStride, xyz );
 	qglTexCoordPointer( 2, GL_FLOAT, texcoordStride, texcoords );
 	qglColorPointer( colorComponents, colorType, colorStride, colors );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( vertexCount, vertexCount,
 		totalBytes, 0, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );

@@ -458,10 +458,17 @@ public:
 	qboolean StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation );
 	qboolean StreamUploadAt( glxStreamReservation_t *reservation, int relativeOffset, const void *data, int bytes );
 	void StreamCommit( glxStreamReservation_t *reservation );
+	GLuint BindStreamArrayBuffer( GLuint buffer );
+	void RestoreStreamArrayBuffer( GLuint buffer );
+	GLuint BindStreamElementArrayBuffer( GLuint buffer );
+	void RestoreStreamElementArrayBuffer( GLuint buffer );
+	void RecordStreamBufferBind( unsigned int target, GLuint buffer );
 	void RecordStreamDrawResult( int numVertexes, int numIndexes, int totalBytes, int indexBytes,
 		int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, int materialFlags,
 		unsigned int categoryMask, qboolean success );
 	void RecordStreamDrawSkip( int reason );
+	void ResetImageColorAudit();
+	void RecordImageColorAudit( int colorSpace, qboolean srgbDecode );
 	void RecordFboInit( qboolean requested, qboolean ready, qboolean programReady, qboolean framebufferFnsReady,
 		int vidWidth, int vidHeight, int captureWidth, int captureHeight, int windowWidth, int windowHeight,
 		int internalFormat, int textureFormat, int textureType, qboolean multiSampled, qboolean superSampled,
@@ -601,7 +608,11 @@ void RendererModule::Shutdown( int code )
 	(void)code;
 
 	GLX_Material_Shutdown( &material_, qtrue );
-	GLX_PostProcess_Shutdown( &postprocess_ );
+	if ( code == REF_KEEP_CONTEXT ) {
+		postprocess_.glReady = qfalse;
+	} else {
+		GLX_PostProcess_Shutdown( &postprocess_ );
+	}
 	GLX_Profiler_Shutdown( &profiler_ );
 	GLX_Debug_Shutdown( &debug_ );
 	GLX_Executor_Shutdown( &executor_ );
@@ -715,6 +726,15 @@ void RendererModule::PrintCaps() const
 		postprocess_.captureWidth, postprocess_.captureHeight, postprocess_.bloomMode,
 		postprocess_.lastBloomEffectivePasses, postprocess_.lastBloomRequestedPasses,
 		GLX_PostProcess_ResultName( postprocess_.lastResult ) );
+	RI().Printf( PRINT_ALL, "  post/output ownership: mode %s, post nodes %u, outputs %u, legacy fallback %s, post hash 0x%08x, output hash 0x%08x, plan hash 0x%08x, fallback 0x%08x\n",
+		GLX_PostProcess_PostOutputModeName( postprocess_.lastPostOutputGlxOwned ),
+		executor_.postNodes,
+		executor_.outputTransforms,
+		BoolName( postprocess_.lastPostOutputGlxOwned ? qfalse : qtrue ),
+		executor_.lastPostNodeHash,
+		executor_.lastOutputTransformHash,
+		postprocess_.lastPostOutputPlanHash,
+		postprocess_.lastPostOutputFallbackReasons );
 	RI().Printf( PRINT_ALL, "  static world GLx arena: %s, %.2f MB\n",
 		BoolName( staticWorld_.arenaReady ),
 		( staticWorld_.arenaVertexBytes + staticWorld_.arenaIndexBytes ) / ( 1024.0f * 1024.0f ) );
@@ -1052,7 +1072,7 @@ void RendererModule::PrintFrameCounters() const
 		profiler_.blendMaterialStages,
 		profiler_.texmodMaterialStages,
 		profiler_.environmentMaterialStages );
-	RI().Printf( PRINT_ALL, "glx: render IR executor %s/%s passes %u world %u dynamic %u idx/%u verts materials %u uploads %u post %u outputs %u rejects %u\n",
+	RI().Printf( PRINT_ALL, "glx: render IR executor %s/%s passes %u world %u dynamic %u draws/%u idx/%u verts materials %u uploads %u post %u outputs %u rejects %u\n",
 		GLX_Executor_TierName( executor_ ),
 		GLX_Executor_ModeName( executor_ ),
 		executor_.framePasses,
@@ -1065,6 +1085,15 @@ void RendererModule::PrintFrameCounters() const
 		executor_.postNodes,
 		executor_.outputTransforms,
 		executor_.rejectedProducts );
+	RI().Printf( PRINT_ALL, "glx: post/output ownership mode %s, post nodes %u, outputs %u, legacy fallback %s, post hash 0x%08x, output hash 0x%08x, plan hash 0x%08x, fallback 0x%08x\n",
+		GLX_PostProcess_PostOutputModeName( postprocess_.lastPostOutputGlxOwned ),
+		executor_.postNodes,
+		executor_.outputTransforms,
+		BoolName( postprocess_.lastPostOutputGlxOwned ? qfalse : qtrue ),
+		executor_.lastPostNodeHash,
+		executor_.lastOutputTransformHash,
+		postprocess_.lastPostOutputPlanHash,
+		postprocess_.lastPostOutputFallbackReasons );
 	if ( caps_.tier == RenderProductTier::GL12 ) {
 		RI().Printf( PRINT_ALL, "glx: GL12 fixed-function draws %u client-memory %u unsupported stream %u post %u output %u\n",
 			executor_.fixedFunctionDraws,
@@ -1144,6 +1173,15 @@ void RendererModule::PrintFrameCounters() const
 		material_.precacheFailures,
 		material_.bindFailures,
 		material_.debugLabels );
+	RI().Printf( PRINT_ALL, "glx: material parameters blocks %u invalid %u hash 0x%08x, last sort %i passes %i features 0x%x flags 0x%x state 0x%x\n",
+		material_.parameterBlocks,
+		material_.invalidParameterBlocks,
+		material_.lastParameterBlockHash,
+		material_.lastParameterBlock.frame.sort,
+		material_.lastParameterBlock.frame.shaderStagePasses,
+		material_.lastParameterBlock.frame.featureMask,
+		material_.lastParameterBlock.material.flags,
+		material_.lastParameterBlock.material.stateBits );
 	RI().Printf( PRINT_ALL, "glx: postprocess fbo %s %ix%i capture %ix%i bloom %i, frames %u final %u prefinal %u gamma %u/%u, copies %u, msaa %u, ssaa %u, last %s\n",
 		postprocess_.fboReady ? "ready" : "off",
 		postprocess_.vidWidth,
@@ -1191,13 +1229,35 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.lastGradeGain[0], postprocess_.lastGradeGain[1], postprocess_.lastGradeGain[2],
 		postprocess_.lastWhitePointSourceKelvin, postprocess_.lastWhitePointTargetKelvin,
 		postprocess_.lastColorGradeLutSize, postprocess_.lastColorGradeLutScale );
-	RI().Printf( PRINT_ALL, "glx: color audit srgb-decode %s requested %s available %s framebuffer-srgb %s requested %s available %s capture sdr-srgb\n",
+	const unsigned int missingSrgbDecode =
+		( postprocess_.lastOutput.hdrMode &&
+		  postprocess_.r_srgbTextures && postprocess_.r_srgbTextures->integer &&
+		  postprocess_.textureSrgbAvailable &&
+		  postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB] >
+			  postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB] ) ?
+		postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB] -
+			postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB] : 0u;
+	RI().Printf( PRINT_ALL, "glx: color audit srgb-decode %s requested %s available %s framebuffer-srgb %s requested %s available %s capture sdr-srgb target-float %s final-encode %s contract %s\n",
 		BoolName( postprocess_.textureSrgbDecode ),
 		BoolName( postprocess_.r_srgbTextures && postprocess_.r_srgbTextures->integer ? qtrue : qfalse ),
 		BoolName( postprocess_.textureSrgbAvailable ),
 		BoolName( postprocess_.framebufferSrgbEnabled ),
 		BoolName( postprocess_.r_framebufferSRGB && postprocess_.r_framebufferSRGB->integer ? qtrue : qfalse ),
-		BoolName( postprocess_.framebufferSrgbAvailable ) );
+		BoolName( postprocess_.framebufferSrgbAvailable ),
+		BoolName( postprocess_.sceneTargetFloat ),
+		postprocess_.finalShaderSrgbEncode ? "shader-srgb" : "none",
+		BoolName( postprocess_.outputContractValid ) );
+	RI().Printf( PRINT_ALL, "glx: texture audit srgb %u decode %u, linear %u decode %u, data %u decode %u, unknown %u decode %u, missing-srgb-decode %u, unexpected-decode %u\n",
+		postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB],
+		postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB],
+		postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_LINEAR],
+		postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_LINEAR],
+		postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_DATA],
+		postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_DATA],
+		postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_UNKNOWN],
+		postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_UNKNOWN],
+		missingSrgbDecode,
+		postprocess_.imageUnexpectedSrgbDecode );
 	RI().Printf( PRINT_ALL, "glx: stream draws %u/%u attempts, %u idx, %.2fMB/index %.2fMB/tex1 %.2fMB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, shadow %u, beam %u, post %u, fallbacks %u, skips %u\n",
 		stream_.streamedDraws,
 		stream_.streamedDrawAttempts,
@@ -1241,6 +1301,16 @@ void RendererModule::PrintFrameCounters() const
 		GLX_Stream_StrategyName( stream_.lastReservationStrategy ),
 		stream_.largestReservationBytes,
 		stream_.sameFrameWrapRejects );
+	RI().Printf( PRINT_ALL, "glx: stream binding cache queries %u hits %u restores %u invalidations %u external %u array-known %s array-buffer %u element-known %s element-buffer %u\n",
+		stream_.arrayBufferBindingQueries,
+		stream_.arrayBufferBindingCacheHits,
+		stream_.arrayBufferBindingRestores,
+		stream_.arrayBufferBindingInvalidations,
+		stream_.bufferBindingExternalUpdates,
+		BoolName( stream_.arrayBufferBindingKnown ),
+		stream_.arrayBufferBinding,
+		BoolName( stream_.elementArrayBufferBindingKnown ),
+		stream_.elementArrayBufferBinding );
 	RI().Printf( PRINT_ALL, "glx: static queues %u, last %u items/%u idx, device %u idx in %u runs, soft %u idx, largest run %u idx\n",
 		staticWorld_.queueBatches,
 		staticWorld_.lastQueueItems,
@@ -1633,6 +1703,31 @@ void RendererModule::StreamCommit( glxStreamReservation_t *reservation )
 	GLX_Module_ToPublicReservation( streamReservation, reservation );
 }
 
+GLuint RendererModule::BindStreamArrayBuffer( GLuint buffer )
+{
+	return GLX_Stream_BindArrayBufferCached( &stream_, buffer );
+}
+
+void RendererModule::RestoreStreamArrayBuffer( GLuint buffer )
+{
+	GLX_Stream_RestoreArrayBufferCached( &stream_, buffer );
+}
+
+GLuint RendererModule::BindStreamElementArrayBuffer( GLuint buffer )
+{
+	return GLX_Stream_BindElementArrayBufferCached( &stream_, buffer );
+}
+
+void RendererModule::RestoreStreamElementArrayBuffer( GLuint buffer )
+{
+	GLX_Stream_RestoreElementArrayBufferCached( &stream_, buffer );
+}
+
+void RendererModule::RecordStreamBufferBind( unsigned int target, GLuint buffer )
+{
+	GLX_Stream_RecordExternalBufferBind( &stream_, target, buffer );
+}
+
 void RendererModule::RecordStreamDrawResult( int numVertexes, int numIndexes, int totalBytes, int indexBytes,
 	int texcoord1Bytes, qboolean multitexture, qboolean fog, qboolean depthFragment, int materialFlags,
 	unsigned int categoryMask, qboolean success )
@@ -1650,6 +1745,16 @@ void RendererModule::RecordStreamDrawResult( int numVertexes, int numIndexes, in
 void RendererModule::RecordStreamDrawSkip( int reason )
 {
 	GLX_Stream_RecordDrawSkip( &stream_, reason );
+}
+
+void RendererModule::ResetImageColorAudit()
+{
+	GLX_PostProcess_ResetImageColorAudit( &postprocess_ );
+}
+
+void RendererModule::RecordImageColorAudit( int colorSpace, qboolean srgbDecode )
+{
+	GLX_PostProcess_RecordImageColorAudit( &postprocess_, colorSpace, srgbDecode );
 }
 
 void RendererModule::RecordFboInit( qboolean requested, qboolean ready, qboolean programReady, qboolean framebufferFnsReady,
@@ -1674,35 +1779,36 @@ void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomA
 	int screenshotMask, qboolean windowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
 	float greyscale )
 {
-	PostNode node {};
-
 	GLX_PostProcess_RecordFrame( &postprocess_, minimized, bloomAvailable, programReady,
 		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
 	OutputTransform output = GLX_Module_OutputTransformIR( postprocess_ );
-
-	node.kind = bloomAvailable ? PostNodeKind::BloomFinal : PostNodeKind::Resolve;
-	node.pass = FramePassKind::PostProcess;
-	node.sequence = static_cast<int>( postprocess_.frames ? postprocess_.frames - 1 : 0 );
-	node.inputTarget = fboReadIndex;
-	node.outputTarget = 0;
-	node.flags = ( minimized ? 0x1u : 0u ) | ( programReady ? 0x2u : 0u ) |
+	PostOutputPlanInputs inputs {};
+	inputs.tier = caps_.tier;
+	inputs.output = output;
+	inputs.fboReady = postprocess_.fboReady;
+	inputs.programReady = programReady;
+	inputs.framebufferFnsReady = postprocess_.framebufferFnsReady;
+	inputs.outputContractValid = postprocess_.outputContractValid;
+	inputs.bloomAvailable = bloomAvailable;
+	inputs.minimized = minimized;
+	inputs.windowAdjusted = windowAdjusted;
+	inputs.screenshotMask = screenshotMask;
+	inputs.fboReadIndex = fboReadIndex;
+	inputs.sequenceBase = static_cast<int>( postprocess_.frames ? postprocess_.frames - 1 : 0 );
+	inputs.flags = ( minimized ? 0x1u : 0u ) | ( programReady ? 0x2u : 0u ) |
 		( windowAdjusted ? 0x4u : 0u ) | ( screenshotMask ? 0x8u : 0u );
-	node.output = output;
 
-	GLX_Executor_ConsumePostNode( &executor_, node );
-	if ( output.grade != ColorGradeMode::None ) {
-		PostNode gradeNode = node;
-		gradeNode.kind = PostNodeKind::Grade;
-		gradeNode.sequence = node.sequence + 1;
-		GLX_Executor_ConsumePostNode( &executor_, gradeNode );
+	PostOutputPlan plan = GLX_RenderIR_BuildPostOutputPlan( inputs );
+	qboolean consumed = qtrue;
+	for ( int i = 0; i < plan.nodeCount; i++ ) {
+		if ( !GLX_Executor_ConsumePostNode( &executor_, plan.nodes[i] ) ) {
+			consumed = qfalse;
+		}
 	}
-	if ( output.toneMap != ToneMapOperator::Legacy ) {
-		PostNode toneMapNode = node;
-		toneMapNode.kind = PostNodeKind::ToneMap;
-		toneMapNode.sequence = node.sequence + 2;
-		GLX_Executor_ConsumePostNode( &executor_, toneMapNode );
+	if ( plan.outputTransformPresent && !GLX_Executor_ConsumeOutputTransform( &executor_, plan.output ) ) {
+		consumed = qfalse;
 	}
-	GLX_Executor_ConsumeOutputTransform( &executor_, output );
+	GLX_PostProcess_RecordPostOutputPlan( &postprocess_, plan, consumed );
 }
 
 void RendererModule::RecordPostProcessResult( int result )
@@ -2129,6 +2235,31 @@ extern "C" void GLX_Renderer_StreamCommit( glxStreamReservation_t *reservation )
 	glx::g_module.StreamCommit( reservation );
 }
 
+extern "C" unsigned int GLX_Renderer_BindStreamArrayBuffer( unsigned int buffer )
+{
+	return glx::g_module.BindStreamArrayBuffer( static_cast<GLuint>( buffer ) );
+}
+
+extern "C" void GLX_Renderer_RestoreStreamArrayBuffer( unsigned int buffer )
+{
+	glx::g_module.RestoreStreamArrayBuffer( static_cast<GLuint>( buffer ) );
+}
+
+extern "C" unsigned int GLX_Renderer_BindStreamElementArrayBuffer( unsigned int buffer )
+{
+	return glx::g_module.BindStreamElementArrayBuffer( static_cast<GLuint>( buffer ) );
+}
+
+extern "C" void GLX_Renderer_RestoreStreamElementArrayBuffer( unsigned int buffer )
+{
+	glx::g_module.RestoreStreamElementArrayBuffer( static_cast<GLuint>( buffer ) );
+}
+
+extern "C" void GLX_Renderer_RecordStreamBufferBind( unsigned int target, unsigned int buffer )
+{
+	glx::g_module.RecordStreamBufferBind( target, static_cast<GLuint>( buffer ) );
+}
+
 extern "C" void GLX_Renderer_RecordStreamDrawResult( int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
 	qboolean depthFragment, int materialFlags, unsigned int categoryMask, qboolean success )
@@ -2140,6 +2271,16 @@ extern "C" void GLX_Renderer_RecordStreamDrawResult( int numVertexes, int numInd
 extern "C" void GLX_Renderer_RecordStreamDrawSkip( int reason )
 {
 	glx::g_module.RecordStreamDrawSkip( reason );
+}
+
+extern "C" void GLX_Renderer_ResetImageColorAudit( void )
+{
+	glx::g_module.ResetImageColorAudit();
+}
+
+extern "C" void GLX_Renderer_RecordImageColorAudit( int colorSpace, qboolean srgbDecode )
+{
+	glx::g_module.RecordImageColorAudit( colorSpace, srgbDecode );
 }
 
 extern "C" void GLX_Renderer_RecordFboInit( qboolean requested, qboolean ready,

@@ -6,18 +6,18 @@ The GLx proof corpus is the single scene list used by RC gate dry runs, runtime 
 
 `scripts/glx_runtime_sweep.py` owns the machine-readable corpus. This document is the maintainer-facing description of the same corpus and must stay in sync with `GLX_PROOF_CORPUS_VERSION`.
 
-Current corpus version: `2026-05-10-task-v`.
+Current corpus version: `2026-05-11-post-proof-v1`.
 
-Current parity suite version: `2026-05-10-task-v`.
+Current parity suite version: `2026-05-11-post-v1`.
 
 ## Scene Sets
 
 | Gate | Corpus scenes | Required coverage |
 |---|---|---|
 | `rc-smoke` | `stock-q3dm1-hud` | Retail stock map, UI/HUD-sensitive renderer switching, screenshots, diagnostics, frame-counter samples. |
-| `rc-parity` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `timedemo-demo1` | Retail stock screenshots, HUD-sensitive coverage, bloom-tagged output, and legacy OpenGL versus GLx timedemo comparison. |
-| `rc-proof` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `timedemo-demo1` | Retail screenshot, demo playback, HUD, shadow, bloom, cel-shading, fog, tone-map/color-grade, screenshot-baseline, and performance-baseline proof. |
-| `rc-stress` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `modern-fnq3glx-heavy01`, `modern-fnq3glx-shader01`, `modern-fnq3glx-fog01`, `timedemo-demo1`, `timedemo-fnq3glx-particles01` | Full retail proof set plus staged modern-map, high-geometry, shader-heavy, fog-heavy, tone-map/color-grade, particle-heavy-demo, and performance stress coverage. |
+| `rc-parity` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `timedemo-demo1` | Retail stock screenshots, HUD-sensitive coverage, bloom-tagged output, stock-map/lightmap `worldProofEvidence`, and legacy OpenGL versus GLx timedemo comparison. |
+| `rc-proof` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `timedemo-demo1` | Retail screenshot, demo playback, HUD, shadow, bloom, cel-shading, fog, tone-map/color-grade, world/static/lightmap/fog `worldProofEvidence`, material/tcgen `materialProofEvidence`, entity/weapon/dynamic-light/planar-shadow `dynamicProofEvidence`, greyscale/render-scale `postProofEvidence`, screenshot-baseline, and performance-baseline proof. |
+| `rc-stress` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `modern-fnq3glx-heavy01`, `modern-fnq3glx-shader01`, `modern-fnq3glx-fog01`, `timedemo-demo1`, `timedemo-fnq3glx-particles01` | Full retail proof set plus staged modern-map, high-geometry, shader-heavy, fog-heavy, animated-image, vector-tcgen, screen-map, video-map, tone-map/color-grade, particle-heavy-demo, world/static/fog proof, material proof, dynamic-scene proof for particles/polys/marks/beams, postprocess proof, and performance stress coverage. |
 
 ## Parity Suites
 
@@ -31,21 +31,23 @@ Current parity suite version: `2026-05-10-task-v`.
 | `shadow` | screenshot | `stock-q3dm6-geometry` | `shadow-parity` | `cg_shadows=2` |
 | `bloom` | screenshot | `stock-q3dm17-open` | `bloom-parity` | none; the RC profile enables final-pass bloom |
 | `cel-shading` | screenshot | `stock-q3dm11-shader` | `cel-shading-parity`, `outline-parity` | `r_celShading=1`, `r_celOutline=1`, `r_celShadingSteps=4` |
+| `greyscale` | screenshot | `stock-q3dm1-hud` | `greyscale-proof` | `r_fbo=1`, `r_greyscale=1` |
+| `render-scale` | screenshot | `stock-q3dm17-open` | `render-scale-proof` | `r_fbo=1`, `r_renderScale=1`, `r_renderWidth=512`, `r_renderHeight=384` |
 
 ## Scenes
 
 | Scene ID | Kind | Target | Asset tier | Tags |
 |---|---|---|---|---|
-| `stock-q3dm1-hud` | map | `q3dm1` | `retail-baseq3` | `stock-map`, `baseline-map`, `ui-hud-sensitive`, `screenshot-parity`, `hud-parity`, `lightmap` |
-| `stock-q3dm17-open` | map | `q3dm17` | `retail-baseq3` | `stock-map`, `open-map`, `shader-heavy`, `sky`, `screenshot-parity`, `bloom-parity`, `tone-map-proof` |
-| `stock-q3dm6-geometry` | map | `q3dm6` | `retail-baseq3` | `stock-map`, `high-geometry`, `large-map`, `screenshot-parity`, `shadow-parity`, `performance-comparison` |
-| `stock-q3dm11-shader` | map | `q3dm11` | `retail-baseq3` | `stock-map`, `shader-heavy`, `material-stage`, `screenshot-parity`, `cel-shading-parity`, `outline-parity`, `color-grade-proof`, `tone-map-proof` |
-| `stock-q3dm15-fog` | map | `q3dm15` | `retail-baseq3` | `stock-map`, `fog-heavy`, `visibility`, `screenshot-parity`, `color-grade-proof` |
+| `stock-q3dm1-hud` | map | `q3dm1` | `retail-baseq3` | `stock-map`, `baseline-map`, `ui-hud-sensitive`, `screenshot-parity`, `hud-parity`, `lightmap`, `tcgen-lightmap`, `dynamic-entity`, `weapon-model`, `greyscale-proof` |
+| `stock-q3dm17-open` | map | `q3dm17` | `retail-baseq3` | `stock-map`, `open-map`, `shader-heavy`, `sky`, `screenshot-parity`, `bloom-parity`, `tone-map-proof`, `render-scale-proof` |
+| `stock-q3dm6-geometry` | map | `q3dm6` | `retail-baseq3` | `stock-map`, `high-geometry`, `large-map`, `screenshot-parity`, `shadow-parity`, `performance-comparison`, `dynamic-entity`, `planar-shadow` |
+| `stock-q3dm11-shader` | map | `q3dm11` | `retail-baseq3` | `stock-map`, `shader-heavy`, `material-stage`, `tcgen-environment`, `screenshot-parity`, `cel-shading-parity`, `outline-parity`, `color-grade-proof`, `tone-map-proof`, `dynamic-entity` |
+| `stock-q3dm15-fog` | map | `q3dm15` | `retail-baseq3` | `stock-map`, `fog-heavy`, `visibility`, `tcgen-fog`, `screenshot-parity`, `color-grade-proof` |
 | `modern-fnq3glx-heavy01` | map | `fnq3_glx_heavy01` | `glx-proof-corpus` | `modern-map`, `high-geometry`, `large-map`, `screenshot-parity`, `performance-comparison` |
-| `modern-fnq3glx-shader01` | map | `fnq3_glx_shader01` | `glx-proof-corpus` | `modern-map`, `shader-heavy`, `material-stage`, `screenshot-parity`, `cel-shading-parity`, `outline-parity` |
+| `modern-fnq3glx-shader01` | map | `fnq3_glx_shader01` | `glx-proof-corpus` | `modern-map`, `shader-heavy`, `material-stage`, `animated-image`, `tcgen-vector`, `screen-map`, `video-map`, `screenshot-parity`, `cel-shading-parity`, `outline-parity` |
 | `modern-fnq3glx-fog01` | map | `fnq3_glx_fog01` | `glx-proof-corpus` | `modern-map`, `fog-heavy`, `visibility`, `screenshot-parity` |
-| `timedemo-demo1` | demo | `demo1` | `retail-baseq3` | `stock-demo`, `demo-playback-parity`, `performance-comparison` |
-| `timedemo-fnq3glx-particles01` | demo | `fnq3_glx_particles01` | `glx-proof-corpus` | `particle-heavy-demo`, `demo-playback-parity`, `modern-map`, `performance-comparison` |
+| `timedemo-demo1` | demo | `demo1` | `retail-baseq3` | `stock-demo`, `demo-playback-parity`, `performance-comparison`, `dynamic-entity`, `dynamic-light` |
+| `timedemo-fnq3glx-particles01` | demo | `fnq3_glx_particles01` | `glx-proof-corpus` | `particle-heavy-demo`, `demo-playback-parity`, `modern-map`, `performance-comparison`, `particle`, `transient-poly`, `mark-decal`, `beam`, `dynamic-light` |
 
 ## Artifact Contract
 

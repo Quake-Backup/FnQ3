@@ -11,6 +11,12 @@
 #ifndef GL_ARRAY_BUFFER_BINDING
 #define GL_ARRAY_BUFFER_BINDING 0x8894
 #endif
+#ifndef GL_ELEMENT_ARRAY_BUFFER
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#endif
+#ifndef GL_ELEMENT_ARRAY_BUFFER_BINDING
+#define GL_ELEMENT_ARRAY_BUFFER_BINDING 0x8895
+#endif
 #ifndef GL_STREAM_DRAW
 #define GL_STREAM_DRAW 0x88E0
 #endif
@@ -166,10 +172,14 @@ static void GLX_Stream_ResetRuntime( StreamState *state )
 	state->mappedPtr = nullptr;
 	state->frameSync = nullptr;
 	state->buffer = 0;
+	state->arrayBufferBinding = 0;
+	state->elementArrayBufferBinding = 0;
 	state->ready = qfalse;
 	state->persistentMapped = qfalse;
 	state->syncReady = qfalse;
 	state->frameTouched = qfalse;
+	state->arrayBufferBindingKnown = qfalse;
+	state->elementArrayBufferBindingKnown = qfalse;
 }
 
 static void GLX_Stream_ResetCounters( StreamState *state )
@@ -196,6 +206,11 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	state->syncFailures = 0;
 	state->syncFenceSkips = 0;
 	state->selfTests = 0;
+	state->arrayBufferBindingQueries = 0;
+	state->arrayBufferBindingCacheHits = 0;
+	state->arrayBufferBindingRestores = 0;
+	state->arrayBufferBindingInvalidations = 0;
+	state->bufferBindingExternalUpdates = 0;
 	state->shadowTessUploads = 0;
 	state->shadowTessSkips = 0;
 	state->shadowTessFailures = 0;
@@ -295,6 +310,102 @@ static GLenum GLX_Stream_GetGLError()
 	return s_fns.GetError ? s_fns.GetError() : GL_NO_ERROR;
 }
 
+void GLX_Stream_InvalidateArrayBufferCache( StreamState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->arrayBufferBinding = 0;
+	state->arrayBufferBindingKnown = qfalse;
+	state->elementArrayBufferBinding = 0;
+	state->elementArrayBufferBindingKnown = qfalse;
+	state->arrayBufferBindingInvalidations++;
+}
+
+void GLX_Stream_RecordExternalBufferBind( StreamState *state, unsigned int target, GLuint buffer )
+{
+	if ( !state ) {
+		return;
+	}
+
+	if ( target == GL_ARRAY_BUFFER ) {
+		state->arrayBufferBinding = buffer;
+		state->arrayBufferBindingKnown = qtrue;
+		state->bufferBindingExternalUpdates++;
+	} else if ( target == GL_ELEMENT_ARRAY_BUFFER ) {
+		state->elementArrayBufferBinding = buffer;
+		state->elementArrayBufferBindingKnown = qtrue;
+		state->bufferBindingExternalUpdates++;
+	}
+}
+
+static GLuint GLX_Stream_CurrentArrayBufferBinding( StreamState *state )
+{
+	GLint current = 0;
+
+	if ( !state ) {
+		return 0;
+	}
+
+	if ( state->arrayBufferBindingKnown ) {
+		state->arrayBufferBindingCacheHits++;
+		return state->arrayBufferBinding;
+	}
+
+	if ( s_fns.GetIntegerv ) {
+		s_fns.GetIntegerv( GL_ARRAY_BUFFER_BINDING, &current );
+		state->arrayBufferBindingQueries++;
+	}
+	state->arrayBufferBinding = static_cast<GLuint>( current );
+	state->arrayBufferBindingKnown = qtrue;
+	return state->arrayBufferBinding;
+}
+
+static void GLX_Stream_BindArrayBufferTracked( StreamState *state, GLuint buffer )
+{
+	if ( s_fns.BindBuffer ) {
+		s_fns.BindBuffer( GL_ARRAY_BUFFER, buffer );
+	}
+	if ( state ) {
+		state->arrayBufferBinding = buffer;
+		state->arrayBufferBindingKnown = qtrue;
+	}
+}
+
+static GLuint GLX_Stream_CurrentElementArrayBufferBinding( StreamState *state )
+{
+	GLint current = 0;
+
+	if ( !state ) {
+		return 0;
+	}
+
+	if ( state->elementArrayBufferBindingKnown ) {
+		state->arrayBufferBindingCacheHits++;
+		return state->elementArrayBufferBinding;
+	}
+
+	if ( s_fns.GetIntegerv ) {
+		s_fns.GetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING, &current );
+		state->arrayBufferBindingQueries++;
+	}
+	state->elementArrayBufferBinding = static_cast<GLuint>( current );
+	state->elementArrayBufferBindingKnown = qtrue;
+	return state->elementArrayBufferBinding;
+}
+
+static void GLX_Stream_BindElementArrayBufferTracked( StreamState *state, GLuint buffer )
+{
+	if ( s_fns.BindBuffer ) {
+		s_fns.BindBuffer( GL_ELEMENT_ARRAY_BUFFER, buffer );
+	}
+	if ( state ) {
+		state->elementArrayBufferBinding = buffer;
+		state->elementArrayBufferBindingKnown = qtrue;
+	}
+}
+
 static void GLX_Stream_DeleteFrameFence( StreamState *state )
 {
 	if ( !state || !state->frameSync ) {
@@ -348,40 +459,51 @@ static void GLX_Stream_DeleteBuffer( StreamState *state )
 		return;
 	}
 
-	GLint oldArrayBuffer = 0;
-	if ( s_fns.GetIntegerv ) {
-		s_fns.GetIntegerv( GL_ARRAY_BUFFER_BINDING, &oldArrayBuffer );
-	}
+	GLuint oldArrayBuffer = GLX_Stream_CurrentArrayBufferBinding( state );
+	const GLuint restoreArrayBuffer = oldArrayBuffer == state->buffer ? 0u : oldArrayBuffer;
 
 	if ( state->mappedPtr && s_fns.UnmapBuffer && s_fns.BindBuffer ) {
-		s_fns.BindBuffer( GL_ARRAY_BUFFER, state->buffer );
+		GLX_Stream_BindArrayBufferTracked( state, state->buffer );
 		s_fns.UnmapBuffer( GL_ARRAY_BUFFER );
 	}
 
 	s_fns.DeleteBuffers( 1, &state->buffer );
 
 	if ( s_fns.BindBuffer ) {
-		s_fns.BindBuffer( GL_ARRAY_BUFFER, static_cast<GLuint>( oldArrayBuffer ) );
+		GLX_Stream_BindArrayBufferTracked( state, restoreArrayBuffer );
 	}
 
 	GLX_Stream_ResetRuntime( state );
 }
 
-static void GLX_Stream_BindPreserving( GLuint buffer, GLint *oldArrayBuffer )
+static GLuint GLX_Stream_BindPreserving( StreamState *state, GLuint buffer )
 {
-	*oldArrayBuffer = 0;
-	if ( s_fns.GetIntegerv ) {
-		s_fns.GetIntegerv( GL_ARRAY_BUFFER_BINDING, oldArrayBuffer );
+	if ( !s_fns.BindBuffer ) {
+		return 0;
 	}
 
-	s_fns.BindBuffer( GL_ARRAY_BUFFER, buffer );
+	const GLuint oldArrayBuffer = GLX_Stream_CurrentArrayBufferBinding( state );
+	if ( oldArrayBuffer != buffer ) {
+		GLX_Stream_BindArrayBufferTracked( state, buffer );
+	}
+	return oldArrayBuffer;
 }
 
-static void GLX_Stream_RestoreBinding( GLint oldArrayBuffer )
+static void GLX_Stream_RestoreBinding( StreamState *state, GLuint oldArrayBuffer )
 {
-	if ( s_fns.BindBuffer ) {
-		s_fns.BindBuffer( GL_ARRAY_BUFFER, static_cast<GLuint>( oldArrayBuffer ) );
+	if ( !s_fns.BindBuffer ) {
+		return;
 	}
+
+	if ( !state ) {
+		s_fns.BindBuffer( GL_ARRAY_BUFFER, oldArrayBuffer );
+		return;
+	}
+
+	if ( !state->arrayBufferBindingKnown || state->arrayBufferBinding != oldArrayBuffer ) {
+		GLX_Stream_BindArrayBufferTracked( state, oldArrayBuffer );
+	}
+	state->arrayBufferBindingRestores++;
 }
 
 static void GLX_Stream_OrphanBuffer( StreamState *state )
@@ -396,7 +518,7 @@ static void GLX_Stream_OrphanBuffer( StreamState *state )
 
 static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 {
-	GLint oldArrayBuffer = 0;
+	GLuint oldArrayBuffer = 0;
 
 	s_fns.GenBuffers( 1, &state->buffer );
 	if ( !state->buffer ) {
@@ -404,7 +526,7 @@ static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 		return qfalse;
 	}
 
-	GLX_Stream_BindPreserving( state->buffer, &oldArrayBuffer );
+	oldArrayBuffer = GLX_Stream_BindPreserving( state, state->buffer );
 	GLX_Stream_ClearGLErrors();
 
 	if ( state->strategy == StreamStrategy::PersistentMapped ) {
@@ -456,7 +578,7 @@ static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 				}
 				s_fns.GenBuffers( 1, &state->buffer );
 				if ( state->buffer ) {
-					s_fns.BindBuffer( GL_ARRAY_BUFFER, state->buffer );
+					GLX_Stream_BindArrayBufferTracked( state, state->buffer );
 					GLX_Stream_ClearGLErrors();
 				}
 			}
@@ -472,7 +594,7 @@ static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 		}
 	}
 
-	GLX_Stream_RestoreBinding( oldArrayBuffer );
+	GLX_Stream_RestoreBinding( state, oldArrayBuffer );
 
 	if ( !state->ready ) {
 		GLX_Stream_DeleteBuffer( state );
@@ -689,11 +811,12 @@ void GLX_Stream_FrameComplete( StreamState *state )
 	state->frames++;
 	state->writeOffset = 0;
 	state->frameTouched = qfalse;
+	GLX_Stream_InvalidateArrayBufferCache( state );
 }
 
 qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment, StreamReservation *reservation )
 {
-	GLint oldArrayBuffer = 0;
+	GLuint oldArrayBuffer = 0;
 	size_t offset = 0;
 
 	if ( !reservation ) {
@@ -733,7 +856,7 @@ qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment,
 		return qtrue;
 	}
 
-	GLX_Stream_BindPreserving( state->buffer, &oldArrayBuffer );
+	oldArrayBuffer = GLX_Stream_BindPreserving( state, state->buffer );
 
 	if ( state->strategy == StreamStrategy::MapBufferRange && s_fns.MapBufferRange && s_fns.UnmapBuffer ) {
 		GLbitfield access = GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
@@ -757,7 +880,7 @@ qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment,
 		}
 	}
 
-	GLX_Stream_RestoreBinding( oldArrayBuffer );
+	GLX_Stream_RestoreBinding( state, oldArrayBuffer );
 
 	state->reservations++;
 	return qtrue;
@@ -771,7 +894,7 @@ qboolean GLX_Stream_Upload( StreamState *state, StreamReservation *reservation, 
 qboolean GLX_Stream_UploadAt( StreamState *state, StreamReservation *reservation, size_t relativeOffset,
 	const void *data, size_t bytes )
 {
-	GLint oldArrayBuffer = 0;
+	GLuint oldArrayBuffer = 0;
 
 	if ( !state || !reservation || !data || bytes == 0 || relativeOffset > reservation->bytes ||
 		bytes > reservation->bytes - relativeOffset || reservation->committed ) {
@@ -793,15 +916,15 @@ qboolean GLX_Stream_UploadAt( StreamState *state, StreamReservation *reservation
 		return qfalse;
 	}
 
-	GLX_Stream_BindPreserving( reservation->buffer, &oldArrayBuffer );
+	oldArrayBuffer = GLX_Stream_BindPreserving( state, reservation->buffer );
 	s_fns.BufferSubData( GL_ARRAY_BUFFER, static_cast<ptrdiff_t>( reservation->offset + relativeOffset ),
 		static_cast<ptrdiff_t>( bytes ), data );
 	if ( GLX_Stream_GetGLError() != GL_NO_ERROR ) {
 		state->uploadFailures++;
-		GLX_Stream_RestoreBinding( oldArrayBuffer );
+		GLX_Stream_RestoreBinding( state, oldArrayBuffer );
 		return qfalse;
 	}
-	GLX_Stream_RestoreBinding( oldArrayBuffer );
+	GLX_Stream_RestoreBinding( state, oldArrayBuffer );
 
 	state->uploadCalls++;
 	state->uploadBytes += static_cast<unsigned long long>( bytes );
@@ -810,22 +933,72 @@ qboolean GLX_Stream_UploadAt( StreamState *state, StreamReservation *reservation
 
 void GLX_Stream_Commit( StreamState *state, StreamReservation *reservation )
 {
-	GLint oldArrayBuffer = 0;
+	GLuint oldArrayBuffer = 0;
 
 	if ( !state || !reservation || reservation->committed ) {
 		return;
 	}
 
 	if ( reservation->strategy == StreamStrategy::MapBufferRange && reservation->mapped && s_fns.UnmapBuffer ) {
-		GLX_Stream_BindPreserving( reservation->buffer, &oldArrayBuffer );
+		oldArrayBuffer = GLX_Stream_BindPreserving( state, reservation->buffer );
 		if ( !s_fns.UnmapBuffer( GL_ARRAY_BUFFER ) ) {
 			state->unmapFailures++;
 		}
-		GLX_Stream_RestoreBinding( oldArrayBuffer );
+		GLX_Stream_RestoreBinding( state, oldArrayBuffer );
 	}
 
 	reservation->committed = qtrue;
 	state->commits++;
+}
+
+GLuint GLX_Stream_BindArrayBufferCached( StreamState *state, GLuint buffer )
+{
+	if ( !state || !s_fns.BindBuffer ) {
+		return 0;
+	}
+
+	const GLuint previous = GLX_Stream_CurrentArrayBufferBinding( state );
+	if ( previous != buffer ) {
+		GLX_Stream_BindArrayBufferTracked( state, buffer );
+	}
+	return previous;
+}
+
+void GLX_Stream_RestoreArrayBufferCached( StreamState *state, GLuint buffer )
+{
+	if ( !state || !s_fns.BindBuffer ) {
+		return;
+	}
+
+	if ( !state->arrayBufferBindingKnown || state->arrayBufferBinding != buffer ) {
+		GLX_Stream_BindArrayBufferTracked( state, buffer );
+	}
+	state->arrayBufferBindingRestores++;
+}
+
+GLuint GLX_Stream_BindElementArrayBufferCached( StreamState *state, GLuint buffer )
+{
+	if ( !state || !s_fns.BindBuffer ) {
+		return 0;
+	}
+
+	const GLuint previous = GLX_Stream_CurrentElementArrayBufferBinding( state );
+	if ( previous != buffer ) {
+		GLX_Stream_BindElementArrayBufferTracked( state, buffer );
+	}
+	return previous;
+}
+
+void GLX_Stream_RestoreElementArrayBufferCached( StreamState *state, GLuint buffer )
+{
+	if ( !state || !s_fns.BindBuffer ) {
+		return;
+	}
+
+	if ( !state->elementArrayBufferBindingKnown || state->elementArrayBufferBinding != buffer ) {
+		GLX_Stream_BindElementArrayBufferTracked( state, buffer );
+	}
+	state->arrayBufferBindingRestores++;
 }
 
 qboolean GLX_Stream_DrawEnabled( const StreamState &state )
@@ -1195,6 +1368,16 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 		state.largestReservationBytes );
 	RI().Printf( PRINT_ALL, "  dynamic stream uploads: %u calls, %.2f MB, failures %u\n",
 		state.uploadCalls, static_cast<double>( state.uploadBytes ) / ( 1024.0 * 1024.0 ), state.uploadFailures );
+	RI().Printf( PRINT_ALL, "  dynamic stream binding cache: queries %u, hits %u, restores %u, invalidations %u, external %u, array known %s buffer %u, element known %s buffer %u\n",
+		state.arrayBufferBindingQueries,
+		state.arrayBufferBindingCacheHits,
+		state.arrayBufferBindingRestores,
+		state.arrayBufferBindingInvalidations,
+		state.bufferBindingExternalUpdates,
+		BoolName( state.arrayBufferBindingKnown ),
+		state.arrayBufferBinding,
+		BoolName( state.elementArrayBufferBindingKnown ),
+		state.elementArrayBufferBinding );
 	RI().Printf( PRINT_ALL, "  dynamic stream tess shadow uploads: %u batches, %.2f MB, skips %u, failures %u\n",
 		state.shadowTessUploads, static_cast<double>( state.shadowTessBytes ) / ( 1024.0 * 1024.0 ),
 		state.shadowTessSkips, state.shadowTessFailures );

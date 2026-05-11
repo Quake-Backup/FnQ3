@@ -590,6 +590,7 @@ qboolean GLX_Executor_ConsumePostNode( ExecutorState *state, const PostNode &nod
 	}
 
 	state->postNodes++;
+	state->lastPostNodeHash = GLX_RenderIR_HashPostNode( node );
 	if ( state->tier == RenderProductTier::GL2X ) {
 		state->postprocessLiteNodes++;
 	}
@@ -618,6 +619,7 @@ qboolean GLX_Executor_ConsumeOutputTransform( ExecutorState *state, const Output
 	}
 
 	state->outputTransforms++;
+	state->lastOutputTransformHash = GLX_RenderIR_HashOutputTransform( transform );
 	return qtrue;
 }
 

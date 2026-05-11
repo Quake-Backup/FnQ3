@@ -8,6 +8,7 @@ from typing import Iterable
 
 from glx_runtime_sweep import (
     GLX_BLOCKING_RELEASE_PLATFORMS,
+    GLX_OWNERSHIP_PROOF_VERSION,
     GLX_PRODUCT_TIERS,
     evaluate_gate,
     load_json_file,
@@ -22,17 +23,42 @@ ROOT = Path(__file__).resolve().parents[1]
 FEATURE_MATRIX_PATH = ROOT / "docs" / "fnquake3" / "GLX_FEATURE_MATRIX.md"
 FINAL_CONTRACT_PATH = ROOT / "docs" / "fnquake3" / "GLX_FINAL_CONTRACT.md"
 PROMOTION_DOC_PATH = ROOT / "docs" / "fnquake3" / "GLX_PROMOTION.md"
+LEGACY_COUPLING_DOC_PATH = ROOT / "docs" / "fnquake3" / "GLX_LEGACY_COUPLING.md"
+ROLLBACK_PACKAGE_DOC_PATH = ROOT / "docs" / "fnquake3" / "GLX_ROLLBACK_PACKAGE.md"
 CMAKE_PATH = ROOT / "CMakeLists.txt"
 MAKEFILE_PATH = ROOT / "Makefile"
+MSVC_GLX_PROJECT_PATH = ROOT / "code" / "win32" / "msvc2017" / "rendererglx.vcxproj"
 
 PROMOTION_CHECK_VERSION = 1
 PROMOTION_REQUIRED_TIERS = ("GL12", "GL2X", "GL3X", "GL41", "GL46")
+PROMOTION_MODERN_POST_OUTPUT_TIERS = ("GL3X", "GL41", "GL46")
+PROMOTION_MODERN_TIER_DIAGNOSTICS = {
+    "GL3X": ("gl3xExecutor", "gl3xSupport", True),
+    "GL41": ("gl41Executor", "gl41Support", True),
+    "GL46": ("gl46Executor", "gl46Support", False),
+}
 PROMOTION_REQUIRED_FEATURE_STATUS = "covered"
 PROMOTION_OWNERSHIP_PROFILE = "glx-ownership"
 PROMOTION_DOC_REQUIRED_TEXT = (
     "Migration Alias Plan",
     "OpenGL2 Legacy Flag Plan",
     "Rollback Package Contract",
+    "Rollback Package Metadata",
+    "Legacy Coupling Ledger",
+)
+PROMOTION_LEGACY_RENDERER_SOURCE_BUDGET = 24
+PROMOTION_ROLLBACK_METADATA_VERSION = 1
+PROMOTION_ROLLBACK_REQUIRED_ARTIFACTS = (
+    "proofCorpus",
+    "promotionReport",
+    "releaseProofSummary",
+    "checksums",
+)
+PROMOTION_ROLLBACK_REQUIRED_TRIGGER_TERMS = (
+    "demo",
+    "screenshot",
+    "driver",
+    "performance",
 )
 
 
@@ -149,6 +175,317 @@ def check_renderer_source_policy(
     }
 
 
+def renderer_legacy_sources(root: Path = ROOT) -> list[str]:
+    return sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / "code" / "renderer").glob("*.c")
+    )
+
+
+def cmake_glx_legacy_sources(cmake_path: Path = CMAKE_PATH) -> list[str]:
+    text = cmake_path.read_text(encoding="utf-8")
+    if (
+        "AUX_SOURCE_DIRECTORY(code/renderer RENDERER_GL_SRCS)" in text
+        and re.search(
+            r"ADD_LIBRARY\s*\([^)]*_glx[^)]*\$\{RENDERER_GL_SRCS\}",
+            text,
+            re.MULTILINE | re.DOTALL,
+        )
+    ):
+        return renderer_legacy_sources()
+    return sorted(set(re.findall(r"code/renderer/[A-Za-z0-9_]+\.c", text)))
+
+
+def makefile_glx_legacy_sources(makefile_path: Path = MAKEFILE_PATH) -> list[str]:
+    text = makefile_path.read_text(encoding="utf-8")
+    match = re.search(
+        r"Q3RENDXOBJ\s*=\s*\\\n(?P<body>.*?)(?:\n\s*\n|\nifneq)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if not match:
+        return []
+
+    sources = []
+    for stem in re.findall(r"\$\(B\)/rendx/([A-Za-z0-9_]+)\.o", match.group("body")):
+        source = ROOT / "code" / "renderer" / f"{stem}.c"
+        if source.exists():
+            sources.append(source.relative_to(ROOT).as_posix())
+    return sorted(set(sources))
+
+
+def msvc_glx_legacy_sources(project_path: Path = MSVC_GLX_PROJECT_PATH) -> list[str]:
+    text = project_path.read_text(encoding="utf-8")
+    sources = []
+    for include in re.findall(
+        r'<ClCompile Include="\.\.\\\.\.\\renderer\\([^"\\]+\.c)"',
+        text,
+    ):
+        sources.append(f"code/renderer/{include}")
+    return sorted(set(sources))
+
+
+def parse_legacy_coupling_doc(path: Path = LEGACY_COUPLING_DOC_PATH) -> list[str]:
+    if not path.exists():
+        return []
+
+    sources = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("| ") or line.startswith("|---"):
+            continue
+        columns = [column.strip().strip("`") for column in line.strip().strip("|").split("|")]
+        if not columns or columns[0] == "Source":
+            continue
+        if re.fullmatch(r"code/renderer/[A-Za-z0-9_]+\.c", columns[0]):
+            sources.append(columns[0])
+    return sorted(set(sources))
+
+
+def check_legacy_coupling_inventory(
+    cmake_path: Path = CMAKE_PATH,
+    makefile_path: Path = MAKEFILE_PATH,
+    msvc_project_path: Path = MSVC_GLX_PROJECT_PATH,
+    doc_path: Path = LEGACY_COUPLING_DOC_PATH,
+) -> dict[str, object]:
+    build_sources = {
+        "cmake": cmake_glx_legacy_sources(cmake_path),
+        "makefile": makefile_glx_legacy_sources(makefile_path),
+        "msvc": msvc_glx_legacy_sources(msvc_project_path),
+    }
+    documented_sources = parse_legacy_coupling_doc(doc_path)
+    reference_sources = build_sources["cmake"]
+    blockers: list[str] = []
+
+    if not reference_sources:
+        blockers.append("CMake GLx legacy renderer source inventory is empty or unreadable.")
+
+    for name, sources in build_sources.items():
+        missing = sorted(set(reference_sources).difference(sources))
+        extra = sorted(set(sources).difference(reference_sources))
+        if missing:
+            blockers.append(f"{name} GLx build is missing documented CMake source(s): " + ", ".join(missing))
+        if extra:
+            blockers.append(f"{name} GLx build has extra legacy source(s): " + ", ".join(extra))
+
+    undocumented = sorted(set(reference_sources).difference(documented_sources))
+    stale = sorted(set(documented_sources).difference(reference_sources))
+    if undocumented:
+        blockers.append("Legacy coupling ledger is missing source(s): " + ", ".join(undocumented))
+    if stale:
+        blockers.append("Legacy coupling ledger contains stale source(s): " + ", ".join(stale))
+    if len(reference_sources) > PROMOTION_LEGACY_RENDERER_SOURCE_BUDGET:
+        blockers.append(
+            "GLx legacy renderer source count "
+            f"{len(reference_sources)} exceeds ratchet budget "
+            f"{PROMOTION_LEGACY_RENDERER_SOURCE_BUDGET}."
+        )
+
+    return {
+        "name": "legacy-coupling-inventory",
+        "status": "passed" if not blockers else "blocked",
+        "path": doc_path.relative_to(ROOT).as_posix() if doc_path.is_relative_to(ROOT) else str(doc_path),
+        "ratchetBudget": PROMOTION_LEGACY_RENDERER_SOURCE_BUDGET,
+        "remainingLegacyRendererSources": len(reference_sources),
+        "sources": reference_sources,
+        "builds": {
+            name: {
+                "count": len(sources),
+                "sources": sources,
+            }
+            for name, sources in build_sources.items()
+        },
+        "documentedCount": len(documented_sources),
+        "blockers": blockers,
+    }
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _report_relative_path(path: Path) -> str:
+    try:
+        if path.is_relative_to(ROOT):
+            return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        pass
+    return str(path)
+
+
+def check_rollback_package_metadata(
+    metadata_path: Path | None = None,
+    required_platforms: Iterable[str] = GLX_BLOCKING_RELEASE_PLATFORMS,
+) -> dict[str, object]:
+    required_platform_list = [
+        normalize_proof_platform(platform_id)
+        for platform_id in required_platforms
+    ]
+    blockers: list[str] = []
+    package_records: list[dict[str, object]] = []
+    platform_coverage: set[str] = set()
+
+    if metadata_path is None:
+        return {
+            "name": "rollback-package-metadata",
+            "status": "blocked",
+            "required": True,
+            "requiredPlatforms": required_platform_list,
+            "requiredArtifacts": list(PROMOTION_ROLLBACK_REQUIRED_ARTIFACTS),
+            "blockers": ["No GLx rollback package metadata was provided."],
+        }
+
+    try:
+        metadata = load_json_file(metadata_path)
+    except Exception as exc:
+        return {
+            "name": "rollback-package-metadata",
+            "status": "blocked",
+            "required": True,
+            "path": _report_relative_path(metadata_path),
+            "requiredPlatforms": required_platform_list,
+            "requiredArtifacts": list(PROMOTION_ROLLBACK_REQUIRED_ARTIFACTS),
+            "blockers": [f"Could not read GLx rollback package metadata: {exc}"],
+        }
+
+    if not isinstance(metadata, dict):
+        return {
+            "name": "rollback-package-metadata",
+            "status": "blocked",
+            "required": True,
+            "path": _report_relative_path(metadata_path),
+            "requiredPlatforms": required_platform_list,
+            "requiredArtifacts": list(PROMOTION_ROLLBACK_REQUIRED_ARTIFACTS),
+            "blockers": ["GLx rollback package metadata root must be a JSON object."],
+        }
+
+    if metadata.get("version") != PROMOTION_ROLLBACK_METADATA_VERSION:
+        blockers.append(
+            "GLx rollback package metadata version must be "
+            f"{PROMOTION_ROLLBACK_METADATA_VERSION}."
+        )
+
+    status = str(metadata.get("status", "")).strip().lower()
+    if status not in {"ready", "reviewed"}:
+        blockers.append("GLx rollback package metadata status must be ready or reviewed.")
+
+    promoted_renderer = str(metadata.get("promotedRenderer", "")).strip().lower()
+    alias_renderer = str(metadata.get("aliasRenderer", "")).strip().lower()
+    if promoted_renderer != "glx":
+        blockers.append("GLx rollback package metadata must name promotedRenderer as glx.")
+    if alias_renderer != "opengl":
+        blockers.append("GLx rollback package metadata must name aliasRenderer as opengl.")
+
+    migration_instructions = str(metadata.get("migrationInstructions", "")).strip()
+    rollback_instructions = str(metadata.get("rollbackInstructions", "")).strip()
+    if not migration_instructions:
+        blockers.append("GLx rollback package metadata must include migrationInstructions.")
+    if not rollback_instructions:
+        blockers.append("GLx rollback package metadata must include rollbackInstructions.")
+
+    artifact_flags = metadata.get("requiredArtifacts")
+    if not isinstance(artifact_flags, dict):
+        blockers.append("GLx rollback package metadata must include requiredArtifacts.")
+        artifact_flags = {}
+    for artifact_name in PROMOTION_ROLLBACK_REQUIRED_ARTIFACTS:
+        if artifact_flags.get(artifact_name) is not True:
+            blockers.append(
+                "GLx rollback package metadata must confirm required artifact "
+                f"{artifact_name}."
+            )
+
+    triggers = _string_list(metadata.get("rollbackTriggers"))
+    if not triggers:
+        blockers.append("GLx rollback package metadata must include rollbackTriggers.")
+    trigger_text = "\n".join(trigger.lower() for trigger in triggers)
+    for term in PROMOTION_ROLLBACK_REQUIRED_TRIGGER_TERMS:
+        if term not in trigger_text:
+            blockers.append(
+                "GLx rollback package metadata must include a rollback trigger "
+                f"covering {term} regressions."
+            )
+
+    packages = metadata.get("rollbackPackages", metadata.get("packages", []))
+    if not isinstance(packages, list) or not packages:
+        blockers.append("GLx rollback package metadata must include rollbackPackages.")
+        packages = []
+
+    for index, package in enumerate(packages, start=1):
+        if not isinstance(package, dict):
+            blockers.append(f"GLx rollback package entry {index} must be a JSON object.")
+            continue
+
+        artifact_dir = str(package.get("artifactDir", "")).strip()
+        archive = str(package.get("archive", "")).strip()
+        package_id = str(package.get("id") or artifact_dir or archive or f"package-{index}").strip()
+        package_type = str(package.get("type", package.get("packageType", ""))).strip().lower()
+        platforms = _string_list(package.get("platforms"))
+        legacy_renderers = [
+            renderer.lower()
+            for renderer in _string_list(package.get("legacyRenderers"))
+        ]
+        instructions = str(
+            package.get("selectionInstructions")
+            or package.get("instructions")
+            or ""
+        ).strip()
+
+        if package_type != "rollback":
+            blockers.append(f"{package_id} must have type rollback.")
+        if not artifact_dir and not archive:
+            blockers.append(f"{package_id} must name artifactDir or archive.")
+        if "opengl" not in legacy_renderers:
+            blockers.append(f"{package_id} must list the legacy opengl renderer.")
+        if not instructions:
+            blockers.append(f"{package_id} must include legacy renderer selection instructions.")
+
+        normalized_platforms: list[str] = []
+        if any(platform.lower() == "all" for platform in platforms):
+            normalized_platforms = list(required_platform_list)
+        elif not platforms:
+            blockers.append(f"{package_id} must name covered platforms.")
+        else:
+            for platform in platforms:
+                try:
+                    normalized_platforms.append(normalize_proof_platform(platform))
+                except ValueError as exc:
+                    blockers.append(f"{package_id} has invalid platform '{platform}': {exc}")
+
+        platform_coverage.update(normalized_platforms)
+        package_records.append(
+            {
+                "id": package_id,
+                "type": package_type,
+                "artifactDir": artifact_dir,
+                "archive": archive,
+                "platforms": sorted(set(normalized_platforms)),
+                "legacyRenderers": legacy_renderers,
+            }
+        )
+
+    missing_platforms = sorted(set(required_platform_list).difference(platform_coverage))
+    if missing_platforms:
+        blockers.append(
+            "GLx rollback package metadata does not cover platform(s): "
+            + ", ".join(missing_platforms)
+        )
+
+    return {
+        "name": "rollback-package-metadata",
+        "status": "passed" if not blockers else "blocked",
+        "required": True,
+        "path": _report_relative_path(metadata_path),
+        "metadataStatus": status,
+        "requiredPlatforms": required_platform_list,
+        "coveredPlatforms": sorted(platform_coverage),
+        "requiredArtifacts": list(PROMOTION_ROLLBACK_REQUIRED_ARTIFACTS),
+        "packageCount": len(package_records),
+        "packages": package_records,
+        "blockers": blockers,
+    }
+
+
 def check_release_proof_root(proof_root: Path | None) -> dict[str, object]:
     if proof_root is None:
         return {
@@ -180,34 +517,207 @@ def check_release_proof_root(proof_root: Path | None) -> dict[str, object]:
 
 
 def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]:
+    evidence = manifest.get("ownershipProofEvidence")
+    evidence_found = isinstance(evidence, dict)
+    evidence_version = evidence.get("version") if isinstance(evidence, dict) else None
+    evidence_status = str(evidence.get("status", "")) if isinstance(evidence, dict) else ""
+    evidence_failures = (
+        [
+            str(failure)
+            for failure in evidence.get("failures", [])
+            if str(failure).strip()
+        ]
+        if isinstance(evidence, dict)
+        else []
+    )
+
     found = False
     max_calls = 0
     max_items = 0
     diagnostic_failures = 0
+    post_output_found = False
+    post_output_modes: set[str] = set()
+    post_output_post_nodes = 0
+    post_output_outputs = 0
+    post_output_legacy_fallback = 0
+    product_tiers: set[str] = set()
+    modern_tier_diagnostics_found = False
+    modern_tier_diagnostics_ok = False
+
+    def int_metric(value: object, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    if isinstance(evidence, dict):
+        delegation = evidence.get("delegation")
+        if isinstance(delegation, dict):
+            found = bool(delegation.get("found", True))
+            max_calls = int_metric(delegation.get("calls", 0))
+            max_items = int_metric(delegation.get("items", 0))
+        diagnostic_failures = int_metric(evidence.get("diagnosticFailures", 0))
+        tiers = evidence.get("productTiers", [])
+        if isinstance(tiers, list):
+            for tier in tiers:
+                tier_value = str(tier or "").strip().upper()
+                if tier_value in GLX_PRODUCT_TIERS:
+                    product_tiers.add(tier_value)
+        post_output = evidence.get("postOutputOwnership")
+        if isinstance(post_output, dict):
+            post_output_found = bool(post_output.get("found"))
+            modes = post_output.get("modes", [])
+            if isinstance(modes, list):
+                post_output_modes.update(str(mode).strip().lower() for mode in modes if str(mode).strip())
+            post_output_post_nodes = int_metric(post_output.get("postNodes", 0))
+            post_output_outputs = int_metric(post_output.get("outputs", 0))
+            post_output_legacy_fallback = int_metric(post_output.get("legacyFallback", 0))
+        modern_tier_diagnostics_found = bool(evidence.get("modernTierDiagnosticsFound"))
+        modern_tier_diagnostics_ok = bool(evidence.get("modernTierDiagnosticsOk"))
+
+        modern_post_output_tier = bool(evidence.get("modernPostOutputTier"))
+        modern_post_output = bool(evidence.get("modernPostOutput"))
+        return {
+            "found": found,
+            "calls": max_calls,
+            "items": max_items,
+            "diagnosticFailures": diagnostic_failures,
+            "zeroDelegation": bool(evidence.get("zeroDelegation")),
+            "postOutputFound": post_output_found,
+            "postOutputMode": ",".join(sorted(post_output_modes)),
+            "postOutputPostNodes": post_output_post_nodes,
+            "postOutputOutputs": post_output_outputs,
+            "postOutputLegacyFallback": post_output_legacy_fallback,
+            "productTiers": ",".join(sorted(product_tiers)),
+            "modernPostOutputTier": modern_post_output_tier,
+            "modernTierDiagnosticsFound": modern_tier_diagnostics_found,
+            "modernTierDiagnosticsOk": modern_tier_diagnostics_ok,
+            "modernPostOutput": modern_post_output,
+            "evidenceFound": evidence_found,
+            "evidenceVersion": evidence_version,
+            "evidenceStatus": evidence_status,
+            "evidenceFailures": evidence_failures,
+        }
+
+    def record_post_output(mode: object, post_nodes: object, outputs: object, legacy_fallback: object) -> None:
+        nonlocal post_output_found
+        nonlocal post_output_post_nodes
+        nonlocal post_output_outputs
+        nonlocal post_output_legacy_fallback
+
+        if mode is None and post_nodes is None and outputs is None and legacy_fallback is None:
+            return
+        post_output_found = True
+        if mode is not None:
+            post_output_modes.add(str(mode).strip().lower())
+        post_output_post_nodes = max(post_output_post_nodes, int_metric(post_nodes))
+        post_output_outputs = max(post_output_outputs, int_metric(outputs))
+        post_output_legacy_fallback = max(post_output_legacy_fallback, int_metric(legacy_fallback))
+
+    def record_tier(value: object) -> None:
+        tier = str(value or "").strip().upper()
+        if tier in GLX_PRODUCT_TIERS:
+            product_tiers.add(tier)
+
+    def record_modern_tier_diagnostics(metrics: dict[str, object]) -> None:
+        nonlocal modern_tier_diagnostics_found
+        nonlocal modern_tier_diagnostics_ok
+
+        product_tier = metrics.get("productTier")
+        tier = ""
+        if isinstance(product_tier, dict):
+            tier = str(product_tier.get("tier", "")).strip().upper()
+        diagnostics = PROMOTION_MODERN_TIER_DIAGNOSTICS.get(tier)
+        if not diagnostics:
+            return
+
+        executor_name, support_name, require_fbo_post = diagnostics
+        executor = metrics.get(executor_name)
+        support = metrics.get(support_name)
+        if not isinstance(executor, dict) and not isinstance(support, dict):
+            return
+        modern_tier_diagnostics_found = True
+
+        active = isinstance(executor, dict) and int_metric(executor.get("active")) > 0
+        fbo_post = (
+            not require_fbo_post
+            or (isinstance(executor, dict) and int_metric(executor.get("fboPostProcess")) > 0)
+        )
+        modern_post = isinstance(support, dict) and int_metric(support.get("modernPostChain")) > 0
+        scene_linear = isinstance(support, dict) and int_metric(support.get("sceneLinearOutput")) > 0
+        if active and fbo_post and modern_post and scene_linear:
+            modern_tier_diagnostics_ok = True
+
     for run in manifest.get("runs", []):
         if not isinstance(run, dict):
             continue
         diagnostics = run.get("diagnostics")
         if not isinstance(diagnostics, dict):
-            continue
-        failures = diagnostics.get("failures", [])
-        if isinstance(failures, list):
-            diagnostic_failures += len(failures)
-        metrics = diagnostics.get("metrics")
-        if not isinstance(metrics, dict):
-            continue
+            metrics = {}
+        else:
+            failures = diagnostics.get("failures", [])
+            if isinstance(failures, list):
+                diagnostic_failures += len(failures)
+            metrics = diagnostics.get("metrics")
+            if not isinstance(metrics, dict):
+                metrics = {}
         ownership = metrics.get("ownership")
-        if not isinstance(ownership, dict):
-            continue
-        found = True
-        max_calls = max(max_calls, int(ownership.get("calls", 0)))
-        max_items = max(max_items, int(ownership.get("items", 0)))
+        if isinstance(ownership, dict):
+            found = True
+            max_calls = max(max_calls, int_metric(ownership.get("calls", 0)))
+            max_items = max(max_items, int_metric(ownership.get("items", 0)))
+        product_tier = metrics.get("productTier")
+        if isinstance(product_tier, dict):
+            record_tier(product_tier.get("tier"))
+        record_modern_tier_diagnostics(metrics)
+        post_output = metrics.get("postOutputOwnership")
+        if isinstance(post_output, dict):
+            record_post_output(
+                post_output.get("mode"),
+                post_output.get("postNodes"),
+                post_output.get("outputs"),
+                post_output.get("legacyFallback"),
+            )
+        performance = run.get("performance")
+        if isinstance(performance, dict):
+            latest = performance.get("latest")
+            if isinstance(latest, dict):
+                record_post_output(
+                    latest.get("postOutputMode"),
+                    latest.get("postOutputPostNodes"),
+                    latest.get("postOutputOutputs"),
+                    latest.get("postOutputLegacyFallback"),
+                )
+                record_tier(latest.get("productTier", latest.get("tier")))
+    modern_post_output_tier = bool(product_tiers.intersection(PROMOTION_MODERN_POST_OUTPUT_TIERS))
+    modern_post_output = (
+        post_output_found
+        and post_output_modes == {"glx-owned"}
+        and post_output_post_nodes > 0
+        and post_output_outputs > 0
+        and post_output_legacy_fallback == 0
+        and modern_post_output_tier
+    )
     return {
         "found": found,
         "calls": max_calls,
         "items": max_items,
         "diagnosticFailures": diagnostic_failures,
         "zeroDelegation": found and max_calls == 0 and max_items == 0 and diagnostic_failures == 0,
+        "postOutputFound": post_output_found,
+        "postOutputMode": ",".join(sorted(post_output_modes)),
+        "postOutputPostNodes": post_output_post_nodes,
+        "postOutputOutputs": post_output_outputs,
+        "postOutputLegacyFallback": post_output_legacy_fallback,
+        "productTiers": ",".join(sorted(product_tiers)),
+        "modernPostOutputTier": modern_post_output_tier,
+        "modernTierDiagnosticsFound": modern_tier_diagnostics_found,
+        "modernTierDiagnosticsOk": modern_tier_diagnostics_ok,
+        "modernPostOutput": modern_post_output,
+        "evidenceFound": evidence_found,
+        "evidenceVersion": evidence_version,
+        "evidenceStatus": evidence_status,
+        "evidenceFailures": evidence_failures,
     }
 
 
@@ -274,9 +784,41 @@ def check_ownership_proof(
             )
             continue
         ownership = record.get("ownership", {})
+        if not isinstance(ownership, dict) or not ownership.get("evidenceFound"):
+            blockers.append(
+                f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} did not include versioned ownership proof evidence."
+            )
+            continue
+        if isinstance(ownership, dict) and ownership.get("evidenceVersion") != GLX_OWNERSHIP_PROOF_VERSION:
+            blockers.append(
+                f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} has unsupported ownership proof evidence version "
+                f"{ownership.get('evidenceVersion')!r}."
+            )
+        if isinstance(ownership, dict) and ownership.get("evidenceStatus") != "passed":
+            blockers.append(
+                f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} ownership proof evidence status is "
+                f"{ownership.get('evidenceStatus') or '-'}, expected passed."
+            )
+        if isinstance(ownership, dict) and ownership.get("evidenceFailures"):
+            blockers.append(
+                f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} ownership proof evidence failure(s): "
+                + "; ".join(str(failure) for failure in ownership.get("evidenceFailures", []))
+            )
         if not isinstance(ownership, dict) or not ownership.get("zeroDelegation"):
             blockers.append(
                 f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} did not report zero legacy delegation."
+            )
+        if not isinstance(ownership, dict) or not ownership.get("modernPostOutput"):
+            blockers.append(
+                f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} did not prove GLx-owned modern post/output."
+            )
+        if not isinstance(ownership, dict) or not ownership.get("modernPostOutputTier"):
+            blockers.append(
+                f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} did not prove a GL3X+ modern post/output tier."
+            )
+        if not isinstance(ownership, dict) or not ownership.get("modernTierDiagnosticsOk"):
+            blockers.append(
+                f"{PROMOTION_OWNERSHIP_PROFILE} proof for {platform_id} did not prove modern post-chain and scene-linear tier diagnostics."
             )
 
     return {
@@ -310,10 +852,15 @@ def check_migration_doc(path: Path = PROMOTION_DOC_PATH) -> dict[str, object]:
     }
 
 
-def promotion_report(proof_root: Path | None = None) -> dict[str, object]:
+def promotion_report(
+    proof_root: Path | None = None,
+    rollback_metadata_path: Path | None = None,
+) -> dict[str, object]:
     checks = [
         check_feature_matrix(),
         check_product_tiers(),
+        check_legacy_coupling_inventory(),
+        check_rollback_package_metadata(rollback_metadata_path),
         check_release_proof_root(proof_root),
         check_ownership_proof(proof_root),
         check_migration_doc(),
@@ -354,6 +901,11 @@ def parse_args() -> argparse.Namespace:
         "--proof-root",
         type=Path,
         help="Directory containing reviewed GLx proof manifests.",
+    )
+    parser.add_argument(
+        "--rollback-metadata",
+        type=Path,
+        help="Reviewed JSON metadata for the GLx legacy-renderer rollback package.",
     )
     parser.add_argument(
         "--require-ready",
@@ -399,7 +951,7 @@ def print_text_report(report: dict[str, object]) -> None:
 
 def main() -> int:
     args = parse_args()
-    report = promotion_report(args.proof_root)
+    report = promotion_report(args.proof_root, args.rollback_metadata)
     if args.json:
         print(json.dumps(report, indent=2))
     else:

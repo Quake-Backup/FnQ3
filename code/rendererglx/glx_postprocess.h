@@ -3,11 +3,13 @@
 
 #include "glx_local.h"
 #include "glx_render_ir.h"
+#include "../renderercommon/tr_glx_public.h"
 
 namespace glx {
 
 struct PostProcessState {
 	cvar_t *r_glxPostProcessDebug;
+	cvar_t *r_glxColorPipelineDebug;
 	cvar_t *r_hdr;
 	cvar_t *r_hdrPrecision;
 	cvar_t *r_srgbTextures;
@@ -60,6 +62,9 @@ struct PostProcessState {
 	qboolean textureSrgbDecode;
 	qboolean framebufferSrgbAvailable;
 	qboolean framebufferSrgbEnabled;
+	qboolean sceneTargetFloat;
+	qboolean finalShaderSrgbEncode;
+	qboolean outputContractValid;
 	rendererDisplayOutput_t displayOutput;
 	OutputTransform lastOutput;
 	qboolean lastBloomAvailable;
@@ -139,6 +144,25 @@ struct PostProcessState {
 	unsigned int bloomMode1Passes;
 	unsigned int bloomMode2Passes;
 	unsigned int bloomReflectionPasses;
+	unsigned int colorPipelineDumpFrames;
+	qboolean colorPipelineCsvHeaderPrinted;
+	unsigned int postOutputPlanFrames;
+	unsigned int postOutputOwnedFrames;
+	unsigned int postOutputFallbackFrames;
+	unsigned int postOutputPlanNodes;
+	unsigned int postOutputPlanOutputs;
+	unsigned int postOutputExecutorRejects;
+	unsigned int postOutputResultMismatches;
+	unsigned int lastPostOutputNodeCount;
+	unsigned int lastPostOutputOutputCount;
+	unsigned int lastPostOutputPlanHash;
+	unsigned int lastPostOutputFallbackReasons;
+	int lastPostOutputPredictedResult;
+	int lastPostOutputActualResult;
+	qboolean lastPostOutputGlxOwned;
+	unsigned int imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_COUNT];
+	unsigned int imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_COUNT];
+	unsigned int imageUnexpectedSrgbDecode;
 };
 
 void GLX_PostProcess_RegisterCvars( PostProcessState *state );
@@ -155,6 +179,8 @@ void GLX_PostProcess_RecordFboShutdown( PostProcessState *state );
 void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, qboolean bloomAvailable,
 	qboolean programReady, int screenshotMask, qboolean windowAdjusted, int fboReadIndex,
 	int hdrMode, int renderScaleMode, float greyscale );
+void GLX_PostProcess_RecordPostOutputPlan( PostProcessState *state, const PostOutputPlan &plan,
+	qboolean executorConsumed );
 void GLX_PostProcess_RecordFrameResult( PostProcessState *state, int result );
 void GLX_PostProcess_RecordBloomCreate( PostProcessState *state, int result,
 	int requestedPasses, int effectivePasses, int textureUnits );
@@ -165,10 +191,14 @@ void GLX_PostProcess_RecordBloom( PostProcessState *state, int result, qboolean 
 void GLX_PostProcess_RecordCopyScreen( PostProcessState *state, int viewportWidth, int viewportHeight );
 void GLX_PostProcess_RecordBlit( PostProcessState *state, int kind, qboolean depthOnly,
 	int srcWidth, int srcHeight, int dstWidth, int dstHeight );
+void GLX_PostProcess_ResetImageColorAudit( PostProcessState *state );
+void GLX_PostProcess_RecordImageColorAudit( PostProcessState *state, int colorSpace,
+	qboolean srgbDecode );
 void GLX_PostProcess_PrintInfo( const PostProcessState &state );
 const char *GLX_PostProcess_ResultName( int result );
 const char *GLX_PostProcess_BloomCreateResultName( int result );
 const char *GLX_PostProcess_BloomResultName( int result );
+const char *GLX_PostProcess_PostOutputModeName( qboolean glxOwned );
 
 } // namespace glx
 

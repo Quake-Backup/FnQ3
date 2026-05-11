@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -18,6 +19,7 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "code" / "win32" / "msvc2017" / "output"
 DEFAULT_SWEEP_ROOT = ROOT / ".tmp" / "runtime-sweeps"
+TEXTURE_CLASSIFICATION_MANIFEST_PATH = ROOT / "docs" / "fnquake3" / "GLX_TEXTURE_CLASSIFICATION_MANIFEST.json"
 RENDERER_NAME_RE = re.compile(r"^[A-Za-z1-9]+$")
 DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO = 0.20
 GLX_EXPECTED_PASS_SCHEDULE = (
@@ -30,6 +32,102 @@ GLX_PRODUCT_TIERS = {"GL12", "GL2X", "GL3X", "GL41", "GL46"}
 GLX_BLOCKING_RELEASE_PLATFORMS = ("windows-x64", "linux-x86_64")
 GLX_RELEASE_REQUIRED_GATES = ("rc-smoke", "rc-parity", "rc-proof")
 GLX_RELEASE_PROOF_VERSION = 1
+GLX_COLOR_CONTRACT_VERSION = "2026-05-10-p0"
+GLX_VISUAL_DOSSIER_VERSION = "2026-05-10-visual-dossier-v1"
+GLX_SWITCH_LIFECYCLE_VERSION = 1
+GLX_OWNERSHIP_PROOF_VERSION = 1
+GLX_WORLD_PROOF_VERSION = 1
+GLX_MATERIAL_PROOF_VERSION = 1
+GLX_DYNAMIC_PROOF_VERSION = 1
+GLX_POST_PROOF_VERSION = 1
+GLX_PRODUCT_TIER_ORDER = ("GL12", "GL2X", "GL3X", "GL41", "GL46")
+GLX_WORLD_PROOF_TAGS = ("stock-map", "high-geometry", "lightmap", "fog-heavy", "visibility")
+GLX_MATERIAL_PROOF_TAGS = (
+    "shader-heavy",
+    "material-stage",
+    "animated-image",
+    "screen-map",
+    "video-map",
+    "tcgen-lightmap",
+    "tcgen-environment",
+    "tcgen-fog",
+    "tcgen-vector",
+)
+GLX_DYNAMIC_PROOF_TAGS = (
+    "dynamic-entity",
+    "weapon-model",
+    "particle",
+    "transient-poly",
+    "mark-decal",
+    "beam",
+    "dynamic-light",
+    "planar-shadow",
+    "particle-heavy-demo",
+)
+GLX_DYNAMIC_CATEGORY_TAGS = {
+    "entity": "dynamic-entity",
+    "weapon": "weapon-model",
+    "particle": "particle",
+    "poly": "transient-poly",
+    "mark": "mark-decal",
+    "beam": "beam",
+}
+GLX_DYNAMIC_STREAM_FEATURE_TAGS = {
+    "shadow": "planar-shadow",
+    "beam": "beam",
+    "dynamicLight": "dynamic-light",
+}
+GLX_DYNAMIC_SUPPORT_KEYS = {
+    "dynamicEntities",
+    "sprites",
+    "beams",
+    "dynamicLights",
+    "stencilShadows",
+}
+GLX_POST_PROOF_TAGS = (
+    "greyscale-proof",
+    "render-scale-proof",
+)
+GLX_POST_FEATURE_TAGS = {
+    "greyscale": "greyscale-proof",
+    "renderScale": "render-scale-proof",
+}
+GLX_MATERIAL_STAGE_FLAGS = {
+    "multitexture": 0x0001,
+    "depthFragment": 0x0002,
+    "blend": 0x0004,
+    "alphaTest": 0x0008,
+    "depthWrite": 0x0010,
+    "lightmap": 0x0020,
+    "animatedImage": 0x0040,
+    "videoMap": 0x0080,
+    "screenMap": 0x0100,
+    "dynamicLightMap": 0x0200,
+    "texMod": 0x0400,
+    "environment": 0x0800,
+    "st0": 0x1000,
+    "st1": 0x2000,
+    "shadowPass": 0x4000,
+    "beamPass": 0x8000,
+    "postprocessPass": 0x10000,
+    "detail": 0x20000,
+}
+GLX_MATERIAL_TCGEN_IDS = {
+    "bad": 0,
+    "identity": 1,
+    "lightmap": 2,
+    "texture": 3,
+    "environment": 4,
+    "environmentFp": 5,
+    "fog": 6,
+    "vector": 7,
+}
+GLX_MATERIAL_STAGE_FLAG_TAGS = {
+    "animatedImage": "animated-image",
+    "screenMap": "screen-map",
+    "videoMap": "video-map",
+}
+Q3_MAX_QPATH = 64
 PROOF_PLATFORM_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "batches",
@@ -96,7 +194,19 @@ PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "materialBindAttempts",
     "materialSwitches",
     "materialCacheMisses",
+    "materialParameterBlocks",
+    "materialParameterHash",
+    "materialInvalidParameterBlocks",
+    "postOutputPostNodes",
+    "postOutputOutputs",
+    "postOutputPostHash",
+    "postOutputOutputHash",
     "streamSameFrameWrapRejects",
+    "streamBindingQueries",
+    "streamBindingCacheHits",
+    "streamBindingRestores",
+    "streamBindingInvalidations",
+    "streamBindingExternalUpdates",
     "streamDrawMegabytes",
     "streamDrawIndexMegabytes",
     "streamDrawTex1Megabytes",
@@ -112,6 +222,7 @@ DEFAULT_PERFORMANCE_BUDGET = {
         "materialLinkFailures": 0,
         "materialPrecacheFailures": 0,
         "materialBindFailures": 0,
+        "materialInvalidParameterBlocks": 0,
         "streamDrawFallbacks": 0,
         "streamDrawDynamicLights": 0,
         "streamDrawScreenMaps": 0,
@@ -152,7 +263,41 @@ DEFAULT_PERFORMANCE_BUDGET = {
             },
         },
         "GL3X": {
-            "required": ("gpuFrameMs",),
+            "required": (
+                "gpuFrameMs",
+                "postOutputPostNodes",
+                "postOutputOutputs",
+                "postOutputLegacyFallback",
+                "postOutputPostHash",
+                "postOutputOutputHash",
+                "postOutputPlanHash",
+                "postOutputFallbackMask",
+                "materialPrograms",
+                "materialBindAttempts",
+                "materialCacheMisses",
+                "materialCompileFailures",
+                "materialLinkFailures",
+                "materialPrecacheFailures",
+                "materialBindFailures",
+                "materialParameterBlocks",
+                "materialParameterHash",
+                "materialInvalidParameterBlocks",
+                "streamBindingQueries",
+                "streamBindingCacheHits",
+                "streamBindingRestores",
+            ),
+            "min": {
+                "postOutputPostNodes": 1,
+                "postOutputOutputs": 1,
+                "postOutputPostHash": 1,
+                "postOutputOutputHash": 1,
+                "postOutputPlanHash": 1,
+                "materialPrograms": 1,
+                "materialBindAttempts": 1,
+                "materialParameterBlocks": 1,
+                "materialParameterHash": 1,
+                "streamBindingRestores": 1,
+            },
             "max": {
                 "draws": 10000,
                 "drawIndexes": 3500000,
@@ -163,11 +308,47 @@ DEFAULT_PERFORMANCE_BUDGET = {
                 "staticDrawPacketMisses": 10000,
                 "staticQueuePacketMisses": 10000,
                 "staticPacketLookupMisses": 10000,
+                "postOutputLegacyFallback": 0,
+                "postOutputFallbackMask": 0,
                 "gpuFrameMs": 40.0,
             },
         },
         "GL41": {
-            "required": ("gpuFrameMs",),
+            "required": (
+                "gpuFrameMs",
+                "postOutputPostNodes",
+                "postOutputOutputs",
+                "postOutputLegacyFallback",
+                "postOutputPostHash",
+                "postOutputOutputHash",
+                "postOutputPlanHash",
+                "postOutputFallbackMask",
+                "materialPrograms",
+                "materialBindAttempts",
+                "materialCacheMisses",
+                "materialCompileFailures",
+                "materialLinkFailures",
+                "materialPrecacheFailures",
+                "materialBindFailures",
+                "materialParameterBlocks",
+                "materialParameterHash",
+                "materialInvalidParameterBlocks",
+                "streamBindingQueries",
+                "streamBindingCacheHits",
+                "streamBindingRestores",
+            ),
+            "min": {
+                "postOutputPostNodes": 1,
+                "postOutputOutputs": 1,
+                "postOutputPostHash": 1,
+                "postOutputOutputHash": 1,
+                "postOutputPlanHash": 1,
+                "materialPrograms": 1,
+                "materialBindAttempts": 1,
+                "materialParameterBlocks": 1,
+                "materialParameterHash": 1,
+                "streamBindingRestores": 1,
+            },
             "max": {
                 "draws": 9000,
                 "drawIndexes": 3000000,
@@ -178,11 +359,47 @@ DEFAULT_PERFORMANCE_BUDGET = {
                 "staticDrawPacketMisses": 9000,
                 "staticQueuePacketMisses": 9000,
                 "staticPacketLookupMisses": 9000,
+                "postOutputLegacyFallback": 0,
+                "postOutputFallbackMask": 0,
                 "gpuFrameMs": 33.4,
             },
         },
         "GL46": {
-            "required": ("gpuFrameMs",),
+            "required": (
+                "gpuFrameMs",
+                "postOutputPostNodes",
+                "postOutputOutputs",
+                "postOutputLegacyFallback",
+                "postOutputPostHash",
+                "postOutputOutputHash",
+                "postOutputPlanHash",
+                "postOutputFallbackMask",
+                "materialPrograms",
+                "materialBindAttempts",
+                "materialCacheMisses",
+                "materialCompileFailures",
+                "materialLinkFailures",
+                "materialPrecacheFailures",
+                "materialBindFailures",
+                "materialParameterBlocks",
+                "materialParameterHash",
+                "materialInvalidParameterBlocks",
+                "streamBindingQueries",
+                "streamBindingCacheHits",
+                "streamBindingRestores",
+            ),
+            "min": {
+                "postOutputPostNodes": 1,
+                "postOutputOutputs": 1,
+                "postOutputPostHash": 1,
+                "postOutputOutputHash": 1,
+                "postOutputPlanHash": 1,
+                "materialPrograms": 1,
+                "materialBindAttempts": 1,
+                "materialParameterBlocks": 1,
+                "materialParameterHash": 1,
+                "streamBindingRestores": 1,
+            },
             "max": {
                 "draws": 8000,
                 "drawIndexes": 2500000,
@@ -193,8 +410,18 @@ DEFAULT_PERFORMANCE_BUDGET = {
                 "staticDrawPacketMisses": 8000,
                 "staticQueuePacketMisses": 8000,
                 "staticPacketLookupMisses": 8000,
+                "postOutputLegacyFallback": 0,
+                "postOutputFallbackMask": 0,
                 "gpuFrameMs": 25.0,
             },
+        },
+    },
+}
+GLX_GATE_PERFORMANCE_BUDGET_OVERRIDES = {
+    "rc-stress": {
+        "max": {
+            "streamDrawScreenMaps": 8000,
+            "streamDrawVideoMaps": 8000,
         },
     },
 }
@@ -227,6 +454,60 @@ MATERIAL_COMPILER_PLANS_RE = re.compile(
     r"unsupported\s+(?P<unsupported>\d+),\s*"
     r"last unsupported\s+0x(?P<lastUnsupported>[0-9a-fA-F]+)\s*"
     r"\((?P<lastUnsupportedReason>[^)]*)\)",
+    re.IGNORECASE,
+)
+MATERIAL_PARAMETER_DETAIL_RE = re.compile(
+    r"(?:glx:\s*)?material parameter(?:s| blocks):?\s*"
+    r"(?:blocks\s+)?(?P<blocks>\d+)\s+(?:built,\s*)?"
+    r"invalid\s+(?P<invalid>\d+)"
+    r"(?:,?\s+hash\s+0x(?P<hash>[0-9a-fA-F]+))?,?\s*"
+    r"last\s+sort\s+(?P<sort>-?\d+)\s+passes\s+(?P<passes>\d+)\s+"
+    r"features\s+0x(?P<features>[0-9a-fA-F]+)\s+"
+    r"flags\s+0x(?P<flags>[0-9a-fA-F]+)\s+"
+    r"state\s+0x(?P<state>[0-9a-fA-F]+)"
+    r"(?:\s+object\s+rgb\s+(?P<rgbGen>-?\d+):(?P<rgbWave>-?\d+)\s+"
+    r"alpha\s+(?P<alphaGen>-?\d+):(?P<alphaWave>-?\d+)\s+"
+    r"tc\s+(?P<tcGen0>-?\d+)/(?P<tcGen1>-?\d+))?",
+    re.IGNORECASE,
+)
+MATERIAL_PARAMETER_BLOCKS_RE = re.compile(
+    r"(?:glx:\s*)?material parameter(?:s| blocks):?\s*"
+    r"(?:blocks\s+)?(?P<blocks>\d+)\s+(?:built,\s*)?"
+    r"invalid\s+(?P<invalid>\d+)"
+    r"(?:,?\s+hash\s+0x(?P<hash>[0-9a-fA-F]+))?",
+    re.IGNORECASE,
+)
+MATERIAL_LAST_KEY_RE = re.compile(
+    r"material last key:\s*(?P<name>[^,]+),\s*"
+    r"flags\s+0x(?P<flags>[0-9a-fA-F]+),\s*"
+    r"state\s+0x(?P<state>[0-9a-fA-F]+),\s*"
+    r"rgb\s+(?P<rgbGen>-?\d+):(?P<rgbWave>-?\d+)\s+"
+    r"alpha\s+(?P<alphaGen>-?\d+):(?P<alphaWave>-?\d+)\s+"
+    r"tc\s+(?P<tcGen0>-?\d+)/(?P<tcGen1>-?\d+)\s+"
+    r"texmods\s+(?P<texMods0>-?\d+)/(?P<texMods1>-?\d+)\s+"
+    r"combine\s+(?P<combine>-?\d+)\s+fog\s+(?P<fog>\w+)",
+    re.IGNORECASE,
+)
+MATERIAL_LAST_LANGUAGE_RE = re.compile(
+    r"material last language:\s*flags\s+0x(?P<flags>[0-9a-fA-F]+),\s*"
+    r"state\s+0x(?P<state>[0-9a-fA-F]+),\s*"
+    r"tmasks\s+0x(?P<texModMask0>[0-9a-fA-F]+)/0x(?P<texModMask1>[0-9a-fA-F]+),\s*"
+    r"tseq\s+0x(?P<texModSequence0>[0-9a-fA-F]+)/0x(?P<texModSequence1>[0-9a-fA-F]+),\s*"
+    r"twf\s+0x(?P<texModWaveFuncs0>[0-9a-fA-F]+)/0x(?P<texModWaveFuncs1>[0-9a-fA-F]+),\s*"
+    r"fogadjust\s+(?P<fogAdjust>-?\d+)",
+    re.IGNORECASE,
+)
+MATERIAL_FLAGS_COMMON_RE = re.compile(
+    r"material flags mt/depthfrag/blend/atest/depthwrite/lightmap:\s*"
+    r"(?P<multitexture>\d+)/(?P<depthFragment>\d+)/(?P<blend>\d+)/"
+    r"(?P<alphaTest>\d+)/(?P<depthWrite>\d+)/(?P<lightmap>\d+)",
+    re.IGNORECASE,
+)
+MATERIAL_FLAGS_SPECIAL_RE = re.compile(
+    r"material flags anim/video/screen/dlight/texmod/env/st0/st1:\s*"
+    r"(?P<animatedImage>\d+)/(?P<videoMap>\d+)/(?P<screenMap>\d+)/"
+    r"(?P<dynamicLightMap>\d+)/(?P<texMod>\d+)/(?P<environment>\d+)/"
+    r"(?P<st0>\d+)/(?P<st1>\d+)",
     re.IGNORECASE,
 )
 OWNERSHIP_RE = re.compile(
@@ -360,13 +641,61 @@ GLX_GL46_REQUIREMENTS_RE = re.compile(
     re.IGNORECASE,
 )
 GLX_PASS_SCHEDULE_RE = re.compile(
-    r"(?:glx:\s*)?pass schedule:?\s*(?P<valid>valid|invalid)\s+"
+    r"(?:glx:\s*)?(?:GLx\s+)?pass schedule:?\s*(?P<valid>valid|invalid)\s+"
     r"(?P<count>\d+)/(?P<hash>[0-9a-fA-F]+)\s+(?P<order>[A-Za-z0-9_>\-]+)",
+    re.IGNORECASE,
+)
+GLX_RENDER_IR_PRODUCTS_RE = re.compile(
+    r"(?:glx:\s*)?render IR products:?\s*"
+    r"passes\s+(?P<passes>\d+),?\s+world packets\s+(?P<worldPackets>\d+),?\s+"
+    r"dynamic draws\s+(?P<dynamicDraws>\d+),?\s+materials\s+(?P<materials>\d+),?\s+"
+    r"uploads\s+(?P<uploads>\d+),?\s+post nodes\s+(?P<postNodes>\d+),?\s+"
+    r"outputs\s+(?P<outputs>\d+),?\s+rejects\s+(?P<rejects>\d+)",
+    re.IGNORECASE,
+)
+GLX_POST_OUTPUT_OWNERSHIP_RE = re.compile(
+    r"(?:glx:\s*)?post/output ownership:?\s*"
+    r"mode\s+(?P<mode>[A-Za-z0-9_-]+),?\s+post nodes\s+(?P<postNodes>\d+),?\s+"
+    r"outputs\s+(?P<outputs>\d+),?\s+legacy fallback\s+(?P<legacyFallback>\w+)"
+    r"(?:,?\s+post hash\s+0x(?P<postHash>[0-9a-fA-F]+),?\s+"
+    r"output hash\s+0x(?P<outputHash>[0-9a-fA-F]+))?"
+    r"(?:,?\s+plan hash\s+0x(?P<planHash>[0-9a-fA-F]+),?\s+"
+    r"fallback\s+0x(?P<fallbackMask>[0-9a-fA-F]+))?",
     re.IGNORECASE,
 )
 POSTPROCESS_FBO_RE = re.compile(
     r"FBO:\s*requested\s+(?P<requested>\w+),\s*ready\s+(?P<ready>\w+),\s*"
     r"programs\s+(?P<programs>\w+),\s*framebuffer funcs\s+(?P<framebuffer>\w+)",
+    re.IGNORECASE,
+)
+POSTPROCESS_TARGET_FORMAT_RE = re.compile(
+    r"(?:glx:\s*)?target:\s*render\s+(?P<renderWidth>\d+)x(?P<renderHeight>\d+),\s*"
+    r"capture\s+(?P<captureWidth>\d+)x(?P<captureHeight>\d+),\s*"
+    r"window\s+(?P<windowWidth>\d+)x(?P<windowHeight>\d+),\s*"
+    r"format\s+(?P<internalFormat>0x[0-9a-fA-F]+)\s*"
+    r"\((?P<textureFormat>0x[0-9a-fA-F]+):(?P<textureType>0x[0-9a-fA-F]+)\)",
+    re.IGNORECASE,
+)
+POSTPROCESS_CONTROLS_RE = re.compile(
+    r"controls:\s*scene-linear HDR\s+(?P<sceneLinearHdr>\w+),\s*"
+    r"precision\s+(?P<precision>\d+),\s*renderScale\s+(?P<renderScale>\d+),\s*"
+    r"bloom\s+(?P<bloom>\d+),\s*MSAA\s+(?P<msaa>\w+),\s*"
+    r"supersample\s+(?P<supersample>\w+),\s*adjusted window\s+(?P<windowAdjusted>\w+),\s*"
+    r"greyscale\s+(?P<greyscale>-?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+POSTPROCESS_FRAMES_RE = re.compile(
+    r"frames:\s*(?P<frames>\d+)\s+post,\s*(?P<bloomFinal>\d+)\s+bloom-final,\s*"
+    r"(?P<gammaDirect>\d+)\s+gamma-direct,\s*(?P<gammaBlit>\d+)\s+gamma-blit,\s*"
+    r"(?P<minimizedOutput>\d+)\s+minimized output,\s*(?P<screenshots>\d+)\s+screenshots",
+    re.IGNORECASE,
+)
+POSTPROCESS_FRAME_FEATURES_RE = re.compile(
+    r"frame features:\s*(?P<bloomAvailable>\d+)\s+bloom-available,\s*"
+    r"(?P<sceneLinear>\d+)\s+scene-linear,\s*(?P<toneMapped>\d+)\s+tone-mapped,\s*"
+    r"(?P<graded>\d+)\s+graded,\s*(?P<renderScale>\d+)\s+render-scale,\s*"
+    r"(?P<greyscale>\d+)\s+greyscale,\s*(?P<windowAdjusted>\d+)\s+window-adjusted,\s*"
+    r"(?P<minimized>\d+)\s+minimized",
     re.IGNORECASE,
 )
 POSTPROCESS_FBO_LIFECYCLE_RE = re.compile(
@@ -407,6 +736,13 @@ STREAM_RESERVATIONS_RE = re.compile(
 STREAM_UPLOADS_RE = re.compile(
     r"dynamic stream uploads:\s*(?P<calls>\d+)\s+calls,\s*"
     r"(?P<megabytes>\d+(?:\.\d+)?)\s+MB,\s*failures\s+(?P<failures>\d+)",
+    re.IGNORECASE,
+)
+STREAM_BINDING_CACHE_RE = re.compile(
+    r"(?:glx:\s*)?(?:dynamic\s+)?stream binding cache:?\s*"
+    r"queries\s+(?P<queries>\d+),?\s+hits\s+(?P<hits>\d+),?\s+"
+    r"restores\s+(?P<restores>\d+),?\s+invalidations\s+(?P<invalidations>\d+)"
+    r"(?:,?\s+external\s+(?P<external>\d+))?",
     re.IGNORECASE,
 )
 STREAM_DRAWS_RE = re.compile(
@@ -575,7 +911,43 @@ GLX_COLOR_AUDIT_RE = re.compile(
     r"framebuffer-srgb\s+(?P<framebufferSrgb>\w+)\s+"
     r"requested\s+(?P<framebufferRequested>\w+)\s+"
     r"available\s+(?P<framebufferAvailable>\w+),?\s+"
-    r"capture\s+(?P<capture>[A-Za-z0-9_-]+)",
+    r"capture\s+(?P<capture>[A-Za-z0-9_-]+)"
+    r"(?:,?\s+target-float\s+(?P<targetFloat>\w+),?"
+    r"\s+final-encode\s+(?P<finalEncode>[A-Za-z0-9_-]+),?"
+    r"\s+contract\s+(?P<contract>\w+))?",
+    re.IGNORECASE,
+)
+GLX_TEXTURE_AUDIT_RE = re.compile(
+    r"(?:glx:\s*)?texture audit:?\s*"
+    r"srgb\s+(?P<srgb>\d+)\s+decode\s+(?P<srgbDecode>\d+),?\s+"
+    r"linear\s+(?P<linear>\d+)\s+decode\s+(?P<linearDecode>\d+),?\s+"
+    r"data\s+(?P<data>\d+)\s+decode\s+(?P<dataDecode>\d+),?\s+"
+    r"unknown\s+(?P<unknown>\d+)\s+decode\s+(?P<unknownDecode>\d+),?\s+"
+    r"missing-srgb-decode\s+(?P<missingSrgbDecode>\d+),?\s+"
+    r"unexpected-decode\s+(?P<unexpectedDecode>\d+)",
+    re.IGNORECASE,
+)
+GLX_COLOR_FRAME_JSON_RE = re.compile(
+    r"glx:\s*color-frame-json\s+(?P<payload>\{.*\})",
+    re.IGNORECASE,
+)
+GLX_COLOR_FRAME_CSV_RE = re.compile(
+    r"glx:\s*color-frame-csv\s+"
+    r"(?P<frame>\d+),"
+    r"(?P<backend>[^,]+),"
+    r"(?P<space>[^,]+),"
+    r"(?P<transfer>[^,]+),"
+    r"(?P<exposure>-?\d+(?:\.\d+)?),"
+    r"(?P<paperWhiteNits>-?\d+(?:\.\d+)?),"
+    r"(?P<maxOutputNits>-?\d+(?:\.\d+)?),"
+    r"(?P<srgbDecode>[^,]+),"
+    r"(?P<framebufferSrgb>[^,]+),"
+    r"(?P<internalFormat>0x[0-9a-fA-F]+),"
+    r"(?P<textureFormat>0x[0-9a-fA-F]+),"
+    r"(?P<textureType>0x[0-9a-fA-F]+),"
+    r"(?P<sceneTargetFloat>[^,]+),"
+    r"(?P<shaderSrgbEncode>[^,]+),"
+    r"(?P<contractValid>[^,\s]+)",
     re.IGNORECASE,
 )
 GLX_OUTPUT_BACKEND_RE = re.compile(
@@ -700,6 +1072,7 @@ DEFAULT_OPTIONS = {
     "demos": "",
     "corpus_scenes": None,
     "profile": "glx-parity",
+    "color_sweep": False,
     "width": 640,
     "height": 480,
     "map_wait": 180,
@@ -766,9 +1139,14 @@ GLX_STRESS_PROFILE_CVARS = {
 
 GLX_COLOR_PROFILE_CVARS = {
     "r_fbo": "1",
+    "r_bloom": "0",
     "r_hdr": "1",
     "r_tonemap": "2",
     "r_tonemapExposure": "1.0",
+    "r_srgbTextures": "1",
+    "r_framebufferSRGB": "1",
+    "r_outputBackend": "1",
+    "r_glxColorPipelineDebug": "2",
     "r_colorGrade": "3",
     "r_colorGradeLift": "0 0 0",
     "r_colorGradeGamma": "1 1 1",
@@ -799,6 +1177,7 @@ PROFILE_CVARS = {
         "r_glxStreamDrawBeams": "0",
         "r_glxStreamDrawPostProcess": "0",
         "r_glxMaterialRenderer": "1",
+        "r_glxMaterialPrecache": "1",
         "r_glxGpuTiming": "1",
     },
     "glx-bloom": {
@@ -823,9 +1202,9 @@ PROFILE_CVARS = {
     },
 }
 
-GLX_PROOF_CORPUS_VERSION = "2026-05-10-task-v"
+GLX_PROOF_CORPUS_VERSION = "2026-05-11-post-proof-v1"
 GLX_PROOF_CORPUS_DOC = "docs/fnquake3/GLX_PROOF_CORPUS.md"
-GLX_PARITY_SUITE_VERSION = "2026-05-10-task-v"
+GLX_PARITY_SUITE_VERSION = "2026-05-11-post-v1"
 
 GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
     "stock-q3dm1-hud": {
@@ -839,6 +1218,10 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "screenshot-parity",
             "hud-parity",
             "lightmap",
+            "tcgen-lightmap",
+            "dynamic-entity",
+            "weapon-model",
+            "greyscale-proof",
         ),
         "description": "Small retail map used for renderer-switch, weapon/HUD, and baseline-lighting comparisons.",
     },
@@ -854,6 +1237,7 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "screenshot-parity",
             "bloom-parity",
             "tone-map-proof",
+            "render-scale-proof",
         ),
         "description": "Open retail arena that keeps sky, portal-culling, and broad visibility paths in the RC set.",
     },
@@ -868,6 +1252,8 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "screenshot-parity",
             "shadow-parity",
             "performance-comparison",
+            "dynamic-entity",
+            "planar-shadow",
         ),
         "description": "Retail large-map geometry probe for static-world packet and draw-pressure comparisons.",
     },
@@ -879,11 +1265,13 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "stock-map",
             "shader-heavy",
             "material-stage",
+            "tcgen-environment",
             "screenshot-parity",
             "cel-shading-parity",
             "outline-parity",
             "color-grade-proof",
             "tone-map-proof",
+            "dynamic-entity",
         ),
         "description": "Retail shader-stage probe for material ordering, blend, texmod, and environment paths.",
     },
@@ -895,6 +1283,7 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "stock-map",
             "fog-heavy",
             "visibility",
+            "tcgen-fog",
             "screenshot-parity",
             "color-grade-proof",
         ),
@@ -921,11 +1310,15 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "modern-map",
             "shader-heavy",
             "material-stage",
+            "animated-image",
+            "tcgen-vector",
+            "screen-map",
+            "video-map",
             "screenshot-parity",
             "cel-shading-parity",
             "outline-parity",
         ),
-        "description": "Optional GLx proof-corpus stress map for broad shader-stage and material-key coverage.",
+        "description": "Optional GLx proof-corpus stress map for broad shader-stage, animated-image, screen-map, video-map, and material-key coverage.",
     },
     "modern-fnq3glx-fog01": {
         "kind": "map",
@@ -947,6 +1340,8 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "stock-demo",
             "demo-playback-parity",
             "performance-comparison",
+            "dynamic-entity",
+            "dynamic-light",
         ),
         "description": "Retail timedemo used for legacy OpenGL versus GLx performance comparisons.",
     },
@@ -959,6 +1354,11 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "demo-playback-parity",
             "modern-map",
             "performance-comparison",
+            "particle",
+            "transient-poly",
+            "mark-decal",
+            "beam",
+            "dynamic-light",
         ),
         "description": "Optional GLx proof-corpus timedemo for particles, marks, transient polys, and UI churn.",
     },
@@ -1050,6 +1450,28 @@ GLX_PARITY_SUITES: dict[str, dict[str, object]] = {
         },
         "description": "Cel-shading and outline parity suite with explicit banding and outline cvars.",
     },
+    "greyscale": {
+        "artifact": "screenshot",
+        "sceneIds": ("stock-q3dm1-hud",),
+        "requiredTags": ("greyscale-proof",),
+        "cvars": {
+            "r_fbo": "1",
+            "r_greyscale": "1",
+        },
+        "description": "Greyscale final-pass proof suite using the HUD baseline scene and explicit FBO greyscale cvar.",
+    },
+    "render-scale": {
+        "artifact": "screenshot",
+        "sceneIds": ("stock-q3dm17-open",),
+        "requiredTags": ("render-scale-proof",),
+        "cvars": {
+            "r_fbo": "1",
+            "r_renderScale": "1",
+            "r_renderWidth": "512",
+            "r_renderHeight": "384",
+        },
+        "description": "Render-scale proof suite using an open retail scene and explicit custom render dimensions.",
+    },
 }
 
 GLX_PARITY_CVAR_DEFAULTS = {
@@ -1057,6 +1479,8 @@ GLX_PARITY_CVAR_DEFAULTS = {
     "r_celShading": "0",
     "r_celOutline": "1",
     "r_celShadingSteps": "4",
+    "r_greyscale": "0",
+    "r_renderScale": "0",
 }
 
 GLX_GATE_PARITY_SUITES = {
@@ -1069,6 +1493,8 @@ GLX_GATE_PARITY_SUITES = {
         "shadow",
         "bloom",
         "cel-shading",
+        "greyscale",
+        "render-scale",
     ),
     "rc-stress": (
         "screenshot",
@@ -1077,19 +1503,325 @@ GLX_GATE_PARITY_SUITES = {
         "shadow",
         "bloom",
         "cel-shading",
+        "greyscale",
+        "render-scale",
     ),
 }
 
 GLX_PROFILE_CORPUS_SCENES = {
     "baseline": ("stock-q3dm1-hud",),
     "glx-world": ("stock-q3dm1-hud",),
-    "glx-material": ("stock-q3dm1-hud",),
+    "glx-material": ("stock-q3dm1-hud", "stock-q3dm11-shader"),
     "glx-bloom": ("stock-q3dm1-hud",),
     "glx-color": ("stock-q3dm17-open", "stock-q3dm11-shader", "stock-q3dm15-fog"),
     "glx-parity": ("stock-q3dm1-hud",),
     "glx-ownership": ("stock-q3dm1-hud", "stock-q3dm17-open"),
     "glx-stress": GLX_GATE_CORPUS_SCENES["rc-stress"],
 }
+
+GLX_SCENE_TARGET_FORMAT_CONTRACT = {
+    "internalFormat": "0x881a",
+    "internalFormatName": "GL_RGBA16F",
+    "textureFormat": "0x1908",
+    "textureFormatName": "GL_RGBA",
+    "textureType": "0x140b",
+    "textureTypeName": "GL_HALF_FLOAT",
+}
+
+GLX_SDR_OUTPUT_CONTRACT = {
+    "transfer": "sdr-srgb",
+    "encode": "shader-srgb",
+    "framebufferSrgb": False,
+    "paperWhiteNits": 203.0,
+    "maxOutputNits": 203.0,
+}
+
+GLX_TEXTURE_CLASSIFICATION_DOC = "docs/fnquake3/GLX_COLORSPACE_AUDIT.md"
+GLX_TEXTURE_CLASSIFICATION_CONTRACT = {
+    "authored-color": {
+        "declaredSpace": "srgb",
+        "sceneLinearDecode": "srgb-once",
+    },
+    "lightmap": {
+        "declaredSpace": "linear",
+        "sceneLinearDecode": "never",
+    },
+    "procedural-linear": {
+        "declaredSpace": "linear",
+        "sceneLinearDecode": "never",
+    },
+    "data": {
+        "declaredSpace": "data",
+        "sceneLinearDecode": "never",
+    },
+    "capture-target": {
+        "declaredSpace": "linear-or-output-declared",
+        "sceneLinearDecode": "not-authored-srgb",
+    },
+}
+GLX_REQUIRED_TEXTURE_CLASS_ROWS = tuple(GLX_TEXTURE_CLASSIFICATION_CONTRACT)
+
+GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
+    {
+        "id": "sdr-legacy-bloom-off",
+        "purpose": "Legacy SDR compatibility reference with bloom disabled.",
+        "probe": "gray-ramp-ui-bloom-off",
+        "cvars": {
+            "r_fbo": "1",
+            "r_bloom": "0",
+            "r_hdr": "0",
+            "r_tonemap": "0",
+            "r_tonemapExposure": "1.0",
+            "r_srgbTextures": "0",
+            "r_framebufferSRGB": "0",
+            "r_outputBackend": "1",
+            "r_glxColorPipelineDebug": "2",
+        },
+        "expect": {
+            "space": "display-referred-sdr",
+            "transfer": "sdr-srgb",
+            "toneMap": "legacy",
+            "exposure": 1.0,
+            "paperWhiteNits": 203.0,
+            "maxOutputNits": 203.0,
+            "sceneTargetFloat": 0,
+            "finalEncode": "none",
+            "contract": 1,
+            "framebufferSrgb": 0,
+            "srgbDecode": 0,
+            "outputRequest": "sdr-srgb",
+        },
+    },
+    {
+        "id": "scene-linear-sdr-legacy",
+        "purpose": "Scene-linear SDR output using legacy tone scale, shader sRGB encode, and bloom disabled.",
+        "probe": "gray-ramp-output-contract",
+        "cvars": {
+            "r_fbo": "1",
+            "r_bloom": "0",
+            "r_hdr": "1",
+            "r_hdrPrecision": "0",
+            "r_tonemap": "0",
+            "r_tonemapExposure": "1.0",
+            "r_srgbTextures": "1",
+            "r_framebufferSRGB": "1",
+            "r_outputBackend": "1",
+            "r_glxColorPipelineDebug": "2",
+        },
+        "expect": {
+            "space": "scene-linear",
+            "transfer": "sdr-srgb",
+            "toneMap": "legacy",
+            "exposure": 1.0,
+            "paperWhiteNits": 203.0,
+            "maxOutputNits": 203.0,
+            "sceneTargetFloat": 1,
+            "finalEncode": "shader-srgb",
+            "contract": 1,
+            "framebufferSrgb": 0,
+            "srgbDecode": 1,
+            "outputRequest": "sdr-srgb",
+            "internalFormat": "0x881a",
+            "textureFormat": "0x1908",
+            "textureType": "0x140b",
+        },
+    },
+    {
+        "id": "scene-linear-sdr-reinhard-exposure-low",
+        "purpose": "Scene-linear SDR output through Reinhard tone mapping at low exposure for mid-gray placement.",
+        "probe": "mid-gray-exposure-low",
+        "cvars": {
+            "r_fbo": "1",
+            "r_bloom": "0",
+            "r_hdr": "1",
+            "r_hdrPrecision": "0",
+            "r_tonemap": "1",
+            "r_tonemapExposure": "0.5",
+            "r_srgbTextures": "1",
+            "r_framebufferSRGB": "1",
+            "r_outputBackend": "1",
+            "r_glxColorPipelineDebug": "2",
+        },
+        "expect": {
+            "space": "scene-linear",
+            "transfer": "sdr-srgb",
+            "toneMap": "reinhard",
+            "exposure": 0.5,
+            "paperWhiteNits": 203.0,
+            "maxOutputNits": 203.0,
+            "sceneTargetFloat": 1,
+            "finalEncode": "shader-srgb",
+            "contract": 1,
+            "framebufferSrgb": 0,
+            "srgbDecode": 1,
+            "outputRequest": "sdr-srgb",
+            "internalFormat": "0x881a",
+            "textureFormat": "0x1908",
+            "textureType": "0x140b",
+        },
+    },
+    {
+        "id": "scene-linear-sdr-aces",
+        "purpose": "Scene-linear SDR output through ACES tone mapping and shader sRGB encode.",
+        "probe": "color-checker-tone-map",
+        "cvars": {
+            "r_fbo": "1",
+            "r_bloom": "0",
+            "r_hdr": "1",
+            "r_hdrPrecision": "0",
+            "r_tonemap": "2",
+            "r_tonemapExposure": "1.0",
+            "r_srgbTextures": "1",
+            "r_framebufferSRGB": "1",
+            "r_outputBackend": "1",
+            "r_glxColorPipelineDebug": "2",
+        },
+        "expect": {
+            "space": "scene-linear",
+            "transfer": "sdr-srgb",
+            "toneMap": "aces",
+            "exposure": 1.0,
+            "paperWhiteNits": 203.0,
+            "maxOutputNits": 203.0,
+            "sceneTargetFloat": 1,
+            "finalEncode": "shader-srgb",
+            "contract": 1,
+            "framebufferSrgb": 0,
+            "srgbDecode": 1,
+            "outputRequest": "sdr-srgb",
+            "internalFormat": "0x881a",
+            "textureFormat": "0x1908",
+            "textureType": "0x140b",
+        },
+    },
+    {
+        "id": "scene-linear-sdr-aces-exposure-high",
+        "purpose": "Scene-linear SDR output through ACES tone mapping at high exposure for highlight clipping evidence.",
+        "probe": "highlight-clipping-exposure-high",
+        "cvars": {
+            "r_fbo": "1",
+            "r_bloom": "0",
+            "r_hdr": "1",
+            "r_hdrPrecision": "0",
+            "r_tonemap": "2",
+            "r_tonemapExposure": "2.0",
+            "r_srgbTextures": "1",
+            "r_framebufferSRGB": "1",
+            "r_outputBackend": "1",
+            "r_glxColorPipelineDebug": "2",
+        },
+        "expect": {
+            "space": "scene-linear",
+            "transfer": "sdr-srgb",
+            "toneMap": "aces",
+            "exposure": 2.0,
+            "paperWhiteNits": 203.0,
+            "maxOutputNits": 203.0,
+            "sceneTargetFloat": 1,
+            "finalEncode": "shader-srgb",
+            "contract": 1,
+            "framebufferSrgb": 0,
+            "srgbDecode": 1,
+            "outputRequest": "sdr-srgb",
+            "internalFormat": "0x881a",
+            "textureFormat": "0x1908",
+            "textureType": "0x140b",
+        },
+    },
+    {
+        "id": "scene-linear-srgb-decode-off",
+        "purpose": "Scene-linear SDR control row with authored-texture sRGB decode disabled.",
+        "probe": "texture-decode-control",
+        "cvars": {
+            "r_fbo": "1",
+            "r_bloom": "0",
+            "r_hdr": "1",
+            "r_hdrPrecision": "0",
+            "r_tonemap": "2",
+            "r_tonemapExposure": "1.0",
+            "r_srgbTextures": "0",
+            "r_framebufferSRGB": "1",
+            "r_outputBackend": "1",
+            "r_glxColorPipelineDebug": "2",
+        },
+        "expect": {
+            "space": "scene-linear",
+            "transfer": "sdr-srgb",
+            "toneMap": "aces",
+            "exposure": 1.0,
+            "paperWhiteNits": 203.0,
+            "maxOutputNits": 203.0,
+            "sceneTargetFloat": 1,
+            "finalEncode": "shader-srgb",
+            "contract": 1,
+            "framebufferSrgb": 0,
+            "srgbDecode": 0,
+            "srgbRequested": 0,
+            "outputRequest": "sdr-srgb",
+            "internalFormat": "0x881a",
+            "textureFormat": "0x1908",
+            "textureType": "0x140b",
+        },
+    },
+    {
+        "id": "scene-linear-auto-output",
+        "purpose": "Scene-linear output-backend auto-selection row for SDR/HDR platform evidence.",
+        "probe": "hdr-backend-selection",
+        "cvars": {
+            "r_fbo": "1",
+            "r_bloom": "0",
+            "r_hdr": "1",
+            "r_hdrPrecision": "0",
+            "r_tonemap": "2",
+            "r_tonemapExposure": "1.0",
+            "r_srgbTextures": "1",
+            "r_framebufferSRGB": "1",
+            "r_outputBackend": "0",
+            "r_glxColorPipelineDebug": "2",
+        },
+        "expect": {
+            "space": "scene-linear",
+            "toneMap": "aces",
+            "exposure": 1.0,
+            "sceneTargetFloat": 1,
+            "contract": 1,
+            "srgbDecode": 1,
+            "outputRequest": "auto",
+            "internalFormat": "0x881a",
+            "textureFormat": "0x1908",
+            "textureType": "0x140b",
+        },
+    },
+    {
+        "id": "scene-linear-windows-scrgb-request",
+        "purpose": "Scene-linear explicit Windows scRGB backend request, with safe SDR fallback when HDR output is unavailable.",
+        "probe": "hdr-backend-request-scrgb",
+        "cvars": {
+            "r_fbo": "1",
+            "r_bloom": "0",
+            "r_hdr": "1",
+            "r_hdrPrecision": "0",
+            "r_tonemap": "2",
+            "r_tonemapExposure": "1.0",
+            "r_srgbTextures": "1",
+            "r_framebufferSRGB": "1",
+            "r_outputBackend": "2",
+            "r_glxColorPipelineDebug": "2",
+        },
+        "expect": {
+            "space": "scene-linear",
+            "toneMap": "aces",
+            "exposure": 1.0,
+            "sceneTargetFloat": 1,
+            "contract": 1,
+            "srgbDecode": 1,
+            "outputRequest": "windows-scrgb",
+            "internalFormat": "0x881a",
+            "textureFormat": "0x1908",
+            "textureType": "0x140b",
+        },
+    },
+)
 
 
 def _dedupe(items: Iterable[str]) -> list[str]:
@@ -1335,6 +2067,14 @@ STARTUP_CVARS = {
     "r_fbo",
     "r_bloom",
     "r_bloom_passes",
+    "r_hdr",
+    "r_hdrPrecision",
+    "r_srgbTextures",
+    "r_framebufferSRGB",
+    "r_tonemap",
+    "r_tonemapExposure",
+    "r_outputBackend",
+    "r_glxColorPipelineDebug",
     "r_vbo",
     "r_glxProfile",
     "r_glxRequireOwnership",
@@ -1369,6 +2109,8 @@ RC_GATE_PRESETS = {
                 "hud-parity",
             ),
             "require_screenshots": True,
+            "require_renderer_switch_lifecycle": True,
+            "require_renderer_switch_roundtrip": True,
             "require_glx_diagnostics": True,
             "require_glx_performance_samples": True,
         },
@@ -1383,6 +2125,7 @@ RC_GATE_PRESETS = {
             "renderers": "opengl,glx",
             "switch_sequence": "opengl,glx,opengl,glx",
             "switch_rounds": 1,
+            "color_sweep": True,
             "timeout": 300.0,
         },
         "requirements": {
@@ -1404,8 +2147,16 @@ RC_GATE_PRESETS = {
             "min_timedemo_fps_ratio": 0.90,
             "screenshot_max_rms": 2.0,
             "screenshot_max_pixel_ratio": 0.005,
+            "require_renderer_switch_lifecycle": True,
+            "require_renderer_switch_roundtrip": True,
             "require_glx_diagnostics": True,
             "require_glx_performance_samples": True,
+            "require_glx_color_sweep": True,
+            "require_world_proof": True,
+            "required_world_tags": (
+                "stock-map",
+                "lightmap",
+            ),
         },
     },
     "rc-proof": {
@@ -1418,6 +2169,7 @@ RC_GATE_PRESETS = {
             "renderers": "opengl,glx",
             "switch_sequence": "opengl,glx,opengl,glx",
             "switch_rounds": 1,
+            "color_sweep": True,
             "timeout": 300.0,
         },
         "requirements": {
@@ -1437,6 +2189,16 @@ RC_GATE_PRESETS = {
                 "bloom-parity",
                 "cel-shading-parity",
                 "outline-parity",
+                "material-stage",
+                "dynamic-entity",
+                "weapon-model",
+                "dynamic-light",
+                "planar-shadow",
+                "greyscale-proof",
+                "render-scale-proof",
+                "tcgen-lightmap",
+                "tcgen-environment",
+                "tcgen-fog",
                 "performance-comparison",
             ),
             "required_parity_suites": GLX_GATE_PARITY_SUITES["rc-proof"],
@@ -1449,8 +2211,84 @@ RC_GATE_PRESETS = {
             "min_timedemo_fps_ratio": 0.90,
             "screenshot_max_rms": 2.0,
             "screenshot_max_pixel_ratio": 0.005,
+            "require_renderer_switch_lifecycle": True,
+            "require_renderer_switch_roundtrip": True,
             "require_glx_diagnostics": True,
             "require_glx_performance_samples": True,
+            "require_glx_color_sweep": True,
+            "require_world_proof": True,
+            "required_world_tags": (
+                "stock-map",
+                "high-geometry",
+                "lightmap",
+                "fog-heavy",
+                "visibility",
+            ),
+            "require_material_proof": True,
+            "required_material_tags": (
+                "shader-heavy",
+                "material-stage",
+                "tcgen-lightmap",
+                "tcgen-environment",
+                "tcgen-fog",
+            ),
+            "required_material_stream_features": (
+                "multitexture",
+                "depthFragment",
+                "texMod",
+                "environment",
+            ),
+            "required_material_stream_guards": (
+                "dynamicLight",
+                "screenMap",
+                "videoMap",
+            ),
+            "forbidden_material_stream_features": (
+                "dynamicLight",
+                "screenMap",
+                "videoMap",
+            ),
+            "required_material_tcgens": (
+                "texture",
+                "lightmap",
+                "environment",
+                "fog",
+            ),
+            "require_dynamic_proof": True,
+            "required_dynamic_tags": (
+                "dynamic-entity",
+                "weapon-model",
+                "dynamic-light",
+                "planar-shadow",
+            ),
+            "required_dynamic_categories": (
+                "entity",
+                "weapon",
+            ),
+            "required_dynamic_stream_features": (
+                "shadow",
+            ),
+            "required_dynamic_support": (
+                "dynamicEntities",
+                "sprites",
+                "dynamicLights",
+                "stencilShadows",
+            ),
+            "required_dynamic_stream_guards": (
+                "dynamicLight",
+            ),
+            "forbidden_dynamic_stream_features": (
+                "dynamicLight",
+            ),
+            "require_post_proof": True,
+            "required_post_tags": (
+                "greyscale-proof",
+                "render-scale-proof",
+            ),
+            "required_post_features": (
+                "greyscale",
+                "renderScale",
+            ),
         },
     },
     "rc-stress": {
@@ -1484,6 +2322,24 @@ RC_GATE_PRESETS = {
                 "bloom-parity",
                 "cel-shading-parity",
                 "outline-parity",
+                "material-stage",
+                "dynamic-entity",
+                "weapon-model",
+                "particle",
+                "transient-poly",
+                "mark-decal",
+                "beam",
+                "dynamic-light",
+                "planar-shadow",
+                "greyscale-proof",
+                "render-scale-proof",
+                "animated-image",
+                "tcgen-lightmap",
+                "tcgen-environment",
+                "tcgen-fog",
+                "tcgen-vector",
+                "screen-map",
+                "video-map",
                 "performance-comparison",
             ),
             "required_parity_suites": GLX_GATE_PARITY_SUITES["rc-stress"],
@@ -1491,8 +2347,101 @@ RC_GATE_PRESETS = {
             "require_timedemo_metrics": True,
             "screenshot_max_rms": 2.0,
             "screenshot_max_pixel_ratio": 0.005,
+            "require_renderer_switch_lifecycle": True,
+            "require_renderer_switch_roundtrip": False,
             "require_glx_diagnostics": True,
             "require_glx_performance_samples": True,
+            "require_world_proof": True,
+            "required_world_tags": (
+                "stock-map",
+                "modern-map",
+                "high-geometry",
+                "lightmap",
+                "fog-heavy",
+                "visibility",
+            ),
+            "require_material_proof": True,
+            "required_material_tags": (
+                "shader-heavy",
+                "material-stage",
+                "animated-image",
+                "tcgen-lightmap",
+                "tcgen-environment",
+                "tcgen-fog",
+                "tcgen-vector",
+                "screen-map",
+                "video-map",
+            ),
+            "required_material_stage_flags": (
+                "animatedImage",
+                "screenMap",
+                "videoMap",
+            ),
+            "required_material_stream_features": (
+                "multitexture",
+                "depthFragment",
+                "texMod",
+                "environment",
+                "screenMap",
+                "videoMap",
+            ),
+            "required_material_stream_guards": (
+                "dynamicLight",
+                "screenMap",
+                "videoMap",
+            ),
+            "required_material_tcgens": (
+                "texture",
+                "lightmap",
+                "environment",
+                "fog",
+                "vector",
+            ),
+            "require_dynamic_proof": True,
+            "required_dynamic_tags": (
+                "dynamic-entity",
+                "weapon-model",
+                "particle",
+                "transient-poly",
+                "mark-decal",
+                "beam",
+                "dynamic-light",
+                "planar-shadow",
+            ),
+            "required_dynamic_categories": (
+                "entity",
+                "particle",
+                "poly",
+                "mark",
+                "weapon",
+                "beam",
+            ),
+            "required_dynamic_stream_features": (
+                "shadow",
+                "beam",
+            ),
+            "required_dynamic_support": (
+                "dynamicEntities",
+                "sprites",
+                "beams",
+                "dynamicLights",
+                "stencilShadows",
+            ),
+            "required_dynamic_stream_guards": (
+                "dynamicLight",
+            ),
+            "forbidden_dynamic_stream_features": (
+                "dynamicLight",
+            ),
+            "require_post_proof": True,
+            "required_post_tags": (
+                "greyscale-proof",
+                "render-scale-proof",
+            ),
+            "required_post_features": (
+                "greyscale",
+                "renderScale",
+            ),
         },
     },
 }
@@ -1575,6 +2524,17 @@ def parse_args() -> argparse.Namespace:
             "Comma-separated GLx proof corpus scene ids. Named gates use this "
             "to derive maps and demos unless --maps or --demos are explicit."
         ),
+    )
+    parser.add_argument(
+        "--color-sweep",
+        action="store_true",
+        default=None,
+        help="Run the P0 GLx color-contract sweep matrix as separate GLx launches.",
+    )
+    parser.add_argument(
+        "--no-color-sweep",
+        action="store_true",
+        help="Disable a color sweep requested by a gate preset.",
     )
     parser.add_argument(
         "--profile",
@@ -1709,7 +2669,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Maximum allowed growth versus --performance-baseline for tracked "
-            f"counter metrics. Defaults to {DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO:.0%}."
+            f"counter metrics. Defaults to {DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO * 100:.0f} percent."
         ),
     )
     parser.add_argument(
@@ -1806,6 +2766,8 @@ def apply_gate_defaults(args: argparse.Namespace) -> None:
     for name, value in options.items():
         if getattr(args, name) is None:
             setattr(args, name, value)
+    if getattr(args, "no_color_sweep", False):
+        args.color_sweep = False
 
 
 def split_csv(value: str) -> list[str]:
@@ -1815,6 +2777,26 @@ def split_csv(value: str) -> list[str]:
 def sanitize(value: str) -> str:
     value = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())
     return value.strip("._-") or "item"
+
+
+def qpath_token(value: str, max_length: int) -> str:
+    token = sanitize(value).lower()
+    if len(token) > max_length:
+        token = token[:max_length].rstrip("._-")
+    return token or "x"
+
+
+def runtime_token(run_id: str) -> str:
+    return "gs" + hashlib.sha1(run_id.encode("utf-8")).hexdigest()[:8]
+
+
+def validate_runtime_qpath(name: str) -> str:
+    if len(name) >= Q3_MAX_QPATH:
+        raise ValueError(
+            f"Generated runtime qpath '{name}' is {len(name)} characters; "
+            f"Quake III paths must stay below {Q3_MAX_QPATH}."
+        )
+    return name
 
 
 def q3_path(path: Path) -> str:
@@ -1938,6 +2920,8 @@ def make_cvars(args: argparse.Namespace) -> dict[str, str]:
     cvars["r_customWidth"] = str(args.width)
     cvars["r_customHeight"] = str(args.height)
     cvars.update(PROFILE_CVARS[args.profile])
+    if args.gate and RC_GATE_PRESETS[args.gate]["requirements"].get("require_glx_diagnostics"):  # type: ignore[index]
+        cvars["r_glxColorPipelineDebug"] = "2"
     cvars.update(parse_extra_sets(args.extra_set))
     return cvars
 
@@ -1982,12 +2966,18 @@ def glx_diagnostic_commands() -> list[str]:
     ]
 
 
+def map_load_command(args: argparse.Namespace, map_name: str) -> str:
+    command = "map" if getattr(args, "no_perf_samples", False) else "devmap"
+    return f"{command} {map_name}"
+
+
 def build_switch_cfg(
     args: argparse.Namespace,
     cvars: dict[str, str],
     maps: list[str],
     switch_sequence: list[str],
     run_id: str,
+    qpath_run_token: str,
     corpus_scene_ids: Iterable[str] = (),
     parity_suite_ids: Iterable[str] = (),
 ) -> tuple[str, list[dict[str, object]]]:
@@ -2005,6 +2995,7 @@ def build_switch_cfg(
     lines.append(f"wait {args.startup_wait}")
     for map_index, map_name in enumerate(maps, start=1):
         safe_map = sanitize(map_name)
+        shot_map = qpath_token(map_name, 12)
         map_corpus_scene_ids = corpus_scene_ids_for_target(
             selected_corpus_scene_ids,
             "map",
@@ -2024,15 +3015,15 @@ def build_switch_cfg(
                     lines.append(f"set {cvar_name} \"{cvar_value}\"")
             for cvar_name, cvar_value in sorted(map_parity_cvars.items()):
                 lines.append(f"set {cvar_name} \"{cvar_value}\"")
-        lines.append(f"map {map_name}")
+        lines.append(map_load_command(args, map_name))
         lines.append(f"wait {args.map_wait}")
 
         for round_index in range(1, args.switch_rounds + 1):
             for switch_index, renderer in enumerate(switch_sequence, start=1):
                 safe_renderer = sanitize(renderer)
-                shot_name = (
-                    f"{run_id}-map{map_index}-{safe_map}-round{round_index}-"
-                    f"step{switch_index}-{safe_renderer}"
+                shot_name = validate_runtime_qpath(
+                    f"{qpath_run_token}-m{map_index}{shot_map}-"
+                    f"r{round_index}s{switch_index}-{qpath_token(safe_renderer, 8)}"
                 )
                 baseline_key = (
                     f"{args.profile}-map{map_index}-{safe_map}-round{round_index}-"
@@ -2074,6 +3065,49 @@ def build_switch_cfg(
     lines.append("quit")
     lines.append("")
     return "\n".join(lines), expected_shots
+
+
+def build_color_sweep_cfg(
+    args: argparse.Namespace,
+    cvars: dict[str, str],
+    map_name: str,
+    row: dict[str, object],
+    run_id: str,
+    qpath_run_token: str,
+    row_index: int,
+) -> tuple[str, list[dict[str, object]]]:
+    row_id = str(row["id"])
+    safe_row = sanitize(row_id)
+    safe_map = sanitize(map_name)
+    shot_name = validate_runtime_qpath(
+        f"{qpath_run_token}-c{row_index:02d}-{qpath_token(safe_map, 12)}"
+    )
+    baseline_key = f"glx-color-{safe_row}-{safe_map}"
+    lines = cfg_preamble(cvars, f"GLx color sweep {row_id}")
+    lines.extend(
+        [
+            f"wait {args.startup_wait}",
+            map_load_command(args, map_name),
+            f"wait {args.map_wait}",
+        ]
+    )
+    if not args.no_perf_samples:
+        lines.extend(["set r_speeds \"7\"", f"wait {args.perf_sample_wait}"])
+    lines.extend([f"screenshotPNG {shot_name}", f"wait {args.screenshot_wait}"])
+    if not args.no_perf_samples:
+        lines.extend(["set r_speeds \"0\"", "wait 1"])
+    lines.extend(glx_diagnostic_commands())
+    lines.extend(["wait 1", "quit", ""])
+    return "\n".join(lines), [
+        {
+            "name": shot_name,
+            "baselineKey": baseline_key,
+            "renderer": "glx",
+            "map": map_name,
+            "colorSweepRowId": row_id,
+            "colorSweepProbe": row.get("probe", ""),
+        }
+    ]
 
 
 def build_demo_cfg(args: argparse.Namespace, cvars: dict[str, str], demo: str) -> str:
@@ -2123,6 +3157,11 @@ def base_launch_args(
         "-1",
     ]
 
+    if "logfile" not in startup_cvars:
+        command.extend(["+set", "logfile", "2"])
+    if "developer" not in startup_cvars:
+        command.extend(["+set", "developer", "1"])
+
     for name in sorted(startup_cvars):
         if name in {"r_fullscreen", "r_mode"}:
             continue
@@ -2143,12 +3182,29 @@ def base_launch_args(
     return command
 
 
+def engine_console_log_path(homepath: Path, fs_game: str) -> Path:
+    return homepath / game_dir(fs_game) / "qconsole.log"
+
+
+def merge_engine_output(stdout: str, engine_log_path: Path | None) -> str:
+    if engine_log_path is None or not engine_log_path.exists():
+        return stdout
+
+    engine_output = engine_log_path.read_text(encoding="utf-8", errors="replace")
+    if not stdout:
+        return engine_output
+    if not engine_output:
+        return stdout
+    return stdout.rstrip() + "\n\n--- qconsole.log ---\n" + engine_output
+
+
 def run_engine(
     command: list[str],
     cwd: Path,
     timeout: float,
     log_path: Path,
     dry_run: bool,
+    engine_log_path: Path | None = None,
 ) -> dict[str, object]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     printable = command_to_string(command)
@@ -2163,6 +3219,12 @@ def run_engine(
             "log": str(log_path),
         }
 
+    if engine_log_path is not None:
+        try:
+            engine_log_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     try:
         completed = subprocess.run(
             command,
@@ -2175,7 +3237,8 @@ def run_engine(
             timeout=timeout,
             check=False,
         )
-        log_path.write_text(completed.stdout or "", encoding="utf-8")
+        output = merge_engine_output(completed.stdout or "", engine_log_path)
+        log_path.write_text(output, encoding="utf-8")
         status = "passed" if completed.returncode == 0 else "failed"
         return {
             "status": status,
@@ -2188,6 +3251,7 @@ def run_engine(
         output = exc.stdout or ""
         if isinstance(output, bytes):
             output = output.decode("utf-8", errors="replace")
+        output = merge_engine_output(output, engine_log_path)
         log_path.write_text(
             output + f"\nTIMEOUT after {timeout:.1f} seconds\n",
             encoding="utf-8",
@@ -2358,6 +3422,77 @@ def read_png_rgba(path: Path) -> tuple[int, int, bytes]:
     return width, height, bytes(pixels)
 
 
+def png_luma_histogram(path: Path) -> dict[str, object]:
+    width, height, pixels = read_png_rgba(path)
+    luma_histogram = [0] * 256
+    red_histogram = [0] * 256
+    green_histogram = [0] * 256
+    blue_histogram = [0] * 256
+    pixel_count = width * height
+    total_luma = 0
+    total_red = 0
+    total_green = 0
+    total_blue = 0
+
+    for offset in range(0, len(pixels), 4):
+        r, g, b = pixels[offset], pixels[offset + 1], pixels[offset + 2]
+        luma = int(round(0.2126 * r + 0.7152 * g + 0.0722 * b))
+        luma = max(0, min(255, luma))
+        luma_histogram[luma] += 1
+        red_histogram[r] += 1
+        green_histogram[g] += 1
+        blue_histogram[b] += 1
+        total_luma += luma
+        total_red += r
+        total_green += g
+        total_blue += b
+
+    def percentile_value(histogram: list[int], percentile: float) -> int:
+        target = max(1, int(round(pixel_count * percentile)))
+        seen = 0
+        for value, count in enumerate(histogram):
+            seen += count
+            if seen >= target:
+                return value
+        return 255
+
+    clipped_black = luma_histogram[0]
+    clipped_white = luma_histogram[255]
+    return {
+        "status": "passed",
+        "width": width,
+        "height": height,
+        "pixels": pixel_count,
+        "meanLuma": round(total_luma / pixel_count, 3) if pixel_count else 0.0,
+        "meanRed": round(total_red / pixel_count, 3) if pixel_count else 0.0,
+        "meanGreen": round(total_green / pixel_count, 3) if pixel_count else 0.0,
+        "meanBlue": round(total_blue / pixel_count, 3) if pixel_count else 0.0,
+        "p01Luma": percentile_value(luma_histogram, 0.01),
+        "p50Luma": percentile_value(luma_histogram, 0.50),
+        "p99Luma": percentile_value(luma_histogram, 0.99),
+        "p50Red": percentile_value(red_histogram, 0.50),
+        "p50Green": percentile_value(green_histogram, 0.50),
+        "p50Blue": percentile_value(blue_histogram, 0.50),
+        "clippedBlackRatio": round(clipped_black / pixel_count, 6) if pixel_count else 0.0,
+        "clippedWhiteRatio": round(clipped_white / pixel_count, 6) if pixel_count else 0.0,
+    }
+
+
+def false_color_luma_rgb(luma: int) -> tuple[int, int, int]:
+    value = max(0, min(255, luma)) / 255.0
+    if value < 0.25:
+        t = value / 0.25
+        return 0, int(round(255 * t)), 255
+    if value < 0.5:
+        t = (value - 0.25) / 0.25
+        return 0, 255, int(round(255 * (1.0 - t)))
+    if value < 0.75:
+        t = (value - 0.5) / 0.25
+        return int(round(255 * t)), 255, 0
+    t = (value - 0.75) / 0.25
+    return 255, int(round(255 * (1.0 - t))), 0
+
+
 def png_filter_none_rows(width: int, height: int, pixels: bytes) -> bytes:
     stride = width * 4
     rows = bytearray()
@@ -2394,6 +3529,17 @@ def write_png_rgba(path: Path, width: int, height: int, pixels: bytes) -> None:
     encoded.extend(chunk(b"IDAT", zlib.compress(raw)))
     encoded.extend(chunk(b"IEND", b""))
     path.write_bytes(bytes(encoded))
+
+
+def write_luma_false_color_png(source_path: Path, output_path: Path) -> None:
+    width, height, pixels = read_png_rgba(source_path)
+    out = bytearray(width * height * 4)
+    for offset in range(0, len(pixels), 4):
+        r, g, b, a = pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]
+        luma = int(round(0.2126 * r + 0.7152 * g + 0.0722 * b))
+        false_r, false_g, false_b = false_color_luma_rgb(luma)
+        out[offset:offset + 4] = bytes((false_r, false_g, false_b, a))
+    write_png_rgba(output_path, width, height, bytes(out))
 
 
 def compare_rgba_pixels(
@@ -2512,6 +3658,25 @@ def screenshot_results(
                 "bytes": path.stat().st_size if path.exists() else 0,
             }
         )
+        if path.exists():
+            histogram_path = path.with_name(f"{path.stem}.histogram.json")
+            false_color_path = path.with_name(f"{path.stem}.luma-falsecolor.png")
+            try:
+                histogram = png_luma_histogram(path)
+                result["histogram"] = histogram
+                histogram_path.write_text(
+                    json.dumps(histogram, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                result["histogramPath"] = str(histogram_path)
+            except Exception as exc:
+                result["histogram"] = {"status": "failed", "reason": str(exc)}
+            try:
+                write_luma_false_color_png(path, false_color_path)
+                result["falseColor"] = {"status": "passed"}
+                result["falseColorPath"] = str(false_color_path)
+            except Exception as exc:
+                result["falseColor"] = {"status": "failed", "reason": str(exc)}
         results.append(result)
     return results
 
@@ -2612,6 +3777,80 @@ def int_group(match: re.Match[str], name: str) -> int:
     return int(match.group(name))
 
 
+def normalize_color_frame_payload(payload: dict[str, object]) -> dict[str, object]:
+    normalized = dict(payload)
+    for key in ("backend", "space", "transfer"):
+        if key in normalized:
+            normalized[key] = str(normalized[key]).strip().lower()
+    for key in ("internalFormat", "textureFormat", "textureType"):
+        if key in normalized:
+            try:
+                normalized[key] = normalized_hex(normalized[key])
+            except (TypeError, ValueError):
+                normalized[key] = str(normalized[key]).strip().lower()
+    return normalized
+
+
+def color_frame_payload_from_csv(match: re.Match[str]) -> dict[str, object]:
+    return normalize_color_frame_payload(
+        {
+            "frame": int_group(match, "frame"),
+            "backend": match.group("backend"),
+            "space": match.group("space"),
+            "transfer": match.group("transfer"),
+            "exposure": float(match.group("exposure")),
+            "paperWhiteNits": float(match.group("paperWhiteNits")),
+            "maxOutputNits": float(match.group("maxOutputNits")),
+            "srgbDecode": q3_bool(match.group("srgbDecode")),
+            "framebufferSrgb": q3_bool(match.group("framebufferSrgb")),
+            "internalFormat": match.group("internalFormat"),
+            "textureFormat": match.group("textureFormat"),
+            "textureType": match.group("textureType"),
+            "sceneTargetFloat": q3_bool(match.group("sceneTargetFloat")),
+            "shaderSrgbEncode": q3_bool(match.group("shaderSrgbEncode")),
+            "contractValid": q3_bool(match.group("contractValid")),
+        }
+    )
+
+
+def record_color_frame_diagnostics(
+    metrics: dict[str, object],
+    payload: dict[str, object],
+    failures: list[str],
+) -> None:
+    normalized = normalize_color_frame_payload(payload)
+    color_frames = metrics.setdefault("colorFrame", {})
+    if isinstance(color_frames, dict):
+        color_frames["samples"] = int(color_frames.get("samples", 0)) + 1
+        color_frames["latest"] = normalized
+    if normalized.get("contractValid") is False:
+        failures.append("GLx color-frame reported an invalid output contract.")
+    if (
+        normalized.get("transfer") == GLX_SDR_OUTPUT_CONTRACT["transfer"]
+        and float(normalized.get("maxOutputNits", 0.0)) >
+        float(normalized.get("paperWhiteNits", GLX_SDR_OUTPUT_CONTRACT["paperWhiteNits"])) + 0.01
+    ):
+        failures.append(
+            "GLx color-frame SDR output used HDR max-output headroom while hardware HDR is inactive."
+        )
+
+
+def record_color_frame_performance(
+    performance: dict[str, object],
+    payload: dict[str, object],
+) -> None:
+    normalized = normalize_color_frame_payload(payload)
+    perf_record_numeric(performance, "colorFrameSamples", 1)
+    for key, value in normalized.items():
+        metric_key = f"colorFrame{key[0].upper()}{key[1:]}"
+        if isinstance(value, bool):
+            perf_record_numeric(performance, metric_key, 1 if value else 0)
+        elif isinstance(value, (int, float)):
+            perf_record_numeric(performance, metric_key, float(value))
+        else:
+            perf_record_string(performance, metric_key, str(value).lower())
+
+
 def pass_schedule_valid_from_match(match: re.Match[str]) -> bool:
     return (
         match.group("valid").lower() == "valid"
@@ -2633,6 +3872,20 @@ def pass_schedule_failure_from_values(valid: object, count: object, schedule_has
         "GLx pass schedule is not locked to the final contract: "
         f"valid {valid}, count {count}, hash {schedule_hash!r}, order {order!r}."
     )
+
+
+def record_diagnostic_pass_schedule(
+    metrics: dict[str, object],
+    match: re.Match[str],
+) -> None:
+    valid = 1 if match.group("valid").lower() == "valid" else 0
+    section = metric_section(metrics, "passSchedule")
+    if valid != 1 and section.get("valid") == 1:
+        return
+    section["valid"] = valid
+    section["count"] = int_group(match, "count")
+    section["hash"] = match.group("hash").lower()
+    section["order"] = match.group("order")
 
 
 def product_tier_failure(tier: object) -> str | None:
@@ -2658,6 +3911,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
     text = log_path.read_text(encoding="utf-8", errors="replace")
     requires_glx_paths = rc_profile_requires_glx_paths(profile)
     requires_glx_ownership = profile_requires_glx_ownership(profile)
+    requires_tier_contract = profile != "glx-color"
     saw_ownership = False
     saw_stream_categories = False
 
@@ -2675,7 +3929,11 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             or line.startswith("color pipeline")
             or line.startswith("color grade")
             or line.startswith("color audit")
+            or line.startswith("texture audit")
+            or line.startswith("color-frame-json")
+            or line.startswith("color-frame-csv")
             or line.startswith("output backend")
+            or line.startswith("target:")
             or line.startswith("product tier ")
             or line.startswith("capability hint ")
             or line.startswith("GL12 fixed-function ")
@@ -2742,6 +4000,98 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                     f"{int_group(match, 'unsupported')} "
                     f"({match.group('lastUnsupportedReason')})."
                 )
+            continue
+
+        match = MATERIAL_PARAMETER_DETAIL_RE.search(line)
+        if match:
+            record_metric_max(metrics, "materialParameters", "blocks", int_group(match, "blocks"))
+            record_metric_max(metrics, "materialParameters", "invalid", int_group(match, "invalid"))
+            if match.group("hash") is not None:
+                record_metric_max(metrics, "materialParameters", "hash", int(match.group("hash"), 16))
+            record_metric_max(metrics, "materialParameters", "sort", int_group(match, "sort"))
+            record_metric_max(metrics, "materialParameters", "passes", int_group(match, "passes"))
+            record_metric_max(metrics, "materialParameters", "features", int(match.group("features"), 16))
+            record_metric_max(metrics, "materialParameters", "flags", int(match.group("flags"), 16))
+            record_metric_max(metrics, "materialParameters", "state", int(match.group("state"), 16))
+            for key in ("rgbGen", "rgbWave", "alphaGen", "alphaWave", "tcGen0", "tcGen1"):
+                if match.group(key) is not None:
+                    record_metric_max(metrics, "materialParameters", key, int_group(match, key))
+            if int_group(match, "invalid") > 0:
+                failures.append(f"GLx material parameter blocks invalid: {int_group(match, 'invalid')}.")
+            continue
+
+        match = MATERIAL_PARAMETER_BLOCKS_RE.search(line)
+        if match:
+            record_metric_max(metrics, "materialParameters", "blocks", int_group(match, "blocks"))
+            record_metric_max(metrics, "materialParameters", "invalid", int_group(match, "invalid"))
+            if match.group("hash") is not None:
+                record_metric_max(metrics, "materialParameters", "hash", int(match.group("hash"), 16))
+            if int_group(match, "invalid") > 0:
+                failures.append(f"GLx material parameter blocks invalid: {int_group(match, 'invalid')}.")
+            continue
+
+        match = MATERIAL_LAST_KEY_RE.search(line)
+        if match:
+            record_metric_max(metrics, "materialLastKey", "name", match.group("name").strip())
+            record_metric_max(metrics, "materialLastKey", "flags", int(match.group("flags"), 16))
+            record_metric_max(metrics, "materialLastKey", "state", int(match.group("state"), 16))
+            for key in (
+                "rgbGen",
+                "rgbWave",
+                "alphaGen",
+                "alphaWave",
+                "tcGen0",
+                "tcGen1",
+                "texMods0",
+                "texMods1",
+                "combine",
+            ):
+                record_metric_max(metrics, "materialLastKey", key, int_group(match, key))
+            record_metric_max(metrics, "materialLastKey", "fogPass", 1 if q3_bool(match.group("fog")) else 0)
+            continue
+
+        match = MATERIAL_LAST_LANGUAGE_RE.search(line)
+        if match:
+            record_metric_max(metrics, "materialLanguage", "flags", int(match.group("flags"), 16))
+            record_metric_max(metrics, "materialLanguage", "state", int(match.group("state"), 16))
+            for key in (
+                "texModMask0",
+                "texModMask1",
+                "texModSequence0",
+                "texModSequence1",
+                "texModWaveFuncs0",
+                "texModWaveFuncs1",
+            ):
+                record_metric_max(metrics, "materialLanguage", key, int(match.group(key), 16))
+            record_metric_max(metrics, "materialLanguage", "fogAdjust", int_group(match, "fogAdjust"))
+            continue
+
+        match = MATERIAL_FLAGS_COMMON_RE.search(line)
+        if match:
+            for key in (
+                "multitexture",
+                "depthFragment",
+                "blend",
+                "alphaTest",
+                "depthWrite",
+                "lightmap",
+            ):
+                record_metric_max(metrics, "materialStageFlags", key, int_group(match, key))
+            continue
+
+        match = MATERIAL_FLAGS_SPECIAL_RE.search(line)
+        if match:
+            for key in (
+                "animatedImage",
+                "videoMap",
+                "screenMap",
+                "dynamicLightMap",
+                "texMod",
+                "environment",
+                "st0",
+                "st1",
+            ):
+                record_metric_max(metrics, "materialStageFlags", key, int_group(match, key))
             continue
 
         match = OWNERSHIP_RE.search(line)
@@ -3006,17 +4356,43 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
 
         match = GLX_PASS_SCHEDULE_RE.search(line)
         if match:
-            valid = 1 if match.group("valid").lower() == "valid" else 0
-            record_metric_max(metrics, "passSchedule", "valid", valid)
-            record_metric_max(metrics, "passSchedule", "count", int_group(match, "count"))
-            record_metric_max(metrics, "passSchedule", "hash", match.group("hash").lower())
-            record_metric_max(metrics, "passSchedule", "order", match.group("order"))
-            if not pass_schedule_valid_from_match(match):
-                failures.append(
-                    "GLx pass schedule is not locked to the final contract: "
-                    f"{match.group('valid')} {match.group('count')}/{match.group('hash')} "
-                    f"{match.group('order')}."
-                )
+            record_diagnostic_pass_schedule(metrics, match)
+            continue
+
+        match = GLX_RENDER_IR_PRODUCTS_RE.search(line)
+        if match:
+            for key in (
+                "passes",
+                "worldPackets",
+                "dynamicDraws",
+                "materials",
+                "uploads",
+                "postNodes",
+                "outputs",
+                "rejects",
+            ):
+                record_metric_max(metrics, "renderIRProducts", key, int_group(match, key))
+            continue
+
+        match = GLX_POST_OUTPUT_OWNERSHIP_RE.search(line)
+        if match:
+            record_metric_max(metrics, "postOutputOwnership", "mode", match.group("mode").lower())
+            record_metric_max(metrics, "postOutputOwnership", "postNodes", int_group(match, "postNodes"))
+            record_metric_max(metrics, "postOutputOwnership", "outputs", int_group(match, "outputs"))
+            record_metric_max(
+                metrics,
+                "postOutputOwnership",
+                "legacyFallback",
+                1 if q3_bool(match.group("legacyFallback")) else 0,
+            )
+            if match.group("postHash") is not None:
+                record_metric_max(metrics, "postOutputOwnership", "postHash", int(match.group("postHash"), 16))
+            if match.group("outputHash") is not None:
+                record_metric_max(metrics, "postOutputOwnership", "outputHash", int(match.group("outputHash"), 16))
+            if match.group("planHash") is not None:
+                record_metric_max(metrics, "postOutputOwnership", "planHash", int(match.group("planHash"), 16))
+            if match.group("fallbackMask") is not None:
+                record_metric_max(metrics, "postOutputOwnership", "fallbackMask", int(match.group("fallbackMask"), 16))
             continue
 
         match = POSTPROCESS_FBO_RE.search(line)
@@ -3025,8 +4401,46 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             ready = q3_bool(match.group("ready"))
             record_metric_max(metrics, "postprocess", "fboRequested", 1 if requested else 0)
             record_metric_max(metrics, "postprocess", "fboReady", 1 if ready else 0)
-            if requested and not ready:
+            if requires_glx_paths and requested and not ready:
                 failures.append("GLx postprocess FBO was requested but not ready.")
+            continue
+
+        match = POSTPROCESS_TARGET_FORMAT_RE.search(line)
+        if match:
+            for key in ("renderWidth", "renderHeight", "captureWidth", "captureHeight", "windowWidth", "windowHeight"):
+                record_metric_max(metrics, "targetFormat", key, int_group(match, key))
+            for key in ("internalFormat", "textureFormat", "textureType"):
+                record_metric_max(metrics, "targetFormat", key, int(match.group(key), 16))
+            continue
+
+        match = POSTPROCESS_CONTROLS_RE.search(line)
+        if match:
+            for key in ("sceneLinearHdr", "msaa", "supersample", "windowAdjusted"):
+                record_metric_max(
+                    metrics,
+                    "postprocessControls",
+                    key,
+                    1 if q3_bool(match.group(key)) else 0,
+                )
+            for key in ("precision", "renderScale", "bloom"):
+                record_metric_max(metrics, "postprocessControls", key, int_group(match, key))
+            record_metric_max(metrics, "postprocessControls", "greyscale", float(match.group("greyscale")))
+            continue
+
+        match = POSTPROCESS_FRAMES_RE.search(line)
+        if match:
+            for key in ("frames", "bloomFinal", "gammaDirect", "gammaBlit", "minimizedOutput", "screenshots"):
+                record_metric_max(metrics, "postprocessFrames", key, int_group(match, key))
+            if int_group(match, "minimizedOutput") > 0:
+                failures.append(f"GLx postprocess minimized output frames: {int_group(match, 'minimizedOutput')}.")
+            continue
+
+        match = POSTPROCESS_FRAME_FEATURES_RE.search(line)
+        if match:
+            for key in ("bloomAvailable", "sceneLinear", "toneMapped", "graded", "renderScale", "greyscale", "windowAdjusted", "minimized"):
+                record_metric_max(metrics, "postprocessFrameFeatures", key, int_group(match, key))
+            if int_group(match, "minimized") > 0:
+                failures.append(f"GLx postprocess minimized frames: {int_group(match, 'minimized')}.")
             continue
 
         match = POSTPROCESS_FBO_LIFECYCLE_RE.search(line)
@@ -3084,6 +4498,13 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             record_metric_max(metrics, "colorPipeline", "maxOutput", float(match.group("maxOutput")))
             if float(match.group("exposure")) <= 0.0:
                 failures.append("GLx color pipeline exposure must be positive.")
+            if (
+                match.group("transfer").lower() == GLX_SDR_OUTPUT_CONTRACT["transfer"]
+                and float(match.group("maxOutput")) > float(match.group("paperWhite") or GLX_SDR_OUTPUT_CONTRACT["paperWhiteNits"]) + 0.01
+            ):
+                failures.append(
+                    "GLx SDR output contract used HDR max-output headroom while hardware HDR is inactive."
+                )
             continue
 
         match = GLX_COLOR_GRADE_RE.search(line)
@@ -3110,8 +4531,60 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             record_metric_max(metrics, "colorAudit", "framebufferRequested", 1 if q3_bool(match.group("framebufferRequested")) else 0)
             record_metric_max(metrics, "colorAudit", "framebufferAvailable", 1 if q3_bool(match.group("framebufferAvailable")) else 0)
             record_metric_max(metrics, "colorAudit", "capture", match.group("capture").lower())
+            if match.group("targetFloat") is not None:
+                record_metric_max(metrics, "colorAudit", "targetFloat", 1 if q3_bool(match.group("targetFloat")) else 0)
+            if match.group("finalEncode") is not None:
+                record_metric_max(metrics, "colorAudit", "finalEncode", match.group("finalEncode").lower())
+            if match.group("contract") is not None:
+                contract_valid = q3_bool(match.group("contract"))
+                record_metric_max(metrics, "colorAudit", "contract", 1 if contract_valid else 0)
+                if not contract_valid:
+                    failures.append("GLx color output contract is invalid.")
             if q3_bool(match.group("framebufferSrgb")):
                 failures.append("GLx framebuffer sRGB state is active on the shader-encoded SDR output path.")
+            continue
+
+        match = GLX_TEXTURE_AUDIT_RE.search(line)
+        if match:
+            for key in (
+                "srgb",
+                "srgbDecode",
+                "linear",
+                "linearDecode",
+                "data",
+                "dataDecode",
+                "unknown",
+                "unknownDecode",
+                "missingSrgbDecode",
+                "unexpectedDecode",
+            ):
+                record_metric_max(metrics, "textureAudit", key, int_group(match, key))
+            if int_group(match, "missingSrgbDecode") > 0:
+                failures.append(
+                    f"GLx texture audit missing sRGB decode rows: {int_group(match, 'missingSrgbDecode')}."
+                )
+            if int_group(match, "unexpectedDecode") > 0:
+                failures.append(
+                    f"GLx texture audit unexpected decode rows: {int_group(match, 'unexpectedDecode')}."
+                )
+            continue
+
+        match = GLX_COLOR_FRAME_JSON_RE.search(line)
+        if match:
+            try:
+                payload = json.loads(match.group("payload"))
+            except json.JSONDecodeError as exc:
+                failures.append(f"GLx color-frame JSON is invalid: {exc}.")
+                continue
+            if isinstance(payload, dict):
+                record_color_frame_diagnostics(metrics, payload, failures)
+            else:
+                failures.append("GLx color-frame JSON payload is not an object.")
+            continue
+
+        match = GLX_COLOR_FRAME_CSV_RE.search(line)
+        if match:
+            record_color_frame_diagnostics(metrics, color_frame_payload_from_csv(match), failures)
             continue
 
         match = GLX_OUTPUT_BACKEND_RE.search(line)
@@ -3165,6 +4638,14 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             record_metric_max(metrics, "stream", "uploadFailures", int_group(match, "failures"))
             if int_group(match, "failures") > 0:
                 failures.append(f"GLx dynamic stream upload failures: {int_group(match, 'failures')}.")
+            continue
+
+        match = STREAM_BINDING_CACHE_RE.search(line)
+        if match:
+            for key in ("queries", "hits", "restores", "invalidations"):
+                record_metric_max(metrics, "streamBindingCache", key, int_group(match, key))
+            if match.group("external") is not None:
+                record_metric_max(metrics, "streamBindingCache", "external", int_group(match, "external"))
             continue
 
         match = STREAM_DRAWS_RE.search(line)
@@ -3348,9 +4829,19 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         failures.append("No GLx dynamic stream category diagnostics were found in the run log.")
     if requires_glx_ownership and not saw_ownership:
         failures.append("No GLx ownership diagnostic output was found in the run log.")
+    if requires_glx_paths:
+        pass_schedule = metric_section(metrics, "passSchedule")
+        schedule_failure = pass_schedule_failure_from_values(
+            pass_schedule.get("valid"),
+            pass_schedule.get("count"),
+            pass_schedule.get("hash"),
+            pass_schedule.get("order"),
+        )
+        if schedule_failure:
+            failures.append(schedule_failure)
 
     product_tier = metric_section(metrics, "productTier").get("tier")
-    if product_tier == "GL12":
+    if requires_tier_contract and product_tier == "GL12":
         gl12_executor = metric_section(metrics, "gl12Executor")
         gl12_support = metric_section(metrics, "gl12Support")
         if gl12_executor.get("active") != 1:
@@ -3374,7 +4865,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         ):
             if gl12_support.get(key) != 1:
                 failures.append(f"GL12 fixed-function support is missing required {key} coverage.")
-    if product_tier == "GL2X":
+    if requires_tier_contract and product_tier == "GL2X":
         gl2x_executor = metric_section(metrics, "gl2xExecutor")
         gl2x_support = metric_section(metrics, "gl2xSupport")
         if gl2x_executor.get("active") != 1:
@@ -3398,7 +4889,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         ):
             if gl2x_support.get(key) != 1:
                 failures.append(f"GL2X programmable support is missing required {key} coverage.")
-    if product_tier == "GL3X":
+    if requires_tier_contract and product_tier == "GL3X":
         gl3x_executor = metric_section(metrics, "gl3xExecutor")
         gl3x_support = metric_section(metrics, "gl3xSupport")
         if gl3x_executor.get("active") != 1:
@@ -3427,7 +4918,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         ):
             if gl3x_support.get(key) != 1:
                 failures.append(f"GL3X performance support is missing required {key} coverage.")
-    if product_tier == "GL41":
+    if requires_tier_contract and product_tier == "GL41":
         gl41_executor = metric_section(metrics, "gl41Executor")
         gl41_support = metric_section(metrics, "gl41Support")
         gl41_limits = metric_section(metrics, "gl41Limits")
@@ -3465,7 +4956,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         ):
             if gl41_limits.get(key) not in (0, None):
                 failures.append(f"GL41 mac-modern executor incorrectly requires {key}.")
-    if product_tier == "GL46":
+    if requires_tier_contract and product_tier == "GL46":
         gl46_executor = metric_section(metrics, "gl46Executor")
         gl46_support = metric_section(metrics, "gl46Support")
         gl46_requirements = metric_section(metrics, "gl46Requirements")
@@ -3502,6 +4993,55 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         ):
             if gl46_requirements.get(key) != 1:
                 failures.append(f"GL46 high-end executor did not report required {key}.")
+
+    if requires_glx_ownership and product_tier in {"GL3X", "GL41", "GL46"}:
+        post_output = metric_section(metrics, "postOutputOwnership")
+        render_products = metric_section(metrics, "renderIRProducts")
+        post_nodes = post_output.get("postNodes", render_products.get("postNodes"))
+        outputs = post_output.get("outputs", render_products.get("outputs"))
+        post_hash = post_output.get("postHash")
+        output_hash = post_output.get("outputHash")
+        plan_hash = post_output.get("planHash")
+        fallback_mask = post_output.get("fallbackMask")
+        if post_output.get("mode") not in ("glx-owned", None):
+            failures.append("GLx post/output ownership is not in glx-owned mode on a modern tier.")
+        if post_output.get("legacyFallback") not in (0, None):
+            failures.append("GLx post/output ownership still reports legacy fallback on a modern tier.")
+        if fallback_mask not in (0, None):
+            failures.append("GLx post/output ownership plan reports a fallback reason on a modern tier.")
+        if not isinstance(post_nodes, int) or post_nodes <= 0:
+            failures.append("GLx ownership proof did not execute any GLx post nodes on a modern tier.")
+        if not isinstance(outputs, int) or outputs <= 0:
+            failures.append("GLx ownership proof did not execute any GLx output transforms on a modern tier.")
+        if not isinstance(post_hash, int) or post_hash <= 0:
+            failures.append("GLx ownership proof did not report a post-node fingerprint on a modern tier.")
+        if not isinstance(output_hash, int) or output_hash <= 0:
+            failures.append("GLx ownership proof did not report an output-transform fingerprint on a modern tier.")
+        if not isinstance(plan_hash, int) or plan_hash <= 0:
+            failures.append("GLx ownership proof did not report a post/output plan fingerprint on a modern tier.")
+
+    color_pipeline = metrics.get("colorPipeline")
+    target_format = metrics.get("targetFormat")
+    if (
+        isinstance(color_pipeline, dict)
+        and color_pipeline.get("space") == "scene-linear"
+    ):
+        if not isinstance(target_format, dict):
+            failures.append("GLx scene-linear target format metadata is missing.")
+        else:
+            for key, expected in (
+                ("internalFormat", GLX_SCENE_TARGET_FORMAT_CONTRACT["internalFormat"]),
+                ("textureFormat", GLX_SCENE_TARGET_FORMAT_CONTRACT["textureFormat"]),
+                ("textureType", GLX_SCENE_TARGET_FORMAT_CONTRACT["textureType"]),
+            ):
+                try:
+                    actual_hex = normalized_hex(target_format.get(key))
+                except (TypeError, ValueError):
+                    actual_hex = str(target_format.get(key))
+                if actual_hex != expected:
+                    failures.append(
+                        f"GLx scene-linear target {key} is {actual_hex}; expected {expected}."
+                    )
 
     diagnostics["failures"] = list(dict.fromkeys(failures))
     return diagnostics
@@ -3576,7 +5116,13 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
     text = log_path.read_text(encoding="utf-8", errors="replace")
     for raw_line in text.splitlines():
         line = raw_line.strip()
-        if not line.startswith("glx:"):
+        if not (
+            line.startswith("glx:")
+            or line.startswith("target:")
+            or line.startswith("controls:")
+            or line.startswith("frames:")
+            or line.startswith("frame features:")
+        ):
             continue
 
         performance["found"] = True
@@ -3616,11 +5162,49 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
 
         match = GLX_PASS_SCHEDULE_RE.search(line)
         if match:
-            perf_record_numeric(performance, "passScheduleValid",
-                1 if match.group("valid").lower() == "valid" else 0)
-            perf_record_numeric(performance, "passScheduleCount", int_group(match, "count"))
-            perf_record_string(performance, "passScheduleHash", match.group("hash").lower())
-            perf_record_string(performance, "passScheduleOrder", match.group("order"))
+            valid = 1 if match.group("valid").lower() == "valid" else 0
+            latest = performance.get("latest", {})
+            if valid == 1 or not (isinstance(latest, dict) and latest.get("passScheduleValid") == 1):
+                perf_record_numeric(performance, "passScheduleValid", valid)
+                perf_record_numeric(performance, "passScheduleCount", int_group(match, "count"))
+                perf_record_string(performance, "passScheduleHash", match.group("hash").lower())
+                perf_record_string(performance, "passScheduleOrder", match.group("order"))
+            continue
+
+        match = GLX_RENDER_IR_PRODUCTS_RE.search(line)
+        if match:
+            perf_record_match_numbers_prefixed(
+                performance,
+                match,
+                "renderIR",
+                (
+                    "passes",
+                    "worldPackets",
+                    "dynamicDraws",
+                    "materials",
+                    "uploads",
+                    "postNodes",
+                    "outputs",
+                    "rejects",
+                ),
+            )
+            continue
+
+        match = GLX_POST_OUTPUT_OWNERSHIP_RE.search(line)
+        if match:
+            perf_record_string(performance, "postOutputMode", match.group("mode").lower())
+            perf_record_numeric(performance, "postOutputPostNodes", int_group(match, "postNodes"))
+            perf_record_numeric(performance, "postOutputOutputs", int_group(match, "outputs"))
+            perf_record_numeric(performance, "postOutputLegacyFallback",
+                1 if q3_bool(match.group("legacyFallback")) else 0)
+            if match.group("postHash") is not None:
+                perf_record_numeric(performance, "postOutputPostHash", int(match.group("postHash"), 16))
+            if match.group("outputHash") is not None:
+                perf_record_numeric(performance, "postOutputOutputHash", int(match.group("outputHash"), 16))
+            if match.group("planHash") is not None:
+                perf_record_numeric(performance, "postOutputPlanHash", int(match.group("planHash"), 16))
+            if match.group("fallbackMask") is not None:
+                perf_record_numeric(performance, "postOutputFallbackMask", int(match.group("fallbackMask"), 16))
             continue
 
         match = GLX_MATERIAL_RENDERER_SUMMARY_RE.search(line)
@@ -3647,6 +5231,70 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             )
             continue
 
+        match = MATERIAL_PARAMETER_DETAIL_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "materialParameterBlocks", int_group(match, "blocks"))
+            perf_record_numeric(performance, "materialInvalidParameterBlocks", int_group(match, "invalid"))
+            if match.group("hash") is not None:
+                perf_record_numeric(performance, "materialParameterHash", int(match.group("hash"), 16))
+            perf_record_numeric(performance, "materialParameterSort", int_group(match, "sort"))
+            perf_record_numeric(performance, "materialParameterPasses", int_group(match, "passes"))
+            perf_record_numeric(performance, "materialParameterFeatures", int(match.group("features"), 16))
+            perf_record_numeric(performance, "materialParameterFlags", int(match.group("flags"), 16))
+            perf_record_numeric(performance, "materialParameterState", int(match.group("state"), 16))
+            for key in ("rgbGen", "rgbWave", "alphaGen", "alphaWave", "tcGen0", "tcGen1"):
+                if match.group(key) is not None:
+                    perf_record_numeric(
+                        performance,
+                        f"materialParameter{key[0].upper()}{key[1:]}",
+                        int_group(match, key),
+                    )
+            continue
+
+        match = MATERIAL_PARAMETER_BLOCKS_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "materialParameterBlocks", int_group(match, "blocks"))
+            perf_record_numeric(performance, "materialInvalidParameterBlocks", int_group(match, "invalid"))
+            if match.group("hash") is not None:
+                perf_record_numeric(performance, "materialParameterHash", int(match.group("hash"), 16))
+            continue
+
+        match = MATERIAL_FLAGS_COMMON_RE.search(line)
+        if match:
+            for key in (
+                "multitexture",
+                "depthFragment",
+                "blend",
+                "alphaTest",
+                "depthWrite",
+                "lightmap",
+            ):
+                perf_record_numeric(
+                    performance,
+                    f"materialStageFlag{key[0].upper()}{key[1:]}",
+                    int_group(match, key),
+                )
+            continue
+
+        match = MATERIAL_FLAGS_SPECIAL_RE.search(line)
+        if match:
+            for key in (
+                "animatedImage",
+                "videoMap",
+                "screenMap",
+                "dynamicLightMap",
+                "texMod",
+                "environment",
+                "st0",
+                "st1",
+            ):
+                perf_record_numeric(
+                    performance,
+                    f"materialStageFlag{key[0].upper()}{key[1:]}",
+                    int_group(match, key),
+                )
+            continue
+
         match = GLX_POSTPROCESS_SUMMARY_RE.search(line)
         if match:
             perf_record_string(performance, "fbo", match.group("fbo"))
@@ -3671,6 +5319,38 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                     "ssaa",
                 ),
             )
+            continue
+
+        match = POSTPROCESS_TARGET_FORMAT_RE.search(line)
+        if match:
+            for key in ("renderWidth", "renderHeight", "captureWidth", "captureHeight", "windowWidth", "windowHeight"):
+                perf_record_numeric(performance, f"target{key[0].upper()}{key[1:]}", int_group(match, key))
+            for key in ("internalFormat", "textureFormat", "textureType"):
+                perf_record_numeric(performance, f"target{key[0].upper()}{key[1:]}", int(match.group(key), 16))
+            continue
+
+        match = POSTPROCESS_CONTROLS_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "postprocessSceneLinearHdr", 1 if q3_bool(match.group("sceneLinearHdr")) else 0)
+            perf_record_numeric(performance, "postprocessPrecision", int_group(match, "precision"))
+            perf_record_numeric(performance, "postprocessRenderScaleMode", int_group(match, "renderScale"))
+            perf_record_numeric(performance, "postprocessBloomMode", int_group(match, "bloom"))
+            perf_record_numeric(performance, "postprocessMsaa", 1 if q3_bool(match.group("msaa")) else 0)
+            perf_record_numeric(performance, "postprocessSupersample", 1 if q3_bool(match.group("supersample")) else 0)
+            perf_record_numeric(performance, "postprocessWindowAdjusted", 1 if q3_bool(match.group("windowAdjusted")) else 0)
+            perf_record_numeric(performance, "postprocessGreyscale", float(match.group("greyscale")))
+            continue
+
+        match = POSTPROCESS_FRAMES_RE.search(line)
+        if match:
+            for key in ("frames", "bloomFinal", "gammaDirect", "gammaBlit", "minimizedOutput", "screenshots"):
+                perf_record_numeric(performance, f"postprocess{key[0].upper()}{key[1:]}", int_group(match, key))
+            continue
+
+        match = POSTPROCESS_FRAME_FEATURES_RE.search(line)
+        if match:
+            for key in ("bloomAvailable", "sceneLinear", "toneMapped", "graded", "renderScale", "greyscale", "windowAdjusted", "minimized"):
+                perf_record_numeric(performance, f"postprocessFeature{key[0].upper()}{key[1:]}", int_group(match, key))
             continue
 
         match = GLX_COLOR_PIPELINE_RE.search(line)
@@ -3707,10 +5387,49 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
         match = GLX_COLOR_AUDIT_RE.search(line)
         if match:
             perf_record_numeric(performance, "colorSrgbDecode", 1 if q3_bool(match.group("srgbDecode")) else 0)
+            perf_record_numeric(performance, "colorSrgbRequested", 1 if q3_bool(match.group("srgbRequested")) else 0)
             perf_record_numeric(performance, "colorSrgbAvailable", 1 if q3_bool(match.group("srgbAvailable")) else 0)
             perf_record_numeric(performance, "colorFramebufferSrgb", 1 if q3_bool(match.group("framebufferSrgb")) else 0)
             perf_record_numeric(performance, "colorFramebufferSrgbAvailable", 1 if q3_bool(match.group("framebufferAvailable")) else 0)
             perf_record_string(performance, "captureColorSpace", match.group("capture").lower())
+            if match.group("targetFloat") is not None:
+                perf_record_numeric(performance, "colorSceneTargetFloat", 1 if q3_bool(match.group("targetFloat")) else 0)
+            if match.group("finalEncode") is not None:
+                perf_record_string(performance, "colorFinalEncode", match.group("finalEncode").lower())
+            if match.group("contract") is not None:
+                perf_record_numeric(performance, "colorOutputContract", 1 if q3_bool(match.group("contract")) else 0)
+            continue
+
+        match = GLX_TEXTURE_AUDIT_RE.search(line)
+        if match:
+            for key in (
+                "srgb",
+                "srgbDecode",
+                "linear",
+                "linearDecode",
+                "data",
+                "dataDecode",
+                "unknown",
+                "unknownDecode",
+                "missingSrgbDecode",
+                "unexpectedDecode",
+            ):
+                perf_record_numeric(performance, f"textureAudit{key[0].upper()}{key[1:]}", int_group(match, key))
+            continue
+
+        match = GLX_COLOR_FRAME_JSON_RE.search(line)
+        if match:
+            try:
+                payload = json.loads(match.group("payload"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                record_color_frame_performance(performance, payload)
+            continue
+
+        match = GLX_COLOR_FRAME_CSV_RE.search(line)
+        if match:
+            record_color_frame_performance(performance, color_frame_payload_from_csv(match))
             continue
 
         match = GLX_OUTPUT_BACKEND_RE.search(line)
@@ -3779,6 +5498,16 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             perf_record_numeric(performance, "streamReservationLastBytes", int_group(match, "lastBytes"))
             perf_record_numeric(performance, "streamReservationLargestBytes", int_group(match, "largestBytes"))
             perf_record_numeric(performance, "streamSameFrameWrapRejects", int_group(match, "sameFrameRejects"))
+            continue
+
+        match = STREAM_BINDING_CACHE_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "streamBindingQueries", int_group(match, "queries"))
+            perf_record_numeric(performance, "streamBindingCacheHits", int_group(match, "hits"))
+            perf_record_numeric(performance, "streamBindingRestores", int_group(match, "restores"))
+            perf_record_numeric(performance, "streamBindingInvalidations", int_group(match, "invalidations"))
+            if match.group("external") is not None:
+                perf_record_numeric(performance, "streamBindingExternalUpdates", int_group(match, "external"))
             continue
 
         match = GLX_STATIC_DRAW_SUMMARY_RE.search(line)
@@ -3956,11 +5685,145 @@ def load_json_file(path: Path) -> dict[str, object]:
     return data
 
 
+def normalized_hex(value: object) -> str:
+    if isinstance(value, int):
+        return f"0x{value:04x}"
+    text = str(value).strip().lower()
+    if text.startswith("0x"):
+        return f"0x{int(text, 16):04x}"
+    return f"0x{int(text):04x}"
+
+
+def texture_classification_manifest() -> dict[str, object]:
+    manifest = load_json_file(TEXTURE_CLASSIFICATION_MANIFEST_PATH)
+    rows = manifest.get("rows", [])
+    if not isinstance(rows, list):
+        rows = []
+    manifest["rows"] = [row for row in rows if isinstance(row, dict)]
+    return manifest
+
+
+def color_sweep_matrix_manifest() -> list[dict[str, object]]:
+    return [dict(row) for row in GLX_COLOR_SWEEP_MATRIX]
+
+
+def color_contract_manifest() -> dict[str, object]:
+    return {
+        "version": GLX_COLOR_CONTRACT_VERSION,
+        "sceneTargetFormat": dict(GLX_SCENE_TARGET_FORMAT_CONTRACT),
+        "sdrOutput": dict(GLX_SDR_OUTPUT_CONTRACT),
+        "textureClassificationManifest": texture_classification_manifest(),
+        "colorSweepMatrix": color_sweep_matrix_manifest(),
+    }
+
+
+def validate_color_contract_manifest(manifest: dict[str, object]) -> list[str]:
+    failures: list[str] = []
+    contracts = manifest.get("colorContracts")
+    if not isinstance(contracts, dict):
+        return ["GLx color contract manifest is missing."]
+
+    scene_target = contracts.get("sceneTargetFormat")
+    if not isinstance(scene_target, dict):
+        failures.append("GLx scene-target format contract is missing.")
+    else:
+        for key, expected in GLX_SCENE_TARGET_FORMAT_CONTRACT.items():
+            actual = scene_target.get(key)
+            if str(actual).lower() != str(expected).lower():
+                failures.append(
+                    f"GLx scene-target format contract {key} is {actual!r}; expected {expected!r}."
+                )
+
+    sdr_output = contracts.get("sdrOutput")
+    if not isinstance(sdr_output, dict):
+        failures.append("GLx SDR output contract is missing.")
+    else:
+        for key, expected in GLX_SDR_OUTPUT_CONTRACT.items():
+            if sdr_output.get(key) != expected:
+                failures.append(
+                    f"GLx SDR output contract {key} is {sdr_output.get(key)!r}; expected {expected!r}."
+                )
+
+    texture_manifest = contracts.get("textureClassificationManifest")
+    rows = texture_manifest.get("rows", []) if isinstance(texture_manifest, dict) else []
+    if not isinstance(rows, list):
+        rows = []
+    if not isinstance(texture_manifest, dict):
+        failures.append("Texture color classification manifest is missing.")
+    else:
+        if texture_manifest.get("version") != GLX_COLOR_CONTRACT_VERSION:
+            failures.append(
+                "Texture color classification manifest version is "
+                f"{texture_manifest.get('version')!r}; expected {GLX_COLOR_CONTRACT_VERSION!r}."
+            )
+        if texture_manifest.get("document") != GLX_TEXTURE_CLASSIFICATION_DOC:
+            failures.append(
+                "Texture color classification manifest document is "
+                f"{texture_manifest.get('document')!r}; expected {GLX_TEXTURE_CLASSIFICATION_DOC!r}."
+            )
+    row_by_id = {
+        str(row.get("id")): row
+        for row in rows
+        if isinstance(row, dict) and str(row.get("id", "")).strip()
+    }
+    missing_rows = [
+        row_id for row_id in GLX_REQUIRED_TEXTURE_CLASS_ROWS if row_id not in row_by_id
+    ]
+    if missing_rows:
+        failures.append(
+            "Texture color classification manifest is missing row(s): " +
+            ", ".join(missing_rows) + "."
+        )
+    for row_id in GLX_REQUIRED_TEXTURE_CLASS_ROWS:
+        row = row_by_id.get(row_id)
+        if not row:
+            continue
+        for key in ("declaredSpace", "sceneLinearDecode", "examples", "codePath"):
+            if key not in row or row.get(key) in ("", [], None):
+                failures.append(
+                    f"Texture color classification manifest row {row_id} is missing {key}."
+                )
+        for key, expected in GLX_TEXTURE_CLASSIFICATION_CONTRACT[row_id].items():
+            actual = row.get(key)
+            if actual != expected:
+                failures.append(
+                    f"Texture color classification manifest row {row_id} {key} "
+                    f"is {actual!r}; expected {expected!r}."
+                )
+
+    matrix = contracts.get("colorSweepMatrix")
+    matrix_rows = matrix if isinstance(matrix, list) else []
+    matrix_ids = {
+        str(row.get("id"))
+        for row in matrix_rows
+        if isinstance(row, dict) and str(row.get("id", "")).strip()
+    }
+    expected_ids = {str(row["id"]) for row in GLX_COLOR_SWEEP_MATRIX}
+    if matrix_ids != expected_ids:
+        failures.append(
+            "GLx color sweep matrix contract does not match the required P0 rows: "
+            f"{','.join(sorted(matrix_ids)) or '-'}; expected {','.join(sorted(expected_ids))}."
+        )
+
+    return failures
+
+
 def load_performance_budget(path: Path | None, include_default: bool) -> dict[str, object]:
     budget = dict(DEFAULT_PERFORMANCE_BUDGET) if include_default else {}
     if path is not None:
         loaded = load_json_file(path.resolve())
         budget = merge_budget(budget, loaded)
+    return budget
+
+
+def performance_budget_for_gate(
+    gate: str | None,
+    budget: dict[str, object],
+) -> dict[str, object]:
+    gate_name = str(gate or "").strip()
+    override = GLX_GATE_PERFORMANCE_BUDGET_OVERRIDES.get(gate_name)
+    if isinstance(override, dict):
+        return merge_budget(budget, override)
     return budget
 
 
@@ -4407,6 +6270,2715 @@ def evaluate_proof_corpus(
     return failures
 
 
+def color_sweep_runs(manifest: dict[str, object]) -> list[dict[str, object]]:
+    runs = manifest.get("runs", [])
+    if not isinstance(runs, list):
+        return []
+    return [
+        run
+        for run in runs
+        if isinstance(run, dict) and run.get("type") == "color-sweep"
+    ]
+
+
+def color_sweep_row_id(run: dict[str, object]) -> str:
+    row = run.get("colorSweepRow")
+    return str(row.get("id", "")) if isinstance(row, dict) else ""
+
+
+def color_sweep_metric(run: dict[str, object], section: str, key: str) -> object | None:
+    diagnostics = run.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        metrics = diagnostics.get("metrics")
+        if isinstance(metrics, dict):
+            metric_section = metrics.get(section)
+            if isinstance(metric_section, dict) and key in metric_section:
+                return metric_section[key]
+
+    performance = run.get("performance")
+    if isinstance(performance, dict):
+        latest = performance.get("latest")
+        if isinstance(latest, dict):
+            performance_key = {
+                ("colorPipeline", "space"): "colorSpace",
+                ("colorPipeline", "transfer"): "outputTransfer",
+                ("colorPipeline", "toneMap"): "toneMap",
+                ("colorPipeline", "exposure"): "toneMapExposure",
+                ("colorPipeline", "paperWhite"): "paperWhiteNits",
+                ("colorPipeline", "maxOutput"): "maxOutputNits",
+                ("colorAudit", "targetFloat"): "colorSceneTargetFloat",
+                ("colorAudit", "finalEncode"): "colorFinalEncode",
+                ("colorAudit", "contract"): "colorOutputContract",
+                ("colorAudit", "framebufferSrgb"): "colorFramebufferSrgb",
+                ("colorAudit", "srgbRequested"): "colorSrgbRequested",
+                ("outputBackend", "request"): "outputBackendRequest",
+                ("outputBackend", "selected"): "outputBackendSelected",
+                ("targetFormat", "internalFormat"): "targetInternalFormat",
+                ("targetFormat", "textureFormat"): "targetTextureFormat",
+                ("targetFormat", "textureType"): "targetTextureType",
+            }.get((section, key))
+            if performance_key and performance_key in latest:
+                return latest[performance_key]
+
+    return None
+
+
+def screenshot_luma_false_color_passed(shot: dict[str, object]) -> bool:
+    false_color = shot.get("falseColor")
+    if isinstance(false_color, dict):
+        status = str(false_color.get("status", "")).strip().lower()
+        if status == "failed":
+            return False
+        if status == "passed":
+            return True
+    path = shot.get("falseColorPath")
+    return isinstance(path, str) and bool(path.strip())
+
+
+def renderer_switch_lifecycle_evidence(manifest: dict[str, object]) -> dict[str, object]:
+    maps = [
+        str(map_name)
+        for map_name in manifest.get("maps", [])
+        if str(map_name).strip()
+    ]
+    sequence = [
+        str(renderer).strip().lower()
+        for renderer in manifest.get("switchSequence", [])
+        if str(renderer).strip()
+    ]
+    switch_rounds = int(manifest.get("switchRounds", 1) or 1)
+    dry_run = bool(manifest.get("dryRun"))
+    runs = [
+        run
+        for run in manifest.get("runs", [])
+        if isinstance(run, dict) and run.get("type") == "switch-screenshots"
+    ]
+
+    expected_records = [
+        {
+            "map": map_name,
+            "round": round_index,
+            "step": switch_index,
+            "renderer": renderer,
+        }
+        for map_name in maps
+        for round_index in range(1, switch_rounds + 1)
+        for switch_index, renderer in enumerate(sequence, start=1)
+    ]
+    expected_keys = {
+        (
+            str(record["map"]),
+            int(record["round"]),
+            int(record["step"]),
+            str(record["renderer"]).lower(),
+        )
+        for record in expected_records
+    }
+    expected_transitions = len(expected_records)
+    screenshots: list[dict[str, object]] = []
+    run_statuses: list[str] = []
+    restart_modes: set[str] = set()
+    restart_paths: set[str] = set()
+    vid_restart_equivalent = False
+    glx_diagnostics_found = False
+    glx_performance_samples = 0
+    transitions: list[dict[str, object]] = []
+
+    for run in runs:
+        run_statuses.append(str(run.get("status", "unknown")))
+        restart_mode = str(run.get("restartMode", "fast")).strip().lower() or "fast"
+        restart_modes.add(restart_mode)
+        restart_path = str(run.get("vidRestartPath", "")).strip()
+        if restart_path:
+            restart_paths.add(restart_path)
+        if run.get("vidRestartEquivalent") or restart_mode in {"fast", "keep_window", "full", "destroy_window"}:
+            vid_restart_equivalent = True
+        diagnostics = run.get("diagnostics")
+        if isinstance(diagnostics, dict) and diagnostics.get("found"):
+            glx_diagnostics_found = True
+        performance = run.get("performance")
+        if isinstance(performance, dict):
+            try:
+                glx_performance_samples += int(performance.get("sampleCount", 0))
+            except (TypeError, ValueError):
+                pass
+        for shot in run.get("screenshots", []):
+            if isinstance(shot, dict):
+                screenshots.append(shot)
+
+    completed_expected_keys: set[tuple[str, int, int, str]] = set()
+    unexpected_transitions: list[dict[str, object]] = []
+    for shot in screenshots:
+        try:
+            shot_key = (
+                str(shot.get("map", "")),
+                int(shot.get("round", 0) or 0),
+                int(shot.get("switchStep", 0) or 0),
+                str(shot.get("renderer", "")).strip().lower(),
+            )
+        except (TypeError, ValueError):
+            shot_key = ("", 0, 0, "")
+        if not shot.get("found"):
+            continue
+        if expected_keys:
+            if shot_key in expected_keys:
+                completed_expected_keys.add(shot_key)
+            else:
+                unexpected_transitions.append(
+                    {
+                        "map": shot.get("map", ""),
+                        "round": shot.get("round", 0),
+                        "step": shot.get("switchStep", 0),
+                        "renderer": str(shot.get("renderer", "")).lower(),
+                        "screenshot": shot.get("name", ""),
+                    }
+                )
+
+    observed_transitions = (
+        len(completed_expected_keys)
+        if expected_keys
+        else sum(1 for shot in screenshots if shot.get("found"))
+    )
+    planned_transitions = expected_transitions if expected_transitions else len(screenshots)
+    missing_transition_records = [
+        record
+        for record in expected_records
+        if (
+            str(record["map"]),
+            int(record["round"]),
+            int(record["step"]),
+            str(record["renderer"]).lower(),
+        ) not in completed_expected_keys
+    ]
+    missing_transitions = [] if dry_run else missing_transition_records
+    if dry_run:
+        status = "planned"
+    else:
+        status = "passed"
+        if not runs or planned_transitions <= 0:
+            status = "failed"
+        if any(run_status != "passed" for run_status in run_statuses):
+            status = "failed"
+        if observed_transitions < planned_transitions or missing_transition_records:
+            status = "failed"
+
+    renderer_set = set(sequence)
+    transition_pairs = [
+        (sequence[index], sequence[index + 1])
+        for index in range(len(sequence) - 1)
+    ]
+    transitions_into_glx = sum(1 for source, target in transition_pairs if target == "glx" and source != "glx")
+    transitions_out_of_glx = sum(1 for source, target in transition_pairs if source == "glx" and target != "glx")
+
+    for shot in screenshots:
+        transitions.append(
+            {
+                "map": shot.get("map", ""),
+                "round": shot.get("round", 0),
+                "step": shot.get("switchStep", 0),
+                "renderer": str(shot.get("renderer", "")).lower(),
+                "screenshot": shot.get("name", ""),
+                "found": bool(shot.get("found")),
+                "baselineStatus": shot.get("baselineStatus", ""),
+            }
+        )
+
+    return {
+        "version": GLX_SWITCH_LIFECYCLE_VERSION,
+        "status": status,
+        "command": "renderer_switch",
+        "restartMode": ",".join(sorted(restart_modes)) if restart_modes else "fast",
+        "vidRestartPath": ",".join(sorted(restart_paths)) if restart_paths else "",
+        "vidRestartEquivalent": vid_restart_equivalent,
+        "plannedTransitions": planned_transitions,
+        "expectedTransitions": expected_transitions,
+        "completedTransitions": observed_transitions,
+        "maps": maps,
+        "switchRounds": switch_rounds,
+        "sequence": sequence,
+        "sawLegacyRenderer": any(renderer != "glx" for renderer in renderer_set),
+        "sawGlxRenderer": "glx" in renderer_set,
+        "transitionsIntoGlx": transitions_into_glx,
+        "transitionsOutOfGlx": transitions_out_of_glx,
+        "glxDiagnosticsFound": glx_diagnostics_found,
+        "glxPerformanceSamples": glx_performance_samples,
+        "missingTransitions": missing_transitions,
+        "unexpectedTransitions": unexpected_transitions,
+        "runStatuses": run_statuses,
+        "transitions": transitions,
+    }
+
+
+def evaluate_renderer_switch_lifecycle(manifest: dict[str, object], requirements: dict[str, object]) -> list[str]:
+    if not requirements.get("require_renderer_switch_lifecycle"):
+        return []
+
+    evidence = manifest.get("rendererSwitchEvidence")
+    if not isinstance(evidence, dict):
+        return ["No renderer-switch lifecycle evidence was recorded."]
+
+    failures: list[str] = []
+    if evidence.get("version") != GLX_SWITCH_LIFECYCLE_VERSION:
+        failures.append(
+            "Renderer-switch lifecycle evidence has unsupported version "
+            f"{evidence.get('version')!r}."
+        )
+    if evidence.get("status") != "passed":
+        failures.append(
+            "Renderer-switch lifecycle evidence status is "
+            f"{evidence.get('status')!r}, expected 'passed'."
+        )
+    if not evidence.get("vidRestartEquivalent"):
+        failures.append("Renderer-switch lifecycle did not record vid_restart-equivalent restart mode.")
+    if int(evidence.get("plannedTransitions", 0) or 0) <= 0:
+        failures.append("Renderer-switch lifecycle did not plan any transitions.")
+    if int(evidence.get("completedTransitions", 0) or 0) < int(evidence.get("plannedTransitions", 0) or 0):
+        failures.append(
+            "Renderer-switch lifecycle did not complete every planned transition "
+            f"({evidence.get('completedTransitions', 0)}/{evidence.get('plannedTransitions', 0)})."
+        )
+    if not evidence.get("sawLegacyRenderer"):
+        failures.append("Renderer-switch lifecycle did not include a legacy renderer leg.")
+    if not evidence.get("sawGlxRenderer"):
+        failures.append("Renderer-switch lifecycle did not include a GLx renderer leg.")
+    if int(evidence.get("transitionsIntoGlx", 0) or 0) <= 0:
+        failures.append("Renderer-switch lifecycle did not switch into GLx.")
+    if requirements.get("require_renderer_switch_roundtrip") and int(evidence.get("transitionsOutOfGlx", 0) or 0) <= 0:
+        failures.append("Renderer-switch lifecycle did not switch back out of GLx.")
+    if requirements.get("require_glx_diagnostics") and not evidence.get("glxDiagnosticsFound"):
+        failures.append("Renderer-switch lifecycle did not collect GLx diagnostics after a GLx leg.")
+    if requirements.get("require_glx_performance_samples") and int(evidence.get("glxPerformanceSamples", 0) or 0) <= 0:
+        failures.append("Renderer-switch lifecycle did not collect GLx performance samples after a GLx leg.")
+    return failures
+
+
+def int_metric(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def float_metric(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def manifest_requires_world_proof(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> bool:
+    return bool(requirements.get("require_world_proof"))
+
+
+def manifest_selected_scene_ids(manifest: dict[str, object]) -> list[str]:
+    proof_corpus = manifest.get("proofCorpus")
+    scene_ids: list[str] = []
+    if isinstance(proof_corpus, dict):
+        scene_ids = [
+            str(scene_id)
+            for scene_id in proof_corpus.get("selectedSceneIds", [])
+            if str(scene_id).strip()
+        ]
+    if not scene_ids:
+        gate = str(manifest.get("gate", ""))
+        scene_ids = [str(scene_id) for scene_id in GLX_GATE_CORPUS_SCENES.get(gate, ())]
+    return [
+        scene_id
+        for scene_id in scene_ids
+        if scene_id in GLX_PROOF_CORPUS_SCENES
+    ]
+
+
+def world_scene_records(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> list[dict[str, object]]:
+    required_tags = {
+        str(tag)
+        for tag in requirements.get("required_world_tags", ())
+        if str(tag).strip()
+    }
+    world_tags = set(GLX_WORLD_PROOF_TAGS)
+    records: list[dict[str, object]] = []
+    for scene_id in manifest_selected_scene_ids(manifest):
+        scene = GLX_PROOF_CORPUS_SCENES[scene_id]
+        if scene.get("kind") != "map":
+            continue
+        tags = {str(tag) for tag in scene.get("tags", ()) if str(tag).strip()}
+        if not tags.intersection(world_tags) and not tags.intersection(required_tags):
+            continue
+        records.append(
+            {
+                "sceneId": scene_id,
+                "map": str(scene.get("target", "")).strip().lower(),
+                "assetTier": scene.get("assetTier", ""),
+                "tags": sorted(tags),
+                "required": bool(tags.intersection(required_tags)),
+            }
+        )
+    return records
+
+
+def manifest_glx_screenshot_records(manifest: dict[str, object]) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    runs = manifest.get("runs", [])
+    if not isinstance(runs, list):
+        return records
+
+    for run_index, run in enumerate(runs, start=1):
+        if not isinstance(run, dict):
+            continue
+        run_renderer = str(run.get("renderer", "")).strip().lower()
+        run_map = str(run.get("map", "")).strip().lower()
+        run_type = str(run.get("type", f"run-{run_index}"))
+        screenshots = run.get("screenshots", [])
+        if not isinstance(screenshots, list):
+            continue
+        for shot in screenshots:
+            if not isinstance(shot, dict):
+                continue
+            renderer = str(shot.get("renderer", run_renderer)).strip().lower()
+            map_name = str(shot.get("map", run_map)).strip().lower()
+            if renderer != "glx" or not map_name:
+                continue
+            histogram = shot.get("histogram")
+            records.append(
+                {
+                    "run": run_type,
+                    "map": map_name,
+                    "name": shot.get("name", ""),
+                    "found": bool(shot.get("found")),
+                    "baselineStatus": shot.get("baselineStatus", ""),
+                    "histogramPassed": (
+                        isinstance(histogram, dict)
+                        and histogram.get("status") == "passed"
+                    ),
+                    "comparisonStatus": (
+                        shot.get("comparison", {}).get("status", "")
+                        if isinstance(shot.get("comparison"), dict)
+                        else ""
+                    ),
+                }
+            )
+    return records
+
+
+def performance_numeric_value(performance: dict[str, object], key: str) -> int:
+    for section_name in ("max", "latest"):
+        section = performance.get(section_name)
+        if isinstance(section, dict) and key in section:
+            return int_metric(section.get(key))
+    return int_metric(performance.get(key))
+
+
+def world_proof_evidence(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> dict[str, object]:
+    dry_run = bool(manifest.get("dryRun"))
+    require_world = manifest_requires_world_proof(manifest, requirements)
+    required_tags = sorted(
+        {
+            str(tag)
+            for tag in requirements.get("required_world_tags", ())
+            if str(tag).strip()
+        }
+    )
+    proof_corpus = manifest.get("proofCorpus")
+    selected_tags = sorted(
+        {
+            str(tag)
+            for tag in (
+                proof_corpus.get("selectedTags", [])
+                if isinstance(proof_corpus, dict)
+                else []
+            )
+            if str(tag).strip()
+        }
+    )
+    scene_records = world_scene_records(manifest, requirements)
+    required_scene_records = [
+        record for record in scene_records if bool(record.get("required"))
+    ]
+    required_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in required_scene_records
+            if str(record.get("map", "")).strip()
+        }
+    )
+    lightmap_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in scene_records
+            if "lightmap" in record.get("tags", ())
+        }
+    )
+    fog_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in scene_records
+            if "fog-heavy" in record.get("tags", ())
+        }
+    )
+
+    screenshots = manifest_glx_screenshot_records(manifest)
+    found_screenshot_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in screenshots
+            if record.get("found")
+        }
+    )
+    histogram_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in screenshots
+            if record.get("found") and record.get("histogramPassed")
+        }
+    )
+    screenshot_map_set = set(found_screenshot_maps)
+    histogram_map_set = set(histogram_maps)
+
+    static_renderer_enabled = 0
+    static_arena_ready = 0
+    static_packet_batch_enabled = 0
+    static_packet_batches = 0
+    static_indirect_ready = 0
+    static_gl_errors = 0
+    static_failures = 0
+    static_draw_attempts = 0
+    static_draw_indexes = 0
+    static_draw_fallbacks = 0
+    static_packet_full = 0
+    static_packet_partial = 0
+    static_packet_misses = 0
+    static_queue_packet_misses = 0
+    static_packet_lookup_misses = 0
+    static_mdi_errors = 0
+    stream_fog_draws = 0
+    stream_draw_fallbacks = 0
+    material_parameter_blocks = 0
+    material_parameter_hash = 0
+    material_invalid_parameters = 0
+    tier_lightmap_support: set[str] = set()
+    tier_fog_support: set[str] = set()
+    product_tiers: set[str] = set()
+    source_runs: set[str] = set()
+
+    runs = manifest.get("runs", [])
+    if isinstance(runs, list):
+        for run_index, run in enumerate(runs, start=1):
+            if not isinstance(run, dict):
+                continue
+            run_label = str(run.get("type", f"run-{run_index}"))
+            world_run = run_label == "switch-screenshots" or isinstance(run.get("maps"), list)
+            diagnostics = run.get("diagnostics")
+            metrics: dict[str, object] = {}
+            if isinstance(diagnostics, dict):
+                raw_metrics = diagnostics.get("metrics")
+                if world_run and isinstance(raw_metrics, dict):
+                    metrics = raw_metrics
+                    source_runs.add(run_label)
+
+            product_tier = metrics.get("productTier")
+            if isinstance(product_tier, dict):
+                tier = str(product_tier.get("tier", "")).strip().upper()
+                if tier:
+                    product_tiers.add(tier)
+
+            static_world = metrics.get("staticWorld")
+            if isinstance(static_world, dict):
+                static_renderer_enabled = max(static_renderer_enabled, int_metric(static_world.get("rendererEnabled")))
+                static_arena_ready = max(static_arena_ready, int_metric(static_world.get("arenaReady")))
+                static_packet_batch_enabled = max(static_packet_batch_enabled, int_metric(static_world.get("packetBatchEnabled")))
+                static_packet_batches = max(static_packet_batches, int_metric(static_world.get("packetBatchBatches")))
+                static_indirect_ready = max(static_indirect_ready, int_metric(static_world.get("indirectBufferReady")))
+                static_gl_errors = max(static_gl_errors, int_metric(static_world.get("glErrors")))
+                static_failures = max(static_failures, int_metric(static_world.get("failures")))
+
+            for support_name, tier_label in (
+                ("gl12Support", "GL12"),
+                ("gl2xSupport", "GL2X"),
+            ):
+                support = metrics.get(support_name)
+                if not isinstance(support, dict):
+                    continue
+                if int_metric(support.get("lightmaps")) > 0:
+                    tier_lightmap_support.add(tier_label)
+                if int_metric(support.get("fog")) > 0:
+                    tier_fog_support.add(tier_label)
+
+            for support_name, tier_label in (
+                ("gl3xSupport", "GL3X"),
+                ("gl41Support", "GL41"),
+                ("gl46Support", "GL46"),
+            ):
+                support = metrics.get(support_name)
+                if not isinstance(support, dict):
+                    continue
+                if int_metric(support.get("materialCompiler")) > 0 or int_metric(support.get("commonMaterials")) > 0:
+                    product_tiers.add(tier_label)
+
+            stream_draw = metrics.get("streamDraw")
+            if isinstance(stream_draw, dict):
+                stream_fog_draws = max(stream_fog_draws, int_metric(stream_draw.get("fog")))
+                stream_draw_fallbacks = max(stream_draw_fallbacks, int_metric(stream_draw.get("fallbacks")))
+
+            material_parameters = metrics.get("materialParameters")
+            if isinstance(material_parameters, dict):
+                material_parameter_blocks = max(material_parameter_blocks, int_metric(material_parameters.get("blocks")))
+                material_parameter_hash = max(material_parameter_hash, int_metric(material_parameters.get("hash")))
+                material_invalid_parameters = max(material_invalid_parameters, int_metric(material_parameters.get("invalid")))
+
+            performance = run.get("performance")
+            if world_run and isinstance(performance, dict):
+                source_runs.add(run_label)
+                latest = performance.get("latest")
+                if isinstance(latest, dict):
+                    tier = str(latest.get("productTier", latest.get("tier", ""))).strip().upper()
+                    if tier:
+                        product_tiers.add(tier)
+                static_draw_attempts = max(static_draw_attempts, performance_numeric_value(performance, "staticDrawAttempts"))
+                static_draw_indexes = max(static_draw_indexes, performance_numeric_value(performance, "staticDrawIndexes"))
+                static_draw_fallbacks = max(static_draw_fallbacks, performance_numeric_value(performance, "staticDrawFallbacks"))
+                static_packet_full = max(static_packet_full, performance_numeric_value(performance, "staticDrawPacketFull"))
+                static_packet_partial = max(static_packet_partial, performance_numeric_value(performance, "staticDrawPacketPartial"))
+                static_packet_misses = max(static_packet_misses, performance_numeric_value(performance, "staticDrawPacketMisses"))
+                static_queue_packet_misses = max(static_queue_packet_misses, performance_numeric_value(performance, "staticQueuePacketMisses"))
+                static_packet_lookup_misses = max(static_packet_lookup_misses, performance_numeric_value(performance, "staticPacketLookupMisses"))
+                static_mdi_errors = max(static_mdi_errors, performance_numeric_value(performance, "staticMdiErrors"))
+                stream_fog_draws = max(stream_fog_draws, performance_numeric_value(performance, "streamDrawFog"))
+                stream_draw_fallbacks = max(stream_draw_fallbacks, performance_numeric_value(performance, "streamDrawFallbacks"))
+                material_parameter_blocks = max(material_parameter_blocks, performance_numeric_value(performance, "materialParameterBlocks"))
+                material_parameter_hash = max(material_parameter_hash, performance_numeric_value(performance, "materialParameterHash"))
+                material_invalid_parameters = max(material_invalid_parameters, performance_numeric_value(performance, "materialInvalidParameterBlocks"))
+
+    performance_aggregate = manifest.get("performanceAggregate")
+    if isinstance(performance_aggregate, dict):
+        static_draw_attempts = max(static_draw_attempts, performance_numeric_value(performance_aggregate, "staticDrawAttempts"))
+        static_draw_indexes = max(static_draw_indexes, performance_numeric_value(performance_aggregate, "staticDrawIndexes"))
+        static_draw_fallbacks = max(static_draw_fallbacks, performance_numeric_value(performance_aggregate, "staticDrawFallbacks"))
+        static_packet_full = max(static_packet_full, performance_numeric_value(performance_aggregate, "staticDrawPacketFull"))
+        static_packet_partial = max(static_packet_partial, performance_numeric_value(performance_aggregate, "staticDrawPacketPartial"))
+        static_packet_misses = max(static_packet_misses, performance_numeric_value(performance_aggregate, "staticDrawPacketMisses"))
+        static_queue_packet_misses = max(static_queue_packet_misses, performance_numeric_value(performance_aggregate, "staticQueuePacketMisses"))
+        static_packet_lookup_misses = max(static_packet_lookup_misses, performance_numeric_value(performance_aggregate, "staticPacketLookupMisses"))
+        static_mdi_errors = max(static_mdi_errors, performance_numeric_value(performance_aggregate, "staticMdiErrors"))
+        stream_fog_draws = max(stream_fog_draws, performance_numeric_value(performance_aggregate, "streamDrawFog"))
+        stream_draw_fallbacks = max(stream_draw_fallbacks, performance_numeric_value(performance_aggregate, "streamDrawFallbacks"))
+        material_parameter_blocks = max(material_parameter_blocks, performance_numeric_value(performance_aggregate, "materialParameterBlocks"))
+        material_parameter_hash = max(material_parameter_hash, performance_numeric_value(performance_aggregate, "materialParameterHash"))
+        material_invalid_parameters = max(material_invalid_parameters, performance_numeric_value(performance_aggregate, "materialInvalidParameterBlocks"))
+
+    static_packets = static_packet_full + static_packet_partial
+    if static_packets <= 0:
+        static_packets = static_packet_batches
+    lightmap_required = "lightmap" in required_tags
+    fog_required = "fog-heavy" in required_tags or "visibility" in required_tags
+    lightmap_path_found = bool(tier_lightmap_support) or material_parameter_blocks > 0
+    fog_path_found = bool(tier_fog_support) or stream_fog_draws > 0
+
+    missing_required_tags = sorted(set(required_tags) - set(selected_tags))
+    missing_screenshot_maps = sorted(set(required_maps) - screenshot_map_set)
+    missing_histogram_maps = sorted(set(required_maps) - histogram_map_set)
+    missing_lightmap_maps = sorted(set(lightmap_maps) - screenshot_map_set)
+    missing_fog_maps = sorted(set(fog_maps) - screenshot_map_set)
+
+    failures: list[str] = []
+    if require_world and not dry_run:
+        if missing_required_tags:
+            failures.append("World proof corpus is missing required tag(s): " + ", ".join(missing_required_tags) + ".")
+        if required_tags and not required_maps:
+            failures.append("World proof did not select any map scene for the required world tags.")
+        if missing_screenshot_maps:
+            failures.append("World proof is missing GLx screenshots for map(s): " + ", ".join(missing_screenshot_maps) + ".")
+        if missing_histogram_maps:
+            failures.append("World proof is missing histogram metadata for map(s): " + ", ".join(missing_histogram_maps) + ".")
+        if static_renderer_enabled <= 0:
+            failures.append("World proof did not observe the GLx static-world renderer enabled.")
+        if static_arena_ready <= 0 and static_packets <= 0:
+            failures.append("World proof did not observe a ready static arena or queued static packets.")
+        if static_draw_attempts <= 0:
+            failures.append("World proof did not observe static-world draw attempts.")
+        if static_draw_indexes <= 0:
+            failures.append("World proof did not observe static-world submitted indexes.")
+        if static_draw_fallbacks > 0:
+            failures.append(f"World proof reported static draw fallbacks: {static_draw_fallbacks}.")
+        if static_packet_misses or static_queue_packet_misses or static_packet_lookup_misses:
+            failures.append(
+                "World proof reported static packet misses: "
+                f"draw={static_packet_misses}, queue={static_queue_packet_misses}, "
+                f"lookup={static_packet_lookup_misses}."
+            )
+        if static_gl_errors > 0 or static_failures > 0 or static_mdi_errors > 0:
+            failures.append(
+                "World proof reported static-world errors: "
+                f"gl={static_gl_errors}, failures={static_failures}, mdi={static_mdi_errors}."
+            )
+        if lightmap_required:
+            if not lightmap_maps:
+                failures.append("World proof requires lightmap coverage but selected no lightmap-tagged map.")
+            if missing_lightmap_maps:
+                failures.append("World proof is missing GLx lightmap screenshot map(s): " + ", ".join(missing_lightmap_maps) + ".")
+            if not lightmap_path_found:
+                failures.append("World proof did not observe lightmap support or material parameter-block evidence.")
+        if fog_required:
+            if not fog_maps:
+                failures.append("World proof requires fog/visibility coverage but selected no fog-heavy map.")
+            if missing_fog_maps:
+                failures.append("World proof is missing GLx fog-heavy screenshot map(s): " + ", ".join(missing_fog_maps) + ".")
+            if "fog-heavy" in required_tags and not fog_path_found:
+                failures.append("World proof did not observe fog support or fog stream-draw evidence.")
+        if stream_draw_fallbacks > 0:
+            failures.append(f"World proof reported stream draw fallbacks: {stream_draw_fallbacks}.")
+        if material_invalid_parameters > 0:
+            failures.append(f"World proof reported invalid material parameter blocks: {material_invalid_parameters}.")
+
+    status = "not-configured"
+    if require_world:
+        status = "planned" if dry_run else ("passed" if not failures else "failed")
+
+    return {
+        "version": GLX_WORLD_PROOF_VERSION,
+        "status": status,
+        "requiresWorldProof": require_world,
+        "requiredTags": required_tags,
+        "selectedTags": selected_tags,
+        "scenes": scene_records,
+        "requiredMaps": required_maps,
+        "glxScreenshotMaps": found_screenshot_maps,
+        "histogramMaps": histogram_maps,
+        "missingScreenshotMaps": [] if dry_run else missing_screenshot_maps,
+        "staticWorld": {
+            "rendererEnabled": static_renderer_enabled,
+            "arenaReady": static_arena_ready,
+            "packetBatchEnabled": static_packet_batch_enabled,
+            "indirectBufferReady": static_indirect_ready,
+            "packets": static_packets,
+            "drawAttempts": static_draw_attempts,
+            "drawIndexes": static_draw_indexes,
+            "drawFallbacks": static_draw_fallbacks,
+            "packetMisses": static_packet_misses,
+            "queuePacketMisses": static_queue_packet_misses,
+            "lookupMisses": static_packet_lookup_misses,
+            "glErrors": static_gl_errors,
+            "failures": static_failures,
+            "mdiErrors": static_mdi_errors,
+        },
+        "lightmaps": {
+            "required": lightmap_required,
+            "maps": lightmap_maps,
+            "tierSupport": sorted(tier_lightmap_support),
+            "materialParameterBlocks": material_parameter_blocks,
+            "materialParameterHash": material_parameter_hash,
+            "ok": (not lightmap_required) or (not missing_lightmap_maps and lightmap_path_found),
+        },
+        "fog": {
+            "required": fog_required,
+            "maps": fog_maps,
+            "tierSupport": sorted(tier_fog_support),
+            "streamDraws": stream_fog_draws,
+            "ok": (not fog_required) or (not missing_fog_maps and fog_path_found),
+        },
+        "productTiers": sorted(product_tiers),
+        "sourceRuns": sorted(source_runs),
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def evaluate_world_proof(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> list[str]:
+    if not manifest_requires_world_proof(manifest, requirements):
+        return []
+
+    evidence = manifest.get("worldProofEvidence")
+    if not isinstance(evidence, dict):
+        return ["No world proof evidence was recorded."]
+
+    failures: list[str] = []
+    if evidence.get("version") != GLX_WORLD_PROOF_VERSION:
+        failures.append(
+            "World proof evidence has unsupported version "
+            f"{evidence.get('version')!r}."
+        )
+    if evidence.get("status") != "passed":
+        failures.append(
+            "World proof evidence status is "
+            f"{evidence.get('status')!r}, expected 'passed'."
+        )
+    for failure in evidence.get("failures", []):
+        if str(failure).strip():
+            failures.append(str(failure))
+    return list(dict.fromkeys(failures))
+
+
+def manifest_requires_material_proof(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> bool:
+    return bool(requirements.get("require_material_proof"))
+
+
+def material_scene_records(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> list[dict[str, object]]:
+    required_tags = {
+        str(tag)
+        for tag in requirements.get("required_material_tags", ())
+        if str(tag).strip()
+    }
+    material_tags = set(GLX_MATERIAL_PROOF_TAGS)
+    records: list[dict[str, object]] = []
+    for scene_id in manifest_selected_scene_ids(manifest):
+        scene = GLX_PROOF_CORPUS_SCENES[scene_id]
+        if scene.get("kind") != "map":
+            continue
+        tags = {str(tag) for tag in scene.get("tags", ()) if str(tag).strip()}
+        if not tags.intersection(material_tags) and not tags.intersection(required_tags):
+            continue
+        records.append(
+            {
+                "sceneId": scene_id,
+                "map": str(scene.get("target", "")).strip().lower(),
+                "assetTier": scene.get("assetTier", ""),
+                "tags": sorted(tags),
+                "required": bool(tags.intersection(required_tags)),
+            }
+        )
+    return records
+
+
+def material_flag_names(flags: int) -> list[str]:
+    return [
+        name
+        for name, bit in sorted(GLX_MATERIAL_STAGE_FLAGS.items())
+        if flags & bit
+    ]
+
+
+def material_tcgen_name(value: object) -> str:
+    tcgen = int_metric(value, -1)
+    for name, known_value in GLX_MATERIAL_TCGEN_IDS.items():
+        if tcgen == known_value:
+            return name
+    return f"unknown-{tcgen}"
+
+
+def material_proof_evidence(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> dict[str, object]:
+    dry_run = bool(manifest.get("dryRun"))
+    require_material = manifest_requires_material_proof(manifest, requirements)
+    required_tags = sorted(
+        {
+            str(tag)
+            for tag in requirements.get("required_material_tags", ())
+            if str(tag).strip()
+        }
+    )
+    required_stream_features = [
+        str(feature)
+        for feature in requirements.get("required_material_stream_features", ())
+        if str(feature).strip()
+    ]
+    required_tcgens = [
+        str(tcgen)
+        for tcgen in requirements.get("required_material_tcgens", ())
+        if str(tcgen).strip()
+    ]
+    required_stage_flags = [
+        str(flag)
+        for flag in requirements.get("required_material_stage_flags", ())
+        if str(flag).strip()
+    ]
+    required_stream_guards = [
+        str(feature)
+        for feature in requirements.get("required_material_stream_guards", ())
+        if str(feature).strip()
+    ]
+    forbidden_stream_features = [
+        str(feature)
+        for feature in requirements.get("forbidden_material_stream_features", ())
+        if str(feature).strip()
+    ]
+    proof_corpus = manifest.get("proofCorpus")
+    selected_tags = sorted(
+        {
+            str(tag)
+            for tag in (
+                proof_corpus.get("selectedTags", [])
+                if isinstance(proof_corpus, dict)
+                else []
+            )
+            if str(tag).strip()
+        }
+    )
+    scene_records = material_scene_records(manifest, requirements)
+    required_scene_records = [
+        record for record in scene_records if bool(record.get("required"))
+    ]
+    required_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in required_scene_records
+            if str(record.get("map", "")).strip()
+        }
+    )
+    screenshots = manifest_glx_screenshot_records(manifest)
+    found_screenshot_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in screenshots
+            if record.get("found")
+        }
+    )
+    histogram_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in screenshots
+            if record.get("found") and record.get("histogramPassed")
+        }
+    )
+
+    material_enabled = 0
+    material_ready = 0
+    compile_attempts = 0
+    compile_failures = 0
+    link_failures = 0
+    precache_failures = 0
+    bind_failures = 0
+    programs = 0
+    binds = 0
+    bind_attempts = 0
+    switches = 0
+    cache_misses = 0
+    fallback_unsupported = 0
+    fallback_disabled = 0
+    fallback_not_ready = 0
+    fallback_full = 0
+    compiler_plans = 0
+    unsupported_plans = 0
+    last_unsupported = 0
+    parameter_blocks = 0
+    invalid_parameter_blocks = 0
+    parameter_hash = 0
+    parameter_features = 0
+    parameter_flags = 0
+    parameter_state = 0
+    observed_tcgens: set[str] = set()
+    observed_flags = 0
+    language_flags = 0
+    language_texmod_mask = 0
+    language_texmod_sequence = 0
+    language_texmod_wave_funcs = 0
+    language_fog_adjust = 0
+    stage_flag_counts = {name: 0 for name in GLX_MATERIAL_STAGE_FLAGS}
+    stream_feature_counts = {
+        "multitexture": 0,
+        "depthFragment": 0,
+        "texMod": 0,
+        "environment": 0,
+        "dynamicLight": 0,
+        "screenMap": 0,
+        "videoMap": 0,
+    }
+    stream_fallbacks = 0
+    stream_skips = 0
+    stream_program_skips = 0
+    stream_gate_records: dict[str, dict[str, int]] = {}
+    source_runs: set[str] = set()
+
+    def record_material_metrics(metrics: dict[str, object], run_label: str) -> None:
+        nonlocal material_enabled, material_ready, compile_attempts
+        nonlocal compile_failures, link_failures, precache_failures, bind_failures
+        nonlocal fallback_unsupported, fallback_disabled, fallback_not_ready, fallback_full
+        nonlocal compiler_plans, unsupported_plans, last_unsupported
+        nonlocal parameter_blocks, invalid_parameter_blocks, parameter_hash
+        nonlocal parameter_features, parameter_flags, parameter_state, observed_flags
+        nonlocal language_flags, language_texmod_mask, language_texmod_sequence
+        nonlocal language_texmod_wave_funcs, language_fog_adjust
+        nonlocal stage_flag_counts
+        nonlocal stream_fallbacks, stream_skips, stream_program_skips
+
+        source_runs.add(run_label)
+        material = metrics.get("material")
+        if isinstance(material, dict):
+            material_enabled = max(material_enabled, int_metric(material.get("enabled")))
+            material_ready = max(material_ready, int_metric(material.get("ready")))
+            compile_attempts = max(compile_attempts, int_metric(material.get("attempts")))
+            compile_failures = max(compile_failures, int_metric(material.get("compile")))
+            link_failures = max(link_failures, int_metric(material.get("link")))
+            precache_failures = max(precache_failures, int_metric(material.get("precacheFailures")))
+            bind_failures = max(bind_failures, int_metric(material.get("bind")))
+
+        fallbacks = metrics.get("materialFallbacks")
+        if isinstance(fallbacks, dict):
+            fallback_unsupported = max(fallback_unsupported, int_metric(fallbacks.get("unsupported")))
+            fallback_disabled = max(fallback_disabled, int_metric(fallbacks.get("disabled")))
+            fallback_not_ready = max(fallback_not_ready, int_metric(fallbacks.get("notReady")))
+            fallback_full = max(fallback_full, int_metric(fallbacks.get("full")))
+
+        compiler = metrics.get("materialCompilerPlans")
+        if isinstance(compiler, dict):
+            compiler_plans = max(compiler_plans, int_metric(compiler.get("compiled")))
+            unsupported_plans = max(unsupported_plans, int_metric(compiler.get("unsupported")))
+            last_unsupported = max(last_unsupported, int_metric(compiler.get("lastUnsupported")))
+
+        parameters = metrics.get("materialParameters")
+        if isinstance(parameters, dict):
+            parameter_blocks = max(parameter_blocks, int_metric(parameters.get("blocks")))
+            invalid_parameter_blocks = max(invalid_parameter_blocks, int_metric(parameters.get("invalid")))
+            parameter_hash = max(parameter_hash, int_metric(parameters.get("hash")))
+            parameter_features = max(parameter_features, int_metric(parameters.get("features")))
+            parameter_flags = max(parameter_flags, int_metric(parameters.get("flags")))
+            parameter_state = max(parameter_state, int_metric(parameters.get("state")))
+            for key in ("tcGen0", "tcGen1"):
+                if key in parameters:
+                    observed_tcgens.add(material_tcgen_name(parameters.get(key)))
+            observed_flags |= int_metric(parameters.get("flags"))
+
+        last_key = metrics.get("materialLastKey")
+        if isinstance(last_key, dict):
+            observed_flags |= int_metric(last_key.get("flags"))
+            for key in ("tcGen0", "tcGen1"):
+                if key in last_key:
+                    observed_tcgens.add(material_tcgen_name(last_key.get(key)))
+
+        language = metrics.get("materialLanguage")
+        if isinstance(language, dict):
+            language_flags |= int_metric(language.get("flags"))
+            language_texmod_mask |= int_metric(language.get("texModMask0")) | int_metric(language.get("texModMask1"))
+            language_texmod_sequence |= int_metric(language.get("texModSequence0")) | int_metric(language.get("texModSequence1"))
+            language_texmod_wave_funcs |= int_metric(language.get("texModWaveFuncs0")) | int_metric(language.get("texModWaveFuncs1"))
+            language_fog_adjust = max(language_fog_adjust, int_metric(language.get("fogAdjust")))
+
+        stage_flags = metrics.get("materialStageFlags")
+        if isinstance(stage_flags, dict):
+            for flag_name in stage_flag_counts:
+                count = int_metric(stage_flags.get(flag_name))
+                stage_flag_counts[flag_name] = max(stage_flag_counts[flag_name], count)
+                if count > 0:
+                    observed_flags |= GLX_MATERIAL_STAGE_FLAGS[flag_name]
+
+        stream_draw = metrics.get("streamDraw")
+        if isinstance(stream_draw, dict):
+            stream_feature_counts["multitexture"] = max(
+                stream_feature_counts["multitexture"],
+                int_metric(stream_draw.get("multitexture")),
+            )
+            stream_feature_counts["depthFragment"] = max(
+                stream_feature_counts["depthFragment"],
+                int_metric(stream_draw.get("depthFragment")),
+            )
+            stream_feature_counts["texMod"] = max(
+                stream_feature_counts["texMod"],
+                int_metric(stream_draw.get("texMods")),
+            )
+            stream_feature_counts["environment"] = max(
+                stream_feature_counts["environment"],
+                int_metric(stream_draw.get("environment")),
+            )
+            stream_feature_counts["dynamicLight"] = max(
+                stream_feature_counts["dynamicLight"],
+                int_metric(stream_draw.get("dynamicLights")),
+            )
+            stream_feature_counts["screenMap"] = max(
+                stream_feature_counts["screenMap"],
+                int_metric(stream_draw.get("screenMaps")),
+            )
+            stream_feature_counts["videoMap"] = max(
+                stream_feature_counts["videoMap"],
+                int_metric(stream_draw.get("videoMaps")),
+            )
+            stream_fallbacks = max(stream_fallbacks, int_metric(stream_draw.get("fallbacks")))
+            stream_skips = max(stream_skips, int_metric(stream_draw.get("skips")))
+
+        stream_skip = metrics.get("streamDrawSkip")
+        if isinstance(stream_skip, dict):
+            stream_program_skips = max(stream_program_skips, int_metric(stream_skip.get("program")))
+
+        gates = metrics.get("streamMaterialGate")
+        if isinstance(gates, dict):
+            for gate_name in (
+                "multitexture",
+                "depthFragment",
+                "texMod",
+                "environment",
+                "dynamicLight",
+                "screenMap",
+                "videoMap",
+            ):
+                record = stream_gate_records.setdefault(
+                    gate_name,
+                    {"enabled": 0, "accepted": 0, "rejected": 0},
+                )
+                prefix = gate_name
+                record["enabled"] = max(record["enabled"], int_metric(gates.get(f"{prefix}Enabled")))
+                record["accepted"] = max(record["accepted"], int_metric(gates.get(f"{prefix}Accepted")))
+                record["rejected"] = max(record["rejected"], int_metric(gates.get(f"{prefix}Rejected")))
+                stream_feature_counts[gate_name] = max(
+                    stream_feature_counts[gate_name],
+                    record["accepted"],
+                )
+
+    def record_material_performance(performance: dict[str, object], run_label: str) -> None:
+        nonlocal material_enabled, material_ready
+        nonlocal programs, binds, bind_attempts, switches, cache_misses
+        nonlocal compile_failures, link_failures, precache_failures, bind_failures
+        nonlocal parameter_blocks, invalid_parameter_blocks, parameter_hash
+        nonlocal parameter_features, parameter_flags, parameter_state, observed_flags
+        nonlocal stage_flag_counts
+        nonlocal stream_fallbacks, stream_skips
+
+        source_runs.add(run_label)
+        if str(performance_metric(performance, "materialRenderer") or "").lower() == "enabled":
+            material_enabled = max(material_enabled, 1)
+        if str(performance_metric(performance, "materialReady") or "").lower() == "ready":
+            material_ready = max(material_ready, 1)
+        programs = max(programs, performance_numeric_value(performance, "materialPrograms"))
+        binds = max(binds, performance_numeric_value(performance, "materialBinds"))
+        bind_attempts = max(bind_attempts, performance_numeric_value(performance, "materialBindAttempts"))
+        switches = max(switches, performance_numeric_value(performance, "materialSwitches"))
+        cache_misses = max(cache_misses, performance_numeric_value(performance, "materialCacheMisses"))
+        compile_failures = max(compile_failures, performance_numeric_value(performance, "materialCompileFailures"))
+        link_failures = max(link_failures, performance_numeric_value(performance, "materialLinkFailures"))
+        precache_failures = max(precache_failures, performance_numeric_value(performance, "materialPrecacheFailures"))
+        bind_failures = max(bind_failures, performance_numeric_value(performance, "materialBindFailures"))
+        parameter_blocks = max(parameter_blocks, performance_numeric_value(performance, "materialParameterBlocks"))
+        invalid_parameter_blocks = max(invalid_parameter_blocks, performance_numeric_value(performance, "materialInvalidParameterBlocks"))
+        parameter_hash = max(parameter_hash, performance_numeric_value(performance, "materialParameterHash"))
+        parameter_features = max(parameter_features, performance_numeric_value(performance, "materialParameterFeatures"))
+        parameter_flags = max(parameter_flags, performance_numeric_value(performance, "materialParameterFlags"))
+        parameter_state = max(parameter_state, performance_numeric_value(performance, "materialParameterState"))
+        observed_flags |= parameter_flags
+        stream_feature_counts["multitexture"] = max(
+            stream_feature_counts["multitexture"],
+            performance_numeric_value(performance, "streamDrawMultitexture"),
+        )
+        stream_feature_counts["depthFragment"] = max(
+            stream_feature_counts["depthFragment"],
+            performance_numeric_value(performance, "streamDrawDepthFragment"),
+        )
+        stream_feature_counts["texMod"] = max(
+            stream_feature_counts["texMod"],
+            performance_numeric_value(performance, "streamDrawTexMods"),
+        )
+        stream_feature_counts["environment"] = max(
+            stream_feature_counts["environment"],
+            performance_numeric_value(performance, "streamDrawEnvironment"),
+        )
+        stream_feature_counts["dynamicLight"] = max(
+            stream_feature_counts["dynamicLight"],
+            performance_numeric_value(performance, "streamDrawDynamicLights"),
+        )
+        stream_feature_counts["screenMap"] = max(
+            stream_feature_counts["screenMap"],
+            performance_numeric_value(performance, "streamDrawScreenMaps"),
+        )
+        stream_feature_counts["videoMap"] = max(
+            stream_feature_counts["videoMap"],
+            performance_numeric_value(performance, "streamDrawVideoMaps"),
+        )
+        stream_fallbacks = max(stream_fallbacks, performance_numeric_value(performance, "streamDrawFallbacks"))
+        stream_skips = max(stream_skips, performance_numeric_value(performance, "streamDrawSkips"))
+        for key in ("materialParameterTcGen0", "materialParameterTcGen1"):
+            value = performance_metric(performance, key)
+            if value is not None:
+                observed_tcgens.add(material_tcgen_name(value))
+        for flag_name in stage_flag_counts:
+            metric_key = f"materialStageFlag{flag_name[0].upper()}{flag_name[1:]}"
+            count = performance_numeric_value(performance, metric_key)
+            stage_flag_counts[flag_name] = max(stage_flag_counts[flag_name], count)
+            if count > 0:
+                observed_flags |= GLX_MATERIAL_STAGE_FLAGS[flag_name]
+
+    runs = manifest.get("runs", [])
+    if isinstance(runs, list):
+        for run_index, run in enumerate(runs, start=1):
+            if not isinstance(run, dict):
+                continue
+            run_label = str(run.get("type", f"run-{run_index}"))
+            material_run = (
+                run_label == "switch-screenshots"
+                or isinstance(run.get("maps"), list)
+                or str(run.get("map", "")).strip().lower() in required_maps
+            )
+            diagnostics = run.get("diagnostics")
+            if material_run and isinstance(diagnostics, dict):
+                raw_metrics = diagnostics.get("metrics")
+                if isinstance(raw_metrics, dict):
+                    record_material_metrics(raw_metrics, run_label)
+            performance = run.get("performance")
+            if material_run and isinstance(performance, dict):
+                record_material_performance(performance, run_label)
+
+    performance_aggregate = manifest.get("performanceAggregate")
+    if isinstance(performance_aggregate, dict):
+        record_material_performance(performance_aggregate, "performanceAggregate")
+
+    missing_required_tags = sorted(set(required_tags) - set(selected_tags))
+    screenshot_map_set = set(found_screenshot_maps)
+    histogram_map_set = set(histogram_maps)
+    missing_screenshot_maps = sorted(set(required_maps) - screenshot_map_set)
+    missing_histogram_maps = sorted(set(required_maps) - histogram_map_set)
+    missing_stream_features = [
+        feature
+        for feature in required_stream_features
+        if stream_feature_counts.get(feature, 0) <= 0
+    ]
+    missing_tcgens = [
+        tcgen
+        for tcgen in required_tcgens
+        if tcgen not in GLX_MATERIAL_TCGEN_IDS
+    ]
+    tag_backed_tcgens = {
+        "lightmap": "tcgen-lightmap",
+        "environment": "tcgen-environment",
+        "fog": "tcgen-fog",
+        "vector": "tcgen-vector",
+    }
+    missing_tcgen_tags = [
+        tag
+        for tcgen, tag in tag_backed_tcgens.items()
+        if tcgen in required_tcgens and tag not in selected_tags
+    ]
+    unknown_stage_flags = [
+        flag for flag in required_stage_flags if flag not in GLX_MATERIAL_STAGE_FLAGS
+    ]
+    missing_stage_flags = [
+        flag
+        for flag in required_stage_flags
+        if flag in GLX_MATERIAL_STAGE_FLAGS
+        and stage_flag_counts.get(flag, 0) <= 0
+        and (observed_flags & GLX_MATERIAL_STAGE_FLAGS[flag]) == 0
+    ]
+    missing_stage_flag_tags = [
+        tag
+        for flag, tag in GLX_MATERIAL_STAGE_FLAG_TAGS.items()
+        if flag in required_stage_flags and tag not in selected_tags
+    ]
+    missing_stream_guards = [
+        feature for feature in required_stream_guards if feature not in stream_gate_records
+    ]
+    unsafe_stream_guards = [
+        feature
+        for feature in required_stream_guards
+        if stream_gate_records.get(feature, {}).get("accepted", 0) > 0
+        and feature in forbidden_stream_features
+    ]
+    forbidden_stream_draws = [
+        feature
+        for feature in forbidden_stream_features
+        if stream_feature_counts.get(feature, 0) > 0
+    ]
+
+    failures: list[str] = []
+    if require_material and not dry_run:
+        if missing_required_tags:
+            failures.append("Material proof corpus is missing required tag(s): " + ", ".join(missing_required_tags) + ".")
+        if required_tags and not required_maps:
+            failures.append("Material proof did not select any map scene for the required material tags.")
+        if missing_screenshot_maps:
+            failures.append("Material proof is missing GLx screenshots for map(s): " + ", ".join(missing_screenshot_maps) + ".")
+        if missing_histogram_maps:
+            failures.append("Material proof is missing histogram metadata for map(s): " + ", ".join(missing_histogram_maps) + ".")
+        if material_enabled <= 0:
+            failures.append("Material proof did not observe the GLx material renderer enabled.")
+        if material_ready <= 0:
+            failures.append("Material proof did not observe the GLx material renderer ready.")
+        if compile_attempts <= 0 and programs <= 0 and compiler_plans <= 0:
+            failures.append("Material proof did not observe material compile/program activity.")
+        if compile_failures or link_failures or precache_failures or bind_failures:
+            failures.append(
+                "Material proof reported material failures: "
+                f"compile={compile_failures}, link={link_failures}, "
+                f"precache={precache_failures}, bind={bind_failures}."
+            )
+        if fallback_unsupported or fallback_disabled or fallback_not_ready or fallback_full:
+            failures.append(
+                "Material proof reported material fallbacks: "
+                f"unsupported={fallback_unsupported}, disabled={fallback_disabled}, "
+                f"notReady={fallback_not_ready}, full={fallback_full}."
+            )
+        if unsupported_plans or last_unsupported:
+            failures.append(
+                "Material proof reported unsupported compiler plans: "
+                f"unsupported={unsupported_plans}, last=0x{last_unsupported:08x}."
+            )
+        if parameter_blocks <= 0:
+            failures.append("Material proof did not observe material parameter blocks.")
+        if invalid_parameter_blocks:
+            failures.append(f"Material proof reported invalid parameter blocks: {invalid_parameter_blocks}.")
+        if parameter_hash <= 0:
+            failures.append("Material proof did not record a material parameter fingerprint.")
+        if missing_stream_features:
+            failures.append("Material proof is missing stream feature evidence: " + ", ".join(missing_stream_features) + ".")
+        if unknown_stage_flags:
+            failures.append("Material proof requires unknown stage flag(s): " + ", ".join(unknown_stage_flags) + ".")
+        if missing_stage_flags:
+            failures.append("Material proof is missing stage-flag evidence: " + ", ".join(missing_stage_flags) + ".")
+        if missing_stage_flag_tags:
+            failures.append("Material proof corpus is missing stage-flag tag(s): " + ", ".join(missing_stage_flag_tags) + ".")
+        if missing_stream_guards:
+            failures.append("Material proof is missing stream guard evidence: " + ", ".join(missing_stream_guards) + ".")
+        if unsafe_stream_guards:
+            failures.append("Material proof stream guards accepted forbidden feature(s): " + ", ".join(unsafe_stream_guards) + ".")
+        if stream_fallbacks > 0:
+            failures.append(f"Material proof reported stream draw fallbacks: {stream_fallbacks}.")
+        if stream_program_skips > 0:
+            failures.append(f"Material proof reported material-program stream skips: {stream_program_skips}.")
+        if forbidden_stream_draws:
+            failures.append(
+                "Material proof saw high-risk material stream draws in the RC proof surface: "
+                + ", ".join(
+                    f"{feature}={stream_feature_counts.get(feature, 0)}"
+                    for feature in forbidden_stream_draws
+                )
+                + "."
+            )
+        if missing_tcgens:
+            failures.append("Material proof requires unknown tcgen id(s): " + ", ".join(missing_tcgens) + ".")
+        if missing_tcgen_tags:
+            failures.append("Material proof corpus is missing tcgen tag(s): " + ", ".join(missing_tcgen_tags) + ".")
+
+    status = "not-configured"
+    if require_material:
+        status = "planned" if dry_run else ("passed" if not failures else "failed")
+
+    return {
+        "version": GLX_MATERIAL_PROOF_VERSION,
+        "status": status,
+        "requiresMaterialProof": require_material,
+        "requiredTags": required_tags,
+        "selectedTags": selected_tags,
+        "requiredStageFlags": required_stage_flags,
+        "requiredStreamFeatures": required_stream_features,
+        "requiredStreamGuards": required_stream_guards,
+        "forbiddenStreamFeatures": forbidden_stream_features,
+        "requiredTcgens": required_tcgens,
+        "tcgenContract": dict(GLX_MATERIAL_TCGEN_IDS),
+        "stageFlagContract": dict(GLX_MATERIAL_STAGE_FLAGS),
+        "scenes": scene_records,
+        "requiredMaps": required_maps,
+        "glxScreenshotMaps": found_screenshot_maps,
+        "histogramMaps": histogram_maps,
+        "missingScreenshotMaps": [] if dry_run else missing_screenshot_maps,
+        "renderer": {
+            "enabled": material_enabled,
+            "ready": material_ready,
+            "compileAttempts": compile_attempts,
+            "programs": programs,
+            "binds": binds,
+            "bindAttempts": bind_attempts,
+            "switches": switches,
+            "cacheMisses": cache_misses,
+            "compileFailures": compile_failures,
+            "linkFailures": link_failures,
+            "precacheFailures": precache_failures,
+            "bindFailures": bind_failures,
+        },
+        "compilerPlans": {
+            "compiled": compiler_plans,
+            "unsupported": unsupported_plans,
+            "lastUnsupported": last_unsupported,
+        },
+        "fallbacks": {
+            "unsupported": fallback_unsupported,
+            "disabled": fallback_disabled,
+            "notReady": fallback_not_ready,
+            "full": fallback_full,
+        },
+        "parameters": {
+            "blocks": parameter_blocks,
+            "invalid": invalid_parameter_blocks,
+            "hash": parameter_hash,
+            "features": parameter_features,
+            "flags": parameter_flags,
+            "flagNames": material_flag_names(parameter_flags or observed_flags),
+            "state": parameter_state,
+            "observedTcgens": sorted(observed_tcgens),
+        },
+        "stageFlags": {
+            "counts": dict(stage_flag_counts),
+            "observedMask": observed_flags,
+            "observedNames": material_flag_names(observed_flags),
+        },
+        "language": {
+            "flags": language_flags,
+            "flagNames": material_flag_names(language_flags),
+            "texModMask": language_texmod_mask,
+            "texModSequence": language_texmod_sequence,
+            "texModWaveFuncs": language_texmod_wave_funcs,
+            "fogAdjust": language_fog_adjust,
+        },
+        "streamFeatures": dict(stream_feature_counts),
+        "streamMaterialGates": stream_gate_records,
+        "streamFallbacks": stream_fallbacks,
+        "streamSkips": stream_skips,
+        "streamProgramSkips": stream_program_skips,
+        "sourceRuns": sorted(source_runs),
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def evaluate_material_proof(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> list[str]:
+    if not manifest_requires_material_proof(manifest, requirements):
+        return []
+
+    evidence = manifest.get("materialProofEvidence")
+    if not isinstance(evidence, dict):
+        return ["No material proof evidence was recorded."]
+
+    failures: list[str] = []
+    if evidence.get("version") != GLX_MATERIAL_PROOF_VERSION:
+        failures.append(
+            "Material proof evidence has unsupported version "
+            f"{evidence.get('version')!r}."
+        )
+    if evidence.get("status") != "passed":
+        failures.append(
+            "Material proof evidence status is "
+            f"{evidence.get('status')!r}, expected 'passed'."
+        )
+    for failure in evidence.get("failures", []):
+        if str(failure).strip():
+            failures.append(str(failure))
+    return list(dict.fromkeys(failures))
+
+
+def manifest_requires_dynamic_proof(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> bool:
+    return bool(requirements.get("require_dynamic_proof"))
+
+
+def dynamic_scene_records(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> list[dict[str, object]]:
+    required_tags = {
+        str(tag)
+        for tag in requirements.get("required_dynamic_tags", ())
+        if str(tag).strip()
+    }
+    dynamic_tags = set(GLX_DYNAMIC_PROOF_TAGS)
+    records: list[dict[str, object]] = []
+    for scene_id in manifest_selected_scene_ids(manifest):
+        scene = GLX_PROOF_CORPUS_SCENES[scene_id]
+        kind = str(scene.get("kind", "")).strip().lower()
+        if kind not in {"map", "demo"}:
+            continue
+        tags = {str(tag) for tag in scene.get("tags", ()) if str(tag).strip()}
+        if not tags.intersection(dynamic_tags) and not tags.intersection(required_tags):
+            continue
+        target = str(scene.get("target", "")).strip().lower()
+        record: dict[str, object] = {
+            "sceneId": scene_id,
+            "kind": kind,
+            "target": target,
+            "assetTier": scene.get("assetTier", ""),
+            "tags": sorted(tags),
+            "required": bool(tags.intersection(required_tags)),
+        }
+        if kind == "map":
+            record["map"] = target
+        elif kind == "demo":
+            record["demo"] = target
+        records.append(record)
+    return records
+
+
+def manifest_glx_timedemo_records(manifest: dict[str, object]) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    runs = manifest.get("runs", [])
+    if not isinstance(runs, list):
+        return records
+
+    for run_index, run in enumerate(runs, start=1):
+        if not isinstance(run, dict) or run.get("type") != "timedemo":
+            continue
+        renderer = str(run.get("renderer", "")).strip().lower()
+        demo = str(run.get("demo", "")).strip().lower()
+        if renderer != "glx" or not demo:
+            continue
+        metrics = run.get("timedemoMetrics")
+        records.append(
+            {
+                "run": f"timedemo-{run_index}",
+                "demo": demo,
+                "found": isinstance(metrics, dict),
+                "fps": metrics.get("fps", 0.0) if isinstance(metrics, dict) else 0.0,
+            }
+        )
+    return records
+
+
+def dynamic_proof_evidence(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> dict[str, object]:
+    dry_run = bool(manifest.get("dryRun"))
+    require_dynamic = manifest_requires_dynamic_proof(manifest, requirements)
+    required_tags = sorted(
+        {
+            str(tag)
+            for tag in requirements.get("required_dynamic_tags", ())
+            if str(tag).strip()
+        }
+    )
+    required_categories = [
+        str(category)
+        for category in requirements.get("required_dynamic_categories", ())
+        if str(category).strip()
+    ]
+    required_stream_features = [
+        str(feature)
+        for feature in requirements.get("required_dynamic_stream_features", ())
+        if str(feature).strip()
+    ]
+    required_support = [
+        str(item)
+        for item in requirements.get("required_dynamic_support", ())
+        if str(item).strip()
+    ]
+    required_stream_guards = [
+        str(feature)
+        for feature in requirements.get("required_dynamic_stream_guards", ())
+        if str(feature).strip()
+    ]
+    forbidden_stream_features = [
+        str(feature)
+        for feature in requirements.get("forbidden_dynamic_stream_features", ())
+        if str(feature).strip()
+    ]
+    proof_corpus = manifest.get("proofCorpus")
+    selected_tags = sorted(
+        {
+            str(tag)
+            for tag in (
+                proof_corpus.get("selectedTags", [])
+                if isinstance(proof_corpus, dict)
+                else []
+            )
+            if str(tag).strip()
+        }
+    )
+    scene_records = dynamic_scene_records(manifest, requirements)
+    required_scene_records = [
+        record for record in scene_records if bool(record.get("required"))
+    ]
+    required_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in required_scene_records
+            if str(record.get("kind", "")) == "map" and str(record.get("map", "")).strip()
+        }
+    )
+    required_demos = sorted(
+        {
+            str(record.get("demo", ""))
+            for record in required_scene_records
+            if str(record.get("kind", "")) == "demo" and str(record.get("demo", "")).strip()
+        }
+    )
+
+    screenshots = manifest_glx_screenshot_records(manifest)
+    found_screenshot_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in screenshots
+            if record.get("found")
+        }
+    )
+    histogram_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in screenshots
+            if record.get("found") and record.get("histogramPassed")
+        }
+    )
+    timedemos = manifest_glx_timedemo_records(manifest)
+    found_timedemo_demos = sorted(
+        {
+            str(record.get("demo", ""))
+            for record in timedemos
+            if record.get("found")
+        }
+    )
+
+    dynamic_categories: dict[str, dict[str, int]] = {
+        category: {"draws": 0, "attempts": 0, "fallbacks": 0, "observed": 0}
+        for category in STREAM_CATEGORY_KEYS
+    }
+    stream_features = {
+        "shadow": 0,
+        "beam": 0,
+        "dynamicLight": 0,
+        "postProcess": 0,
+    }
+    stream_draws = 0
+    stream_attempts = 0
+    stream_indexes = 0
+    stream_fallbacks = 0
+    stream_skips = 0
+    stream_gate_records: dict[str, dict[str, int]] = {}
+    support_tiers: dict[str, set[str]] = {
+        key: set() for key in GLX_DYNAMIC_SUPPORT_KEYS
+    }
+    product_tiers: set[str] = set()
+    source_runs: set[str] = set()
+
+    def record_support(metrics: dict[str, object], section_name: str, tier_label: str) -> None:
+        support = metrics.get(section_name)
+        if not isinstance(support, dict):
+            return
+        for key in GLX_DYNAMIC_SUPPORT_KEYS:
+            if int_metric(support.get(key)) > 0:
+                support_tiers.setdefault(key, set()).add(tier_label)
+
+    def record_dynamic_metrics(metrics: dict[str, object], run_label: str) -> None:
+        nonlocal stream_draws, stream_attempts, stream_indexes
+        nonlocal stream_fallbacks, stream_skips
+
+        source_runs.add(run_label)
+        product_tier = metrics.get("productTier")
+        if isinstance(product_tier, dict):
+            tier = str(product_tier.get("tier", "")).strip().upper()
+            if tier:
+                product_tiers.add(tier)
+
+        for section_name, tier_label in (
+            ("gl12Support", "GL12"),
+            ("gl2xSupport", "GL2X"),
+            ("gl3xSupport", "GL3X"),
+            ("gl41Support", "GL41"),
+            ("gl46Support", "GL46"),
+        ):
+            record_support(metrics, section_name, tier_label)
+
+        stream_draw = metrics.get("streamDraw")
+        if isinstance(stream_draw, dict):
+            stream_draws = max(stream_draws, int_metric(stream_draw.get("draws")))
+            stream_attempts = max(stream_attempts, int_metric(stream_draw.get("attempts")))
+            stream_indexes = max(stream_indexes, int_metric(stream_draw.get("indexes")))
+            stream_features["dynamicLight"] = max(
+                stream_features["dynamicLight"],
+                int_metric(stream_draw.get("dynamicLights")),
+            )
+            stream_features["shadow"] = max(
+                stream_features["shadow"],
+                int_metric(stream_draw.get("shadows")),
+            )
+            stream_features["beam"] = max(
+                stream_features["beam"],
+                int_metric(stream_draw.get("beams")),
+            )
+            stream_features["postProcess"] = max(
+                stream_features["postProcess"],
+                int_metric(stream_draw.get("postprocess")),
+            )
+            stream_fallbacks = max(stream_fallbacks, int_metric(stream_draw.get("fallbacks")))
+            stream_skips = max(stream_skips, int_metric(stream_draw.get("skips")))
+
+        stream_category = metrics.get("streamCategory")
+        if isinstance(stream_category, dict):
+            for category, record in dynamic_categories.items():
+                draws = int_metric(stream_category.get(f"{category}Draws"))
+                attempts = int_metric(stream_category.get(f"{category}Attempts"))
+                fallbacks = int_metric(stream_category.get(f"{category}Fallbacks"))
+                observed = int_metric(stream_category.get(f"{category}Observed"))
+                record["draws"] = max(record["draws"], draws)
+                record["attempts"] = max(record["attempts"], attempts)
+                record["fallbacks"] = max(record["fallbacks"], fallbacks)
+                record["observed"] = max(record["observed"], observed, 1 if draws or attempts else 0)
+
+        gates = metrics.get("streamMaterialGate")
+        if isinstance(gates, dict):
+            for gate_name in ("dynamicLight",):
+                record = stream_gate_records.setdefault(
+                    gate_name,
+                    {"enabled": 0, "accepted": 0, "rejected": 0},
+                )
+                record["enabled"] = max(record["enabled"], int_metric(gates.get(f"{gate_name}Enabled")))
+                record["accepted"] = max(record["accepted"], int_metric(gates.get(f"{gate_name}Accepted")))
+                record["rejected"] = max(record["rejected"], int_metric(gates.get(f"{gate_name}Rejected")))
+
+    def record_dynamic_performance(performance: dict[str, object], run_label: str) -> None:
+        nonlocal stream_draws, stream_attempts, stream_indexes
+        nonlocal stream_fallbacks, stream_skips
+
+        source_runs.add(run_label)
+        tier = str(performance_metric(performance, "productTier") or performance_metric(performance, "tier") or "").strip().upper()
+        if tier:
+            product_tiers.add(tier)
+        stream_draws = max(stream_draws, performance_numeric_value(performance, "draws"))
+        stream_attempts = max(stream_attempts, performance_numeric_value(performance, "streamDrawAttempts"))
+        stream_indexes = max(stream_indexes, performance_numeric_value(performance, "streamDrawIndexes"))
+        stream_features["dynamicLight"] = max(
+            stream_features["dynamicLight"],
+            performance_numeric_value(performance, "streamDrawDynamicLights"),
+        )
+        stream_features["shadow"] = max(
+            stream_features["shadow"],
+            performance_numeric_value(performance, "streamDrawShadows"),
+        )
+        stream_features["beam"] = max(
+            stream_features["beam"],
+            performance_numeric_value(performance, "streamDrawBeams"),
+        )
+        stream_features["postProcess"] = max(
+            stream_features["postProcess"],
+            performance_numeric_value(performance, "streamDrawPostProcess"),
+        )
+        stream_fallbacks = max(stream_fallbacks, performance_numeric_value(performance, "streamDrawFallbacks"))
+        stream_skips = max(stream_skips, performance_numeric_value(performance, "streamDrawSkips"))
+        for category, record in dynamic_categories.items():
+            suffix = category[0].upper() + category[1:]
+            draws = performance_numeric_value(performance, f"streamCategory{suffix}Draws")
+            attempts = performance_numeric_value(performance, f"streamCategory{suffix}Attempts")
+            record["draws"] = max(record["draws"], draws)
+            record["attempts"] = max(record["attempts"], attempts)
+            record["observed"] = max(record["observed"], 1 if draws or attempts else 0)
+
+    runs = manifest.get("runs", [])
+    if isinstance(runs, list):
+        for run_index, run in enumerate(runs, start=1):
+            if not isinstance(run, dict):
+                continue
+            run_label = str(run.get("type", f"run-{run_index}"))
+            diagnostics = run.get("diagnostics")
+            if isinstance(diagnostics, dict):
+                raw_metrics = diagnostics.get("metrics")
+                if isinstance(raw_metrics, dict):
+                    record_dynamic_metrics(raw_metrics, run_label)
+            performance = run.get("performance")
+            if isinstance(performance, dict):
+                record_dynamic_performance(performance, run_label)
+
+    performance_aggregate = manifest.get("performanceAggregate")
+    if isinstance(performance_aggregate, dict):
+        record_dynamic_performance(performance_aggregate, "performanceAggregate")
+
+    missing_required_tags = sorted(set(required_tags) - set(selected_tags))
+    screenshot_map_set = set(found_screenshot_maps)
+    histogram_map_set = set(histogram_maps)
+    timedemo_demo_set = set(found_timedemo_demos)
+    missing_screenshot_maps = sorted(set(required_maps) - screenshot_map_set)
+    missing_histogram_maps = sorted(set(required_maps) - histogram_map_set)
+    missing_timedemo_demos = sorted(set(required_demos) - timedemo_demo_set)
+    unknown_categories = [
+        category for category in required_categories if category not in dynamic_categories
+    ]
+    missing_category_tags = [
+        tag
+        for category, tag in GLX_DYNAMIC_CATEGORY_TAGS.items()
+        if category in required_categories and tag not in selected_tags
+    ]
+    missing_categories = [
+        category
+        for category in required_categories
+        if category in dynamic_categories
+        and dynamic_categories[category].get("draws", 0) <= 0
+    ]
+    unknown_stream_features = [
+        feature for feature in required_stream_features if feature not in stream_features
+    ]
+    missing_stream_feature_tags = [
+        tag
+        for feature, tag in GLX_DYNAMIC_STREAM_FEATURE_TAGS.items()
+        if feature in required_stream_features and tag not in selected_tags
+    ]
+    missing_stream_features = [
+        feature
+        for feature in required_stream_features
+        if feature in stream_features and stream_features.get(feature, 0) <= 0
+    ]
+    unknown_support = [
+        item for item in required_support if item not in GLX_DYNAMIC_SUPPORT_KEYS
+    ]
+    missing_support = [
+        item
+        for item in required_support
+        if item in GLX_DYNAMIC_SUPPORT_KEYS and not support_tiers.get(item)
+    ]
+    missing_stream_guards = [
+        feature for feature in required_stream_guards if feature not in stream_gate_records
+    ]
+    unsafe_stream_guards = [
+        feature
+        for feature in required_stream_guards
+        if stream_gate_records.get(feature, {}).get("accepted", 0) > 0
+        and feature in forbidden_stream_features
+    ]
+    forbidden_stream_draws = [
+        feature
+        for feature in forbidden_stream_features
+        if stream_features.get(feature, 0) > 0
+    ]
+    category_fallbacks = {
+        category: record["fallbacks"]
+        for category, record in dynamic_categories.items()
+        if record.get("fallbacks", 0) > 0
+    }
+
+    failures: list[str] = []
+    if require_dynamic and not dry_run:
+        if missing_required_tags:
+            failures.append("Dynamic proof corpus is missing required tag(s): " + ", ".join(missing_required_tags) + ".")
+        if required_tags and not required_scene_records:
+            failures.append("Dynamic proof did not select any scene for the required dynamic tags.")
+        if missing_screenshot_maps:
+            failures.append("Dynamic proof is missing GLx screenshots for map(s): " + ", ".join(missing_screenshot_maps) + ".")
+        if missing_histogram_maps:
+            failures.append("Dynamic proof is missing histogram metadata for map(s): " + ", ".join(missing_histogram_maps) + ".")
+        if missing_timedemo_demos:
+            failures.append("Dynamic proof is missing GLx timedemo metrics for demo(s): " + ", ".join(missing_timedemo_demos) + ".")
+        if unknown_categories:
+            failures.append("Dynamic proof requires unknown stream category(s): " + ", ".join(unknown_categories) + ".")
+        if missing_category_tags:
+            failures.append("Dynamic proof corpus is missing category tag(s): " + ", ".join(missing_category_tags) + ".")
+        if missing_categories:
+            failures.append("Dynamic proof is missing stream category evidence: " + ", ".join(missing_categories) + ".")
+        if unknown_stream_features:
+            failures.append("Dynamic proof requires unknown stream feature(s): " + ", ".join(unknown_stream_features) + ".")
+        if missing_stream_feature_tags:
+            failures.append("Dynamic proof corpus is missing stream feature tag(s): " + ", ".join(missing_stream_feature_tags) + ".")
+        if missing_stream_features:
+            failures.append("Dynamic proof is missing stream feature evidence: " + ", ".join(missing_stream_features) + ".")
+        if unknown_support:
+            failures.append("Dynamic proof requires unknown support key(s): " + ", ".join(unknown_support) + ".")
+        if missing_support:
+            failures.append("Dynamic proof is missing tier-support evidence: " + ", ".join(missing_support) + ".")
+        if missing_stream_guards:
+            failures.append("Dynamic proof is missing stream guard evidence: " + ", ".join(missing_stream_guards) + ".")
+        if unsafe_stream_guards:
+            failures.append("Dynamic proof stream guards accepted forbidden feature(s): " + ", ".join(unsafe_stream_guards) + ".")
+        if forbidden_stream_draws:
+            failures.append(
+                "Dynamic proof saw high-risk stream draws in the proof surface: "
+                + ", ".join(
+                    f"{feature}={stream_features.get(feature, 0)}"
+                    for feature in forbidden_stream_draws
+                )
+                + "."
+            )
+        if stream_attempts <= 0 and stream_draws <= 0:
+            failures.append("Dynamic proof did not observe dynamic stream draw attempts.")
+        if stream_indexes <= 0 and stream_draws <= 0:
+            failures.append("Dynamic proof did not observe submitted dynamic stream indexes or draws.")
+        if stream_fallbacks > 0:
+            failures.append(f"Dynamic proof reported stream draw fallbacks: {stream_fallbacks}.")
+        if stream_skips > 0:
+            failures.append(f"Dynamic proof reported stream draw skips: {stream_skips}.")
+        if category_fallbacks:
+            failures.append(
+                "Dynamic proof reported category fallbacks: "
+                + ", ".join(
+                    f"{category}={count}"
+                    for category, count in sorted(category_fallbacks.items())
+                )
+                + "."
+            )
+
+    status = "not-configured"
+    if require_dynamic:
+        status = "planned" if dry_run else ("passed" if not failures else "failed")
+
+    return {
+        "version": GLX_DYNAMIC_PROOF_VERSION,
+        "status": status,
+        "requiresDynamicProof": require_dynamic,
+        "requiredTags": required_tags,
+        "selectedTags": selected_tags,
+        "requiredCategories": required_categories,
+        "requiredStreamFeatures": required_stream_features,
+        "requiredSupport": required_support,
+        "requiredStreamGuards": required_stream_guards,
+        "forbiddenStreamFeatures": forbidden_stream_features,
+        "scenes": scene_records,
+        "requiredMaps": required_maps,
+        "requiredDemos": required_demos,
+        "glxScreenshotMaps": found_screenshot_maps,
+        "histogramMaps": histogram_maps,
+        "glxTimedemoDemos": found_timedemo_demos,
+        "missingScreenshotMaps": [] if dry_run else missing_screenshot_maps,
+        "missingTimedemos": [] if dry_run else missing_timedemo_demos,
+        "streamDraw": {
+            "draws": stream_draws,
+            "attempts": stream_attempts,
+            "indexes": stream_indexes,
+            "fallbacks": stream_fallbacks,
+            "skips": stream_skips,
+        },
+        "streamCategories": dynamic_categories,
+        "streamFeatures": dict(stream_features),
+        "streamGuards": stream_gate_records,
+        "tierSupport": {
+            key: sorted(values)
+            for key, values in sorted(support_tiers.items())
+        },
+        "productTiers": sorted(product_tiers),
+        "sourceRuns": sorted(source_runs),
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def evaluate_dynamic_proof(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> list[str]:
+    if not manifest_requires_dynamic_proof(manifest, requirements):
+        return []
+
+    evidence = manifest.get("dynamicProofEvidence")
+    if not isinstance(evidence, dict):
+        return ["No dynamic proof evidence was recorded."]
+
+    failures: list[str] = []
+    if evidence.get("version") != GLX_DYNAMIC_PROOF_VERSION:
+        failures.append(
+            "Dynamic proof evidence has unsupported version "
+            f"{evidence.get('version')!r}."
+        )
+    if evidence.get("status") != "passed":
+        failures.append(
+            "Dynamic proof evidence status is "
+            f"{evidence.get('status')!r}, expected 'passed'."
+        )
+    for failure in evidence.get("failures", []):
+        if str(failure).strip():
+            failures.append(str(failure))
+    return list(dict.fromkeys(failures))
+
+
+def manifest_requires_post_proof(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> bool:
+    return bool(requirements.get("require_post_proof"))
+
+
+def post_scene_records(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> list[dict[str, object]]:
+    required_tags = {
+        str(tag)
+        for tag in requirements.get("required_post_tags", ())
+        if str(tag).strip()
+    }
+    post_tags = set(GLX_POST_PROOF_TAGS)
+    records: list[dict[str, object]] = []
+    for scene_id in manifest_selected_scene_ids(manifest):
+        scene = GLX_PROOF_CORPUS_SCENES[scene_id]
+        if scene.get("kind") != "map":
+            continue
+        tags = {str(tag) for tag in scene.get("tags", ()) if str(tag).strip()}
+        if not tags.intersection(post_tags) and not tags.intersection(required_tags):
+            continue
+        records.append(
+            {
+                "sceneId": scene_id,
+                "map": str(scene.get("target", "")).strip().lower(),
+                "assetTier": scene.get("assetTier", ""),
+                "tags": sorted(tags),
+                "required": bool(tags.intersection(required_tags)),
+            }
+        )
+    return records
+
+
+def post_proof_evidence(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> dict[str, object]:
+    dry_run = bool(manifest.get("dryRun"))
+    require_post = manifest_requires_post_proof(manifest, requirements)
+    required_tags = sorted(
+        {
+            str(tag)
+            for tag in requirements.get("required_post_tags", ())
+            if str(tag).strip()
+        }
+    )
+    required_features = [
+        str(feature)
+        for feature in requirements.get("required_post_features", ())
+        if str(feature).strip()
+    ]
+    proof_corpus = manifest.get("proofCorpus")
+    selected_tags = sorted(
+        {
+            str(tag)
+            for tag in (
+                proof_corpus.get("selectedTags", [])
+                if isinstance(proof_corpus, dict)
+                else []
+            )
+            if str(tag).strip()
+        }
+    )
+    scene_records = post_scene_records(manifest, requirements)
+    required_scene_records = [
+        record for record in scene_records if bool(record.get("required"))
+    ]
+    required_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in required_scene_records
+            if str(record.get("map", "")).strip()
+        }
+    )
+
+    screenshots = manifest_glx_screenshot_records(manifest)
+    found_screenshot_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in screenshots
+            if record.get("found")
+        }
+    )
+    histogram_maps = sorted(
+        {
+            str(record.get("map", ""))
+            for record in screenshots
+            if record.get("found") and record.get("histogramPassed")
+        }
+    )
+
+    fbo_requested = 0
+    fbo_ready = 0
+    fbo_programs = 0
+    fbo_framebuffer = 0
+    fbo_init_attempts = 0
+    fbo_init_failed = 0
+    frames = 0
+    screenshots_count = 0
+    minimized_output = 0
+    feature_frames = {
+        "renderScale": 0,
+        "greyscale": 0,
+        "windowAdjusted": 0,
+        "minimized": 0,
+    }
+    controls = {
+        "renderScale": 0,
+        "greyscale": 0.0,
+        "windowAdjusted": 0,
+    }
+    target = {
+        "renderWidth": 0,
+        "renderHeight": 0,
+        "captureWidth": 0,
+        "captureHeight": 0,
+        "windowWidth": 0,
+        "windowHeight": 0,
+    }
+    post_output = {
+        "mode": "",
+        "postNodes": 0,
+        "outputs": 0,
+        "legacyFallback": 0,
+        "postHash": 0,
+        "outputHash": 0,
+        "planHash": 0,
+        "fallbackMask": 0,
+    }
+    color_contract = 0
+    source_runs: set[str] = set()
+
+    def record_post_metrics(metrics: dict[str, object], run_label: str) -> None:
+        nonlocal fbo_requested, fbo_ready, fbo_programs, fbo_framebuffer
+        nonlocal fbo_init_attempts, fbo_init_failed, frames, screenshots_count
+        nonlocal minimized_output, color_contract
+
+        source_runs.add(run_label)
+        postprocess = metrics.get("postprocess")
+        if isinstance(postprocess, dict):
+            fbo_requested = max(fbo_requested, int_metric(postprocess.get("fboRequested")))
+            fbo_ready = max(fbo_ready, int_metric(postprocess.get("fboReady")))
+            fbo_programs = max(fbo_programs, int_metric(postprocess.get("fboPrograms")))
+            fbo_framebuffer = max(fbo_framebuffer, int_metric(postprocess.get("fboFramebuffer")))
+            fbo_init_attempts = max(fbo_init_attempts, int_metric(postprocess.get("fboAttempts")))
+            fbo_init_failed = max(fbo_init_failed, int_metric(postprocess.get("fboFailed")))
+            if str(postprocess.get("lastOutput", "")).lower() == "minimized":
+                minimized_output = max(minimized_output, 1)
+
+        post_controls = metrics.get("postprocessControls")
+        if isinstance(post_controls, dict):
+            controls["renderScale"] = max(controls["renderScale"], int_metric(post_controls.get("renderScale")))
+            controls["greyscale"] = max(controls["greyscale"], float_metric(post_controls.get("greyscale")))
+            controls["windowAdjusted"] = max(controls["windowAdjusted"], int_metric(post_controls.get("windowAdjusted")))
+
+        post_frames = metrics.get("postprocessFrames")
+        if isinstance(post_frames, dict):
+            frames = max(frames, int_metric(post_frames.get("frames")))
+            screenshots_count = max(screenshots_count, int_metric(post_frames.get("screenshots")))
+            minimized_output = max(minimized_output, int_metric(post_frames.get("minimizedOutput")))
+
+        features = metrics.get("postprocessFrameFeatures")
+        if isinstance(features, dict):
+            feature_frames["renderScale"] = max(feature_frames["renderScale"], int_metric(features.get("renderScale")))
+            feature_frames["greyscale"] = max(feature_frames["greyscale"], int_metric(features.get("greyscale")))
+            feature_frames["windowAdjusted"] = max(feature_frames["windowAdjusted"], int_metric(features.get("windowAdjusted")))
+            feature_frames["minimized"] = max(feature_frames["minimized"], int_metric(features.get("minimized")))
+
+        target_format = metrics.get("targetFormat")
+        if isinstance(target_format, dict):
+            for key in target:
+                target[key] = max(target[key], int_metric(target_format.get(key)))
+
+        ownership = metrics.get("postOutputOwnership")
+        if isinstance(ownership, dict):
+            post_output["mode"] = str(ownership.get("mode", post_output["mode"]))
+            for key in ("postNodes", "outputs", "legacyFallback", "postHash", "outputHash", "planHash", "fallbackMask"):
+                post_output[key] = max(int_metric(post_output.get(key)), int_metric(ownership.get(key)))
+
+        audit = metrics.get("colorAudit")
+        if isinstance(audit, dict):
+            color_contract = max(color_contract, int_metric(audit.get("contract")))
+
+    def record_post_performance(performance: dict[str, object], run_label: str) -> None:
+        nonlocal fbo_ready, frames, screenshots_count, minimized_output, color_contract
+
+        source_runs.add(run_label)
+        fbo = str(performance_metric(performance, "fbo") or "").lower()
+        if fbo == "ready":
+            fbo_ready = max(fbo_ready, 1)
+        controls["renderScale"] = max(controls["renderScale"], performance_numeric_value(performance, "postprocessRenderScaleMode"))
+        controls["greyscale"] = max(controls["greyscale"], float_metric(performance_metric(performance, "postprocessGreyscale")))
+        controls["windowAdjusted"] = max(controls["windowAdjusted"], performance_numeric_value(performance, "postprocessWindowAdjusted"))
+        frames = max(frames, performance_numeric_value(performance, "postprocessFrames"))
+        screenshots_count = max(screenshots_count, performance_numeric_value(performance, "postprocessScreenshots"))
+        minimized_output = max(minimized_output, performance_numeric_value(performance, "postprocessMinimizedOutput"))
+        feature_frames["renderScale"] = max(feature_frames["renderScale"], performance_numeric_value(performance, "postprocessFeatureRenderScale"))
+        feature_frames["greyscale"] = max(feature_frames["greyscale"], performance_numeric_value(performance, "postprocessFeatureGreyscale"))
+        feature_frames["windowAdjusted"] = max(feature_frames["windowAdjusted"], performance_numeric_value(performance, "postprocessFeatureWindowAdjusted"))
+        feature_frames["minimized"] = max(feature_frames["minimized"], performance_numeric_value(performance, "postprocessFeatureMinimized"))
+        for key in target:
+            metric_key = f"target{key[0].upper()}{key[1:]}"
+            target[key] = max(target[key], performance_numeric_value(performance, metric_key))
+        mode = performance_metric(performance, "postOutputMode")
+        if mode is not None:
+            post_output["mode"] = str(mode)
+        post_output["postNodes"] = max(post_output["postNodes"], performance_numeric_value(performance, "postOutputPostNodes"))
+        post_output["outputs"] = max(post_output["outputs"], performance_numeric_value(performance, "postOutputOutputs"))
+        post_output["legacyFallback"] = max(post_output["legacyFallback"], performance_numeric_value(performance, "postOutputLegacyFallback"))
+        post_output["postHash"] = max(post_output["postHash"], performance_numeric_value(performance, "postOutputPostHash"))
+        post_output["outputHash"] = max(post_output["outputHash"], performance_numeric_value(performance, "postOutputOutputHash"))
+        post_output["planHash"] = max(post_output["planHash"], performance_numeric_value(performance, "postOutputPlanHash"))
+        post_output["fallbackMask"] = max(post_output["fallbackMask"], performance_numeric_value(performance, "postOutputFallbackMask"))
+        color_contract = max(color_contract, performance_numeric_value(performance, "colorOutputContract"))
+
+    runs = manifest.get("runs", [])
+    if isinstance(runs, list):
+        for run_index, run in enumerate(runs, start=1):
+            if not isinstance(run, dict):
+                continue
+            run_label = str(run.get("type", f"run-{run_index}"))
+            diagnostics = run.get("diagnostics")
+            if isinstance(diagnostics, dict):
+                raw_metrics = diagnostics.get("metrics")
+                if isinstance(raw_metrics, dict):
+                    record_post_metrics(raw_metrics, run_label)
+            performance = run.get("performance")
+            if isinstance(performance, dict):
+                record_post_performance(performance, run_label)
+
+    performance_aggregate = manifest.get("performanceAggregate")
+    if isinstance(performance_aggregate, dict):
+        record_post_performance(performance_aggregate, "performanceAggregate")
+
+    selected_tag_set = set(selected_tags)
+    missing_required_tags = sorted(set(required_tags) - selected_tag_set)
+    screenshot_map_set = set(found_screenshot_maps)
+    histogram_map_set = set(histogram_maps)
+    missing_screenshot_maps = sorted(set(required_maps) - screenshot_map_set)
+    missing_histogram_maps = sorted(set(required_maps) - histogram_map_set)
+    unknown_features = [
+        feature for feature in required_features if feature not in GLX_POST_FEATURE_TAGS
+    ]
+    missing_feature_tags = [
+        tag
+        for feature, tag in GLX_POST_FEATURE_TAGS.items()
+        if feature in required_features and tag not in selected_tag_set
+    ]
+    render_scale_dimension_evidence = (
+        target["renderWidth"] > 0
+        and target["renderHeight"] > 0
+        and target["captureWidth"] > 0
+        and target["captureHeight"] > 0
+        and target["windowWidth"] > 0
+        and target["windowHeight"] > 0
+        and (
+            target["renderWidth"] != target["windowWidth"]
+            or target["renderHeight"] != target["windowHeight"]
+            or target["captureWidth"] != target["windowWidth"]
+            or target["captureHeight"] != target["windowHeight"]
+        )
+    )
+    feature_evidence = {
+        "greyscale": {
+            "control": controls["greyscale"],
+            "frames": feature_frames["greyscale"],
+            "ok": controls["greyscale"] > 0.0 and feature_frames["greyscale"] > 0,
+        },
+        "renderScale": {
+            "control": controls["renderScale"],
+            "frames": feature_frames["renderScale"],
+            "dimensionEvidence": render_scale_dimension_evidence,
+            "ok": (
+                controls["renderScale"] > 0
+                and feature_frames["renderScale"] > 0
+                and render_scale_dimension_evidence
+            ),
+        },
+    }
+    missing_features = [
+        feature
+        for feature in required_features
+        if feature in feature_evidence and not feature_evidence[feature]["ok"]
+    ]
+
+    failures: list[str] = []
+    if require_post and not dry_run:
+        if missing_required_tags:
+            failures.append("Post proof corpus is missing required tag(s): " + ", ".join(missing_required_tags) + ".")
+        if required_tags and not required_maps:
+            failures.append("Post proof did not select any map scene for the required post tags.")
+        if missing_screenshot_maps:
+            failures.append("Post proof is missing GLx screenshots for map(s): " + ", ".join(missing_screenshot_maps) + ".")
+        if missing_histogram_maps:
+            failures.append("Post proof is missing histogram metadata for map(s): " + ", ".join(missing_histogram_maps) + ".")
+        if unknown_features:
+            failures.append("Post proof requires unknown feature(s): " + ", ".join(unknown_features) + ".")
+        if missing_feature_tags:
+            failures.append("Post proof corpus is missing feature tag(s): " + ", ".join(missing_feature_tags) + ".")
+        if missing_features:
+            failures.append("Post proof is missing feature evidence: " + ", ".join(missing_features) + ".")
+        if fbo_requested <= 0:
+            failures.append("Post proof did not observe postprocess FBO requested.")
+        if fbo_ready <= 0:
+            failures.append("Post proof did not observe a ready postprocess FBO.")
+        if fbo_init_failed > 0:
+            failures.append(f"Post proof reported FBO init failures: {fbo_init_failed}.")
+        if frames <= 0:
+            failures.append("Post proof did not observe postprocess frames.")
+        if minimized_output > 0 or feature_frames["minimized"] > 0:
+            failures.append(
+                "Post proof reported minimized output/frame evidence: "
+                f"output={minimized_output}, frames={feature_frames['minimized']}."
+            )
+        if color_contract <= 0:
+            failures.append("Post proof did not observe a valid output color contract.")
+
+    status = "not-configured"
+    if require_post:
+        status = "planned" if dry_run else ("passed" if not failures else "failed")
+
+    return {
+        "version": GLX_POST_PROOF_VERSION,
+        "status": status,
+        "requiresPostProof": require_post,
+        "requiredTags": required_tags,
+        "selectedTags": selected_tags,
+        "requiredFeatures": required_features,
+        "scenes": scene_records,
+        "requiredMaps": required_maps,
+        "glxScreenshotMaps": found_screenshot_maps,
+        "histogramMaps": histogram_maps,
+        "missingScreenshotMaps": [] if dry_run else missing_screenshot_maps,
+        "fbo": {
+            "requested": fbo_requested,
+            "ready": fbo_ready,
+            "programs": fbo_programs,
+            "framebufferFns": fbo_framebuffer,
+            "initAttempts": fbo_init_attempts,
+            "initFailures": fbo_init_failed,
+        },
+        "controls": dict(controls),
+        "frames": {
+            "post": frames,
+            "screenshots": screenshots_count,
+            "minimizedOutput": minimized_output,
+        },
+        "frameFeatures": dict(feature_frames),
+        "featureEvidence": feature_evidence,
+        "target": dict(target),
+        "postOutputOwnership": dict(post_output),
+        "colorContract": color_contract,
+        "sourceRuns": sorted(source_runs),
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def evaluate_post_proof(
+    manifest: dict[str, object],
+    requirements: dict[str, object],
+) -> list[str]:
+    if not manifest_requires_post_proof(manifest, requirements):
+        return []
+
+    evidence = manifest.get("postProofEvidence")
+    if not isinstance(evidence, dict):
+        return ["No post proof evidence was recorded."]
+
+    failures: list[str] = []
+    if evidence.get("version") != GLX_POST_PROOF_VERSION:
+        failures.append(
+            "Post proof evidence has unsupported version "
+            f"{evidence.get('version')!r}."
+        )
+    if evidence.get("status") != "passed":
+        failures.append(
+            "Post proof evidence status is "
+            f"{evidence.get('status')!r}, expected 'passed'."
+        )
+    for failure in evidence.get("failures", []):
+        if str(failure).strip():
+            failures.append(str(failure))
+    return list(dict.fromkeys(failures))
+
+
+def manifest_requires_ownership_proof(manifest: dict[str, object]) -> bool:
+    profile = str(manifest.get("profile", ""))
+    if profile_requires_glx_ownership(profile):
+        return True
+
+    for section_name in ("cvars", "startupCvars", "configCvars"):
+        section = manifest.get(section_name)
+        if isinstance(section, dict) and q3_bool(section.get("r_glxRequireOwnership", 0)):
+            return True
+    return False
+
+
+def ownership_tier_diagnostics(metrics: dict[str, object]) -> dict[str, object]:
+    product_tier = metrics.get("productTier")
+    tier = ""
+    if isinstance(product_tier, dict):
+        tier = str(product_tier.get("tier", "")).strip().upper()
+
+    if tier == "GL3X":
+        executor_name = "gl3xExecutor"
+        support_name = "gl3xSupport"
+        require_fbo_post = True
+    elif tier == "GL41":
+        executor_name = "gl41Executor"
+        support_name = "gl41Support"
+        require_fbo_post = True
+    elif tier == "GL46":
+        executor_name = "gl46Executor"
+        support_name = "gl46Support"
+        require_fbo_post = False
+    else:
+        return {
+            "tier": tier,
+            "modern": False,
+            "found": False,
+            "active": False,
+            "fboPostProcess": False,
+            "modernPostChain": False,
+            "sceneLinearOutput": False,
+            "ok": False,
+        }
+
+    executor = metrics.get(executor_name)
+    support = metrics.get(support_name)
+    found = isinstance(executor, dict) or isinstance(support, dict)
+    active = isinstance(executor, dict) and int_metric(executor.get("active")) > 0
+    fbo_post = (
+        not require_fbo_post
+        or (isinstance(executor, dict) and int_metric(executor.get("fboPostProcess")) > 0)
+    )
+    modern_post = isinstance(support, dict) and int_metric(support.get("modernPostChain")) > 0
+    scene_linear = isinstance(support, dict) and int_metric(support.get("sceneLinearOutput")) > 0
+    return {
+        "tier": tier,
+        "modern": True,
+        "found": found,
+        "active": active,
+        "fboPostProcess": fbo_post,
+        "modernPostChain": modern_post,
+        "sceneLinearOutput": scene_linear,
+        "ok": bool(found and active and fbo_post and modern_post and scene_linear),
+    }
+
+
+def ownership_proof_evidence(manifest: dict[str, object]) -> dict[str, object]:
+    dry_run = bool(manifest.get("dryRun"))
+    profile = str(manifest.get("profile", ""))
+    require_ownership = manifest_requires_ownership_proof(manifest)
+    ownership_found = False
+    product_tiers: set[str] = set()
+    post_output_found = False
+    post_output_modes: set[str] = set()
+    post_nodes = 0
+    outputs = 0
+    legacy_fallback = 0
+    fallback_mask = 0
+    post_hash = 0
+    output_hash = 0
+    plan_hash = 0
+    diagnostic_failures = 0
+    max_calls = 0
+    max_items = 0
+    delegation_breakdown = {
+        "generic": 0,
+        "vboDevice": 0,
+        "vboSoft": 0,
+        "arrays": 0,
+    }
+    tier_records: list[dict[str, object]] = []
+    source_runs: list[str] = []
+
+    def record_tier(value: object) -> None:
+        tier = str(value or "").strip().upper()
+        if tier in GLX_PRODUCT_TIERS:
+            product_tiers.add(tier)
+
+    def record_post_output(
+        mode: object,
+        node_count: object,
+        output_count: object,
+        fallback: object,
+        node_hash: object = None,
+        transform_hash: object = None,
+        graph_hash: object = None,
+        mask: object = None,
+    ) -> None:
+        nonlocal post_output_found, post_nodes, outputs, legacy_fallback
+        nonlocal fallback_mask, post_hash, output_hash, plan_hash
+
+        if (
+            mode is None and node_count is None and output_count is None and
+            fallback is None and node_hash is None and transform_hash is None and
+            graph_hash is None and mask is None
+        ):
+            return
+        post_output_found = True
+        if mode is not None:
+            post_output_modes.add(str(mode).strip().lower())
+        post_nodes = max(post_nodes, int_metric(node_count))
+        outputs = max(outputs, int_metric(output_count))
+        legacy_fallback = max(legacy_fallback, int_metric(fallback))
+        fallback_mask = max(fallback_mask, int_metric(mask))
+        post_hash = max(post_hash, int_metric(node_hash))
+        output_hash = max(output_hash, int_metric(transform_hash))
+        plan_hash = max(plan_hash, int_metric(graph_hash))
+
+    runs = manifest.get("runs", [])
+    if isinstance(runs, list):
+        for run_index, run in enumerate(runs, start=1):
+            if not isinstance(run, dict):
+                continue
+            run_label = str(run.get("type", f"run-{run_index}"))
+            diagnostics = run.get("diagnostics")
+            metrics: dict[str, object] = {}
+            if isinstance(diagnostics, dict):
+                failures = diagnostics.get("failures", [])
+                if isinstance(failures, list):
+                    diagnostic_failures += len([failure for failure in failures if str(failure).strip()])
+                raw_metrics = diagnostics.get("metrics")
+                if isinstance(raw_metrics, dict):
+                    metrics = raw_metrics
+            if metrics:
+                source_runs.append(run_label)
+
+            ownership = metrics.get("ownership")
+            if isinstance(ownership, dict):
+                ownership_found = True
+                max_calls = max(max_calls, int_metric(ownership.get("calls")))
+                max_items = max(max_items, int_metric(ownership.get("items")))
+                for key in delegation_breakdown:
+                    delegation_breakdown[key] = max(
+                        delegation_breakdown[key],
+                        int_metric(ownership.get(key)),
+                    )
+
+            product_tier = metrics.get("productTier")
+            if isinstance(product_tier, dict):
+                record_tier(product_tier.get("tier"))
+            tier_record = ownership_tier_diagnostics(metrics)
+            if tier_record.get("tier"):
+                tier_records.append(tier_record)
+
+            post_output = metrics.get("postOutputOwnership")
+            if isinstance(post_output, dict):
+                record_post_output(
+                    post_output.get("mode"),
+                    post_output.get("postNodes"),
+                    post_output.get("outputs"),
+                    post_output.get("legacyFallback"),
+                    post_output.get("postHash"),
+                    post_output.get("outputHash"),
+                    post_output.get("planHash"),
+                    post_output.get("fallbackMask"),
+                )
+
+            performance = run.get("performance")
+            if isinstance(performance, dict):
+                latest = performance.get("latest")
+                if isinstance(latest, dict):
+                    record_tier(latest.get("productTier", latest.get("tier")))
+                    record_post_output(
+                        latest.get("postOutputMode"),
+                        latest.get("postOutputPostNodes"),
+                        latest.get("postOutputOutputs"),
+                        latest.get("postOutputLegacyFallback"),
+                        latest.get("postOutputPostHash"),
+                        latest.get("postOutputOutputHash"),
+                        latest.get("postOutputPlanHash"),
+                        latest.get("postOutputFallbackMask"),
+                    )
+
+    modern_tier = bool(product_tiers.intersection({"GL3X", "GL41", "GL46"}))
+    modern_tier_diagnostics_found = any(bool(record.get("found")) for record in tier_records)
+    modern_tier_diagnostics_ok = any(bool(record.get("ok")) for record in tier_records)
+    zero_delegation = ownership_found and max_calls == 0 and max_items == 0 and diagnostic_failures == 0
+    modern_post_output = (
+        post_output_found
+        and post_output_modes == {"glx-owned"}
+        and post_nodes > 0
+        and outputs > 0
+        and legacy_fallback == 0
+        and fallback_mask == 0
+        and post_hash > 0
+        and output_hash > 0
+        and plan_hash > 0
+        and modern_tier
+    )
+
+    failures: list[str] = []
+    if require_ownership and not dry_run:
+        if not ownership_found:
+            failures.append("Ownership proof did not include legacy-delegation diagnostics.")
+        if max_calls or max_items:
+            failures.append(
+                f"Ownership proof still reported legacy delegation: {max_calls} calls / {max_items} items."
+            )
+        if diagnostic_failures:
+            failures.append(f"Ownership proof diagnostics reported {diagnostic_failures} failure(s).")
+        if not modern_tier:
+            failures.append("Ownership proof did not run on a GL3X+ product tier.")
+        if not modern_tier_diagnostics_found:
+            failures.append("Ownership proof did not include modern-tier diagnostics.")
+        elif not modern_tier_diagnostics_ok:
+            failures.append("Ownership proof modern-tier diagnostics did not prove post-chain and scene-linear support.")
+        if not post_output_found:
+            failures.append("Ownership proof did not include post/output ownership diagnostics.")
+        elif post_output_modes != {"glx-owned"}:
+            failures.append(
+                "Ownership proof post/output mode was not exclusively glx-owned "
+                f"({','.join(sorted(post_output_modes)) or '-'})."
+            )
+        if legacy_fallback:
+            failures.append("Ownership proof post/output still reported legacy fallback.")
+        if fallback_mask:
+            failures.append(f"Ownership proof post/output plan reported fallback mask 0x{fallback_mask:08x}.")
+        if post_nodes <= 0:
+            failures.append("Ownership proof did not execute GLx post nodes.")
+        if outputs <= 0:
+            failures.append("Ownership proof did not execute GLx output transforms.")
+        if post_hash <= 0:
+            failures.append("Ownership proof did not report a post-node fingerprint.")
+        if output_hash <= 0:
+            failures.append("Ownership proof did not report an output-transform fingerprint.")
+        if plan_hash <= 0:
+            failures.append("Ownership proof did not report a post/output plan fingerprint.")
+
+    status = "not-configured"
+    if require_ownership:
+        status = "planned" if dry_run else ("passed" if not failures else "failed")
+
+    return {
+        "version": GLX_OWNERSHIP_PROOF_VERSION,
+        "status": status,
+        "profile": profile,
+        "requiresOwnership": require_ownership,
+        "zeroDelegation": zero_delegation,
+        "delegation": {
+            "found": ownership_found,
+            "calls": max_calls,
+            "items": max_items,
+            **delegation_breakdown,
+        },
+        "diagnosticFailures": diagnostic_failures,
+        "productTiers": sorted(product_tiers),
+        "modernPostOutputTier": modern_tier,
+        "modernTierDiagnosticsFound": modern_tier_diagnostics_found,
+        "modernTierDiagnosticsOk": modern_tier_diagnostics_ok,
+        "tierDiagnostics": tier_records,
+        "postOutputOwnership": {
+            "found": post_output_found,
+            "modes": sorted(post_output_modes),
+            "postNodes": post_nodes,
+            "outputs": outputs,
+            "legacyFallback": legacy_fallback,
+            "postHash": post_hash,
+            "outputHash": output_hash,
+            "planHash": plan_hash,
+            "fallbackMask": fallback_mask,
+        },
+        "modernPostOutput": modern_post_output,
+        "sourceRuns": sorted(set(source_runs)),
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def color_sweep_metric_matches(actual: object, expected: object) -> bool:
+    if isinstance(expected, str) and expected.startswith("0x"):
+        try:
+            return normalized_hex(actual) == normalized_hex(expected)
+        except (TypeError, ValueError):
+            return False
+    if isinstance(expected, bool):
+        return bool(actual) == expected
+    if isinstance(expected, int):
+        return actual == expected
+    if isinstance(expected, float):
+        try:
+            return abs(float(actual) - expected) <= 0.0001
+        except (TypeError, ValueError):
+            return False
+    return str(actual).lower() == str(expected).lower()
+
+
+def color_frame_metric_matches(actual: object, expectation_key: str, expected: object) -> bool:
+    if expectation_key == "finalEncode":
+        expected_shader_encode = str(expected).lower() == "shader-srgb"
+        return color_sweep_metric_matches(actual, expected_shader_encode)
+    return color_sweep_metric_matches(actual, expected)
+
+
+def evaluate_color_sweep(manifest: dict[str, object]) -> list[str]:
+    failures: list[str] = []
+    runs_by_id = {color_sweep_row_id(run): run for run in color_sweep_runs(manifest)}
+    expected_rows = {str(row["id"]): row for row in GLX_COLOR_SWEEP_MATRIX}
+    missing_rows = [row_id for row_id in expected_rows if row_id not in runs_by_id]
+    if missing_rows:
+        failures.append(
+            "GLx color sweep is missing required row(s): " + ", ".join(missing_rows) + "."
+        )
+
+    for row_id, row in expected_rows.items():
+        run = runs_by_id.get(row_id)
+        if not run:
+            continue
+        if run.get("status") not in {"passed", "planned"}:
+            failures.append(f"GLx color sweep row {row_id} did not pass: {run.get('status')}.")
+
+        screenshots_value = run.get("screenshots", [])
+        screenshots = [
+            shot for shot in screenshots_value if isinstance(shot, dict)
+        ] if isinstance(screenshots_value, list) else []
+        if not screenshots:
+            failures.append(f"GLx color sweep row {row_id} did not capture a screenshot.")
+        for shot in screenshots:
+            histogram = shot.get("histogram")
+            if not shot.get("found") or not isinstance(histogram, dict) or histogram.get("status") != "passed":
+                failures.append(f"GLx color sweep row {row_id} is missing screenshot histogram metadata.")
+            if shot.get("found") and not screenshot_luma_false_color_passed(shot):
+                failures.append(f"GLx color sweep row {row_id} is missing luma false-color sidecar metadata.")
+
+        diagnostics = run.get("diagnostics")
+        if not isinstance(diagnostics, dict) or not diagnostics.get("found"):
+            failures.append(f"GLx color sweep row {row_id} is missing GLx diagnostics.")
+        performance = run.get("performance")
+        if not isinstance(performance, dict) or int(performance.get("sampleCount", 0)) <= 0:
+            failures.append(f"GLx color sweep row {row_id} is missing r_speeds 7 performance metadata.")
+        color_frame_samples = color_sweep_metric(run, "colorFrame", "samples")
+        performance_latest = performance.get("latest", {}) if isinstance(performance, dict) else {}
+        if (
+            not isinstance(color_frame_samples, (int, float))
+            or int(color_frame_samples) <= 0
+        ) and (
+            not isinstance(performance_latest, dict)
+            or int(performance_latest.get("colorFrameSamples", 0)) <= 0
+        ):
+            failures.append(f"GLx color sweep row {row_id} is missing per-frame color-pipeline metadata.")
+
+        expectations = row.get("expect", {})
+        if not isinstance(expectations, dict):
+            continue
+        checks = {
+            "space": ("colorPipeline", "space"),
+            "transfer": ("colorPipeline", "transfer"),
+            "toneMap": ("colorPipeline", "toneMap"),
+            "exposure": ("colorPipeline", "exposure"),
+            "paperWhiteNits": ("colorPipeline", "paperWhite"),
+            "maxOutputNits": ("colorPipeline", "maxOutput"),
+            "sceneTargetFloat": ("colorAudit", "targetFloat"),
+            "finalEncode": ("colorAudit", "finalEncode"),
+            "contract": ("colorAudit", "contract"),
+            "framebufferSrgb": ("colorAudit", "framebufferSrgb"),
+            "srgbDecode": ("colorAudit", "srgbDecode"),
+            "srgbRequested": ("colorAudit", "srgbRequested"),
+            "outputRequest": ("outputBackend", "request"),
+            "outputSelected": ("outputBackend", "selected"),
+            "internalFormat": ("targetFormat", "internalFormat"),
+            "textureFormat": ("targetFormat", "textureFormat"),
+            "textureType": ("targetFormat", "textureType"),
+        }
+        for expectation_key, metric_key in checks.items():
+            if expectation_key not in expectations:
+                continue
+            actual = color_sweep_metric(run, metric_key[0], metric_key[1])
+            if actual is None:
+                failures.append(
+                    f"GLx color sweep row {row_id} is missing {metric_key[0]}.{metric_key[1]}."
+                )
+            elif not color_sweep_metric_matches(actual, expectations[expectation_key]):
+                failures.append(
+                    f"GLx color sweep row {row_id} {metric_key[0]}.{metric_key[1]} "
+                    f"is {actual!r}; expected {expectations[expectation_key]!r}."
+                )
+
+        color_frame = color_sweep_metric(run, "colorFrame", "latest")
+        if isinstance(color_frame, dict):
+            frame_checks = {
+                "space": "space",
+                "transfer": "transfer",
+                "exposure": "exposure",
+                "paperWhiteNits": "paperWhiteNits",
+                "maxOutputNits": "maxOutputNits",
+                "sceneTargetFloat": "sceneTargetFloat",
+                "finalEncode": "shaderSrgbEncode",
+                "contract": "contractValid",
+                "framebufferSrgb": "framebufferSrgb",
+                "srgbDecode": "srgbDecode",
+                "internalFormat": "internalFormat",
+                "textureFormat": "textureFormat",
+                "textureType": "textureType",
+            }
+            for expectation_key, frame_key in frame_checks.items():
+                if expectation_key not in expectations:
+                    continue
+                actual = color_frame.get(frame_key)
+                if actual is None:
+                    failures.append(
+                        f"GLx color sweep row {row_id} is missing colorFrame.{frame_key}."
+                    )
+                elif not color_frame_metric_matches(actual, expectation_key, expectations[expectation_key]):
+                    failures.append(
+                        f"GLx color sweep row {row_id} colorFrame.{frame_key} "
+                        f"is {actual!r}; expected {expectations[expectation_key]!r}."
+                    )
+
+    return failures
+
+
 def evaluate_gate(manifest: dict[str, object]) -> list[str]:
     gate_name = manifest.get("gate")
     if manifest.get("dryRun"):
@@ -4419,7 +8991,19 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
     if not isinstance(runs, list):
         return ["Manifest does not contain a run list."]
 
+    require_color_sweep = bool(
+        requirements.get("require_glx_color_sweep") or manifest.get("colorSweepEnabled")
+    )
     failures.extend(evaluate_proof_corpus(manifest, requirements))  # type: ignore[arg-type]
+    failures.extend(evaluate_renderer_switch_lifecycle(manifest, requirements))  # type: ignore[arg-type]
+    failures.extend(evaluate_world_proof(manifest, requirements))  # type: ignore[arg-type]
+    failures.extend(evaluate_material_proof(manifest, requirements))  # type: ignore[arg-type]
+    failures.extend(evaluate_dynamic_proof(manifest, requirements))  # type: ignore[arg-type]
+    failures.extend(evaluate_post_proof(manifest, requirements))  # type: ignore[arg-type]
+    if requirements.get("require_glx_diagnostics") or require_color_sweep:
+        failures.extend(validate_color_contract_manifest(manifest))
+    if require_color_sweep:
+        failures.extend(evaluate_color_sweep(manifest))
 
     failed_runs = [
         run for run in runs
@@ -4454,6 +9038,15 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
             failures.append("No GLx diagnostics were collected for a diagnostic gate.")
         elif not any(diagnostics_result.get("found") for diagnostics_result in diagnostics):
             failures.append("No GLx diagnostic output was found in collected logs.")
+        else:
+            required_sections = ("colorPipeline", "colorAudit", "outputBackend", "textureAudit", "targetFormat", "colorFrame")
+            for section in required_sections:
+                if not any(
+                    isinstance(result.get("metrics"), dict)
+                    and isinstance(result["metrics"].get(section), dict)  # type: ignore[index]
+                    for result in diagnostics
+                ):
+                    failures.append(f"Missing GLx color metadata section: {section}.")
 
     performance_samples = [
         run.get("performance")
@@ -4497,6 +9090,47 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                 if failure
             ]
             failures.extend(tier_failures)
+            color_metadata_keys = (
+                "colorSpace",
+                "outputTransfer",
+                "toneMap",
+                "toneMapExposure",
+                "paperWhiteNits",
+                "maxOutputNits",
+                "colorSrgbDecode",
+                "colorFramebufferSrgb",
+                "colorOutputContract",
+                "outputBackendSelected",
+                "textureAuditSrgb",
+                "textureAuditSrgbDecode",
+                "textureAuditMissingSrgbDecode",
+                "textureAuditUnexpectedDecode",
+                "targetInternalFormat",
+                "targetTextureFormat",
+                "targetTextureType",
+                "colorFrameSamples",
+                "colorFrameBackend",
+                "colorFrameSpace",
+                "colorFrameTransfer",
+                "colorFrameExposure",
+                "colorFramePaperWhiteNits",
+                "colorFrameMaxOutputNits",
+                "colorFrameSrgbDecode",
+                "colorFrameFramebufferSrgb",
+                "colorFrameInternalFormat",
+                "colorFrameTextureFormat",
+                "colorFrameTextureType",
+                "colorFrameSceneTargetFloat",
+                "colorFrameShaderSrgbEncode",
+                "colorFrameContractValid",
+            )
+            if not any(
+                int(sample.get("sampleCount", 0)) > 0
+                and isinstance(sample.get("latest"), dict)
+                and all(key in sample["latest"] for key in color_metadata_keys)  # type: ignore[operator]
+                for sample in performance_samples
+            ):
+                failures.append("No GLx performance sample included complete color-pipeline metadata.")
 
     performance_failures = [
         str(failure)
@@ -4548,6 +9182,21 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                 f"Missing screenshots: {len(missing)}/{len(screenshots)} "
                 f"({', '.join(str(name) for name in missing[:6])}"
                 f"{'...' if len(missing) > 6 else ''})"
+            )
+        missing_histograms = [
+            shot.get("name", "screenshot")
+            for shot in screenshots
+            if shot.get("found")
+            and (
+                not isinstance(shot.get("histogram"), dict)
+                or shot["histogram"].get("status") != "passed"  # type: ignore[index]
+            )
+        ]
+        if (requirements.get("require_screenshots") or manifest.get("screenshotBaselineDir")) and missing_histograms:
+            failures.append(
+                f"Screenshot color histogram metadata is missing or invalid: {len(missing_histograms)}/{len(screenshots)} "
+                f"({', '.join(str(name) for name in missing_histograms[:6])}"
+                f"{'...' if len(missing_histograms) > 6 else ''})"
             )
 
         if manifest.get("screenshotBaselineDir") and not manifest.get("approveScreenshotBaselines"):
@@ -4781,6 +9430,611 @@ def release_proof_manifest_record(
     }
 
 
+def markdown_escape_cell(value: object) -> str:
+    text = str(value if value is not None else "-")
+    return text.replace("|", "\\|").replace("\n", " ").strip() or "-"
+
+
+def markdown_artifact_link(value: object, base_path: Path) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    path = Path(text)
+    label = path.name or text
+    try:
+        if path.is_absolute():
+            target = os.path.relpath(path, base_path.parent).replace("\\", "/")
+        else:
+            target = text.replace("\\", "/")
+    except ValueError:
+        target = text.replace("\\", "/")
+    return f"[`{markdown_escape_cell(label)}`]({target})"
+
+
+def iter_manifest_runs(manifest: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        run
+        for run in manifest.get("runs", [])
+        if isinstance(run, dict)
+    ]
+
+
+def iter_manifest_screenshots(manifest: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        shot
+        for run in iter_manifest_runs(manifest)
+        for shot in run.get("screenshots", [])
+        if isinstance(shot, dict)
+    ]
+
+
+def collect_visual_backend_rows(manifest: dict[str, object]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for run in iter_manifest_runs(manifest):
+        diagnostics = run.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            continue
+        metrics = diagnostics.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        pipeline = metrics.get("colorPipeline", {}) if isinstance(metrics.get("colorPipeline"), dict) else {}
+        audit = metrics.get("colorAudit", {}) if isinstance(metrics.get("colorAudit"), dict) else {}
+        backend = metrics.get("outputBackend", {}) if isinstance(metrics.get("outputBackend"), dict) else {}
+        target = metrics.get("targetFormat", {}) if isinstance(metrics.get("targetFormat"), dict) else {}
+        color_frame = metrics.get("colorFrame", {}) if isinstance(metrics.get("colorFrame"), dict) else {}
+        latest_frame = color_frame.get("latest", {}) if isinstance(color_frame.get("latest"), dict) else {}
+        if not any((pipeline, audit, backend, target, latest_frame)):
+            continue
+        internal_format = target.get("internalFormat", latest_frame.get("internalFormat", "-"))
+        if isinstance(internal_format, int):
+            internal_format = f"0x{internal_format:04x}"
+        rows.append(
+            {
+                "run": run.get("type", "-"),
+                "renderer": run.get("renderer", "-"),
+                "space": pipeline.get("space", latest_frame.get("space", "-")),
+                "transfer": pipeline.get("transfer", latest_frame.get("transfer", "-")),
+                "backendRequest": backend.get("request", "-"),
+                "backendSelected": backend.get("selected", latest_frame.get("backend", "-")),
+                "hardware": backend.get("hardware", "-"),
+                "headroom": backend.get("headroom", "-"),
+                "exposure": pipeline.get("exposure", latest_frame.get("exposure", "-")),
+                "framebufferSrgb": audit.get("framebufferSrgb", latest_frame.get("framebufferSrgb", "-")),
+                "srgbDecode": audit.get("srgbDecode", latest_frame.get("srgbDecode", "-")),
+                "targetFloat": audit.get("targetFloat", latest_frame.get("sceneTargetFloat", "-")),
+                "internalFormat": internal_format,
+                "finalEncode": audit.get("finalEncode", "-"),
+                "contract": audit.get("contract", latest_frame.get("contractValid", "-")),
+            }
+        )
+    return rows
+
+
+def collect_visual_tier_rows(manifest: dict[str, object]) -> list[dict[str, object]]:
+    records: dict[str, dict[str, object]] = {
+        tier: {
+            "tier": tier,
+            "observed": "no",
+            "executor": "-",
+            "modernPost": "-",
+            "sceneLinear": "-",
+            "postOutputMode": "-",
+            "postNodes": "-",
+            "outputs": "-",
+            "fallbackMask": "-",
+            "outputTransfer": "-",
+            "gpuFrameMs": "-",
+        }
+        for tier in GLX_PRODUCT_TIER_ORDER
+    }
+
+    def record_tier(tier_value: object) -> dict[str, object] | None:
+        tier = str(tier_value or "").strip().upper()
+        if tier not in records:
+            return None
+        records[tier]["observed"] = "yes"
+        return records[tier]
+
+    for run in iter_manifest_runs(manifest):
+        diagnostics = run.get("diagnostics")
+        if isinstance(diagnostics, dict) and isinstance(diagnostics.get("metrics"), dict):
+            metrics = diagnostics["metrics"]
+            product_tier = metrics.get("productTier", {})
+            tier_value = product_tier.get("tier") if isinstance(product_tier, dict) else product_tier
+            record = record_tier(tier_value)
+            if record is not None:
+                post = metrics.get("postOutputOwnership", {})
+                if isinstance(post, dict):
+                    record["postOutputMode"] = post.get("mode", record["postOutputMode"])
+                    record["postNodes"] = post.get("postNodes", record["postNodes"])
+                    record["outputs"] = post.get("outputs", record["outputs"])
+                    record["fallbackMask"] = post.get("fallbackMask", record["fallbackMask"])
+                for prefix, label in (
+                    ("gl3x", "GL3X"),
+                    ("gl41", "GL41"),
+                    ("gl46", "GL46"),
+                ):
+                    if record["tier"] != label:
+                        continue
+                    executor = metrics.get(f"{prefix}Executor", {})
+                    support = metrics.get(f"{prefix}Support", {})
+                    if isinstance(executor, dict):
+                        record["executor"] = executor.get("active", record["executor"])
+                    if isinstance(support, dict):
+                        record["modernPost"] = support.get("modernPostChain", record["modernPost"])
+                        record["sceneLinear"] = support.get("sceneLinearOutput", record["sceneLinear"])
+
+        performance = run.get("performance")
+        if isinstance(performance, dict):
+            latest = performance.get("latest", {})
+            if isinstance(latest, dict):
+                record = record_tier(latest.get("productTier", latest.get("tier")))
+                if record is not None:
+                    record["postOutputMode"] = latest.get("postOutputMode", record["postOutputMode"])
+                    record["postNodes"] = latest.get("postOutputPostNodes", record["postNodes"])
+                    record["outputs"] = latest.get("postOutputOutputs", record["outputs"])
+                    record["fallbackMask"] = latest.get("postOutputFallbackMask", record["fallbackMask"])
+                    record["outputTransfer"] = latest.get("outputTransfer", record["outputTransfer"])
+                    record["gpuFrameMs"] = latest.get("gpuFrameMs", latest.get("gpu", record["gpuFrameMs"]))
+
+    return [records[tier] for tier in GLX_PRODUCT_TIER_ORDER]
+
+
+def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
+    runs = iter_manifest_runs(manifest)
+    screenshots = iter_manifest_screenshots(manifest)
+    backend_rows = collect_visual_backend_rows(manifest)
+    tier_rows = collect_visual_tier_rows(manifest)
+    status = run_status(manifest)
+
+    lines = [
+        f"# GLx Visual Dossier {manifest.get('runId', '')}",
+        "",
+        f"- Version: `{GLX_VISUAL_DOSSIER_VERSION}`",
+        f"- Status: `{status}`",
+        f"- Gate: `{manifest.get('gate') or 'custom'}`",
+        f"- Profile: `{manifest.get('profile') or '-'}`",
+        f"- Proof platform: `{manifest.get('proofPlatform', '-')}`",
+        f"- Manifest: {markdown_artifact_link(manifest_path, manifest_path)}",
+        "",
+        "## Current Pipeline Flow",
+        "",
+        "```mermaid",
+        "flowchart LR",
+        "    A[Authored textures and lightmaps] --> B[Compatibility scene preparation]",
+        "    B --> C[GLx stream/material/static products]",
+        "    C --> D[Shared OpenGL/FBO postprocess substrate]",
+        "    D --> E[GLx OutputTransform diagnostics]",
+        "    E --> F[SDR or hardware HDR presentation]",
+        "```",
+        "",
+        "## Target Pipeline Flow",
+        "",
+        "```mermaid",
+        "flowchart LR",
+        "    A[Authored-color textures decode to linear once] --> B[Linear lighting and blending]",
+        "    B --> C[Float scene target]",
+        "    C --> D[Optional bloom chain in linear]",
+        "    C --> E[Optional grading in linear]",
+        "    D --> F[Single final composite]",
+        "    E --> F",
+        "    F --> G[Single output transform]",
+        "    G --> H[SDR sRGB or hardware HDR present]",
+        "```",
+        "",
+    ]
+
+    switch_evidence = manifest.get("rendererSwitchEvidence")
+    if isinstance(switch_evidence, dict):
+        lines.extend(
+            [
+                "## Renderer Switch Lifecycle",
+                "",
+                "| Status | Command | Restart Mode | Vid Restart Path | Planned | Completed | Into GLx | Out Of GLx | Diagnostics | Perf Samples |",
+                "|---:|---|---|---|---:|---:|---:|---:|---:|---:|",
+                "| "
+                f"{markdown_escape_cell(switch_evidence.get('status', '-'))} | "
+                f"{markdown_escape_cell(switch_evidence.get('command', '-'))} | "
+                f"{markdown_escape_cell(switch_evidence.get('restartMode', '-'))} | "
+                f"{markdown_escape_cell(switch_evidence.get('vidRestartPath', '-'))} | "
+                f"{markdown_escape_cell(switch_evidence.get('plannedTransitions', '-'))} | "
+                f"{markdown_escape_cell(switch_evidence.get('completedTransitions', '-'))} | "
+                f"{markdown_escape_cell(switch_evidence.get('transitionsIntoGlx', '-'))} | "
+                f"{markdown_escape_cell(switch_evidence.get('transitionsOutOfGlx', '-'))} | "
+                f"{markdown_escape_cell(switch_evidence.get('glxDiagnosticsFound', '-'))} | "
+                f"{markdown_escape_cell(switch_evidence.get('glxPerformanceSamples', '-'))} |",
+                "",
+            ]
+        )
+
+    world_evidence = manifest.get("worldProofEvidence")
+    if isinstance(world_evidence, dict) and world_evidence.get("requiresWorldProof"):
+        static_world = (
+            world_evidence.get("staticWorld", {})
+            if isinstance(world_evidence.get("staticWorld"), dict)
+            else {}
+        )
+        lightmaps = (
+            world_evidence.get("lightmaps", {})
+            if isinstance(world_evidence.get("lightmaps"), dict)
+            else {}
+        )
+        fog = (
+            world_evidence.get("fog", {})
+            if isinstance(world_evidence.get("fog"), dict)
+            else {}
+        )
+        lines.extend(
+            [
+                "## World Proof",
+                "",
+                "| Status | Required Maps | Screenshot Maps | Static Attempts | Static Indexes | Static Fallbacks | Lightmaps | Fog |",
+                "|---:|---|---|---:|---:|---:|---:|---:|",
+                "| "
+                f"{markdown_escape_cell(world_evidence.get('status', '-'))} | "
+                f"{markdown_escape_cell(', '.join(str(item) for item in world_evidence.get('requiredMaps', [])) or '-')} | "
+                f"{markdown_escape_cell(', '.join(str(item) for item in world_evidence.get('glxScreenshotMaps', [])) or '-')} | "
+                f"{markdown_escape_cell(static_world.get('drawAttempts', '-'))} | "
+                f"{markdown_escape_cell(static_world.get('drawIndexes', '-'))} | "
+                f"{markdown_escape_cell(static_world.get('drawFallbacks', '-'))} | "
+                f"{markdown_escape_cell(lightmaps.get('ok', '-'))} | "
+                f"{markdown_escape_cell(fog.get('ok', '-'))} |",
+                "",
+            ]
+        )
+
+    material_evidence = manifest.get("materialProofEvidence")
+    if isinstance(material_evidence, dict) and material_evidence.get("requiresMaterialProof"):
+        renderer = (
+            material_evidence.get("renderer", {})
+            if isinstance(material_evidence.get("renderer"), dict)
+            else {}
+        )
+        parameters = (
+            material_evidence.get("parameters", {})
+            if isinstance(material_evidence.get("parameters"), dict)
+            else {}
+        )
+        stream_features = (
+            material_evidence.get("streamFeatures", {})
+            if isinstance(material_evidence.get("streamFeatures"), dict)
+            else {}
+        )
+        stage_flags = (
+            material_evidence.get("stageFlags", {})
+            if isinstance(material_evidence.get("stageFlags"), dict)
+            else {}
+        )
+        stage_flag_counts = (
+            stage_flags.get("counts", {})
+            if isinstance(stage_flags.get("counts"), dict)
+            else {}
+        )
+        lines.extend(
+            [
+                "## Material Proof",
+                "",
+                "| Status | Required Maps | Programs | Parameter Blocks | Parameter Hash | Animated | Screen | Video | MT | DepthFrag | TexMod | Env | Failures |",
+                "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+                "| "
+                f"{markdown_escape_cell(material_evidence.get('status', '-'))} | "
+                f"{markdown_escape_cell(', '.join(str(item) for item in material_evidence.get('requiredMaps', [])) or '-')} | "
+                f"{markdown_escape_cell(renderer.get('programs', '-'))} | "
+                f"{markdown_escape_cell(parameters.get('blocks', '-'))} | "
+                f"{markdown_escape_cell(parameters.get('hash', '-'))} | "
+                f"{markdown_escape_cell(stage_flag_counts.get('animatedImage', '-'))} | "
+                f"{markdown_escape_cell(stage_flag_counts.get('screenMap', '-'))} | "
+                f"{markdown_escape_cell(stage_flag_counts.get('videoMap', '-'))} | "
+                f"{markdown_escape_cell(stream_features.get('multitexture', '-'))} | "
+                f"{markdown_escape_cell(stream_features.get('depthFragment', '-'))} | "
+                f"{markdown_escape_cell(stream_features.get('texMod', '-'))} | "
+                f"{markdown_escape_cell(stream_features.get('environment', '-'))} | "
+                f"{markdown_escape_cell(len(material_evidence.get('failures', [])) if isinstance(material_evidence.get('failures'), list) else '-')} |",
+                "",
+            ]
+        )
+
+    dynamic_evidence = manifest.get("dynamicProofEvidence")
+    if isinstance(dynamic_evidence, dict) and dynamic_evidence.get("requiresDynamicProof"):
+        stream_draw = (
+            dynamic_evidence.get("streamDraw", {})
+            if isinstance(dynamic_evidence.get("streamDraw"), dict)
+            else {}
+        )
+        stream_features = (
+            dynamic_evidence.get("streamFeatures", {})
+            if isinstance(dynamic_evidence.get("streamFeatures"), dict)
+            else {}
+        )
+        stream_categories = (
+            dynamic_evidence.get("streamCategories", {})
+            if isinstance(dynamic_evidence.get("streamCategories"), dict)
+            else {}
+        )
+
+        def dynamic_category_draws(name: str) -> object:
+            category = stream_categories.get(name)
+            if isinstance(category, dict):
+                return category.get("draws", "-")
+            return "-"
+
+        lines.extend(
+            [
+                "## Dynamic Proof",
+                "",
+                "| Status | Required Maps | Required Demos | Entity | Particle | Poly | Mark | Weapon | Beam Cat | Shadows | Beams | DLight | Fallbacks |",
+                "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+                "| "
+                f"{markdown_escape_cell(dynamic_evidence.get('status', '-'))} | "
+                f"{markdown_escape_cell(', '.join(str(item) for item in dynamic_evidence.get('requiredMaps', [])) or '-')} | "
+                f"{markdown_escape_cell(', '.join(str(item) for item in dynamic_evidence.get('requiredDemos', [])) or '-')} | "
+                f"{markdown_escape_cell(dynamic_category_draws('entity'))} | "
+                f"{markdown_escape_cell(dynamic_category_draws('particle'))} | "
+                f"{markdown_escape_cell(dynamic_category_draws('poly'))} | "
+                f"{markdown_escape_cell(dynamic_category_draws('mark'))} | "
+                f"{markdown_escape_cell(dynamic_category_draws('weapon'))} | "
+                f"{markdown_escape_cell(dynamic_category_draws('beam'))} | "
+                f"{markdown_escape_cell(stream_features.get('shadow', '-'))} | "
+                f"{markdown_escape_cell(stream_features.get('beam', '-'))} | "
+                f"{markdown_escape_cell(stream_features.get('dynamicLight', '-'))} | "
+                f"{markdown_escape_cell(stream_draw.get('fallbacks', '-'))} |",
+                "",
+            ]
+        )
+
+    post_evidence = manifest.get("postProofEvidence")
+    if isinstance(post_evidence, dict) and post_evidence.get("requiresPostProof"):
+        fbo = (
+            post_evidence.get("fbo", {})
+            if isinstance(post_evidence.get("fbo"), dict)
+            else {}
+        )
+        frames = (
+            post_evidence.get("frames", {})
+            if isinstance(post_evidence.get("frames"), dict)
+            else {}
+        )
+        controls = (
+            post_evidence.get("controls", {})
+            if isinstance(post_evidence.get("controls"), dict)
+            else {}
+        )
+        feature_evidence = (
+            post_evidence.get("featureEvidence", {})
+            if isinstance(post_evidence.get("featureEvidence"), dict)
+            else {}
+        )
+        greyscale = (
+            feature_evidence.get("greyscale", {})
+            if isinstance(feature_evidence.get("greyscale"), dict)
+            else {}
+        )
+        render_scale = (
+            feature_evidence.get("renderScale", {})
+            if isinstance(feature_evidence.get("renderScale"), dict)
+            else {}
+        )
+        lines.extend(
+            [
+                "## Post Proof",
+                "",
+                "| Status | Required Maps | FBO Ready | Post Frames | Screenshots | Greyscale | Render Scale | Dimension Evidence | Color Contract | Failures |",
+                "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+                "| "
+                f"{markdown_escape_cell(post_evidence.get('status', '-'))} | "
+                f"{markdown_escape_cell(', '.join(str(item) for item in post_evidence.get('requiredMaps', [])) or '-')} | "
+                f"{markdown_escape_cell(fbo.get('ready', '-'))} | "
+                f"{markdown_escape_cell(frames.get('post', '-'))} | "
+                f"{markdown_escape_cell(frames.get('screenshots', '-'))} | "
+                f"{markdown_escape_cell(greyscale.get('ok', '-'))} | "
+                f"{markdown_escape_cell(render_scale.get('ok', '-'))} | "
+                f"{markdown_escape_cell(render_scale.get('dimensionEvidence', '-'))} | "
+                f"{markdown_escape_cell(post_evidence.get('colorContract', '-'))} | "
+                f"{markdown_escape_cell(len(post_evidence.get('failures', [])) if isinstance(post_evidence.get('failures'), list) else '-')} |",
+                "",
+                "| Render Scale Control | Greyscale Control | Window Adjusted | Minimized Output |",
+                "|---:|---:|---:|---:|",
+                "| "
+                f"{markdown_escape_cell(controls.get('renderScale', '-'))} | "
+                f"{markdown_escape_cell(controls.get('greyscale', '-'))} | "
+                f"{markdown_escape_cell(controls.get('windowAdjusted', '-'))} | "
+                f"{markdown_escape_cell(frames.get('minimizedOutput', '-'))} |",
+                "",
+            ]
+        )
+
+    ownership_evidence = manifest.get("ownershipProofEvidence")
+    if isinstance(ownership_evidence, dict) and ownership_evidence.get("requiresOwnership"):
+        delegation = (
+            ownership_evidence.get("delegation", {})
+            if isinstance(ownership_evidence.get("delegation"), dict)
+            else {}
+        )
+        post_output = (
+            ownership_evidence.get("postOutputOwnership", {})
+            if isinstance(ownership_evidence.get("postOutputOwnership"), dict)
+            else {}
+        )
+        lines.extend(
+            [
+                "## Ownership Proof",
+                "",
+                "| Status | Profile | Calls | Items | Product Tiers | Modern Tier | Post/Output | Post Nodes | Outputs | Fallback |",
+                "|---:|---|---:|---:|---|---:|---:|---:|---:|---:|",
+                "| "
+                f"{markdown_escape_cell(ownership_evidence.get('status', '-'))} | "
+                f"{markdown_escape_cell(ownership_evidence.get('profile', '-'))} | "
+                f"{markdown_escape_cell(delegation.get('calls', '-'))} | "
+                f"{markdown_escape_cell(delegation.get('items', '-'))} | "
+                f"{markdown_escape_cell(', '.join(str(tier) for tier in ownership_evidence.get('productTiers', [])) or '-')} | "
+                f"{markdown_escape_cell(ownership_evidence.get('modernTierDiagnosticsOk', '-'))} | "
+                f"{markdown_escape_cell(ownership_evidence.get('modernPostOutput', '-'))} | "
+                f"{markdown_escape_cell(post_output.get('postNodes', '-'))} | "
+                f"{markdown_escape_cell(post_output.get('outputs', '-'))} | "
+                f"{markdown_escape_cell(post_output.get('fallbackMask', '-'))} |",
+                "",
+            ]
+        )
+
+    if backend_rows:
+        lines.extend(
+            [
+                "## Backend State Overlay",
+                "",
+                "| Run | Renderer | Space | Transfer | Request | Selected | HDR | Headroom | Exposure | sRGB Decode | FB sRGB | Float Target | Format | Encode | Contract |",
+                "|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---|---|---:|",
+            ]
+        )
+        for row in backend_rows:
+            lines.append(
+                "| "
+                f"{markdown_escape_cell(row['run'])} | "
+                f"{markdown_escape_cell(row['renderer'])} | "
+                f"{markdown_escape_cell(row['space'])} | "
+                f"{markdown_escape_cell(row['transfer'])} | "
+                f"{markdown_escape_cell(row['backendRequest'])} | "
+                f"{markdown_escape_cell(row['backendSelected'])} | "
+                f"{markdown_escape_cell(row['hardware'])} | "
+                f"{markdown_escape_cell(row['headroom'])} | "
+                f"{markdown_escape_cell(row['exposure'])} | "
+                f"{markdown_escape_cell(row['srgbDecode'])} | "
+                f"{markdown_escape_cell(row['framebufferSrgb'])} | "
+                f"{markdown_escape_cell(row['targetFloat'])} | "
+                f"{markdown_escape_cell(row['internalFormat'])} | "
+                f"{markdown_escape_cell(row['finalEncode'])} | "
+                f"{markdown_escape_cell(row['contract'])} |"
+            )
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Driver Tier Matrix",
+            "",
+            "| Tier | Observed | Executor | Modern Post | Scene Linear | Post/Output | Nodes | Outputs | Fallback Mask | Transfer | GPU ms |",
+            "|---|---:|---:|---:|---:|---|---:|---:|---:|---|---:|",
+        ]
+    )
+    for row in tier_rows:
+        lines.append(
+            "| "
+            f"{markdown_escape_cell(row['tier'])} | "
+            f"{markdown_escape_cell(row['observed'])} | "
+            f"{markdown_escape_cell(row['executor'])} | "
+            f"{markdown_escape_cell(row['modernPost'])} | "
+            f"{markdown_escape_cell(row['sceneLinear'])} | "
+            f"{markdown_escape_cell(row['postOutputMode'])} | "
+            f"{markdown_escape_cell(row['postNodes'])} | "
+            f"{markdown_escape_cell(row['outputs'])} | "
+            f"{markdown_escape_cell(row['fallbackMask'])} | "
+            f"{markdown_escape_cell(row['outputTransfer'])} | "
+            f"{markdown_escape_cell(row['gpuFrameMs'])} |"
+        )
+    lines.append("")
+
+    if screenshots:
+        lines.extend(
+            [
+                "## Histogram And False-Color Evidence",
+                "",
+                "| Screenshot | Found | Mean Luma | P01 | P50 | P99 | Black Clip | White Clip | Histogram | False Color |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
+            ]
+        )
+        for shot in screenshots:
+            histogram = shot.get("histogram", {}) if isinstance(shot.get("histogram"), dict) else {}
+            black = histogram.get("clippedBlackRatio", "-")
+            white = histogram.get("clippedWhiteRatio", "-")
+            if isinstance(black, (int, float)):
+                black = f"{float(black):.3%}"
+            if isinstance(white, (int, float)):
+                white = f"{float(white):.3%}"
+            lines.append(
+                "| "
+                f"{markdown_escape_cell(shot.get('name', '-'))} | "
+                f"{markdown_escape_cell(shot.get('found', '-'))} | "
+                f"{markdown_escape_cell(histogram.get('meanLuma', '-'))} | "
+                f"{markdown_escape_cell(histogram.get('p01Luma', '-'))} | "
+                f"{markdown_escape_cell(histogram.get('p50Luma', '-'))} | "
+                f"{markdown_escape_cell(histogram.get('p99Luma', '-'))} | "
+                f"{markdown_escape_cell(black)} | "
+                f"{markdown_escape_cell(white)} | "
+                f"{markdown_artifact_link(shot.get('histogramPath'), manifest_path)} | "
+                f"{markdown_artifact_link(shot.get('falseColorPath'), manifest_path)} |"
+            )
+        lines.append("")
+
+        lines.extend(
+            [
+                "## Parity Diff Sheet",
+                "",
+                "| Screenshot | Baseline Status | Candidate | Baseline | Diff | RMS | Changed Pixels |",
+                "|---|---:|---|---|---|---:|---:|",
+            ]
+        )
+        for shot in screenshots:
+            comparison = shot.get("comparison", {}) if isinstance(shot.get("comparison"), dict) else {}
+            changed = comparison.get("changedPixelRatio", "-")
+            if isinstance(changed, (int, float)):
+                changed = f"{float(changed):.3%}"
+            rms = comparison.get("rms", "-")
+            if isinstance(rms, (int, float)):
+                rms = f"{float(rms):.3f}"
+            lines.append(
+                "| "
+                f"{markdown_escape_cell(shot.get('baselineKey', shot.get('name', '-')))} | "
+                f"{markdown_escape_cell(shot.get('baselineStatus', '-'))} | "
+                f"{markdown_artifact_link(shot.get('path'), manifest_path)} | "
+                f"{markdown_artifact_link(shot.get('baselinePath'), manifest_path)} | "
+                f"{markdown_artifact_link(comparison.get('diffPath'), manifest_path)} | "
+                f"{markdown_escape_cell(rms)} | "
+                f"{markdown_escape_cell(changed)} |"
+            )
+        lines.append("")
+
+    color_runs = [run for run in runs if run.get("type") == "color-sweep"]
+    if color_runs:
+        lines.extend(
+            [
+                "## SDR/HDR Color Sweep Review",
+                "",
+                "| Row | Probe | Status | Expected Transfer | Expected Exposure | Screenshot Count |",
+                "|---|---|---:|---|---:|---:|",
+            ]
+        )
+        for run in color_runs:
+            row = run.get("colorSweepRow", {}) if isinstance(run.get("colorSweepRow"), dict) else {}
+            expect = row.get("expect", {}) if isinstance(row.get("expect"), dict) else {}
+            run_shots = [
+                shot for shot in run.get("screenshots", [])
+                if isinstance(shot, dict)
+            ]
+            lines.append(
+                "| "
+                f"{markdown_escape_cell(row.get('id', '-'))} | "
+                f"{markdown_escape_cell(row.get('probe', '-'))} | "
+                f"{markdown_escape_cell(run.get('status', '-'))} | "
+                f"{markdown_escape_cell(expect.get('transfer', '-'))} | "
+                f"{markdown_escape_cell(expect.get('exposure', '-'))} | "
+                f"{len(run_shots)} |"
+            )
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Review Checklist",
+            "",
+            "- Confirm the backend state overlay matches the expected SDR/HDR request for the run.",
+            "- Compare histogram mid-gray and clipping values before trusting visual parity by eye.",
+            "- Use the luma false-color sidecars to spot crushed shadows, clipped highlights, and flat tone mapping.",
+            "- Inspect parity diffs for structured changes before accepting screenshot threshold passes.",
+            "- Confirm modern tiers show GLx-owned post/output evidence before treating the run as promotion evidence.",
+            "",
+        ]
+    )
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def validate_release_proof_root(
     proof_root: Path,
     required_platforms: Iterable[str] = GLX_BLOCKING_RELEASE_PLATFORMS,
@@ -4881,6 +10135,11 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
         for run in runs
         if run.get("type") == "timedemo"
     ]
+    color_sweep_runs_for_summary = [
+        run
+        for run in runs
+        if run.get("type") == "color-sweep"
+    ]
     diagnostics = [
         run.get("diagnostics")
         for run in runs
@@ -4904,6 +10163,7 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
         f"- Dry run: `{str(bool(manifest.get('dryRun'))).lower()}`",
         f"- Proof platform: `{manifest.get('proofPlatform', '-')}`",
         f"- Manifest: `{manifest_path}`",
+        f"- Visual dossier: `{manifest.get('visualDossier', {}).get('path', '-') if isinstance(manifest.get('visualDossier'), dict) else '-'}`",
         f"- Renderers: `{', '.join(str(item) for item in manifest.get('renderers', []))}`",
         f"- Maps: `{', '.join(str(item) for item in manifest.get('maps', [])) or '-'}`",
         f"- Demos: `{', '.join(str(item) for item in manifest.get('demos', [])) or '-'}`",
@@ -4942,6 +10202,428 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
             lines.append(f"- Required tags: `{', '.join(required_tags)}`")
         lines.append(f"- Parity suite version: `{proof_corpus.get('paritySuiteVersion', '-')}`")
         lines.append(f"- Parity suites: `{', '.join(parity_suite_ids) or '-'}`")
+        lines.append("")
+
+    switch_evidence = manifest.get("rendererSwitchEvidence")
+    if isinstance(switch_evidence, dict):
+        lines.append("## Renderer Switch Lifecycle")
+        lines.append("")
+        lines.append(f"- Version: `{switch_evidence.get('version', '-')}`")
+        lines.append(f"- Status: `{switch_evidence.get('status', '-')}`")
+        lines.append(f"- Command: `{switch_evidence.get('command', '-')}`")
+        lines.append(f"- Restart mode: `{switch_evidence.get('restartMode', '-')}`")
+        lines.append(f"- Vid restart path: `{switch_evidence.get('vidRestartPath', '-')}`")
+        lines.append(
+            "- Transitions: "
+            f"`{switch_evidence.get('completedTransitions', 0)}/"
+            f"{switch_evidence.get('plannedTransitions', 0)}`"
+        )
+        lines.append(
+            "- GLx legs: "
+            f"`into={switch_evidence.get('transitionsIntoGlx', 0)}, "
+            f"out={switch_evidence.get('transitionsOutOfGlx', 0)}`"
+        )
+        lines.append(
+            "- GLx diagnostics/performance: "
+            f"`diagnostics={switch_evidence.get('glxDiagnosticsFound', False)}, "
+            f"samples={switch_evidence.get('glxPerformanceSamples', 0)}`"
+        )
+        lines.append("")
+
+    world_evidence = manifest.get("worldProofEvidence")
+    if isinstance(world_evidence, dict) and world_evidence.get("requiresWorldProof"):
+        static_world = (
+            world_evidence.get("staticWorld", {})
+            if isinstance(world_evidence.get("staticWorld"), dict)
+            else {}
+        )
+        lightmaps = (
+            world_evidence.get("lightmaps", {})
+            if isinstance(world_evidence.get("lightmaps"), dict)
+            else {}
+        )
+        fog = (
+            world_evidence.get("fog", {})
+            if isinstance(world_evidence.get("fog"), dict)
+            else {}
+        )
+        lines.append("## World Proof")
+        lines.append("")
+        lines.append(f"- Version: `{world_evidence.get('version', '-')}`")
+        lines.append(f"- Status: `{world_evidence.get('status', '-')}`")
+        lines.append(
+            "- Required maps: "
+            f"`{', '.join(str(item) for item in world_evidence.get('requiredMaps', [])) or '-'}`"
+        )
+        lines.append(
+            "- GLx screenshots: "
+            f"`{', '.join(str(item) for item in world_evidence.get('glxScreenshotMaps', [])) or '-'}`"
+        )
+        lines.append(
+            "- Static world: "
+            f"`enabled={static_world.get('rendererEnabled', 0)}, "
+            f"arena={static_world.get('arenaReady', 0)}, "
+            f"attempts={static_world.get('drawAttempts', 0)}, "
+            f"indexes={static_world.get('drawIndexes', 0)}, "
+            f"fallbacks={static_world.get('drawFallbacks', 0)}`"
+        )
+        lines.append(
+            "- Lightmaps/fog: "
+            f"`lightmaps={lightmaps.get('ok', False)}, "
+            f"fog={fog.get('ok', False)}, "
+            f"fogDraws={fog.get('streamDraws', 0)}`"
+        )
+        failures = [
+            str(failure)
+            for failure in world_evidence.get("failures", [])
+            if str(failure).strip()
+        ]
+        if failures:
+            lines.append(f"- Failures: `{'; '.join(failures)}`")
+        lines.append("")
+
+    material_evidence = manifest.get("materialProofEvidence")
+    if isinstance(material_evidence, dict) and material_evidence.get("requiresMaterialProof"):
+        renderer = (
+            material_evidence.get("renderer", {})
+            if isinstance(material_evidence.get("renderer"), dict)
+            else {}
+        )
+        parameters = (
+            material_evidence.get("parameters", {})
+            if isinstance(material_evidence.get("parameters"), dict)
+            else {}
+        )
+        stream_features = (
+            material_evidence.get("streamFeatures", {})
+            if isinstance(material_evidence.get("streamFeatures"), dict)
+            else {}
+        )
+        stage_flags = (
+            material_evidence.get("stageFlags", {})
+            if isinstance(material_evidence.get("stageFlags"), dict)
+            else {}
+        )
+        stage_flag_counts = (
+            stage_flags.get("counts", {})
+            if isinstance(stage_flags.get("counts"), dict)
+            else {}
+        )
+        lines.append("## Material Proof")
+        lines.append("")
+        lines.append(f"- Version: `{material_evidence.get('version', '-')}`")
+        lines.append(f"- Status: `{material_evidence.get('status', '-')}`")
+        lines.append(
+            "- Required maps: "
+            f"`{', '.join(str(item) for item in material_evidence.get('requiredMaps', [])) or '-'}`"
+        )
+        lines.append(
+            "- Renderer: "
+            f"`enabled={renderer.get('enabled', 0)}, "
+            f"ready={renderer.get('ready', 0)}, "
+            f"programs={renderer.get('programs', 0)}, "
+            f"binds={renderer.get('binds', 0)}, "
+            f"failures={renderer.get('compileFailures', 0)}/"
+            f"{renderer.get('linkFailures', 0)}/"
+            f"{renderer.get('precacheFailures', 0)}/"
+            f"{renderer.get('bindFailures', 0)}`"
+        )
+        lines.append(
+            "- Parameter block: "
+            f"`blocks={parameters.get('blocks', 0)}, "
+            f"invalid={parameters.get('invalid', 0)}, "
+            f"hash={parameters.get('hash', 0)}, "
+            f"flags={','.join(str(flag) for flag in parameters.get('flagNames', [])) or '-'}`"
+        )
+        lines.append(
+            "- Stage flags: "
+            f"`required={','.join(str(flag) for flag in material_evidence.get('requiredStageFlags', [])) or '-'}, "
+            f"observed={','.join(str(flag) for flag in stage_flags.get('observedNames', [])) or '-'}, "
+            f"animated={stage_flag_counts.get('animatedImage', 0)}, "
+            f"screen={stage_flag_counts.get('screenMap', 0)}, "
+            f"video={stage_flag_counts.get('videoMap', 0)}`"
+        )
+        lines.append(
+            "- Stream material features: "
+            f"`mt={stream_features.get('multitexture', 0)}, "
+            f"depth={stream_features.get('depthFragment', 0)}, "
+            f"texmod={stream_features.get('texMod', 0)}, "
+            f"env={stream_features.get('environment', 0)}, "
+            f"screen={stream_features.get('screenMap', 0)}, "
+            f"video={stream_features.get('videoMap', 0)}, "
+            f"fallbacks={material_evidence.get('streamFallbacks', 0)}`"
+        )
+        lines.append(
+            "- Stream guards: "
+            f"`required={','.join(str(item) for item in material_evidence.get('requiredStreamGuards', [])) or '-'}, "
+            f"forbidden={','.join(str(item) for item in material_evidence.get('forbiddenStreamFeatures', [])) or '-'}`"
+        )
+        failures = [
+            str(failure)
+            for failure in material_evidence.get("failures", [])
+            if str(failure).strip()
+        ]
+        if failures:
+            lines.append(f"- Failures: `{'; '.join(failures)}`")
+        lines.append("")
+
+    dynamic_evidence = manifest.get("dynamicProofEvidence")
+    if isinstance(dynamic_evidence, dict) and dynamic_evidence.get("requiresDynamicProof"):
+        stream_draw = (
+            dynamic_evidence.get("streamDraw", {})
+            if isinstance(dynamic_evidence.get("streamDraw"), dict)
+            else {}
+        )
+        stream_features = (
+            dynamic_evidence.get("streamFeatures", {})
+            if isinstance(dynamic_evidence.get("streamFeatures"), dict)
+            else {}
+        )
+        stream_categories = (
+            dynamic_evidence.get("streamCategories", {})
+            if isinstance(dynamic_evidence.get("streamCategories"), dict)
+            else {}
+        )
+        tier_support = (
+            dynamic_evidence.get("tierSupport", {})
+            if isinstance(dynamic_evidence.get("tierSupport"), dict)
+            else {}
+        )
+
+        def summary_category_draws(name: str) -> object:
+            category = stream_categories.get(name)
+            if isinstance(category, dict):
+                return category.get("draws", 0)
+            return 0
+
+        lines.append("## Dynamic Proof")
+        lines.append("")
+        lines.append(f"- Version: `{dynamic_evidence.get('version', '-')}`")
+        lines.append(f"- Status: `{dynamic_evidence.get('status', '-')}`")
+        lines.append(
+            "- Required scenes: "
+            f"`maps={','.join(str(item) for item in dynamic_evidence.get('requiredMaps', [])) or '-'}, "
+            f"demos={','.join(str(item) for item in dynamic_evidence.get('requiredDemos', [])) or '-'}`"
+        )
+        lines.append(
+            "- Stream categories: "
+            f"`entity={summary_category_draws('entity')}, "
+            f"particle={summary_category_draws('particle')}, "
+            f"poly={summary_category_draws('poly')}, "
+            f"mark={summary_category_draws('mark')}, "
+            f"weapon={summary_category_draws('weapon')}, "
+            f"beam={summary_category_draws('beam')}`"
+        )
+        lines.append(
+            "- Stream features: "
+            f"`shadow={stream_features.get('shadow', 0)}, "
+            f"beam={stream_features.get('beam', 0)}, "
+            f"dynamicLight={stream_features.get('dynamicLight', 0)}, "
+            f"fallbacks={stream_draw.get('fallbacks', 0)}, "
+            f"skips={stream_draw.get('skips', 0)}`"
+        )
+        lines.append(
+            "- Tier support: "
+            f"`dynamicEntities={','.join(str(item) for item in tier_support.get('dynamicEntities', [])) or '-'}, "
+            f"sprites={','.join(str(item) for item in tier_support.get('sprites', [])) or '-'}, "
+            f"beams={','.join(str(item) for item in tier_support.get('beams', [])) or '-'}, "
+            f"dynamicLights={','.join(str(item) for item in tier_support.get('dynamicLights', [])) or '-'}, "
+            f"stencilShadows={','.join(str(item) for item in tier_support.get('stencilShadows', [])) or '-'}`"
+        )
+        failures = [
+            str(failure)
+            for failure in dynamic_evidence.get("failures", [])
+            if str(failure).strip()
+        ]
+        if failures:
+            lines.append(f"- Failures: `{'; '.join(failures)}`")
+        lines.append("")
+
+    post_evidence = manifest.get("postProofEvidence")
+    if isinstance(post_evidence, dict) and post_evidence.get("requiresPostProof"):
+        fbo = (
+            post_evidence.get("fbo", {})
+            if isinstance(post_evidence.get("fbo"), dict)
+            else {}
+        )
+        frames = (
+            post_evidence.get("frames", {})
+            if isinstance(post_evidence.get("frames"), dict)
+            else {}
+        )
+        controls = (
+            post_evidence.get("controls", {})
+            if isinstance(post_evidence.get("controls"), dict)
+            else {}
+        )
+        feature_evidence = (
+            post_evidence.get("featureEvidence", {})
+            if isinstance(post_evidence.get("featureEvidence"), dict)
+            else {}
+        )
+        greyscale = (
+            feature_evidence.get("greyscale", {})
+            if isinstance(feature_evidence.get("greyscale"), dict)
+            else {}
+        )
+        render_scale = (
+            feature_evidence.get("renderScale", {})
+            if isinstance(feature_evidence.get("renderScale"), dict)
+            else {}
+        )
+        lines.append("## Post Proof")
+        lines.append("")
+        lines.append(f"- Version: `{post_evidence.get('version', '-')}`")
+        lines.append(f"- Status: `{post_evidence.get('status', '-')}`")
+        lines.append(
+            "- Required maps: "
+            f"`{', '.join(str(item) for item in post_evidence.get('requiredMaps', [])) or '-'}`"
+        )
+        lines.append(
+            "- FBO/frames: "
+            f"`requested={fbo.get('requested', 0)}, ready={fbo.get('ready', 0)}, "
+            f"failures={fbo.get('initFailures', 0)}, frames={frames.get('post', 0)}, "
+            f"screenshots={frames.get('screenshots', 0)}, minimized={frames.get('minimizedOutput', 0)}`"
+        )
+        lines.append(
+            "- Controls: "
+            f"`renderScale={controls.get('renderScale', 0)}, "
+            f"greyscale={controls.get('greyscale', 0)}, "
+            f"windowAdjusted={controls.get('windowAdjusted', 0)}`"
+        )
+        lines.append(
+            "- Feature evidence: "
+            f"`greyscale={greyscale.get('ok', False)}, "
+            f"renderScale={render_scale.get('ok', False)}, "
+            f"dimensionEvidence={render_scale.get('dimensionEvidence', False)}, "
+            f"colorContract={post_evidence.get('colorContract', 0)}`"
+        )
+        failures = [
+            str(failure)
+            for failure in post_evidence.get("failures", [])
+            if str(failure).strip()
+        ]
+        if failures:
+            lines.append(f"- Failures: `{'; '.join(failures)}`")
+        lines.append("")
+
+    ownership_evidence = manifest.get("ownershipProofEvidence")
+    if isinstance(ownership_evidence, dict) and ownership_evidence.get("requiresOwnership"):
+        delegation = (
+            ownership_evidence.get("delegation", {})
+            if isinstance(ownership_evidence.get("delegation"), dict)
+            else {}
+        )
+        post_output = (
+            ownership_evidence.get("postOutputOwnership", {})
+            if isinstance(ownership_evidence.get("postOutputOwnership"), dict)
+            else {}
+        )
+        lines.append("## Ownership Proof")
+        lines.append("")
+        lines.append(f"- Version: `{ownership_evidence.get('version', '-')}`")
+        lines.append(f"- Status: `{ownership_evidence.get('status', '-')}`")
+        lines.append(f"- Profile: `{ownership_evidence.get('profile', '-')}`")
+        lines.append(
+            "- Legacy delegation: "
+            f"`calls={delegation.get('calls', 0)}, items={delegation.get('items', 0)}`"
+        )
+        lines.append(
+            "- Product tiers: "
+            f"`{', '.join(str(tier) for tier in ownership_evidence.get('productTiers', [])) or '-'}`"
+        )
+        lines.append(
+            "- Modern tier diagnostics: "
+            f"`found={ownership_evidence.get('modernTierDiagnosticsFound', False)}, "
+            f"ok={ownership_evidence.get('modernTierDiagnosticsOk', False)}`"
+        )
+        lines.append(
+            "- Post/output ownership: "
+            f"`modern={ownership_evidence.get('modernPostOutput', False)}, "
+            f"nodes={post_output.get('postNodes', 0)}, "
+            f"outputs={post_output.get('outputs', 0)}, "
+            f"fallback=0x{int_metric(post_output.get('fallbackMask', 0)):08x}`"
+        )
+        failures = [
+            str(failure)
+            for failure in ownership_evidence.get("failures", [])
+            if str(failure).strip()
+        ]
+        if failures:
+            lines.append(f"- Failures: `{'; '.join(failures)}`")
+        lines.append("")
+
+    color_contracts = manifest.get("colorContracts")
+    if isinstance(color_contracts, dict) or color_sweep_runs_for_summary:
+        lines.append("## GLx Color Sweep")
+        lines.append("")
+        if isinstance(color_contracts, dict):
+            matrix = (
+                color_contracts.get("colorSweepMatrix", [])
+                if isinstance(color_contracts.get("colorSweepMatrix"), list)
+                else []
+            )
+            lines.append(f"- Contract version: `{color_contracts.get('version', '-')}`")
+            lines.append(
+                f"- Enabled: `{str(bool(manifest.get('colorSweepEnabled'))).lower()}`"
+            )
+            lines.append(f"- Matrix rows: `{len(matrix)}`")
+        if color_sweep_runs_for_summary:
+            lines.append("")
+            lines.append("| Row | Status | Probe | Screenshots | Output Request | Target | Final Encode |")
+            lines.append("|---|---:|---|---:|---:|---:|---:|")
+            for run in color_sweep_runs_for_summary:
+                row = run.get("colorSweepRow")
+                row_id = str(row.get("id", "-")) if isinstance(row, dict) else "-"
+                row_probe = str(row.get("probe", "-")) if isinstance(row, dict) else "-"
+                row_expect = row.get("expect", {}) if isinstance(row, dict) else {}
+                run_shots = [
+                    shot
+                    for shot in run.get("screenshots", [])
+                    if isinstance(shot, dict)
+                ]
+                found_shots = sum(1 for shot in run_shots if shot.get("found"))
+                diagnostics_result = (
+                    run.get("diagnostics")
+                    if isinstance(run.get("diagnostics"), dict)
+                    else {}
+                )
+                metrics = (
+                    diagnostics_result.get("metrics", {})
+                    if isinstance(diagnostics_result, dict)
+                    else {}
+                )
+                target_format = (
+                    metrics.get("targetFormat", {})
+                    if isinstance(metrics, dict) and isinstance(metrics.get("targetFormat"), dict)
+                    else {}
+                )
+                color_audit = (
+                    metrics.get("colorAudit", {})
+                    if isinstance(metrics, dict) and isinstance(metrics.get("colorAudit"), dict)
+                    else {}
+                )
+                output_backend = (
+                    metrics.get("outputBackend", {})
+                    if isinstance(metrics, dict) and isinstance(metrics.get("outputBackend"), dict)
+                    else {}
+                )
+                internal_format = target_format.get("internalFormat", "-")
+                if isinstance(internal_format, int):
+                    internal_format = f"0x{internal_format:x}"
+                output_request = output_backend.get("request", "-")
+                if output_request == "-" and isinstance(row_expect, dict):
+                    output_request = row_expect.get("outputRequest", "-")
+                lines.append(
+                    "| "
+                    f"`{row_id}` | "
+                    f"`{run.get('status', 'unknown')}` | "
+                    f"`{row_probe}` | "
+                    f"`{found_shots}/{len(run_shots)}` | "
+                    f"`{output_request}` | "
+                    f"`{internal_format}` | "
+                    f"`{color_audit.get('finalEncode', '-')}` |"
+                )
         lines.append("")
 
     gate_failures = manifest.get("gateFailures", [])
@@ -5268,6 +10950,7 @@ def main() -> int:
         datetime.now(timezone.utc).strftime("glx-sweep-%Y%m%d-%H%M%S-%f") +
         f"-p{os.getpid()}"
     )
+    qpath_run_token = runtime_token(run_id)
     output_root = args.output_dir.resolve() / run_id
     homepath = args.homepath.resolve() if args.homepath else output_root / "home"
     logs_dir = output_root / "logs"
@@ -5276,6 +10959,7 @@ def main() -> int:
     cvars = make_cvars(args)
     cfg_cvars = config_cvars(args, cvars)
     startup_cvars = launch_cvars(cvars)
+    qconsole_log_path = engine_console_log_path(homepath, args.fs_game)
     runs: list[dict[str, object]] = []
     screenshot_baseline_dir = args.screenshot_baseline_dir.resolve() if args.screenshot_baseline_dir else None
     screenshot_diff_dir = args.screenshot_diff_dir.resolve() if args.screenshot_diff_dir else None
@@ -5310,6 +10994,7 @@ def main() -> int:
         args.performance_budget,
         include_default=bool(args.gate) and not args.no_performance_budget,
     )
+    performance_budget = performance_budget_for_gate(args.gate, performance_budget)
     gate_requirements = (
         RC_GATE_PRESETS[args.gate]["requirements"] if args.gate else {}
     )
@@ -5323,13 +11008,14 @@ def main() -> int:
     )
 
     if not args.no_switch_sweep and maps:
-        switch_cfg_name = f"{run_id}-switch.cfg"
+        switch_cfg_name = validate_runtime_qpath(f"{qpath_run_token}-switch.cfg")
         switch_cfg, expected_shots = build_switch_cfg(
             args,
             cfg_cvars,
             maps,
             switch_sequence,
             run_id,
+            qpath_run_token,
             corpus_scene_ids,
             parity_suite_ids,
         )
@@ -5350,6 +11036,7 @@ def main() -> int:
             args.timeout,
             switch_log_path,
             args.dry_run,
+            qconsole_log_path,
         )
         shots = screenshot_results(homepath, args.fs_game, expected_shots)
         if not args.dry_run:
@@ -5370,17 +11057,84 @@ def main() -> int:
                 "config": str(cfg_path),
                 "maps": maps,
                 "switchSequence": switch_sequence,
+                "restartMode": "fast",
+                "vidRestartEquivalent": True,
+                "vidRestartPath": "CL_Vid_Restart(REF_KEEP_WINDOW)",
                 "screenshots": shots,
             }
         )
         runs.append(result)
 
+    if args.color_sweep:
+        color_map = maps[0] if maps else "q3dm1"
+        for row_index, row in enumerate(GLX_COLOR_SWEEP_MATRIX, start=1):
+            row_id = str(row["id"])
+            row_cvars = dict(cvars)
+            row_values = row.get("cvars", {})
+            if isinstance(row_values, dict):
+                row_cvars.update({str(name): str(value) for name, value in row_values.items()})
+            row_cfg_cvars = config_cvars(args, row_cvars)
+            cfg_name = validate_runtime_qpath(f"{qpath_run_token}-c{row_index:02d}.cfg")
+            color_cfg, expected_shots = build_color_sweep_cfg(
+                args,
+                row_cfg_cvars,
+                color_map,
+                row,
+                run_id,
+                qpath_run_token,
+                row_index,
+            )
+            cfg_path = write_cfg(homepath, args.fs_game, cfg_name, color_cfg)
+            command = base_launch_args(
+                exe,
+                basepath,
+                homepath,
+                args.fs_game,
+                "glx",
+                cfg_name,
+                launch_cvars(row_cvars),
+            )
+            log_path = logs_dir / f"color-{sanitize(row_id)}.log"
+            result = run_engine(
+                command,
+                exe.parent,
+                args.timeout,
+                log_path,
+                args.dry_run,
+                qconsole_log_path,
+            )
+            shots = screenshot_results(homepath, args.fs_game, expected_shots)
+            if not args.dry_run:
+                apply_screenshot_baselines(
+                    shots,
+                    screenshot_baseline_dir,
+                    args.approve_screenshot_baselines,
+                    screenshot_diff_dir,
+                    screenshot_max_rms,
+                    screenshot_max_pixel_ratio,
+                )
+                result["diagnostics"] = analyze_glx_diagnostics(log_path, args.profile)
+                result["performance"] = analyze_glx_performance(log_path)
+            result.update(
+                {
+                    "type": "color-sweep",
+                    "config": str(cfg_path),
+                    "renderer": "glx",
+                    "map": color_map,
+                    "colorSweepRow": dict(row),
+                    "screenshots": shots,
+                }
+            )
+            runs.append(result)
+
     if not args.no_demo_sweep and demos:
-        for renderer in renderers:
-            for demo in demos:
+        for renderer_index, renderer in enumerate(renderers, start=1):
+            for demo_index, demo in enumerate(demos, start=1):
                 safe_renderer = sanitize(renderer)
                 safe_demo = sanitize(demo)
-                cfg_name = f"{run_id}-demo-{safe_renderer}-{safe_demo}.cfg"
+                cfg_name = validate_runtime_qpath(
+                    f"{qpath_run_token}-d{renderer_index:02d}-{demo_index:02d}.cfg"
+                )
                 cfg_path = write_cfg(homepath, args.fs_game, cfg_name, build_demo_cfg(args, cfg_cvars, demo))
                 command = base_launch_args(
                     exe,
@@ -5398,6 +11152,7 @@ def main() -> int:
                     args.timeout,
                     log_path,
                     args.dry_run,
+                    qconsole_log_path,
                 )
                 metrics = timedemo_metrics(log_path)
                 result.update(
@@ -5414,6 +11169,7 @@ def main() -> int:
 
     manifest = {
         "runId": run_id,
+        "runtimeQpathToken": qpath_run_token,
         "createdUtc": datetime.now(timezone.utc).isoformat(),
         "dryRun": args.dry_run,
         "gate": args.gate or "",
@@ -5436,9 +11192,12 @@ def main() -> int:
         "configCvars": cfg_cvars,
         "renderers": renderers,
         "switchSequence": switch_sequence,
+        "switchRounds": args.switch_rounds,
         "maps": maps,
         "demos": demos,
         "proofCorpus": proof_corpus,
+        "colorContracts": color_contract_manifest(),
+        "colorSweepEnabled": bool(args.color_sweep),
         "perfSamplesEnabled": not args.no_perf_samples,
         "perfSampleWait": args.perf_sample_wait,
         "performanceBudget": performance_budget,
@@ -5455,6 +11214,7 @@ def main() -> int:
         },
         "runs": runs,
     }
+    manifest["rendererSwitchEvidence"] = renderer_switch_lifecycle_evidence(manifest)
 
     performance_samples = [
         run.get("performance")
@@ -5496,6 +11256,16 @@ def main() -> int:
 
     manifest["performanceComparisons"] = performance_comparisons
     manifest["performanceFailures"] = list(dict.fromkeys(performance_failures))
+    if manifest_requires_world_proof(manifest, gate_requirements):  # type: ignore[arg-type]
+        manifest["worldProofEvidence"] = world_proof_evidence(manifest, gate_requirements)  # type: ignore[arg-type]
+    if manifest_requires_material_proof(manifest, gate_requirements):  # type: ignore[arg-type]
+        manifest["materialProofEvidence"] = material_proof_evidence(manifest, gate_requirements)  # type: ignore[arg-type]
+    if manifest_requires_dynamic_proof(manifest, gate_requirements):  # type: ignore[arg-type]
+        manifest["dynamicProofEvidence"] = dynamic_proof_evidence(manifest, gate_requirements)  # type: ignore[arg-type]
+    if manifest_requires_post_proof(manifest, gate_requirements):  # type: ignore[arg-type]
+        manifest["postProofEvidence"] = post_proof_evidence(manifest, gate_requirements)  # type: ignore[arg-type]
+    if manifest_requires_ownership_proof(manifest):
+        manifest["ownershipProofEvidence"] = ownership_proof_evidence(manifest)
     manifest["proof"] = proof_status(manifest)
 
     gate_failures = evaluate_gate(manifest)
@@ -5505,7 +11275,36 @@ def main() -> int:
 
     output_root.mkdir(parents=True, exist_ok=True)
     manifest_path = output_root / "manifest.json"
+    visual_dossier_path = output_root / "glx-visual-dossier.md"
+    manifest["visualDossier"] = {
+        "version": GLX_VISUAL_DOSSIER_VERSION,
+        "path": str(visual_dossier_path),
+        "sections": [
+            "current-pipeline-flow",
+            "target-pipeline-flow",
+            "renderer-switch-lifecycle",
+            "backend-state-overlay",
+            "driver-tier-matrix",
+            "histogram-and-false-color-evidence",
+            "parity-diff-sheet",
+        ],
+    }
+    if isinstance(manifest.get("worldProofEvidence"), dict):
+        manifest["visualDossier"]["sections"].insert(3, "world-proof")  # type: ignore[index]
+    if isinstance(manifest.get("materialProofEvidence"), dict):
+        manifest["visualDossier"]["sections"].insert(4, "material-proof")  # type: ignore[index]
+    if isinstance(manifest.get("dynamicProofEvidence"), dict):
+        manifest["visualDossier"]["sections"].insert(5, "dynamic-proof")  # type: ignore[index]
+    if isinstance(manifest.get("postProofEvidence"), dict):
+        manifest["visualDossier"]["sections"].insert(6, "post-proof")  # type: ignore[index]
+    if isinstance(manifest.get("ownershipProofEvidence"), dict):
+        manifest["visualDossier"]["sections"].insert(3, "ownership-proof")  # type: ignore[index]
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    visual_dossier_path.write_text(
+        glx_visual_dossier(manifest, manifest_path),
+        encoding="utf-8",
+        newline="\n",
+    )
 
     if args.summary_markdown:
         summary_path = args.summary_markdown.resolve()
@@ -5542,6 +11341,7 @@ def main() -> int:
             f"{GLX_PARITY_SUITE_VERSION} ({', '.join(parity_suite_ids)})"
         )
     print(f"Manifest: {manifest_path}")
+    print(f"Visual dossier: {visual_dossier_path}")
     print(f"Runs: {passed_runs}/{run_count} passed or planned")
     if screenshots:
         if args.dry_run:

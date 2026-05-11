@@ -8,7 +8,7 @@ The gates are intentionally conservative. They prove that GLx can load through t
 
 The final renderer replacement contract is [GLX_FINAL_CONTRACT.md](GLX_FINAL_CONTRACT.md). The gates in this document validate the transitional RC surface; they do not satisfy the final five-tier, GLx-owned draw, scene-linear color, and full feature-closure requirements by themselves.
 
-The current feature-closure status is tracked in [GLX_FEATURE_MATRIX.md](GLX_FEATURE_MATRIX.md). A clean RC gate does not override rows that remain `partially covered` or `missing` in that matrix. The official screenshot and timedemo scene list is the [GLx proof corpus](GLX_PROOF_CORPUS.md); gate manifests, Markdown summaries, performance baselines, CI gate-plan artifacts, and release manifests all reference that same corpus version. The same corpus document also owns the named screenshot, demo-playback, HUD, shadow, bloom, and cel-shading parity suites required by `rc-proof`.
+The current feature-closure status is tracked in [GLX_FEATURE_MATRIX.md](GLX_FEATURE_MATRIX.md). A clean RC gate does not override rows that remain `partially covered` or `missing` in that matrix. The official screenshot and timedemo scene list is the [GLx proof corpus](GLX_PROOF_CORPUS.md); gate manifests, Markdown summaries, performance baselines, CI gate-plan artifacts, and release manifests all reference that same corpus version. The same corpus document also owns the named screenshot, demo-playback, HUD, shadow, bloom, cel-shading, greyscale, and render-scale parity suites required by `rc-proof`.
 
 ## Blocking Runtime Matrix
 
@@ -35,14 +35,14 @@ Nightly packaging should continue to build GLx wherever the repository already e
 
 | Gate | Purpose | Profile | Scene Set | Automated Floor |
 |---|---|---|---|---|
-| `rc-smoke` | Renderer lifecycle smoke: module load, map load, repeated in-process renderer switches, screenshots, and GLx diagnostics. | `baseline` | `stock-q3dm1-hud` | All runs pass, all expected screenshots are written, and the manifest references the current corpus version. |
-| `rc-parity` | Blocking conservative RC gate for world, ordered packet-batch static spans, stream paths including CPU-computed texmods, environment coordinates, state-only dynamic-scene draw arrays, material, bloom, and GPU-timing paths. | `glx-parity` / `r_glxProfile rc` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `timedemo-demo1` | All runs pass, all screenshots are written, GLx timedemo FPS is at least 90% of `opengl`, and the selected corpus covers stock maps, screenshots, HUD, bloom, demo playback, and performance comparison tags. |
-| `rc-proof` | Blocking proof gate for the RC surface, requiring reviewed screenshot baselines, an approved performance baseline, and the full named parity-suite set in addition to the `rc-parity` checks. | `glx-parity` / `r_glxProfile rc` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `timedemo-demo1` | All parity checks pass, every screenshot compares within threshold, aggregate performance counters stay within the approved baseline growth budget, and the selected corpus carries the `screenshot`, `demo-playback`, `hud`, `shadow`, `bloom`, and `cel-shading` suite records. |
-| `rc-stress` | Developer stress gate for compact static-world MDI command uploads and staged modern-map content before aggressive paths become defaults. | `glx-stress` / `r_glxProfile stress` | `rc-proof` set plus `modern-fnq3glx-heavy01`, `modern-fnq3glx-shader01`, `modern-fnq3glx-fog01`, `timedemo-fnq3glx-particles01` | All runs pass, screenshots are written, timedemo metrics are captured, and the selected corpus covers modern-map, high-geometry, shader-heavy, fog-heavy, particle-heavy-demo, UI/HUD, performance tags, and the full named parity-suite set. |
+| `rc-smoke` | Renderer lifecycle smoke: module load, map load, repeated in-process renderer switches, screenshots, and GLx diagnostics. | `baseline` | `stock-q3dm1-hud` | All runs pass, all expected screenshots are written, the manifest records passing versioned `rendererSwitchEvidence`, and the manifest references the current corpus version. |
+| `rc-parity` | Blocking conservative RC gate for world, ordered packet-batch static spans, stream paths including CPU-computed texmods, environment coordinates, state-only dynamic-scene draw arrays, material, bloom, and GPU-timing paths. | `glx-parity` / `r_glxProfile rc` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `timedemo-demo1` | All runs pass, all screenshots are written, the versioned renderer-switch lifecycle records an `opengl -> glx -> opengl -> glx` round trip, versioned `worldProofEvidence` proves stock-map/lightmap GLx screenshots plus static-world counters with no packet misses or fallbacks, GLx timedemo FPS is at least 90% of `opengl`, and the selected corpus covers stock maps, screenshots, HUD, bloom, demo playback, and performance comparison tags. |
+| `rc-proof` | Blocking proof gate for the RC surface, requiring reviewed screenshot baselines, an approved performance baseline, and the full named parity-suite set in addition to the `rc-parity` checks. | `glx-parity` / `r_glxProfile rc` | `stock-q3dm1-hud`, `stock-q3dm17-open`, `stock-q3dm6-geometry`, `stock-q3dm11-shader`, `stock-q3dm15-fog`, `timedemo-demo1` | All parity checks pass, every screenshot compares within threshold, the renderer-switch lifecycle proves every expected map/round/step transition, `worldProofEvidence` covers stock/high-geometry/lightmap/fog/visibility maps, `materialProofEvidence` covers material-stage and tcgen runtime telemetry, `dynamicProofEvidence` covers entity/weapon categories, dynamic-light guards, and shadow proof tags, `postProofEvidence` covers greyscale and render-scale postprocess proof, aggregate performance counters stay within the approved baseline growth budget, and the selected corpus carries the `screenshot`, `demo-playback`, `hud`, `shadow`, `bloom`, `cel-shading`, `greyscale`, and `render-scale` suite records. |
+| `rc-stress` | Developer stress gate for compact static-world MDI command uploads and staged modern-map content before aggressive paths become defaults. | `glx-stress` / `r_glxProfile stress` | `rc-proof` set plus `modern-fnq3glx-heavy01`, `modern-fnq3glx-shader01`, `modern-fnq3glx-fog01`, `timedemo-fnq3glx-particles01` | All runs pass, screenshots are written, renderer-switch lifecycle evidence proves GLx entry and diagnostics, `worldProofEvidence` covers the stock and modern static/fog scene set, `materialProofEvidence` includes staged animated-image, vector-tcgen, screen-map, and video-map material tags, `dynamicProofEvidence` includes staged particle/poly/mark/beam category counters, `postProofEvidence` includes greyscale and render-scale counters/dimensions, timedemo metrics are captured, and the selected corpus covers modern-map, high-geometry, shader-heavy, fog-heavy, particle-heavy-demo, UI/HUD, performance tags, and the full named parity-suite set. |
 
 The `retail-baseq3` subset is deliberately stock-data friendly. The `glx-proof-corpus` subset is reserved for staged project stress maps and demos; `rc-stress` uses those stable scene IDs so modern-map evidence is comparable across CI plans, local GPU runs, and release artifacts.
 
-The named parity suites are gate data, not prose. `rc-proof` requires the versioned `screenshot`, `demo-playback`, `hud`, `shadow`, `bloom`, and `cel-shading` suite records in its manifest. The sweep verifies that every selected suite's absolute scene list is present in the gate scene set, that the selected tags match the suite requirements, and that suite cvar overrides such as `cg_shadows=2` or `r_celShading=1` are written into the generated screenshot config before the relevant map loads.
+The named parity suites are gate data, not prose. `rc-proof` requires the versioned `screenshot`, `demo-playback`, `hud`, `shadow`, `bloom`, `cel-shading`, `greyscale`, and `render-scale` suite records in its manifest. The sweep verifies that every selected suite's absolute scene list is present in the gate scene set, that the selected tags match the suite requirements, and that suite cvar overrides such as `cg_shadows=2`, `r_celShading=1`, `r_greyscale=1`, or `r_renderScale=1` are written into the generated screenshot config before the relevant map loads.
 
 The profile names are not just documentation labels. `glx-parity` and `glx-ownership` launch GLx with `r_glxProfile rc`, and `glx-stress` launches GLx with `r_glxProfile stress`, so startup-sensitive resources are built under the same profile that `glxprofile status` reports in the renderer. `glx-ownership` uses the RC cvar surface plus `r_glxRequireOwnership 1`, rejecting legacy-delegation draw submissions and turning any attempted delegation into a blocking diagnostic failure.
 
@@ -50,7 +50,7 @@ The profile names are not just documentation labels. `glx-parity` and `glx-owner
 
 The conservative RC profile is frozen as a cvar contract between the runtime renderer and the sweep harness. `code/rendererglx/glx_module.cpp` owns the `r_glxProfile rc` table, while `scripts/glx_runtime_sweep.py` owns the `glx-parity` launch profile. `tests/glx/glx_runtime_sweep_tests.py` parses the runtime table and fails if the script profile drifts from it.
 
-Use `python scripts/glx_runtime_sweep.py --list-profiles` to print the exact profile values used by sweeps. The RC profile enables the compatibility-first GLx world renderer, GLx static arenas, GLx static device/soft draw dispatch, packet-batch static spans, same-state multidraw, capability-gated high-end indirect buffer/single-draw/MDI span submission, guarded stream draw, material renderer/precache, final-pass bloom parity, GPU timing, and the state-only shadow/beam/postprocess dynamic draw-array submissions. It intentionally keeps dynamic-light/screen-map/video-map material gates and compact per-batch MDI command uploads off; those stay in the stress profile or explicit developer overrides until their gates have evidence.
+Use `python scripts/glx_runtime_sweep.py --list-profiles` to print the exact profile values used by sweeps. The RC profile enables the compatibility-first GLx world renderer, GLx static arenas, GLx static device/soft draw dispatch, packet-batch static spans, same-state multidraw, capability-gated high-end indirect buffer/single-draw/MDI span submission, guarded stream draw, material renderer/precache, final-pass bloom parity, GPU timing, and the state-only shadow/beam/postprocess dynamic draw-array submissions. The focused `glx-material` profile also enables material precache and runs the HUD plus shader-heavy stock scenes so shader compile-cache stress evidence is collected even outside the full RC profile. It intentionally keeps dynamic-light/screen-map/video-map material gates and compact per-batch MDI command uploads off; those stay in the stress profile or explicit developer overrides until their gates have evidence.
 
 ## Exit Criteria
 
@@ -59,6 +59,11 @@ A GLx RC candidate must meet all of these conditions:
 - `rc-smoke`, `rc-parity`, and `rc-proof` pass on every blocking runtime platform.
 - The generated manifest, logs, screenshots, screenshot diffs, Markdown summary, timedemo metrics, and performance comparisons are archived with the candidate build.
 - The generated manifest and any performance-baseline JSON identify the same GLx proof corpus version, parity suite version, selected scene IDs, and selected parity suite IDs used by the gate.
+- The generated manifest contains `rendererSwitchEvidence` with the current lifecycle schema version, a `renderer_switch` command record, the `fast`/keep-window `CL_Vid_Restart` path, every expected map/round/step transition, at least one transition into GLx, and a round trip back out of GLx for blocking gates.
+- The generated `rc-parity`, `rc-proof`, and `rc-stress` manifests contain `worldProofEvidence` with the current schema version, required world tags from the selected corpus, found GLx screenshots and histogram metadata for each required map, static-world draw/index counters, zero static packet misses/fallbacks/errors, lightmap evidence, and fog-heavy evidence whenever fog/visibility tags are required.
+- The generated `rc-proof` and `rc-stress` manifests contain `materialProofEvidence` with the current schema version, required material/tcgen/stage-flag tags from the selected corpus, found GLx screenshots and histogram metadata for each required material map, material renderer readiness, compile/program activity, zero compile/link/precache/bind failures, zero unsupported compiler plans, non-zero parameter-block fingerprints, and the required stream-material feature and guard evidence.
+- The generated `rc-proof` and `rc-stress` manifests contain `dynamicProofEvidence` with the current schema version, required dynamic-scene tags from the selected corpus, found GLx screenshots or timedemo metrics for the required dynamic scenes, positive required stream-category and stream-feature counters, required tier-support evidence, explicit high-risk dynamic-light guard state, and zero stream/category fallbacks.
+- The generated `rc-proof` and `rc-stress` manifests contain `postProofEvidence` with the current schema version, required greyscale/render-scale tags from the selected corpus, found GLx screenshots and histogram metadata for each required postprocess map, ready FBO evidence, zero FBO failures, positive postprocess frame/screenshot counters, greyscale control/frame evidence, render-scale control/frame evidence, render/capture dimensions proving a scaled output, non-minimized output, and a valid output color contract.
 - The GLx timedemo result is at least 90% of the legacy `opengl` timedemo result for each required demo on the same machine. A lower result needs a tracked waiver with the measured cause.
 - Manual screenshot review finds no unexplained drift in world visibility, sky, fog, lightmaps, weapon placement, marks/decals, particles, HUD/2D, shadows, cel-shading/outline, bloom, gamma, or final output size.
 - GLx diagnostic output shows no shader compile/link failures, material path `not-ready` state, GL errors, postprocess fallback output, streamed dynamic-scene fallback growth, or unexpected loss of the static-world/stream fallback guarantees.
@@ -103,6 +108,112 @@ The initial thresholds are intentionally tight and should be adjusted only with 
 
 For hard RC proof, prefer `--gate rc-proof --proof-dir <dir>`. The proof directory defaults screenshot baselines to `<dir>/screenshots`, performance baselines to `<dir>/performance-baseline.json`, screenshot diffs to the run artifact directory, and the Markdown summary to the run artifact directory. `rc-proof` rejects baseline-approval mode before launching runtime work; approve refreshed visual and performance baselines in a separate reviewed `rc-parity` run before using them as proof inputs.
 
+## Renderer Switch Lifecycle Evidence
+
+Every named non-dry-run RC gate records a versioned `rendererSwitchEvidence`
+object in the sweep manifest. The evidence is derived from the generated
+switch-screenshot run instead of hand-authored metadata: it expands the selected
+maps, `--switch-rounds`, and `--switch-sequence`, then checks that each expected
+map/round/step/renderer tuple produced a found screenshot.
+
+The blocking gates require that evidence to pass before other visual proof can
+count. The record must show the `renderer_switch` command path, a
+vid-restart-equivalent restart mode, both legacy and GLx renderer legs, at
+least one transition into GLx, a transition back out of GLx for
+`rc-smoke`/`rc-parity`/`rc-proof`, GLx diagnostics collected after a GLx leg,
+and at least one GLx performance sample when performance samples are required.
+Dry-run gate plans write the same object with `status: planned`, but dry-run
+evidence remains planning output only.
+
+## World Proof Evidence
+
+`rc-parity`, `rc-proof`, and `rc-stress` also write a versioned
+`worldProofEvidence` object. The sweep derives this object from the selected
+proof-corpus scene IDs, found GLx screenshots, GLx diagnostics, and `r_speeds 7`
+performance counters. It is intentionally stricter than a screenshot count:
+required world tags expand to required maps, each required map must have a found
+GLx screenshot with histogram metadata, and the static-world path must report
+enabled/ready draw evidence without packet misses, fallbacks, GL errors, static
+failures, or static MDI errors.
+
+The `rc-parity` requirement covers the conservative stock-map/lightmap floor:
+`q3dm1` plus `q3dm17` screenshots and static-world evidence. The `rc-proof`
+requirement expands that contract to high-geometry, fog-heavy, and visibility
+coverage through `q3dm6` and `q3dm15`. `rc-stress` keeps the same proof shape
+for the staged modern-map stress scenes. Lightmap proof can come from tier
+support diagnostics or material parameter-block evidence; fog proof can come
+from tier support diagnostics or fog stream-draw counters, but fog-heavy maps
+must still have screenshot parity evidence.
+
+## Material Proof Evidence
+
+`rc-proof` and `rc-stress` write a versioned `materialProofEvidence` object.
+The sweep derives it from the selected proof-corpus material tags, found GLx
+screenshots, `glxmaterial` diagnostics, stream-material gate diagnostics, and
+`r_speeds 7` material counters. This object is the blocking proof that the
+shader-stage surface is not only compiled in logic tests, but also active in a
+runtime proof manifest.
+
+For `rc-proof`, the required tags cover the shader-heavy/material-stage scene
+plus lightmap, environment, and fog tcgen proof tags. The evidence requires the
+material renderer to be enabled and ready, material compile/program activity to
+be present, compile/link/precache/bind failure counters to stay at zero,
+unsupported compiler plans and material fallbacks to stay at zero, material
+parameter blocks to carry a non-zero fingerprint, and the RC stream-material
+features (`multitexture`, `depthFragment`, `texMod`, and `environment`) to have
+draw or gate-acceptance evidence. Dynamic-light, screen-map, and video-map
+stream guards must also be present, but those features remain forbidden in the
+RC proof surface and continue to fail the diagnostic gate if any accepted draw
+evidence appears there.
+
+For `rc-stress`, the material proof expands to the staged
+`modern-fnq3glx-shader01` material surface. That gate requires the
+`animated-image`, `screen-map`, and `video-map` tags, non-zero stage-flag
+evidence for `animatedImage`, `screenMap`, and `videoMap`, and positive
+screen/video stream-material evidence. This proves the content-sensitive
+material keys and stream gates without silently making them part of the
+conservative RC profile.
+
+## Dynamic Proof Evidence
+
+`rc-proof` and `rc-stress` write a versioned `dynamicProofEvidence` object.
+The sweep derives it from selected proof-corpus dynamic tags, found GLx
+screenshots, GLx timedemo metrics, stream-category diagnostics, tier-support
+diagnostics, stream guard diagnostics, and `r_speeds 7` dynamic stream counters.
+
+For `rc-proof`, the required tags cover the conservative retail surface:
+`dynamic-entity`, `weapon-model`, `dynamic-light`, and `planar-shadow`.
+The evidence requires positive entity and first-person weapon category counters,
+positive shadow stream evidence, dynamic-entity/sprite/dynamic-light/stencil
+shadow support, found screenshots for required map scenes, timedemo metrics for
+required demo scenes, and an explicit dynamic-light stream guard that accepts no
+draws in the conservative proof profile.
+
+For `rc-stress`, the dynamic proof expands to staged particles, transient
+polys, marks/decals, and beams. That gate requires the particle-heavy timedemo
+plus positive particle/poly/mark/beam category counters and positive beam stream
+evidence while preserving the same dynamic-light guard. This lets staged content
+prove transient draw pressure without silently promoting high-risk lighting into
+the RC default surface.
+
+## Post Proof Evidence
+
+`rc-proof` and `rc-stress` write a versioned `postProofEvidence` object. The
+sweep derives it from selected proof-corpus postprocess tags, found GLx
+screenshots, histogram metadata, `glxpostprocess` diagnostics, target-format
+diagnostics, output-contract diagnostics, and `r_speeds 7` postprocess samples.
+
+The proof is intentionally narrower than the full output contract. For
+`rc-proof`, it requires the greyscale suite on `stock-q3dm1-hud` and the
+render-scale suite on `stock-q3dm17-open`. The object fails if the proof corpus
+does not select the required tags, if the tagged maps lack found GLx screenshots
+or histograms, if the postprocess FBO is not ready, if FBO init failures are
+reported, if no postprocess frames or screenshot frames are observed, if
+minimized output is reported, if the color contract is invalid, if greyscale
+control/frame evidence is absent, or if render-scale control/frame evidence
+does not include render/capture dimensions that differ from the window size.
+`rc-stress` keeps the same shape while adding staged content pressure around it.
+
 ## Diagnostic Gate Analysis
 
 Non-dry-run gate manifests now include structured analysis of the GLx diagnostic commands emitted during screenshot sweeps. The analyzer reads the `glxmaterial`, `glxpostprocess`, and `glxstaticworld`/stream sections from the run log and fails the gate on release-blocking renderer states:
@@ -110,7 +221,7 @@ Non-dry-run gate manifests now include structured analysis of the GLx diagnostic
 - material renderer enabled but not ready under the RC/stress profiles;
 - material compile, link, precache, bind, not-ready, or program-limit failures;
 - requested FBO output that is not ready, FBO init failures, bloom create failures, bloom pass failures, or minimized final output;
-- dynamic stream readiness loss under the RC/stress profiles, missing stream-category diagnostics, sync/upload/reservation failures, same-frame wrap rejects, streamed draw fallbacks, per-category stream fallbacks, material-program stream skips, or high-risk dynamic-light/screen-map/video-map material stream draws;
+- dynamic stream readiness loss under the RC/stress profiles, missing stream-category diagnostics, sync/upload/reservation failures, same-frame wrap rejects, streamed draw fallbacks, per-category stream fallbacks, material-program stream skips, or high-risk dynamic-light material stream draws; screen-map and video-map draws remain forbidden in `rc-proof` but are budgeted explicitly in `rc-stress` for staged material proof;
 - static-world renderer or packet batching disabled under the RC/stress profiles, static arena/indirect-buffer failures, or static-world GL errors.
 - a `GL12` diagnostic that does not expose the fixed-function executor contract or that claims stream uploads, the GLSL material compiler, or the modern post chain are supported on the GL12 tier.
 - a `GL2X` diagnostic that does not expose the programmable executor contract or that treats persistent/modern post/HDR requirements as mandatory on the GL2X tier.
@@ -118,7 +229,7 @@ Non-dry-run gate manifests now include structured analysis of the GLx diagnostic
 - a `GL41` diagnostic that does not expose the mac-modern executor contract, omits the modern macOS ceiling feature surface, or treats GL4.3 debug output, GL4.4 buffer storage, GL4.5 DSA, MDI, or persistent uploads as mandatory on the GL41 tier.
 - a `GL46` diagnostic that does not expose the high-end executor contract or omits persistent uploads, buffer storage uploads, sync-heavy streaming, DSA, MDI, aggressive static-world submission, detailed GPU counters, hardware HDR output, or the required high-end driver feature requirements.
 
-The analyzer also records `glx: ownership legacy delegation ...` diagnostics. Transitional RC gates keep those counters as review evidence, while the ownership-proof `glx-ownership` profile fails when any legacy draw delegation remains.
+The analyzer also records `glx: ownership legacy delegation ...` and post/output ownership diagnostics. Transitional RC gates keep those counters as review evidence, while the ownership-proof `glx-ownership` profile writes versioned `ownershipProofEvidence` and fails when any legacy draw delegation remains or when modern tiers do not report GLx-owned `PostNode`, `OutputTransform`, and post/output plan consumption with non-zero fingerprints and a zero fallback mask. Promotion validation requires that versioned evidence object instead of relying on scattered raw counters alone.
 
 Ordinary compatibility counters, unsupported capability fallbacks, packet-shape data, skipped material keys, and other tuning metrics remain in the manifest and Markdown summary for review, but they are not treated as blocking failures by themselves.
 
@@ -128,7 +239,7 @@ During GLx screenshot captures the sweep briefly enables `r_speeds 7`, waits a s
 
 Named RC gates require at least one GLx frame-counter sample in a non-dry-run screenshot sweep. `--perf-sample-wait` controls the number of frames sampled around each GLx capture, and `--no-perf-samples` is available only for focused local experiments that should not count as RC gate evidence.
 
-Named gates also apply a built-in performance budget to the aggregate sample maxima. The default budget blocks stream rejects, material shader failures, material bind/precache failures, streamed/static draw fallbacks, high-risk dynamic-light/screen-map/video-map material stream draws, and static MDI errors from silently entering RC evidence. For local experiments use `--no-performance-budget`; for runner-specific limits add a JSON file with `--performance-budget`:
+Named gates also apply a built-in performance budget to the aggregate sample maxima. The default budget blocks stream rejects, material shader failures, material bind/precache failures, streamed/static draw fallbacks, high-risk dynamic-light/screen-map/video-map material stream draws, post/output fallback masks on modern tiers, and static MDI errors from silently entering RC evidence. `rc-stress` deliberately overrides the screen-map and video-map maxima so staged material proof can exercise those content-sensitive gates; `rc-proof` keeps them forbidden. Modern-tier samples must also carry shader cache counters, material parameter-block counters/fingerprints, stream binding-cache counters, and post/output ownership counters/fingerprints, with positive post/output nodes/fingerprints/plan fingerprints, material programs/binds/parameter blocks/fingerprints, and stream binding restores, so P1 proof cannot omit the hot-path evidence. GL12/GL2X post/output fallback remains recorded compatibility evidence rather than a budget failure. For local experiments use `--no-performance-budget`; for runner-specific limits add a JSON file with `--performance-budget`:
 
 ```json
 {
@@ -174,13 +285,26 @@ proof-root/
     rc-proof/<run-id>/manifest.json
 ```
 
-Each manifest must be non-dry-run, must carry `proofPlatform` as `windows-x64` or `linux-x86_64`, must pass the gate when re-evaluated by `scripts/glx_runtime_sweep.py`, and must reference the current proof-corpus and parity-suite versions. `rc-proof` additionally must compare against reviewed screenshot baselines and a reviewed performance baseline; approval-mode manifests do not count as release proof.
+Each manifest must be non-dry-run, must carry `proofPlatform` as `windows-x64` or `linux-x86_64`, must carry passing `rendererSwitchEvidence`, must pass the gate when re-evaluated by `scripts/glx_runtime_sweep.py`, and must reference the current proof-corpus and parity-suite versions. `rc-proof` additionally must compare against reviewed screenshot baselines and a reviewed performance baseline; approval-mode manifests do not count as release proof.
+
+Each runtime sweep also writes `glx-visual-dossier.md` beside the manifest and
+records it under the manifest `visualDossier` field. The dossier is the review
+index for visual artifacts: pipeline flowcharts, renderer-switch lifecycle,
+backend state, driver-tier coverage, histograms, luma false-color sidecars, and
+parity diffs. See
+[GLX_VISUAL_DOSSIER.md](GLX_VISUAL_DOSSIER.md).
 
 Tagged release packaging uses the same validator:
 
 ```sh
 python scripts/release.py --channel release --artifact-root artifacts --ref-name v0.1.0 --glx-proof-root proof-root
 ```
+
+If the tagged source tree has promoted GLx as the default or `opengl` alias
+target, the same release command must also pass
+`--glx-rollback-metadata <json>`. That metadata is checked against the staged
+archives so the rollback package named by the promotion plan is actually present
+in `.install/packages/`.
 
 Nightly packaging records the proof-corpus metadata but does not require a proof root because it is not a GLx promotion event.
 

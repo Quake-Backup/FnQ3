@@ -579,6 +579,79 @@ bool MaterialIRCompilesToProgramStatePlans()
 	return true;
 }
 
+bool MaterialParameterBlocksMirrorNativeRenderInputs()
+{
+	glx::MaterialIR material = glx::GLX_RenderIR_MakeMaterial(
+		9,
+		GLX_STAGE_MULTITEXTURE | GLX_STAGE_TEXMOD | GLX_STAGE_ENVIRONMENT |
+			GLX_STAGE_DEPTH_FRAGMENT | GLX_STAGE_SCREEN_MAP,
+		GLX_MATERIAL_STATE_SRCBLEND_SRC_ALPHA |
+			GLX_MATERIAL_STATE_DSTBLEND_ONE_MINUS_SRC_ALPHA,
+		3 );
+	unsigned int texModSequence = 0;
+
+	texModSequence = glx::GLX_Material_TexModSequenceSetSlot( texModSequence, 0,
+		GLX_MATERIAL_TMOD_OPCODE_SCROLL );
+	material.rgbGen = GLX_MATERIAL_RGBGEN_VERTEX;
+	material.alphaGen = GLX_MATERIAL_ALPHAGEN_WAVEFORM;
+	material.rgbWaveFunc = GLX_MATERIAL_WAVEFUNC_NONE;
+	material.alphaWaveFunc = GLX_MATERIAL_WAVEFUNC_SIN;
+	material.tcGen0 = GLX_MATERIAL_TCGEN_TEXTURE;
+	material.tcGen1 = GLX_MATERIAL_TCGEN_LIGHTMAP;
+	material.texMods0 = 1;
+	material.texModTypes0 = GLX_MATERIAL_TMOD_SCROLL_BIT;
+	material.texModSequence0 = texModSequence;
+	material.fogAdjust = GLX_MATERIAL_FOG_ADJUST_MODULATE_RGB;
+	material.materialCombine = GLX_MATERIAL_COMBINE_MODULATE;
+
+	glx::MaterialParameterBlock block =
+		glx::GLX_RenderIR_MakeMaterialParameterBlock( material );
+	const unsigned int hash = glx::GLX_RenderIR_HashMaterialParameterBlock( block );
+	CHECK( glx::GLX_RenderIR_ValidateMaterialParameterBlock( block ) == qtrue );
+	CHECK( hash != 0 );
+	CHECK( block.frame.sort == 9 );
+	CHECK( block.frame.shaderStagePasses == 3 );
+	CHECK( ( block.frame.featureMask & GLX_STAGE_MULTITEXTURE ) != 0 );
+	CHECK( ( block.frame.featureMask & GLX_STAGE_TEXMOD ) != 0 );
+	CHECK( ( block.frame.featureMask & GLX_STAGE_SCREEN_MAP ) != 0 );
+	CHECK( block.object.rgbGen == GLX_MATERIAL_RGBGEN_VERTEX );
+	CHECK( block.object.alphaGen == GLX_MATERIAL_ALPHAGEN_WAVEFORM );
+	CHECK( block.object.alphaWaveFunc == GLX_MATERIAL_WAVEFUNC_SIN );
+	CHECK( block.object.tcGen1 == GLX_MATERIAL_TCGEN_LIGHTMAP );
+	CHECK( block.material.flags == material.flags );
+	CHECK( block.material.stateBits == material.stateBits );
+	CHECK( block.material.texModSequence0 == texModSequence );
+	CHECK( block.material.fogAdjust == GLX_MATERIAL_FOG_ADJUST_MODULATE_RGB );
+	CHECK( block.material.materialCombine == GLX_MATERIAL_COMBINE_MODULATE );
+
+	glx::MaterialParameterBlock changedBlock = block;
+	changedBlock.object.tcGen1 = GLX_MATERIAL_TCGEN_TEXTURE;
+	CHECK( glx::GLX_RenderIR_HashMaterialParameterBlock( changedBlock ) != hash );
+
+	glx::MaterialStatePlan irPlan {};
+	glx::MaterialStatePlan blockPlan {};
+	unsigned int irReasons = 0;
+	unsigned int blockReasons = 0;
+	CHECK( glx::GLX_Material_StatePlanForTierAndIR( glx::RenderProductTier::GL2X,
+		material, &irPlan, &irReasons ) == qtrue );
+	CHECK( glx::GLX_Material_StatePlanForTierAndParameterBlock( glx::RenderProductTier::GL2X,
+		block, &blockPlan, &blockReasons ) == qtrue );
+	CHECK( irReasons == glx::GLX_MATERIAL_UNSUPPORTED_NONE );
+	CHECK( blockReasons == glx::GLX_MATERIAL_UNSUPPORTED_NONE );
+	CHECK( blockPlan.sort == material.sort );
+	CHECK( blockPlan.programmable == qtrue );
+	CHECK( glx::GLX_Material_StageKeyEquals( irPlan.stage, blockPlan.stage ) == qtrue );
+
+	block.material.texMods0 = -1;
+	CHECK( glx::GLX_RenderIR_ValidateMaterialParameterBlock( block ) == qfalse );
+	blockReasons = glx::GLX_MATERIAL_UNSUPPORTED_NONE;
+	CHECK( glx::GLX_Material_StatePlanForTierAndParameterBlock( glx::RenderProductTier::GL2X,
+		block, &blockPlan, &blockReasons ) == qfalse );
+	CHECK( ( blockReasons & glx::GLX_MATERIAL_UNSUPPORTED_INVALID_IR ) != 0 );
+
+	return true;
+}
+
 bool StreamGatesMatchRcAllowlist()
 {
 	glx::StreamMaterialGateConfig rc {};
@@ -1140,6 +1213,16 @@ bool RenderIRProductsValidate()
 	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qtrue );
 	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qtrue );
 	CHECK( glx::GLX_RenderIR_ValidatePostNode( post ) == qtrue );
+	const unsigned int outputHash = glx::GLX_RenderIR_HashOutputTransform( output );
+	const unsigned int postHash = glx::GLX_RenderIR_HashPostNode( post );
+	CHECK( outputHash != 0 );
+	CHECK( postHash != 0 );
+	glx::OutputTransform changedOutput = output;
+	changedOutput.exposure = 1.25f;
+	CHECK( glx::GLX_RenderIR_HashOutputTransform( changedOutput ) != outputHash );
+	glx::PostNode changedPost = post;
+	changedPost.sequence++;
+	CHECK( glx::GLX_RenderIR_HashPostNode( changedPost ) != postHash );
 
 	CHECK( glx::GLX_RenderIR_ValidateUploadPlan(
 		glx::GLX_RenderIR_MakeUploadPlan( glx::UploadPlanKind::ClientMemory, -1, 0, 0, 0 ) ) == qtrue );
@@ -1520,6 +1603,85 @@ bool GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements()
 	return true;
 }
 
+bool PostOutputPlansRequireModernOwnedContract()
+{
+	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
+	output.transfer = glx::OutputTransfer::SdrSrgb;
+	output.toneMap = glx::ToneMapOperator::Aces;
+	output.grade = glx::ColorGradeMode::LiftGammaGain;
+	output.hdrMode = 1;
+	output.precisionMode = 16;
+	output.paperWhiteNits = 203.0f;
+	output.maxOutputNits = 203.0f;
+
+	glx::PostOutputPlanInputs inputs {};
+	inputs.tier = glx::RenderProductTier::GL3X;
+	inputs.output = output;
+	inputs.fboReady = qtrue;
+	inputs.programReady = qtrue;
+	inputs.framebufferFnsReady = qtrue;
+	inputs.outputContractValid = qtrue;
+	inputs.bloomAvailable = qfalse;
+	inputs.minimized = qfalse;
+	inputs.windowAdjusted = qfalse;
+	inputs.screenshotMask = 0;
+	inputs.fboReadIndex = 2;
+	inputs.sequenceBase = 7;
+	inputs.flags = 0x2u;
+
+	glx::PostOutputPlan plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
+	CHECK( plan.glxOwned == qtrue );
+	CHECK( plan.fallbackReasons == glx::GLX_POST_OUTPUT_FALLBACK_NONE );
+	CHECK( plan.outputTransformPresent == qtrue );
+	CHECK( plan.predictedResult == GLX_POSTPROCESS_RESULT_GAMMA_DIRECT );
+	CHECK( plan.nodeCount == 3 );
+	CHECK( plan.nodes[0].kind == glx::PostNodeKind::Grade );
+	CHECK( plan.nodes[1].kind == glx::PostNodeKind::ToneMap );
+	CHECK( plan.nodes[2].kind == glx::PostNodeKind::GammaDirect );
+	CHECK( plan.nodes[0].sequence == 7 );
+	CHECK( plan.nodes[2].outputTarget == 0 );
+	CHECK( plan.hash != 0u );
+	for ( int i = 0; i < plan.nodeCount; i++ ) {
+		CHECK( glx::GLX_RenderIR_TierSupportsPostNode( inputs.tier, plan.nodes[i] ) == qtrue );
+	}
+	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( inputs.tier, plan.output ) == qtrue );
+
+	inputs.tier = glx::RenderProductTier::GL2X;
+	plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
+	CHECK( plan.glxOwned == qfalse );
+	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_TIER ) != 0u );
+	CHECK( plan.predictedResult == GLX_POSTPROCESS_RESULT_GAMMA_DIRECT );
+
+	inputs.tier = glx::RenderProductTier::GL46;
+	inputs.minimized = qtrue;
+	plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
+	CHECK( plan.glxOwned == qfalse );
+	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_MINIMIZED ) != 0u );
+	CHECK( plan.predictedResult == GLX_POSTPROCESS_RESULT_MINIMIZED );
+
+	inputs.minimized = qfalse;
+	inputs.outputContractValid = qfalse;
+	plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
+	CHECK( plan.glxOwned == qfalse );
+	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_OUTPUT_CONTRACT ) != 0u );
+
+	inputs.outputContractValid = qtrue;
+	inputs.bloomAvailable = qtrue;
+	inputs.windowAdjusted = qtrue;
+	output.toneMap = glx::ToneMapOperator::Legacy;
+	output.grade = glx::ColorGradeMode::None;
+	inputs.output = output;
+	plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
+	CHECK( plan.glxOwned == qtrue );
+	CHECK( plan.predictedResult == GLX_POSTPROCESS_RESULT_GAMMA_BLIT );
+	CHECK( plan.nodeCount == 2 );
+	CHECK( plan.nodes[0].kind == glx::PostNodeKind::BloomPrefinal );
+	CHECK( plan.nodes[1].kind == glx::PostNodeKind::GammaBlit );
+
+	return true;
+}
+
 bool GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures()
 {
 	const glx::TierExecutionPolicy policy =
@@ -1746,6 +1908,7 @@ int main()
 		{ "MaterialKeysTreatSpecialSceneFlagsAsGates", MaterialKeysTreatSpecialSceneFlagsAsGates },
 		{ "MaterialStageKeysCoverPreparedIdTech3StageLanguage", MaterialStageKeysCoverPreparedIdTech3StageLanguage },
 		{ "MaterialIRCompilesToProgramStatePlans", MaterialIRCompilesToProgramStatePlans },
+		{ "MaterialParameterBlocksMirrorNativeRenderInputs", MaterialParameterBlocksMirrorNativeRenderInputs },
 		{ "StreamGatesMatchRcAllowlist", StreamGatesMatchRcAllowlist },
 		{ "StreamBroadKeyModeRemainsDeveloperEscapeHatch", StreamBroadKeyModeRemainsDeveloperEscapeHatch },
 		{ "StreamSpecialSceneGatesAreExplicit", StreamSpecialSceneGatesAreExplicit },
@@ -1762,6 +1925,7 @@ int main()
 		{ "GL12ExecutorPolicyIsFixedFunctionAndSdrOnly", GL12ExecutorPolicyIsFixedFunctionAndSdrOnly },
 		{ "GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements", GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements },
 		{ "GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements", GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements },
+		{ "PostOutputPlansRequireModernOwnedContract", PostOutputPlansRequireModernOwnedContract },
 		{ "GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures", GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures },
 		{ "GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures", GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures },
 	};

@@ -75,10 +75,17 @@ qboolean GLX_Renderer_StreamReserve( int bytes, int alignment, glxStreamReservat
 qboolean GLX_Renderer_StreamUploadAt( glxStreamReservation_t *reservation, int relativeOffset,
 	const void *data, int bytes );
 void GLX_Renderer_StreamCommit( glxStreamReservation_t *reservation );
+unsigned int GLX_Renderer_BindStreamArrayBuffer( unsigned int buffer );
+void GLX_Renderer_RestoreStreamArrayBuffer( unsigned int buffer );
+unsigned int GLX_Renderer_BindStreamElementArrayBuffer( unsigned int buffer );
+void GLX_Renderer_RestoreStreamElementArrayBuffer( unsigned int buffer );
+void GLX_Renderer_RecordStreamBufferBind( unsigned int target, unsigned int buffer );
 void GLX_Renderer_RecordStreamDrawResult( int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
 	qboolean depthFragment, int materialFlags, unsigned int categoryMask, qboolean success );
 void GLX_Renderer_RecordStreamDrawSkip( int reason );
+void GLX_Renderer_ResetImageColorAudit( void );
+void GLX_Renderer_RecordImageColorAudit( int colorSpace, qboolean srgbDecode );
 void GLX_Renderer_RecordFboInit( qboolean requested, qboolean ready,
 	qboolean programReady, qboolean framebufferFnsReady, int vidWidth, int vidHeight,
 	int captureWidth, int captureHeight, int windowWidth, int windowHeight,

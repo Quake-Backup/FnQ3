@@ -505,8 +505,8 @@ static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
 	int indexBytes;
 	int indexOffset;
 	int totalBytes;
-	GLint oldArrayBuffer = 0;
-	GLint oldElementArrayBuffer = 0;
+	unsigned int oldArrayBuffer = 0;
+	unsigned int oldElementArrayBuffer = 0;
 
 	if ( !GLX_CompatStreamDrawShadowsEnabled() ) {
 		return qfalse;
@@ -548,11 +548,8 @@ static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
 		return qfalse;
 	}
 
-	qglGetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
-	qglGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
-
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, reservation.buffer );
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, reservation.buffer );
+	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
+	oldElementArrayBuffer = GLX_CompatBindStreamElementArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_NONE );
@@ -574,12 +571,12 @@ static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
 		ok = qfalse;
 	}
 
-	qglBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, (GLuint)oldElementArrayBuffer );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+	GLX_CompatRestoreStreamElementArrayBuffer( oldElementArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( 0 );
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
-	qglBindBufferARB( GL_ARRAY_BUFFER_ARB, (GLuint)oldArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( numVertexes, tess.numIndexes,
 		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, GLX_STAGE_SHADOW_PASS,

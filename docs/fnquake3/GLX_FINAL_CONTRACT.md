@@ -52,7 +52,8 @@ The final GLx renderer has these non-negotiable properties:
   framebuffer bit depth.
 - Proof before promotion: GLx becomes the OpenGL-lineage default only after
   the feature matrix, tier matrix, versioned parity suites for screenshots,
-  demos, HUD, shadows, bloom, and cel-shading, and performance gates are green.
+  demos, HUD, shadows, bloom, cel-shading, greyscale, and render-scale, and
+  performance gates are green.
 
 ## ABI Contract
 
@@ -198,18 +199,46 @@ migration alias to GLx, until all of these are true:
   tests, and documentation;
 - the checked-in [feature matrix](GLX_FEATURE_MATRIX.md) has no ambiguous rows;
 - runtime GLx rendering no longer depends on legacy OpenGL draw ownership;
-- screenshot, demo, HUD, fog, bloom, shadow, cel-shading, cinematic, and
-  screenshot/export parity evidence is archived for the release candidate, with
-  `rc-proof` carrying the current proof-corpus and parity-suite versions;
+- screenshot, demo, HUD, fog, bloom, shadow, cel-shading, greyscale,
+  render-scale, cinematic, and screenshot/export parity evidence is archived
+  for the release candidate, with `rc-proof` carrying the current proof-corpus
+  and parity-suite versions;
+- `rc-parity` and `rc-proof` manifests carry current passing `worldProofEvidence`
+  for the selected stock/high-geometry/lightmap/fog/visibility world maps,
+  GLx screenshot histograms, static-world draw/index counters, and zero
+  static packet misses, fallbacks, or errors;
+- `rc-proof` manifests carry current passing `materialProofEvidence` for
+  selected material-stage/tcgen corpus maps, GLx screenshot histograms,
+  material renderer readiness, compile/program activity, zero material failures
+  or unsupported plans, parameter-block fingerprints, required stream-material
+  feature counters, and RC guards that keep dynamic-light, screen-map, and
+  video-map material streams out of the conservative proof surface;
+- `rc-proof` manifests carry current passing `dynamicProofEvidence` for
+  selected dynamic entity, first-person weapon, dynamic-light guard, and
+  planar-shadow corpus coverage, with required stream-category/feature counters,
+  tier-support evidence, screenshots or timedemos for the selected dynamic
+  scenes, and zero stream/category fallbacks;
+- `rc-proof` manifests carry current passing `postProofEvidence` for selected
+  greyscale and render-scale corpus maps, GLx screenshot histograms, ready FBO
+  state, zero FBO failures, positive postprocess frame/screenshot counters,
+  render-scale target-dimension evidence, non-minimized output, and a valid
+  output color contract;
+- `rc-stress` material proof keeps staged animated-image, screen-map, and
+  video-map stage-flag evidence positive before those content-sensitive paths
+  can be considered for conservative defaults;
+- `rc-stress` dynamic proof keeps staged particle, transient-poly, mark/decal,
+  and beam category evidence positive before those transient-scene paths can be
+  considered for conservative defaults;
 - tagged release packaging has revalidated non-dry-run `rc-smoke`,
   `rc-parity`, and `rc-proof` manifests for the blocking Windows and Linux
   runtime platforms through the GLx proof-root validator;
 - per-tier performance budgets for draw pressure, upload volume, fallback
   counts, shader binds, static packet misses, stream wrap rejects, and GPU
   frame time pass on the blocking runtime matrix;
-- migration notes and rollback instructions exist before default changes ship.
+- migration notes, rollback instructions, and reviewed rollback package metadata
+  exist before default changes ship.
 
-The machine-readable promotion guard is `python scripts/glx_promotion.py --require-ready --proof-root <dir>`. It must report `ready` before build defaults, renderer aliases, or legacy OpenGL packaging rules are changed for promotion.
+The machine-readable promotion guard is `python scripts/glx_promotion.py --require-ready --proof-root <dir> --rollback-metadata <json>`. It must report `ready` before build defaults, renderer aliases, or legacy OpenGL packaging rules are changed for promotion.
 
 ## Consequences
 

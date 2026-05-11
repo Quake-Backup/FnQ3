@@ -40,6 +40,13 @@ static void GfxInfo( void );
 static void VarInfo( void );
 static void GL_SetDefaultState( void );
 
+static void R_MakeCvarInstant( cvar_t *cvar )
+{
+	if ( cvar ) {
+		cvar->flags &= ~CVAR_LATCH;
+	}
+}
+
 cvar_t	*r_flareSize;
 cvar_t	*r_flareFade;
 cvar_t	*r_flareCoeff;
@@ -2447,40 +2454,44 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_ext_multisample, "0", "8", CV_INTEGER );
 	ri.Cvar_SetDescription( r_ext_multisample, "For anti-aliasing geometry edges, valid values: 0|2|4|6|8. Requires \\r_fbo 1." );
 	ri.Cvar_SetGroup( r_ext_multisample, CVG_RENDERER );
-	r_hdr = ri.Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND );
+	r_hdr = ri.Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_hdr, "-1", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_hdr,
 		"Selects the scene-linear HDR render pipeline. Requires \\r_fbo 1.\n"
 		" 0: display-referred SDR compatibility path\n"
 		" 1: scene-linear HDR pipeline with exposure, bloom thresholding, tone mapping, and SDR output transform\n"
 		"-1: legacy debug alias for \\r_hdrPrecision -1 without enabling scene-linear HDR\n"
-		"Scene-linear HDR uses floating-point RGBA16F scene framebuffer storage." );
+		"Requires vid_restart so FBO storage and texture sRGB decode state rebuild together." );
 	ri.Cvar_SetGroup( r_hdr, CVG_RENDERER );
 	r_hdrPrecision = ri.Cvar_Get( "r_hdrPrecision", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_hdrPrecision );
 	ri.Cvar_CheckRange( r_hdrPrecision, "-1", "16", CV_INTEGER );
 	ri.Cvar_SetDescription( r_hdrPrecision,
 		"Internal FBO color precision for the display pipeline.\n"
 		" 0: automatic (8-bit SDR, RGBA16F when \\r_hdr 1)\n"
 		"-1: debug 4-bit storage for banding tests\n"
 		" 8: force 8-bit storage\n"
-		"16: force 16-bit normalized storage for SDR; \\r_hdr 1 still uses RGBA16F" );
+		"16: force 16-bit normalized storage for SDR; \\r_hdr 1 still uses RGBA16F\n"
+		"Applies after the current frame." );
 	ri.Cvar_SetGroup( r_hdrPrecision, CVG_RENDERER );
 	r_srgbTextures = ri.Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_srgbTextures, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_srgbTextures, "Use sRGB texture formats for authored color images in the scene-linear HDR pipeline. Data, lightmap, fog, and utility textures stay linear/data." );
+	ri.Cvar_SetDescription( r_srgbTextures, "Use sRGB texture formats for authored color images in the scene-linear HDR pipeline. Data, lightmap, fog, and utility textures stay linear/data. Requires vid_restart so existing textures can be reloaded safely." );
 	ri.Cvar_SetGroup( r_srgbTextures, CVG_RENDERER );
 	r_framebufferSRGB = ri.Cvar_Get( "r_framebufferSRGB", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_framebufferSRGB, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_framebufferSRGB, "Allow GL_FRAMEBUFFER_SRGB when the active draw target is an sRGB-encoded framebuffer. The current GLx/OpenGL SDR output shader keeps it disabled to avoid double encoding." );
 	ri.Cvar_SetGroup( r_framebufferSRGB, CVG_RENDERER );
-	r_outputBackend = ri.Cvar_Get( "r_outputBackend", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_outputBackend = ri.Cvar_Get( "r_outputBackend", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_outputBackend );
 	ri.Cvar_CheckRange( r_outputBackend, "0", "5", CV_INTEGER );
 	ri.Cvar_SetDescription( r_outputBackend,
-		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR telemetry/prototype. Non-SDR output requires r_hdr 1 and platform support." );
+		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR telemetry/prototype. Non-SDR output requires r_hdr 1 and platform support. Applies immediately." );
 	ri.Cvar_SetGroup( r_outputBackend, CVG_RENDERER );
-	r_outputAllowExperimentalLinuxHDR = ri.Cvar_Get( "r_outputAllowExperimentalLinuxHDR", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_outputAllowExperimentalLinuxHDR = ri.Cvar_Get( "r_outputAllowExperimentalLinuxHDR", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_outputAllowExperimentalLinuxHDR );
 	ri.Cvar_CheckRange( r_outputAllowExperimentalLinuxHDR, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_outputAllowExperimentalLinuxHDR, "Allows Linux HDR telemetry/prototype output only when SDL reports HDR headroom and an explicit compositor/protocol path." );
+	ri.Cvar_SetDescription( r_outputAllowExperimentalLinuxHDR, "Allows Linux HDR telemetry/prototype output only when SDL reports HDR headroom and an explicit compositor/protocol path. Applies immediately." );
 	ri.Cvar_SetGroup( r_outputAllowExperimentalLinuxHDR, CVG_RENDERER );
 	r_tonemap = ri.Cvar_Get( "r_tonemap", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_tonemap, "0", "2", CV_INTEGER );
@@ -2529,7 +2540,7 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( r_colorGradeLUTScale, CVG_RENDERER );
 	// bloom
 	r_bloom = ri.Cvar_Get( "r_bloom", "0", CVAR_ARCHIVE_ND );
-	r_bloom->flags &= ~CVAR_LATCH; // If we were running renderervk before, we need to remove latch
+	R_MakeCvarInstant( r_bloom ); // If we were running renderervk before, we need to remove latch
 	ri.Cvar_SetDescription(r_bloom, "Enables bloom post-processing effect. Requires \\r_fbo 1.");
 	r_bloom_threshold = ri.Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription(r_bloom_threshold, "Scene-linear color level to extract to bloom texture, default is 0.75.");
@@ -2543,9 +2554,11 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( r_bloom_soft_knee, CVG_RENDERER );
 	r_bloom_intensity = ri.Cvar_Get( "r_bloom_intensity", "0.5", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_bloom_intensity, "Final bloom blend factor, default is 0.5." );
-	r_bloom_passes = ri.Cvar_Get( "r_bloom_passes", "5", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_bloom_passes = ri.Cvar_Get( "r_bloom_passes", "5", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_bloom_passes );
 	ri.Cvar_CheckRange( r_bloom_passes, "3", XSTRING( MAX_BLUR_PASSES ), CV_INTEGER );
-	ri.Cvar_SetDescription( r_bloom_passes, "Count of downsampled passes (framebuffers) to blend on final bloom image, default is 5." );
+	ri.Cvar_SetDescription( r_bloom_passes, "Count of downsampled passes (framebuffers) to blend on final bloom image, default is 5. Applies after the current frame." );
+	ri.Cvar_SetGroup( r_bloom_passes, CVG_RENDERER );
 	r_bloom_blend_base = ri.Cvar_Get( "r_bloom_blend_base", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_bloom_blend_base, "0", va("%i", r_bloom_passes->integer-1), CV_INTEGER );
 	ri.Cvar_SetDescription( r_bloom_blend_base, "0-based, topmost downsampled framebuffer to use for final image, high values can be used for stronger haze effect, results in overall weaker intensity." );
@@ -2707,7 +2720,8 @@ static void R_Register( void )
 		return;
 
 	//
-	// latched and archived variables that can only change over a vid_restart
+	// startup-probed variables that can only change over a vid_restart,
+	// followed by FBO/runtime toggles with explicit end-of-frame rebuild paths.
 	//
 	r_allowExtensions = ri.Cvar_Get( "r_allowExtensions", "1", CVAR_ARCHIVE_ND | CVAR_LATCH | CVAR_DEVELOPER );
 	ri.Cvar_SetDescription( r_allowExtensions, "Use all of the OpenGL extensions your card is capable of." );
@@ -2733,32 +2747,45 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_ignorehwgamma, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_ignorehwgamma, "Overrides hardware gamma capabilities." );
 
-	r_flares = ri.Cvar_Get( "r_flares", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
-	ri.Cvar_SetDescription( r_flares, "Enables corona effects on light sources." );
+	r_flares = ri.Cvar_Get( "r_flares", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_flares );
+	ri.Cvar_SetDescription( r_flares, "Enables corona effects on light sources. Applies after the current frame." );
+	ri.Cvar_SetGroup( r_flares, CVG_RENDERER );
 
 #ifdef USE_FBO
-	r_fbo = ri.Cvar_Get( "r_fbo", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
-	ri.Cvar_SetDescription( r_fbo, "Use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary video size and screenshot/video capture.\n Required for bloom, HDR rendering, anti-aliasing and greyscale effects.\n OpenGL 3.0+ required." );
+	r_fbo = ri.Cvar_Get( "r_fbo", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_fbo );
+	ri.Cvar_SetDescription( r_fbo, "Use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary video size and screenshot/video capture.\n Required for bloom, HDR rendering, anti-aliasing and greyscale effects.\n OpenGL 3.0+ required. Applies after the current frame." );
+	ri.Cvar_SetGroup( r_fbo, CVG_RENDERER );
 
-	r_ext_supersample = ri.Cvar_Get( "r_ext_supersample", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_ext_supersample = ri.Cvar_Get( "r_ext_supersample", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_ext_supersample );
 	ri.Cvar_CheckRange( r_ext_supersample, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_ext_supersample, "Super-sample anti-aliasing, requires \\r_fbo 1." );
+	ri.Cvar_SetDescription( r_ext_supersample, "Super-sample anti-aliasing, requires \\r_fbo 1. Applies after the current frame." );
+	ri.Cvar_SetGroup( r_ext_supersample, CVG_RENDERER );
 
-	r_renderWidth = ri.Cvar_Get( "r_renderWidth", "800", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_renderWidth = ri.Cvar_Get( "r_renderWidth", "800", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_renderWidth );
 	ri.Cvar_CheckRange( r_renderWidth, "96", NULL, CV_INTEGER );
-	ri.Cvar_SetDescription( r_renderWidth, "Video width to render to when \\r_renderScale > 0." );
-	r_renderHeight = ri.Cvar_Get( "r_renderHeight", "600", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_SetDescription( r_renderWidth, "Video width to render to when \\r_renderScale > 0. Applies after the current frame." );
+	ri.Cvar_SetGroup( r_renderWidth, CVG_RENDERER );
+	r_renderHeight = ri.Cvar_Get( "r_renderHeight", "600", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_renderHeight );
 	ri.Cvar_CheckRange( r_renderHeight, "72", NULL, CV_INTEGER );
-	ri.Cvar_SetDescription( r_renderHeight, "Video height to render to when \\r_renderScale > 0." );
+	ri.Cvar_SetDescription( r_renderHeight, "Video height to render to when \\r_renderScale > 0. Applies after the current frame." );
+	ri.Cvar_SetGroup( r_renderHeight, CVG_RENDERER );
 
-	r_renderScale = ri.Cvar_Get( "r_renderScale", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_renderScale = ri.Cvar_Get( "r_renderScale", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_renderScale );
 	ri.Cvar_CheckRange( r_renderScale, "0", "4", CV_INTEGER );
 	ri.Cvar_SetDescription( r_renderScale, "Scaling mode to be used with custom render resolution:\n"
 		" 0 - disabled\n"
 		" 1 - nearest filtering, stretch to full size\n"
 		" 2 - nearest filtering, preserve aspect ratio (black bars on sides)\n"
 		" 3 - linear filtering, stretch to full size\n"
-		" 4 - linear filtering, preserve aspect ratio (black bars on sides)\n" );
+		" 4 - linear filtering, preserve aspect ratio (black bars on sides)\n"
+		" Applies after the current frame.\n" );
+	ri.Cvar_SetGroup( r_renderScale, CVG_RENDERER );
 #endif // USE_FBO
 }
 

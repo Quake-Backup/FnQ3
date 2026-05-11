@@ -62,6 +62,10 @@ struct PostProcessState {
 	int lastResult;
 	qboolean textureSrgbAvailable;
 	qboolean textureSrgbDecode;
+	qboolean textureSrgbDecodeDesired;
+	qboolean textureSrgbDecodeConsistent;
+	unsigned int textureSrgbMissingDecode;
+	unsigned int textureSrgbStaleDecode;
 	qboolean framebufferSrgbAvailable;
 	qboolean framebufferSrgbEnabled;
 	qboolean sceneTargetFloat;

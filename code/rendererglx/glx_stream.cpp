@@ -262,6 +262,48 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	state->frames = 0;
 }
 
+static int GLX_Stream_CvarModificationCount( const cvar_t *cvar )
+{
+	return cvar ? cvar->modificationCount : 0;
+}
+
+static int GLX_Stream_RequestedMegabytes( const StreamState *state )
+{
+	int megabytes = state && state->r_glxStreamMegabytes ? state->r_glxStreamMegabytes->integer : 8;
+
+	if ( megabytes < 1 ) {
+		megabytes = 1;
+	}
+	if ( megabytes > 128 ) {
+		megabytes = 128;
+	}
+	return megabytes;
+}
+
+static void GLX_Stream_RecordRuntimeCvarCounts( StreamState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->lastStreamModeModificationCount =
+		GLX_Stream_CvarModificationCount( state->r_glxStreamMode );
+	state->lastStreamMegabytesModificationCount =
+		GLX_Stream_CvarModificationCount( state->r_glxStreamMegabytes );
+}
+
+static qboolean GLX_Stream_RuntimeCvarsChanged( const StreamState *state )
+{
+	if ( !state ) {
+		return qfalse;
+	}
+
+	return ( state->lastStreamModeModificationCount !=
+		GLX_Stream_CvarModificationCount( state->r_glxStreamMode ) ||
+		state->lastStreamMegabytesModificationCount !=
+		GLX_Stream_CvarModificationCount( state->r_glxStreamMegabytes ) ) ? qtrue : qfalse;
+}
+
 static qboolean GLX_Stream_FunctionsReady()
 {
 	if ( !RI().GL_GetProcAddress ) {
@@ -604,6 +646,85 @@ static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 	return qtrue;
 }
 
+static qboolean GLX_Stream_ConfigureRuntime( StreamState *state, const Capabilities &caps,
+	qboolean resetCounters )
+{
+	const char *requestedMode;
+	StreamStrategySelection selection {};
+	StreamRuntimeSupport runtimeSupport {};
+	StreamRuntimeFallback runtimeFallback {};
+
+	if ( !state ) {
+		return qfalse;
+	}
+
+	state->strategy = StreamStrategy::OrphanSubData;
+	if ( resetCounters ) {
+		GLX_Stream_ResetCounters( state );
+	}
+	state->tier = caps.tier;
+	state->ringMegabytes = GLX_Stream_RequestedMegabytes( state );
+	state->ringBytes = static_cast<size_t>( state->ringMegabytes ) * 1024u * 1024u;
+
+	if ( caps.tier == RenderProductTier::GL12 ) {
+		GLX_Stream_SetReason( state, "GL12 fixed-function tier uses client-memory draw submission" );
+		state->ready = qfalse;
+		GLX_Stream_RecordRuntimeCvarCounts( state );
+		return qtrue;
+	}
+
+	requestedMode = state->r_glxStreamMode && state->r_glxStreamMode->string ?
+		state->r_glxStreamMode->string : "auto";
+	selection = GLX_Stream_SelectStrategy( requestedMode, caps.features );
+
+	if ( !selection.knownMode ) {
+		RI().Printf( PRINT_WARNING, "Unknown r_glxStreamMode '%s', using auto.\n",
+			requestedMode ? requestedMode : "" );
+	}
+
+	state->strategy = selection.strategy;
+	state->fallbackCount += selection.fallbackCount;
+	GLX_Stream_SetReason( state, selection.reason );
+
+	if ( !GLX_Stream_FunctionsReady() ) {
+		GLX_Stream_SetReason( state, "buffer functions unavailable" );
+		state->ready = qfalse;
+		GLX_Stream_RecordRuntimeCvarCounts( state );
+		return qfalse;
+	}
+
+	runtimeSupport = {
+		state->strategy,
+		caps.features.syncObjects,
+		caps.features.syncObjects ? GLX_Stream_SyncFunctionsReady() : qfalse,
+		caps.features.mapBufferRange,
+		s_fns.MapBufferRange ? qtrue : qfalse,
+		s_fns.BufferSubData ? qtrue : qfalse
+	};
+	runtimeFallback = GLX_Stream_ApplyRuntimeFunctionFallbacks( runtimeSupport );
+	state->strategy = runtimeFallback.strategy;
+	state->syncReady = runtimeFallback.syncReady;
+	state->fallbackCount += runtimeFallback.fallbackCount;
+	if ( runtimeFallback.reason ) {
+		GLX_Stream_SetReason( state, runtimeFallback.reason );
+	}
+	if ( !runtimeFallback.ready ) {
+		state->ready = qfalse;
+		GLX_Stream_RecordRuntimeCvarCounts( state );
+		return qfalse;
+	}
+
+	if ( !GLX_Stream_CreateBufferObject( state ) ) {
+		GLX_Stream_SetReason( state, "stream buffer allocation failed" );
+		RI().Printf( PRINT_DEVELOPER, "GLx dynamic stream buffer allocation failed.\n" );
+		GLX_Stream_RecordRuntimeCvarCounts( state );
+		return qfalse;
+	}
+
+	GLX_Stream_RecordRuntimeCvarCounts( state );
+	return qtrue;
+}
+
 static qboolean GLX_Stream_PrepareRange( StreamState *state, size_t bytes, size_t alignment, size_t *offset )
 {
 	size_t alignedOffset;
@@ -637,12 +758,15 @@ void GLX_Stream_RegisterCvars( StreamState *state )
 		return;
 	}
 
-	state->r_glxStreamMode = RI().Cvar_Get( "r_glxStreamMode", "auto", CVAR_ARCHIVE_ND | CVAR_LATCH | CVAR_DEVELOPER );
+	state->r_glxStreamMode = RI().Cvar_Get( "r_glxStreamMode", "auto", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	MakeCvarInstant( state->r_glxStreamMode );
 	RI().Cvar_SetDescription( state->r_glxStreamMode,
-		"Select GLx dynamic geometry streaming strategy: auto, persistent, maprange, or orphan. Requires vid_restart." );
+		"Select GLx dynamic geometry streaming strategy: auto, persistent, maprange, or orphan. Applies at the next safe frame boundary." );
 
-	state->r_glxStreamMegabytes = RI().Cvar_Get( "r_glxStreamMegabytes", "8", CVAR_ARCHIVE_ND | CVAR_LATCH | CVAR_DEVELOPER );
-	RI().Cvar_SetDescription( state->r_glxStreamMegabytes, "Target GLx dynamic stream ring size in megabytes. Requires vid_restart." );
+	state->r_glxStreamMegabytes = RI().Cvar_Get( "r_glxStreamMegabytes", "8", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	MakeCvarInstant( state->r_glxStreamMegabytes );
+	RI().Cvar_CheckRange( state->r_glxStreamMegabytes, "1", "128", CV_INTEGER );
+	RI().Cvar_SetDescription( state->r_glxStreamMegabytes, "Target GLx dynamic stream ring size in megabytes. Applies at the next safe frame boundary." );
 
 	state->r_glxStreamTess = RI().Cvar_Get( "r_glxStreamTess", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamTess,
@@ -708,69 +832,27 @@ void GLX_Stream_OnOpenGLReady( StreamState *state, const Capabilities &caps )
 	}
 
 	GLX_Stream_Shutdown( state );
+	GLX_Stream_ConfigureRuntime( state, caps, qtrue );
+}
 
-	state->strategy = StreamStrategy::OrphanSubData;
-	GLX_Stream_ResetCounters( state );
-	state->tier = caps.tier;
-	state->ringMegabytes = state->r_glxStreamMegabytes ? state->r_glxStreamMegabytes->integer : 8;
-	if ( state->ringMegabytes < 1 ) {
-		state->ringMegabytes = 1;
-	}
-	if ( state->ringMegabytes > 128 ) {
-		state->ringMegabytes = 128;
-	}
-	state->ringBytes = static_cast<size_t>( state->ringMegabytes ) * 1024u * 1024u;
-
-	if ( caps.tier == RenderProductTier::GL12 ) {
-		GLX_Stream_SetReason( state, "GL12 fixed-function tier uses client-memory draw submission" );
-		state->ready = qfalse;
+void GLX_Stream_UpdateCvars( StreamState *state, const Capabilities &caps )
+{
+	if ( !state || !caps.config || !GLX_Stream_RuntimeCvarsChanged( state ) ) {
 		return;
 	}
 
-	const char *requestedMode = state->r_glxStreamMode && state->r_glxStreamMode->string ?
-		state->r_glxStreamMode->string : "auto";
-	const StreamStrategySelection selection = GLX_Stream_SelectStrategy( requestedMode, caps.features );
-
-	if ( !selection.knownMode ) {
-		RI().Printf( PRINT_WARNING, "Unknown r_glxStreamMode '%s', using auto.\n",
-			requestedMode ? requestedMode : "" );
-	}
-
-	state->strategy = selection.strategy;
-	state->fallbackCount += selection.fallbackCount;
-	GLX_Stream_SetReason( state, selection.reason );
-
-	if ( !GLX_Stream_FunctionsReady() ) {
-		GLX_Stream_SetReason( state, "buffer functions unavailable" );
-		state->ready = qfalse;
+	if ( state->frameTouched ) {
+		GLX_Stream_SetReason( state, "stream cvar change pending frame boundary" );
 		return;
 	}
 
-	const StreamRuntimeSupport runtimeSupport {
-		state->strategy,
-		caps.features.syncObjects,
-		caps.features.syncObjects ? GLX_Stream_SyncFunctionsReady() : qfalse,
-		caps.features.mapBufferRange,
-		s_fns.MapBufferRange ? qtrue : qfalse,
-		s_fns.BufferSubData ? qtrue : qfalse
-	};
-	const StreamRuntimeFallback runtimeFallback =
-		GLX_Stream_ApplyRuntimeFunctionFallbacks( runtimeSupport );
-	state->strategy = runtimeFallback.strategy;
-	state->syncReady = runtimeFallback.syncReady;
-	state->fallbackCount += runtimeFallback.fallbackCount;
-	if ( runtimeFallback.reason ) {
-		GLX_Stream_SetReason( state, runtimeFallback.reason );
-	}
-	if ( !runtimeFallback.ready ) {
-		state->ready = qfalse;
+	if ( state->frameSync && !GLX_Stream_WaitFrameFence( state ) ) {
+		GLX_Stream_SetReason( state, "stream cvar change pending GPU fence" );
 		return;
 	}
 
-	if ( !GLX_Stream_CreateBufferObject( state ) ) {
-		GLX_Stream_SetReason( state, "stream buffer allocation failed" );
-		RI().Printf( PRINT_DEVELOPER, "GLx dynamic stream buffer allocation failed.\n" );
-	}
+	GLX_Stream_DeleteBuffer( state );
+	GLX_Stream_ConfigureRuntime( state, caps, qfalse );
 }
 
 void GLX_Stream_Shutdown( StreamState *state )

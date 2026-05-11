@@ -435,23 +435,10 @@ static qboolean GLX_PostProcess_InternalFormatIsFloat( int internalFormat )
 		internalFormat == GL_R11F_G11F_B10F ) ? qtrue : qfalse;
 }
 
-static void GLX_PostProcess_UpdateOutputContract( PostProcessState *state )
+static qboolean GLX_PostProcess_TextureSrgbDecodeDesired( const PostProcessState *state )
 {
-	if ( !state ) {
-		return;
-	}
-
-	state->sceneTargetFloat = ( state->lastOutput.hdrMode &&
-		GLX_PostProcess_InternalFormatIsFloat( state->internalFormat ) ) ? qtrue : qfalse;
-	state->finalShaderSrgbEncode = ( state->lastOutput.sceneColorSpace == SceneColorSpace::SceneLinear &&
-		state->lastOutput.transfer == OutputTransfer::SdrSrgb ) ? qtrue : qfalse;
-	state->outputContractValid = qtrue;
-	if ( state->lastOutput.hdrMode && !state->sceneTargetFloat ) {
-		state->outputContractValid = qfalse;
-	}
-	if ( state->finalShaderSrgbEncode && state->framebufferSrgbEnabled ) {
-		state->outputContractValid = qfalse;
-	}
+	return ( state && state->lastOutput.hdrMode && state->r_srgbTextures &&
+		state->r_srgbTextures->integer && state->textureSrgbAvailable ) ? qtrue : qfalse;
 }
 
 static unsigned int GLX_PostProcess_MissingSrgbDecode( const PostProcessState &state )
@@ -459,11 +446,58 @@ static unsigned int GLX_PostProcess_MissingSrgbDecode( const PostProcessState &s
 	const unsigned int srgb = state.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB];
 	const unsigned int decoded = state.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB];
 
-	if ( !( state.lastOutput.hdrMode && state.r_srgbTextures && state.r_srgbTextures->integer &&
-		state.textureSrgbAvailable ) ) {
+	if ( !GLX_PostProcess_TextureSrgbDecodeDesired( &state ) ) {
 		return 0u;
 	}
 	return srgb > decoded ? srgb - decoded : 0u;
+}
+
+static unsigned int GLX_PostProcess_StaleSrgbDecode( const PostProcessState &state )
+{
+	if ( GLX_PostProcess_TextureSrgbDecodeDesired( &state ) ) {
+		return 0u;
+	}
+	return state.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB];
+}
+
+static void GLX_PostProcess_UpdateTextureDecodeState( PostProcessState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->textureSrgbDecodeDesired = GLX_PostProcess_TextureSrgbDecodeDesired( state );
+	state->textureSrgbMissingDecode = GLX_PostProcess_MissingSrgbDecode( *state );
+	state->textureSrgbStaleDecode = GLX_PostProcess_StaleSrgbDecode( *state );
+	state->textureSrgbDecodeConsistent =
+		( state->textureSrgbMissingDecode == 0u &&
+		state->textureSrgbStaleDecode == 0u &&
+		state->imageUnexpectedSrgbDecode == 0u ) ? qtrue : qfalse;
+	state->textureSrgbDecode =
+		( state->textureSrgbDecodeDesired && state->textureSrgbDecodeConsistent ) ? qtrue : qfalse;
+}
+
+static void GLX_PostProcess_UpdateOutputContract( PostProcessState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	GLX_PostProcess_UpdateTextureDecodeState( state );
+	state->sceneTargetFloat = ( state->lastOutput.hdrMode &&
+		GLX_PostProcess_InternalFormatIsFloat( state->internalFormat ) ) ? qtrue : qfalse;
+	state->finalShaderSrgbEncode = ( state->lastOutput.sceneColorSpace == SceneColorSpace::SceneLinear &&
+		state->lastOutput.transfer == OutputTransfer::SdrSrgb ) ? qtrue : qfalse;
+	state->outputContractValid = qtrue;
+	if ( state->lastOutput.hdrMode && ( !state->fboReady || !state->sceneTargetFloat ) ) {
+		state->outputContractValid = qfalse;
+	}
+	if ( state->finalShaderSrgbEncode && state->framebufferSrgbEnabled ) {
+		state->outputContractValid = qfalse;
+	}
+	if ( !state->textureSrgbDecodeConsistent ) {
+		state->outputContractValid = qfalse;
+	}
 }
 
 static void GLX_PostProcess_PrintTextureAuditLine( const PostProcessState &state,
@@ -661,15 +695,19 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxColorPipelineDebug,
 		"Print per-frame GLx color-pipeline telemetry: 1 CSV, 2 JSON." );
-	state->r_hdr = RI().Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND );
+	state->r_hdr = RI().Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	RI().Cvar_CheckRange( state->r_hdr, "-1", "1", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_hdr,
-		"Selects the scene-linear HDR render pipeline. r_hdr 1 requires floating-point scene framebuffer storage." );
+		"Selects the scene-linear HDR render pipeline. Requires vid_restart so FBO storage and texture sRGB decode state rebuild together." );
 	state->r_hdrPrecision = RI().Cvar_Get( "r_hdrPrecision", "0", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_hdrPrecision );
+	RI().Cvar_CheckRange( state->r_hdrPrecision, "-1", "16", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_hdrPrecision,
-		"Internal FBO color precision for SDR/debug paths: 0 automatic, -1 debug 4-bit, 8 force 8-bit, 16 force 16-bit. r_hdr 1 always uses RGBA16F." );
+		"Internal FBO color precision for SDR/debug paths: 0 automatic, -1 debug 4-bit, 8 force 8-bit, 16 force 16-bit. r_hdr 1 always uses RGBA16F. Applies after the current frame." );
 	state->r_srgbTextures = RI().Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	RI().Cvar_CheckRange( state->r_srgbTextures, "0", "1", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_srgbTextures,
-		"Use sRGB texture formats for authored color images in the scene-linear HDR pipeline." );
+		"Use sRGB texture formats for authored color images in the scene-linear HDR pipeline. Requires vid_restart so existing textures can be reloaded safely." );
 	state->r_framebufferSRGB = RI().Cvar_Get( "r_framebufferSRGB", "1", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_framebufferSRGB,
 		"Allow GL_FRAMEBUFFER_SRGB when the draw target is an sRGB framebuffer." );
@@ -709,12 +747,16 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 	state->r_hdrDisplayMaxLuminance = RI().Cvar_Get( "r_hdrDisplayMaxLuminance", "1000", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_hdrDisplayMaxLuminance,
 		"Display/output maximum luminance in nits for tone scale and HDR metadata." );
-	state->r_outputBackend = RI().Cvar_Get( "r_outputBackend", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	state->r_outputBackend = RI().Cvar_Get( "r_outputBackend", "0", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_outputBackend );
+	RI().Cvar_CheckRange( state->r_outputBackend, "0", "5", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_outputBackend,
-		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR telemetry/prototype." );
-	state->r_outputAllowExperimentalLinuxHDR = RI().Cvar_Get( "r_outputAllowExperimentalLinuxHDR", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+		"Final display output backend: 0 auto, 1 SDR sRGB, 2 Windows scRGB, 3 HDR10 PQ, 4 macOS EDR, 5 Linux experimental HDR telemetry/prototype. Applies immediately." );
+	state->r_outputAllowExperimentalLinuxHDR = RI().Cvar_Get( "r_outputAllowExperimentalLinuxHDR", "0", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_outputAllowExperimentalLinuxHDR );
+	RI().Cvar_CheckRange( state->r_outputAllowExperimentalLinuxHDR, "0", "1", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_outputAllowExperimentalLinuxHDR,
-		"Allow Linux HDR telemetry/prototype output only when SDL reports HDR headroom and an explicit compositor/protocol path." );
+		"Allow Linux HDR telemetry/prototype output only when SDL reports HDR headroom and an explicit compositor/protocol path. Applies immediately." );
 	state->r_bloom_threshold = RI().Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
 	state->r_bloom_threshold_mode = RI().Cvar_Get( "r_bloom_threshold_mode", "0", CVAR_ARCHIVE_ND );
 	state->r_bloom_soft_knee = RI().Cvar_Get( "r_bloom_soft_knee", "0.0", CVAR_ARCHIVE_ND );
@@ -757,6 +799,7 @@ void GLX_PostProcess_Shutdown( PostProcessState *state )
 	state->fboReady = qfalse;
 	state->programReady = qfalse;
 	state->framebufferFnsReady = qfalse;
+	GLX_PostProcess_UpdateOutputContract( state );
 	GLX_PostProcess_SetReason( state, "renderer shutdown" );
 }
 
@@ -794,8 +837,6 @@ void GLX_PostProcess_RecordFboInit( PostProcessState *state, qboolean requested,
 	state->renderScaleMode = renderScaleMode;
 	state->bloomMode = bloomMode;
 	state->textureSrgbAvailable = textureSrgbAvailable;
-	state->textureSrgbDecode = ( state->r_srgbTextures && state->r_srgbTextures->integer &&
-		textureSrgbAvailable && hdrMode > 0 ) ? qtrue : qfalse;
 	state->framebufferSrgbAvailable = framebufferSrgbAvailable;
 	state->framebufferSrgbEnabled = framebufferSrgbEnabled;
 	GLX_PostProcess_QueryDisplayOutput( state );
@@ -841,6 +882,7 @@ void GLX_PostProcess_RecordFboShutdown( PostProcessState *state )
 	state->fboReady = qfalse;
 	state->multiSampled = qfalse;
 	state->superSampled = qfalse;
+	GLX_PostProcess_UpdateOutputContract( state );
 	GLX_PostProcess_SetReason( state, "FBO shutdown" );
 }
 
@@ -861,8 +903,6 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	state->hdrMode = hdrMode;
 	state->renderScaleMode = renderScaleMode;
 	state->lastGreyscale = greyscale;
-	state->textureSrgbDecode = ( state->r_srgbTextures && state->r_srgbTextures->integer &&
-		state->textureSrgbAvailable && hdrMode > 0 ) ? qtrue : qfalse;
 	if ( GLX_PostProcess_ShouldRefreshDisplayOutput( state ) ) {
 		GLX_PostProcess_QueryDisplayOutput( state );
 	}
@@ -1184,6 +1224,7 @@ void GLX_PostProcess_ResetImageColorAudit( PostProcessState *state )
 	std::memset( state->imageColorSpaceCounts, 0, sizeof( state->imageColorSpaceCounts ) );
 	std::memset( state->imageSrgbDecodeCounts, 0, sizeof( state->imageSrgbDecodeCounts ) );
 	state->imageUnexpectedSrgbDecode = 0u;
+	GLX_PostProcess_UpdateOutputContract( state );
 }
 
 void GLX_PostProcess_RecordImageColorAudit( PostProcessState *state, int colorSpace,
@@ -1203,6 +1244,7 @@ void GLX_PostProcess_RecordImageColorAudit( PostProcessState *state, int colorSp
 			state->imageUnexpectedSrgbDecode++;
 		}
 	}
+	GLX_PostProcess_UpdateOutputContract( state );
 }
 
 void GLX_PostProcess_PrintInfo( const PostProcessState &state )
@@ -1264,7 +1306,7 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		state.lastWhitePointSourceKelvin, state.lastWhitePointTargetKelvin,
 		state.lastColorGradeLutSize, state.lastColorGradeLutScale );
 	RI().Printf( PRINT_ALL,
-		"  color audit: srgb-decode %s requested %s available %s, framebuffer-srgb %s requested %s available %s, capture sdr-srgb, target-float %s, final-encode %s, contract %s\n",
+		"  color audit: srgb-decode %s requested %s available %s, framebuffer-srgb %s requested %s available %s, capture sdr-srgb, target-float %s, final-encode %s, contract %s, texture-consistent %s, stale-srgb-decode %u\n",
 		BoolName( state.textureSrgbDecode ),
 		BoolName( state.r_srgbTextures && state.r_srgbTextures->integer ? qtrue : qfalse ),
 		BoolName( state.textureSrgbAvailable ),
@@ -1273,7 +1315,9 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		BoolName( state.framebufferSrgbAvailable ),
 		BoolName( state.sceneTargetFloat ),
 		state.finalShaderSrgbEncode ? "shader-srgb" : "none",
-		BoolName( state.outputContractValid ) );
+		BoolName( state.outputContractValid ),
+		BoolName( state.textureSrgbDecodeConsistent ),
+		state.textureSrgbStaleDecode );
 	GLX_PostProcess_PrintTextureAuditLine( state, "  " );
 	RI().Printf( PRINT_ALL,
 		"  FBO lifecycle: %u init attempts, %u ready, %u failed, %u disabled, %u shutdowns\n",

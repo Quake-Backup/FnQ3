@@ -120,6 +120,8 @@ struct StreamState {
 	unsigned int largestReservationBytes;
 	unsigned int lastReservationBytes;
 	unsigned int lastReservationOffset;
+	int lastStreamModeModificationCount;
+	int lastStreamMegabytesModificationCount;
 	StreamStrategy lastReservationStrategy;
 	unsigned long long uploadBytes;
 	unsigned long long shadowTessBytes;
@@ -131,6 +133,7 @@ struct StreamState {
 
 void GLX_Stream_RegisterCvars( StreamState *state );
 void GLX_Stream_OnOpenGLReady( StreamState *state, const Capabilities &caps );
+void GLX_Stream_UpdateCvars( StreamState *state, const Capabilities &caps );
 void GLX_Stream_Shutdown( StreamState *state );
 void GLX_Stream_FrameComplete( StreamState *state );
 qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment, StreamReservation *reservation );

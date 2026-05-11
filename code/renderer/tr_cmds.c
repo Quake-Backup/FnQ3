@@ -479,7 +479,10 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 		ARB_UpdatePrograms();
 
 #ifdef USE_FBO
-		if ( r_ext_multisample->modified || r_hdr->modified || r_hdrPrecision->modified )
+		if ( r_ext_multisample->modified || r_hdrPrecision->modified ||
+			r_fbo->modified || r_ext_supersample->modified || r_renderWidth->modified ||
+			r_renderHeight->modified || r_renderScale->modified || r_flares->modified ||
+			r_bloom_passes->modified )
 			QGL_InitFBO();
 #endif
 

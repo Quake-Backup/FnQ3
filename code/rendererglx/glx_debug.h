@@ -8,6 +8,7 @@ namespace glx {
 typedef void ( APIENTRY *GLXDebugProc )( GLenum source, GLenum type, GLuint id, GLenum severity,
 	GLsizei length, const GLchar *message, const void *userParam );
 typedef void ( APIENTRY *PFNGLXENABLEPROC )( GLenum cap );
+typedef void ( APIENTRY *PFNGLXDISABLEPROC )( GLenum cap );
 typedef void ( APIENTRY *PFNGLXDEBUGMESSAGECALLBACKPROC )( GLXDebugProc callback, const void *userParam );
 typedef void ( APIENTRY *PFNGLXDEBUGMESSAGECONTROLPROC )( GLenum source, GLenum type, GLenum severity,
 	GLsizei count, const GLuint *ids, GLboolean enabled );
@@ -17,6 +18,7 @@ typedef void ( APIENTRY *PFNGLXPOPDEBUGGROUPPROC )( void );
 
 struct DebugFns {
 	PFNGLXENABLEPROC Enable;
+	PFNGLXDISABLEPROC Disable;
 	PFNGLXDEBUGMESSAGECALLBACKPROC DebugMessageCallback;
 	PFNGLXDEBUGMESSAGECONTROLPROC DebugMessageControl;
 	PFNGLXOBJECTLABELPROC ObjectLabel;
@@ -30,11 +32,15 @@ struct DebugState {
 	cvar_t *r_glxDebugGroups;
 	DebugFns fns;
 	qboolean callbackInstalled;
+	qboolean khrDebugOutput;
 	unsigned int groupsPushed;
+	int lastDebugModificationCount;
+	int lastVerboseModificationCount;
 };
 
 void GLX_Debug_RegisterCvars( DebugState *state );
 void GLX_Debug_OnOpenGLReady( DebugState *state, const Capabilities &caps );
+void GLX_Debug_UpdateCvars( DebugState *state, const Capabilities &caps );
 void GLX_Debug_Shutdown( DebugState *state );
 qboolean GLX_Debug_CallbackInstalled( const DebugState &state );
 qboolean GLX_Debug_Verbose( const DebugState &state );

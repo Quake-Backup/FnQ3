@@ -143,6 +143,101 @@ static void *GLX_Debug_GetProc( const char *name, const char *fallbackName = nul
 }
 
 static void APIENTRY GLX_Debug_Callback( GLenum source, GLenum type, GLuint id, GLenum severity,
+	GLsizei length, const GLchar *message, const void *userParam );
+
+static int GLX_Debug_CvarModificationCount( const cvar_t *cvar )
+{
+	return cvar ? cvar->modificationCount : 0;
+}
+
+static void GLX_Debug_RecordRuntimeCvarCounts( DebugState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->lastDebugModificationCount = GLX_Debug_CvarModificationCount( state->r_glxDebug );
+	state->lastVerboseModificationCount = GLX_Debug_CvarModificationCount( state->r_glxDebugVerbose );
+}
+
+static qboolean GLX_Debug_RuntimeCvarsChanged( const DebugState *state )
+{
+	if ( !state ) {
+		return qfalse;
+	}
+
+	return ( state->lastDebugModificationCount != GLX_Debug_CvarModificationCount( state->r_glxDebug ) ||
+		state->lastVerboseModificationCount != GLX_Debug_CvarModificationCount( state->r_glxDebugVerbose ) ) ?
+		qtrue : qfalse;
+}
+
+static void GLX_Debug_ApplyNotificationFilter( DebugState *state )
+{
+	if ( !state || !state->khrDebugOutput || !state->fns.DebugMessageControl ) {
+		return;
+	}
+
+	state->fns.DebugMessageControl( GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr,
+		GLX_Debug_Verbose( *state ) ? GL_TRUE : GL_FALSE );
+}
+
+static void GLX_Debug_DisconnectCallback( DebugState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	while ( state->groupsPushed && state->fns.PopDebugGroup ) {
+		state->fns.PopDebugGroup();
+		state->groupsPushed--;
+	}
+
+	if ( state->callbackInstalled && state->fns.DebugMessageCallback ) {
+		state->fns.DebugMessageCallback( nullptr, nullptr );
+	}
+	if ( state->fns.Disable ) {
+		state->fns.Disable( GL_DEBUG_OUTPUT_SYNCHRONOUS );
+		if ( state->khrDebugOutput ) {
+			state->fns.Disable( GL_DEBUG_OUTPUT );
+		}
+	}
+	state->callbackInstalled = qfalse;
+}
+
+static void GLX_Debug_InstallCallback( DebugState *state, const Capabilities &caps )
+{
+	if ( !state || !state->r_glxDebug || !state->r_glxDebug->integer ) {
+		GLX_Debug_DisconnectCallback( state );
+		return;
+	}
+
+	if ( !caps.features.debugOutput ) {
+		return;
+	}
+
+	if ( !state->fns.DebugMessageCallback ) {
+		RI().Printf( PRINT_WARNING, "GLx debug requested, but debug-output callback functions are unavailable.\n" );
+		return;
+	}
+
+	if ( caps.features.khrDebug && !state->fns.Enable ) {
+		RI().Printf( PRINT_WARNING, "GLx KHR_debug requested, but glEnable is unavailable.\n" );
+		return;
+	}
+
+	if ( state->fns.Enable ) {
+		if ( caps.features.khrDebug ) {
+			state->fns.Enable( GL_DEBUG_OUTPUT );
+		}
+		state->fns.Enable( GL_DEBUG_OUTPUT_SYNCHRONOUS );
+	}
+
+	GLX_Debug_ApplyNotificationFilter( state );
+	state->fns.DebugMessageCallback( GLX_Debug_Callback, state );
+	state->callbackInstalled = qtrue;
+}
+
+static void APIENTRY GLX_Debug_Callback( GLenum source, GLenum type, GLuint id, GLenum severity,
 	GLsizei length, const GLchar *message, const void *userParam )
 {
 	const DebugState *state = static_cast<const DebugState *>( userParam );
@@ -166,13 +261,17 @@ void GLX_Debug_RegisterCvars( DebugState *state )
 		return;
 	}
 
-	state->r_glxDebug = RI().Cvar_Get( "r_glxDebug", "0", CVAR_ARCHIVE_ND | CVAR_LATCH | CVAR_DEVELOPER );
-	RI().Cvar_SetDescription( state->r_glxDebug, "Request a GLx debug context when supported and enable debug-output callback wiring when the driver exposes KHR_debug or ARB_debug_output. Requires vid_restart." );
+	state->r_glxDebug = RI().Cvar_Get( "r_glxDebug", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	MakeCvarInstant( state->r_glxDebug );
+	RI().Cvar_CheckRange( state->r_glxDebug, "0", "1", CV_INTEGER );
+	RI().Cvar_SetDescription( state->r_glxDebug, "Request a GLx debug context at startup and toggle debug-output callback wiring immediately when KHR_debug or ARB_debug_output is available." );
 
 	state->r_glxDebugVerbose = RI().Cvar_Get( "r_glxDebugVerbose", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_CheckRange( state->r_glxDebugVerbose, "0", "1", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_glxDebugVerbose, "Print low-volume GLx debug notifications in addition to warnings and errors." );
 
 	state->r_glxDebugGroups = RI().Cvar_Get( "r_glxDebugGroups", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_CheckRange( state->r_glxDebugGroups, "0", "1", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_glxDebugGroups, "Wrap GLx-observed shader batches in KHR_debug groups when available." );
 }
 
@@ -184,13 +283,16 @@ void GLX_Debug_OnOpenGLReady( DebugState *state, const Capabilities &caps )
 
 	state->fns = {};
 	state->callbackInstalled = qfalse;
+	state->khrDebugOutput = caps.features.khrDebug;
 	state->groupsPushed = 0;
 
 	if ( !caps.features.debugOutput || !RI().GL_GetProcAddress ) {
+		GLX_Debug_RecordRuntimeCvarCounts( state );
 		return;
 	}
 
 	state->fns.Enable = reinterpret_cast<PFNGLXENABLEPROC>( GLX_Debug_GetProc( "glEnable" ) );
+	state->fns.Disable = reinterpret_cast<PFNGLXDISABLEPROC>( GLX_Debug_GetProc( "glDisable" ) );
 	state->fns.DebugMessageCallback = reinterpret_cast<PFNGLXDEBUGMESSAGECALLBACKPROC>(
 		GLX_Debug_GetProc( "glDebugMessageCallback", "glDebugMessageCallbackARB" ) );
 	state->fns.DebugMessageControl = reinterpret_cast<PFNGLXDEBUGMESSAGECONTROLPROC>(
@@ -202,33 +304,24 @@ void GLX_Debug_OnOpenGLReady( DebugState *state, const Capabilities &caps )
 		state->fns.PopDebugGroup = reinterpret_cast<PFNGLXPOPDEBUGGROUPPROC>( GLX_Debug_GetProc( "glPopDebugGroup" ) );
 	}
 
+	GLX_Debug_InstallCallback( state, caps );
+	GLX_Debug_RecordRuntimeCvarCounts( state );
+}
+
+void GLX_Debug_UpdateCvars( DebugState *state, const Capabilities &caps )
+{
+	if ( !state || !caps.config || !GLX_Debug_RuntimeCvarsChanged( state ) ) {
+		return;
+	}
+
 	if ( !state->r_glxDebug || !state->r_glxDebug->integer ) {
-		return;
+		GLX_Debug_DisconnectCallback( state );
+	} else if ( state->callbackInstalled ) {
+		GLX_Debug_ApplyNotificationFilter( state );
+	} else {
+		GLX_Debug_InstallCallback( state, caps );
 	}
-
-	if ( !state->fns.DebugMessageCallback ) {
-		RI().Printf( PRINT_WARNING, "GLx debug requested, but debug-output callback functions are unavailable.\n" );
-		return;
-	}
-
-	if ( caps.features.khrDebug && !state->fns.Enable ) {
-		RI().Printf( PRINT_WARNING, "GLx KHR_debug requested, but glEnable is unavailable.\n" );
-		return;
-	}
-
-	if ( state->fns.Enable ) {
-		if ( caps.features.khrDebug ) {
-			state->fns.Enable( GL_DEBUG_OUTPUT );
-		}
-		state->fns.Enable( GL_DEBUG_OUTPUT_SYNCHRONOUS );
-	}
-
-	if ( caps.features.khrDebug && state->fns.DebugMessageControl && !GLX_Debug_Verbose( *state ) ) {
-		state->fns.DebugMessageControl( GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr, GL_FALSE );
-	}
-
-	state->fns.DebugMessageCallback( GLX_Debug_Callback, state );
-	state->callbackInstalled = qtrue;
+	GLX_Debug_RecordRuntimeCvarCounts( state );
 }
 
 void GLX_Debug_Shutdown( DebugState *state )
@@ -237,8 +330,10 @@ void GLX_Debug_Shutdown( DebugState *state )
 		return;
 	}
 
+	GLX_Debug_DisconnectCallback( state );
 	state->fns = {};
 	state->callbackInstalled = qfalse;
+	state->khrDebugOutput = qfalse;
 	state->groupsPushed = 0;
 }
 

@@ -647,7 +647,7 @@ void RendererModule::ApplyProfile( GlxProfile profile, qboolean rememberProfile,
 		RI().Printf( PRINT_ALL, "glxprofile: applied %s startup profile\n", profileName );
 	} else {
 		RI().Printf( PRINT_ALL, "glxprofile: applied %s profile\n", profileName );
-		RI().Printf( PRINT_ALL, "glxprofile: reload the map or run vid_restart for VBO/FBO-backed resources to rebuild under the new profile.\n" );
+		RI().Printf( PRINT_ALL, "glxprofile: FBO and stream settings apply automatically; reload the map for VBO/static-world resources.\n" );
 	}
 }
 
@@ -689,6 +689,8 @@ void RendererModule::FrameComplete()
 	GLX_Material_FrameComplete( &material_ );
 	GLX_PostShader_FrameComplete( &postShader_ );
 	GLX_Stream_FrameComplete( &stream_ );
+	GLX_Debug_UpdateCvars( &debug_, caps_ );
+	GLX_Stream_UpdateCvars( &stream_, caps_ );
 }
 
 void RendererModule::PrintCaps() const
@@ -1315,15 +1317,7 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.lastGradeGain[0], postprocess_.lastGradeGain[1], postprocess_.lastGradeGain[2],
 		postprocess_.lastWhitePointSourceKelvin, postprocess_.lastWhitePointTargetKelvin,
 		postprocess_.lastColorGradeLutSize, postprocess_.lastColorGradeLutScale );
-	const unsigned int missingSrgbDecode =
-		( postprocess_.lastOutput.hdrMode &&
-		  postprocess_.r_srgbTextures && postprocess_.r_srgbTextures->integer &&
-		  postprocess_.textureSrgbAvailable &&
-		  postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB] >
-			  postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB] ) ?
-		postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB] -
-			postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB] : 0u;
-	RI().Printf( PRINT_ALL, "glx: color audit srgb-decode %s requested %s available %s framebuffer-srgb %s requested %s available %s capture sdr-srgb target-float %s final-encode %s contract %s\n",
+	RI().Printf( PRINT_ALL, "glx: color audit srgb-decode %s requested %s available %s framebuffer-srgb %s requested %s available %s capture sdr-srgb target-float %s final-encode %s contract %s texture-consistent %s stale-srgb-decode %u\n",
 		BoolName( postprocess_.textureSrgbDecode ),
 		BoolName( postprocess_.r_srgbTextures && postprocess_.r_srgbTextures->integer ? qtrue : qfalse ),
 		BoolName( postprocess_.textureSrgbAvailable ),
@@ -1332,7 +1326,9 @@ void RendererModule::PrintFrameCounters() const
 		BoolName( postprocess_.framebufferSrgbAvailable ),
 		BoolName( postprocess_.sceneTargetFloat ),
 		postprocess_.finalShaderSrgbEncode ? "shader-srgb" : "none",
-		BoolName( postprocess_.outputContractValid ) );
+		BoolName( postprocess_.outputContractValid ),
+		BoolName( postprocess_.textureSrgbDecodeConsistent ),
+		postprocess_.textureSrgbStaleDecode );
 	RI().Printf( PRINT_ALL, "glx: texture audit srgb %u decode %u, linear %u decode %u, data %u decode %u, unknown %u decode %u, missing-srgb-decode %u, unexpected-decode %u\n",
 		postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB],
 		postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB],
@@ -1342,7 +1338,7 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_DATA],
 		postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_UNKNOWN],
 		postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_UNKNOWN],
-		missingSrgbDecode,
+		postprocess_.textureSrgbMissingDecode,
 		postprocess_.imageUnexpectedSrgbDecode );
 	RI().Printf( PRINT_ALL, "glx: stream draws %u/%u attempts, %u idx, %.2fMB/index %.2fMB/tex1 %.2fMB, mt %u, fog %u, depthfrag %u, texmod %u, env %u, dlight %u, screen %u, video %u, shadow %u, beam %u, post %u, fallbacks %u, skips %u\n",
 		stream_.streamedDraws,

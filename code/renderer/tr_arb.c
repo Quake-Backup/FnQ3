@@ -2944,6 +2944,33 @@ void FBO_PostProcess( void )
 }
 
 
+static void QGL_ResolveRenderSizeFromCvars( void )
+{
+	glConfig.vidWidth = gls.windowWidth;
+	glConfig.vidHeight = gls.windowHeight;
+	gls.captureWidth = glConfig.vidWidth;
+	gls.captureHeight = glConfig.vidHeight;
+	ri.CL_SetScaling( 1.0, gls.captureWidth, gls.captureHeight );
+
+	if ( !qglGenProgramsARB || !qglGenFramebuffers || !r_fbo || !r_fbo->integer ) {
+		return;
+	}
+
+	if ( r_renderScale && r_renderScale->integer ) {
+		glConfig.vidWidth = r_renderWidth ? r_renderWidth->integer : glConfig.vidWidth;
+		glConfig.vidHeight = r_renderHeight ? r_renderHeight->integer : glConfig.vidHeight;
+		gls.captureWidth = glConfig.vidWidth;
+		gls.captureHeight = glConfig.vidHeight;
+		ri.CL_SetScaling( 1.0, gls.captureWidth, gls.captureHeight );
+	}
+
+	if ( r_ext_supersample && r_ext_supersample->integer ) {
+		glConfig.vidWidth *= 2;
+		glConfig.vidHeight *= 2;
+		ri.CL_SetScaling( 2.0, gls.captureWidth, gls.captureHeight );
+	}
+}
+
 void QGL_SetRenderScale( qboolean verbose )
 {
 	windowAdjusted = qfalse;
@@ -2963,7 +2990,7 @@ void QGL_SetRenderScale( qboolean verbose )
 	{
 		if ( verbose && r_renderScale->integer )
 		{
-			ri.Printf( PRINT_ALL, "...ignoring \r_renderScale due to disabled FBO\n" );
+			ri.Printf( PRINT_ALL, "...ignoring \\r_renderScale due to disabled FBO\n" );
 		}
 		return;
 	}
@@ -3036,10 +3063,13 @@ void QGL_DoneFBO( void )
 void QGL_InitFBO( void )
 {
 	int w, h;
+	qboolean programReady;
 	qboolean depthStencil;
 	qboolean result = qfalse;
 
 	QGL_DoneFBO();
+	QGL_ResolveRenderSizeFromCvars();
+	QGL_SetRenderScale( qtrue );
 
 	w = glConfig.vidWidth;
 	h = glConfig.vidHeight;
@@ -3049,15 +3079,16 @@ void QGL_InitFBO( void )
 	fboInternalFormat = FBO_MainInternalFormat();
 	fboTextureFormat = 0;
 	fboTextureType = 0;
+	programReady = ( qglGenProgramsARB && GL_ProgramAvailable() ) ? qtrue : qfalse;
 
-	if ( r_fbo->integer && ( !qglGenProgramsARB || !qglGenFramebuffers ) )
+	if ( r_fbo->integer && ( !programReady || !qglGenFramebuffers ) )
 		ri.Printf( PRINT_WARNING, "...FBO is not available\n" );
 
-	if ( !r_fbo->integer || !qglGenProgramsARB || !qglGenFramebuffers )
+	if ( !r_fbo->integer || !programReady || !qglGenFramebuffers )
 	{
 #ifdef RENDERER_GLX
 		GLX_RecordFboInitState( r_fbo->integer ? qtrue : qfalse, qfalse,
-			qglGenProgramsARB ? qtrue : qfalse, qglGenFramebuffers ? qtrue : qfalse );
+			programReady, qglGenFramebuffers ? qtrue : qfalse );
 #endif
 		return;
 	}
@@ -3126,7 +3157,6 @@ void QGL_InitARB( void )
 {
 	ARB_UpdatePrograms();
 #ifdef USE_FBO
-	QGL_SetRenderScale( qtrue );
 	QGL_InitFBO();
 #endif
 	ri.Cvar_ResetGroup( CVG_RENDERER, qtrue );

@@ -13,7 +13,7 @@
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "externalConsole": false,
+      "console": false,
       "preLaunchTask": "meson: build"
     },
     {
@@ -28,7 +28,7 @@
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "externalConsole": false,
+      "console": false,
       "preLaunchTask": "meson: build"
     },
     {
@@ -43,7 +43,7 @@
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "externalConsole": false,
+      "console": false,
       "preLaunchTask": "meson: build"
     },
     {
@@ -58,7 +58,7 @@
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "externalConsole": false,
+      "console": false,
       "preLaunchTask": "meson: build"
     },
     {
@@ -68,7 +68,7 @@
       "program": "${workspaceFolder}\\meson\\build\\fnquake3.ded.x64.exe",
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "externalConsole": false,
+      "console": false,
       "preLaunchTask": "meson: build"
     }
   ]

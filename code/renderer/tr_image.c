@@ -568,6 +568,8 @@ static qboolean R_ImageWantsSrgbDecode( imageColorSpace_t colorSpace )
 	return ( colorSpace == IMAGE_COLORSPACE_SRGB &&
 		r_srgbTextures && r_srgbTextures->integer &&
 		r_hdr && r_hdr->integer > 0 &&
+		r_fbo && r_fbo->integer &&
+		fboEnabled &&
 		textureSrgbAvailable ) ? qtrue : qfalse;
 #else
 	(void)colorSpace;

@@ -27,6 +27,13 @@ qboolean ImportsReady();
 const char *BoolName( qboolean value );
 qboolean ToQBool( bool value );
 
+static ID_INLINE void MakeCvarInstant( cvar_t *cvar )
+{
+	if ( cvar ) {
+		cvar->flags &= ~CVAR_LATCH;
+	}
+}
+
 } // namespace glx
 
 #endif // GLX_LOCAL_H

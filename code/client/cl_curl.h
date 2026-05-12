@@ -52,6 +52,7 @@ extern CURLcode (*qcurl_easy_setopt)(CURL *curl, CURLoption option, ...);
 extern CURLcode (*qcurl_easy_perform)(CURL *curl);
 extern void (*qcurl_easy_cleanup)(CURL *curl);
 extern CURLcode (*qcurl_easy_getinfo)(CURL *curl, CURLINFO info, ...);
+extern CURL* (*qcurl_easy_duphandle)(CURL *curl);
 extern void (*qcurl_easy_reset)(CURL *curl);
 extern const char *(*qcurl_easy_strerror)(CURLcode);
 
@@ -99,7 +100,7 @@ void CL_cURL_BeginDownload( const char *localName, const char *remoteURL );
 void CL_cURL_PerformDownload( void );
 void CL_cURL_Cleanup( void );
 
-typedef struct download_s {
+typedef struct download_t {
 	char		URL[MAX_OSPATH];
 	char		Name[MAX_OSPATH];
 	char		Ext[8];
@@ -114,7 +115,7 @@ typedef struct download_s {
 	qboolean	headerCheck;
 	qboolean	mapAutoDownload;
 
-	struct func_s {
+	struct {
 		char*		(*version)(void);
 		char *		(*easy_escape)(CURL *curl, const char *string, int length);
 		void		(*free)(char *ptr);

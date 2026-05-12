@@ -23,6 +23,8 @@ void GLX_Renderer_OnOpenGLReady( const glconfig_t *config, const char *extension
 void GLX_Renderer_Shutdown( int code );
 void GLX_Renderer_BeginBackendTimer( void );
 void GLX_Renderer_EndBackendTimer( void );
+void GLX_Renderer_BeginGpuPassTimer( int pass );
+void GLX_Renderer_EndGpuPassTimer( int pass );
 void GLX_Renderer_FrameComplete( void );
 void GLX_Renderer_PrintCaps_f( void );
 void GLX_Renderer_PrintInfo_f( void );
@@ -97,12 +99,18 @@ void GLX_Renderer_RecordFboShutdown( void );
 void GLX_Renderer_RecordPostProcessFrame( qboolean minimized, qboolean bloomAvailable,
 	qboolean programReady, int screenshotMask, qboolean windowAdjusted, int fboReadIndex,
 	int hdrMode, int renderScaleMode, float greyscale );
+qboolean GLX_Renderer_AutoExposureNeedsSamples( int *width, int *height );
+float GLX_Renderer_UpdateAutoExposure( float manualExposure, const float *rgba,
+	int width, int height );
+qboolean GLX_Renderer_TryBindPostShaderFinal( qboolean bloomComposite,
+	qboolean outputTransform, float bloomIntensity );
 qboolean GLX_Renderer_TryBindPostShaderDirectFinal( void );
 void GLX_Renderer_UnbindPostShader( void );
 void GLX_Renderer_RecordPostProcessResult( int result );
 void GLX_Renderer_RecordColorGradeLut( qboolean active, int size, float scale );
 void GLX_Renderer_RecordBloomCreate( int result, int requestedPasses,
-	int effectivePasses, int textureUnits );
+	int effectivePasses, int textureUnits, int formatMode, int internalFormat,
+	int textureFormat, int textureType );
 void GLX_Renderer_RecordBloom( int result, qboolean finalStage, int bloomMode,
 	int requestedPasses, int effectivePasses, int blendBase, int filterSize,
 	int textureUnits, int thresholdMode, int modulate, float threshold, float intensity,
@@ -110,6 +118,9 @@ void GLX_Renderer_RecordBloom( int result, qboolean finalStage, int bloomMode,
 void GLX_Renderer_RecordFboCopyScreen( int viewportWidth, int viewportHeight );
 void GLX_Renderer_RecordFboBlit( int kind, qboolean depthOnly,
 	int srcWidth, int srcHeight, int dstWidth, int dstHeight );
+void GLX_Renderer_RecordFboBind( void );
+void GLX_Renderer_RecordPostClear( void );
+void GLX_Renderer_RecordFullscreenPass( void );
 void GLX_Renderer_PushShaderDebugGroup( const char *shaderName, int numVertexes, int numIndexes, int numPasses );
 void GLX_Renderer_PopDebugGroup( void );
 void GLX_Renderer_ShadowUploadTess( int numVertexes, int numIndexes,

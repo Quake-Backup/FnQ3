@@ -3,7 +3,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.12)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version/fnq3_version.h" FNQ3_VERSION_STRING_LINE REGEX "^#define FNQ3_VERSION_STRING \"[^\"]+\"$")
 string(REGEX REPLACE "^#define FNQ3_VERSION_STRING \"([^\"]+)\"$" "\\1" FNQ3_VERSION_STRING "${FNQ3_VERSION_STRING_LINE}")
 
-PROJECT(FnQuake3 VERSION ${FNQ3_VERSION_STRING})
+PROJECT(FnQuake3 VERSION ${FNQ3_VERSION_STRING} LANGUAGES C CXX)
 
 SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,11 +31,14 @@ ENDIF()
 
 IF(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	# win_resource.rc already embeds q3.manifest; CMake's Windows-Clang rule
-	# adds a generated manifest that lld-link rejects as a duplicate resource.
-	SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /MANIFEST:NO")
+	# can add a generated manifest that lld-link rejects as a duplicate resource.
 	FOREACH(lang C CXX)
 		STRING(REPLACE " -Xlinker /MANIFEST:EMBED" "" CMAKE_${lang}_LINK_EXECUTABLE "${CMAKE_${lang}_LINK_EXECUTABLE}")
+		STRING(REPLACE " /MANIFEST:NO" "" CMAKE_${lang}_LINK_EXECUTABLE "${CMAKE_${lang}_LINK_EXECUTABLE}")
 	ENDFOREACH()
+	IF(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+		SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /MANIFEST:NO")
+	ENDIF()
 ENDIF()
 
 IF(NOT USE_RENDERER_DLOPEN AND RENDERER_DEFAULT STREQUAL "glx")
@@ -92,8 +95,18 @@ AUX_SOURCE_DIRECTORY(code/botlib BOTLIB_SRCS)
 ADD_LIBRARY(botlib OBJECT ${BOTLIB_SRCS})
 TARGET_COMPILE_DEFINITIONS(botlib PRIVATE BOTLIB)
 
-AUX_SOURCE_DIRECTORY(code/server SERVER_SRCS)
-list(REMOVE_ITEM SERVER_SRCS code/server/sv_rankings.c)
+SET(SERVER_SRCS
+	code/server/sv_bot.cpp
+	code/server/sv_ccmds.cpp
+	code/server/sv_client.cpp
+	code/server/sv_filter.cpp
+	code/server/sv_game.cpp
+	code/server/sv_init.cpp
+	code/server/sv_main.cpp
+	code/server/sv_net_chan.cpp
+	code/server/sv_snapshot.cpp
+	code/server/sv_world.cpp
+)
 
 # universal binary
 ADD_LIBRARY(qcommon OBJECT ${QCOMMON_SRCS} ${SERVER_SRCS} ${PLATFORM_ASM_SRCS})
@@ -111,7 +124,7 @@ ENDIF()
 AUX_SOURCE_DIRECTORY(code/client CLIENT_SRCS)
 list(APPEND CLIENT_SRCS code/audio/AudioSystem.cpp)
 IF(NOT USE_CURL)
-	list(REMOVE_ITEM CLIENT_SRCS code/client/cl_curl.c)
+	list(REMOVE_ITEM CLIENT_SRCS code/client/cl_curl.cpp)
 ENDIF()
 
 #ADD_LIBRARY(client OBJECT ${CLIENT_SRCS})
@@ -240,22 +253,27 @@ ENDIF()
 # common function, window system
 IF(UNIX)
 	SET (Q3_SRCS
-		code/unix/unix_main.c
-		code/unix/unix_shared.c
-		code/unix/linux_signals.c)
+		code/unix/unix_main.cpp
+		code/unix/unix_shared.cpp
+		code/unix/unix_syscon.cpp
+		code/unix/linux_signals.cpp)
 
 	IF(USE_SDL)
-		AUX_SOURCE_DIRECTORY(code/sdl Q3_UI_SRCS)
+		SET(Q3_UI_SRCS
+			code/sdl/sdl_gamma.cpp
+			code/sdl/sdl_glimp.cpp
+			code/sdl/sdl_input.cpp
+			code/sdl/sdl_snd.cpp)
 	ELSE()
 		SET(Q3_UI_SRCS
-			code/unix/linux_glimp.c
-			code/unix/linux_qgl.c
-			code/unix/linux_snd.c
-			code/unix/x11_dga.c
-			code/unix/x11_randr.c
-			code/unix/x11_vidmode.c)
+			code/unix/linux_glimp.cpp
+			code/unix/linux_qgl.cpp
+			code/unix/linux_snd.cpp
+			code/unix/x11_dga.cpp
+			code/unix/x11_randr.cpp
+			code/unix/x11_vidmode.cpp)
 		IF(USE_VULKAN)
-			list(APPEND Q3_UI_SRCS code/unix/linux_qvk.c)
+			list(APPEND Q3_UI_SRCS code/unix/linux_qvk.cpp)
 		ENDIF()
 	ENDIF()
 
@@ -276,21 +294,21 @@ ELSEIF(WIN32)
 	ENDIF()
 
 	SET(Q3_SRCS
-		code/win32/win_main.c
-		code/win32/win_shared.c
-		code/win32/win_syscon.c
+		code/win32/win_main.cpp
+		code/win32/win_shared.cpp
+		code/win32/win_syscon.cpp
 		code/win32/win_resource.rc)
 
 	SET(Q3_UI_SRCS
-		code/win32/win_gamma.c
-		code/win32/win_glimp.c
-		code/win32/win_input.c
-		code/win32/win_minimize.c
-		code/win32/win_qgl.c
-		code/win32/win_snd.c
-		code/win32/win_wndproc.c)
+		code/win32/win_gamma.cpp
+		code/win32/win_glimp.cpp
+		code/win32/win_input.cpp
+		code/win32/win_minimize.cpp
+		code/win32/win_qgl.cpp
+		code/win32/win_snd.cpp
+		code/win32/win_wndproc.cpp)
 	IF(USE_VULKAN)
-		list(APPEND Q3_UI_SRCS code/win32/win_qvk.c)
+		list(APPEND Q3_UI_SRCS code/win32/win_qvk.cpp)
 	ENDIF()
 ENDIF(UNIX)
 
@@ -346,6 +364,7 @@ ENDIF()
 
 ADD_EXECUTABLE(${DNAME}${BINEXT} ${EXE_TYPE} ${Q3_SRCS})
 TARGET_LINK_LIBRARIES(${DNAME}${BINEXT} qcommon_ded botlib)
+set_property(TARGET ${DNAME}${BINEXT} PROPERTY LINKER_LANGUAGE CXX)
 #TARGET_LINK_OPTIONS(${DNAME} PRIVATE -fno-pie) # v3.13+
 
 IF(WIN32)

@@ -156,12 +156,16 @@ def screenshot_histogram() -> dict[str, object]:
     }
 
 
+def sdr_capture_policy() -> dict[str, object]:
+    return dict(glx_runtime_sweep.GLX_SCREENSHOT_CAPTURE_POLICY_CONTRACT)
+
+
 def color_diagnostics_metrics() -> dict[str, object]:
     return {
         "colorPipeline": {
             "space": "scene-linear",
             "transfer": "sdr-srgb",
-            "toneMap": "aces",
+            "toneMap": "aces-fitted",
             "grade": "none",
             "exposure": 1.0,
             "paperWhite": 203.0,
@@ -175,6 +179,9 @@ def color_diagnostics_metrics() -> dict[str, object]:
             "framebufferRequested": 1,
             "framebufferAvailable": 1,
             "capture": "sdr-srgb",
+            "captureRequest": "sdr-srgb",
+            "captureHdrAware": 0,
+            "captureSupported": 1,
             "targetFloat": 1,
             "finalEncode": "shader-srgb",
             "contract": 1,
@@ -530,13 +537,34 @@ def color_contracts() -> dict[str, object]:
     return glx_runtime_sweep.color_contract_manifest()
 
 
+def image_evidence_manifest() -> dict[str, object]:
+    return {
+        "version": glx_runtime_sweep.GLX_IMAGE_EVIDENCE_VERSION,
+        "requiredSidecars": list(glx_runtime_sweep.GLX_IMAGE_EVIDENCE_SIDECARS),
+        "shaderReferenceRamps": [
+            {
+                "rowId": str(row["id"]),
+                "path": f"image-evidence/{row['id']}.reference-ramp.png",
+                "width": glx_runtime_sweep.GLX_SHADER_REFERENCE_RAMP_WIDTH,
+                "height": glx_runtime_sweep.GLX_SHADER_REFERENCE_RAMP_HEIGHT,
+                "rampRows": list(glx_runtime_sweep.GLX_SHADER_REFERENCE_RAMP_ROWS),
+                "histogram": screenshot_histogram(),
+                "histogramPath": f"image-evidence/{row['id']}.histogram.json",
+                "falseColorPath": f"image-evidence/{row['id']}.luma-falsecolor.png",
+                "exposureFalseColorPath": f"image-evidence/{row['id']}.exposure-falsecolor.png",
+            }
+            for row in glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX
+        ],
+    }
+
+
 def color_diagnostics_metrics_for_row(row: dict[str, object]) -> dict[str, object]:
     metrics = color_diagnostics_metrics()
     expect = row.get("expect", {})
     if isinstance(expect, dict):
         metrics["colorPipeline"]["space"] = expect.get("space", "scene-linear")  # type: ignore[index]
         metrics["colorPipeline"]["transfer"] = expect.get("transfer", "sdr-srgb")  # type: ignore[index]
-        metrics["colorPipeline"]["toneMap"] = expect.get("toneMap", "aces")  # type: ignore[index]
+        metrics["colorPipeline"]["toneMap"] = expect.get("toneMap", "aces-fitted")  # type: ignore[index]
         metrics["colorPipeline"]["exposure"] = expect.get("exposure", 1.0)  # type: ignore[index]
         metrics["colorAudit"]["targetFloat"] = expect.get("sceneTargetFloat", 1)  # type: ignore[index]
         metrics["colorAudit"]["finalEncode"] = expect.get("finalEncode", "shader-srgb")  # type: ignore[index]
@@ -590,6 +618,10 @@ def locked_performance_sample(row: dict[str, object] | None = None) -> dict[str,
             "colorSceneTargetFloat": color_audit["targetFloat"],
             "colorFinalEncode": color_audit["finalEncode"],
             "colorOutputContract": color_audit["contract"],
+            "captureColorSpace": color_audit["capture"],
+            "capturePolicyRequest": color_audit["captureRequest"],
+            "captureHdrAware": color_audit["captureHdrAware"],
+            "capturePolicySupported": color_audit["captureSupported"],
             "outputBackendRequest": metrics["outputBackend"]["request"],  # type: ignore[index]
             "outputBackendSelected": "sdr-srgb",
             "textureAuditSrgb": 4,
@@ -731,7 +763,9 @@ def color_sweep_runs(gate: str) -> list[dict[str, object]]:
                         "baselineStatus": "passed" if gate == "rc-proof" else "not-compared",
                         "comparison": {"status": "passed"} if gate == "rc-proof" else {},
                         "histogram": screenshot_histogram(),
+                        "capturePolicy": sdr_capture_policy(),
                         "falseColor": {"status": "passed"},
+                        "exposureFalseColor": {"status": "passed"},
                     }
                 ],
                 "diagnostics": {
@@ -784,6 +818,9 @@ def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
             "baselineStatus": "passed" if gate == "rc-proof" else "not-compared",
             "comparison": {"status": "passed"} if gate == "rc-proof" else {},
             "histogram": screenshot_histogram(),
+            "capturePolicy": sdr_capture_policy(),
+            "falseColor": {"status": "passed"},
+            "exposureFalseColor": {"status": "passed"},
         }
         for map_index, map_name in enumerate(maps, start=1)
         for switch_index, renderer in enumerate(switch_sequence, start=1)
@@ -801,6 +838,7 @@ def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
         "switchRounds": 1,
         "proofCorpus": proof_corpus_for_gate(gate),
         "colorContracts": color_contracts(),
+        "imageEvidence": image_evidence_manifest(),
         "performanceFailures": [],
         "runs": [
             {
@@ -1317,6 +1355,11 @@ class GlxRuntimeSweepExecutableTests(unittest.TestCase):
 
             self.assertEqual(len(color_runs), len(glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX))
             self.assertEqual(manifest["colorContracts"]["version"], glx_runtime_sweep.GLX_COLOR_CONTRACT_VERSION)
+            self.assertEqual(manifest["imageEvidence"]["version"], glx_runtime_sweep.GLX_IMAGE_EVIDENCE_VERSION)
+            self.assertEqual(
+                len(manifest["imageEvidence"]["shaderReferenceRamps"]),
+                len(glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX),
+            )
             self.assertEqual(
                 {run["colorSweepRow"]["id"] for run in color_runs},
                 {row["id"] for row in glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX},
@@ -1354,7 +1397,7 @@ class GlxRuntimeSweepExecutableTests(unittest.TestCase):
 
 class GlxRendererSourceCoverageTests(unittest.TestCase):
     def test_requested_glx_renderer_load_failure_is_fatal(self) -> None:
-        client_source = (ROOT / "code" / "client" / "cl_main.c").read_text(encoding="utf-8")
+        client_source = (ROOT / "code" / "client" / "cl_main.cpp").read_text(encoding="utf-8")
         start = client_source.index("static void CL_InitRef")
         failure_start = client_source.index("if ( !rendererLib )", start)
         failure_end = client_source.index("rendererLib = Sys_LoadLibrary( ospath );", failure_start)
@@ -1393,7 +1436,131 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
             self.assertIn("r_hdrPrecision", source)
             self.assertNotIn("Enables high dynamic range frame buffer texture format", source)
         self.assertIn("SceneColorSpace::SceneLinear", glx_ir)
-        self.assertIn("ToneMapOperator::Aces", glx_ir)
+        self.assertIn("ToneMapOperator::AcesFitted", glx_ir)
+        self.assertIn("Aces = AcesFitted", glx_ir)
+
+    def test_renderer2_auto_exposure_has_time_constant_mode_and_legacy_parity(self) -> None:
+        source = (ROOT / "code" / "renderer2" / "tr_postprocess.c").read_text(encoding="utf-8")
+        header = (ROOT / "code" / "renderer2" / "tr_postprocess.h").read_text(encoding="utf-8")
+        display_doc = (ROOT / "docs" / "DISPLAY.md").read_text(encoding="utf-8")
+        audit_doc = COLORSPACE_AUDIT_PATH.read_text(encoding="utf-8")
+
+        legacy_start = source.index("static void RB_CalculateAutoExposureTargetLegacy")
+        robust_start = source.index("static void RB_CalculateAutoExposureTargetRobust")
+        histogram_start = source.index("static void RB_CalculateAutoExposureTargetHistogramPercentile")
+        robust_end = source.index("static void RB_CalculateAutoExposureTargetHistogramPercentile", robust_start)
+        histogram_end = source.index("static void RB_BlendAutoExposureTarget", histogram_start)
+        legacy_body = source[legacy_start:robust_start]
+        robust_body = source[robust_start:robust_end]
+        histogram_body = source[histogram_start:histogram_end]
+
+        self.assertIn("AUTO_EXPOSURE_MODE_TIME_CONSTANT = 1", header)
+        self.assertIn("AUTO_EXPOSURE_MODE_LEGACY = 2", header)
+        self.assertIn("AUTO_EXPOSURE_MODE_HISTOGRAM_PERCENTILE = 3", header)
+        self.assertIn("RB_AutoExposureHistogramPercentileAvailable", source)
+        self.assertIn("RB_TimeConstantAutoExposureAlpha", source)
+        self.assertIn("ri.Milliseconds()", source)
+        self.assertIn("AUTO_EXPOSURE_MAX_DELTA_SECONDS", source)
+        self.assertIn("Q_exp2f((-deltaSeconds * AUTO_EXPOSURE_EXP2_E) / tauSeconds)", source)
+        self.assertIn("RB_SanitizeToneMapInputs();", source)
+        self.assertIn("RB_CameraExposureScale(autoExposureEnabled)", source)
+        self.assertIn("FBO_FastBlit", legacy_body)
+        self.assertIn("&tr.calclevels4xShader[1]", robust_body)
+        self.assertNotIn("FBO_FastBlit", robust_body)
+        self.assertIn("&tr.calclevels4xShader[2]", histogram_body)
+        self.assertIn("AUTO_EXPOSURE_MODE_HISTOGRAM_PERCENTILE", source)
+        self.assertIn("`r_autoExposure`: Automatic exposure", display_doc)
+        self.assertIn("`1`: Time-constant adaptation.", display_doc)
+        self.assertIn("`2`: Legacy parity mode", display_doc)
+        self.assertIn("`3`: Modern-tier histogram percentile reduction", display_doc)
+        self.assertIn("elapsed-time time-constant adaptation", audit_doc)
+        self.assertIn("histogram percentile reduction", audit_doc)
+
+    def test_renderer2_auto_exposure_has_percentile_reduction_shader(self) -> None:
+        shader = (ROOT / "code" / "renderer2" / "glsl" / "calclevels4x_fp.glsl").read_text(encoding="utf-8")
+        glsl = (ROOT / "code" / "renderer2" / "tr_glsl.c").read_text(encoding="utf-8")
+        local = (ROOT / "code" / "renderer2" / "tr_local.h").read_text(encoding="utf-8")
+
+        self.assertIn("#ifdef HISTOGRAM_PERCENTILE", shader)
+        self.assertIn("SortPercentileSamples", shader)
+        self.assertIn("ReducePercentileChannel(0, 1)", shader)
+        self.assertIn("ReducePercentileChannel(1, 8)", shader)
+        self.assertIn("ReducePercentileChannel(2, 14)", shader)
+        self.assertIn("GetHistogramPercentileValues", shader)
+        self.assertIn("calclevels4xShader[3]", local)
+        self.assertIn("for (i = 0; i < 3; i++)", glsl)
+        self.assertIn("#define HISTOGRAM_PERCENTILE", glsl)
+
+    def test_glx_auto_exposure_has_tiered_histogram_percentile_path(self) -> None:
+        color_math = (ROOT / "code" / "rendererglx" / "glx_color_math.h").read_text(encoding="utf-8")
+        render_ir = (ROOT / "code" / "rendererglx" / "glx_render_ir.h").read_text(encoding="utf-8")
+        postprocess = (ROOT / "code" / "rendererglx" / "glx_postprocess.cpp").read_text(encoding="utf-8")
+        renderer_arb = (ROOT / "code" / "renderer" / "tr_arb.c").read_text(encoding="utf-8")
+
+        self.assertIn("GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS", color_math)
+        self.assertIn("GLX_ColorMath_ExposureHistogramPercentile", color_math)
+        self.assertIn("ExposureReductionAlgorithm::HistogramPercentile", render_ir)
+        self.assertIn("GLX_AUTO_EXPOSURE_HISTOGRAM", postprocess)
+        self.assertIn("r_glxAutoExposurePercentile", postprocess)
+        self.assertIn("GLX_PostProcess_ModernExposureTier", postprocess)
+        self.assertIn("ExposureReductionAlgorithm::SimpleAverage", postprocess)
+        self.assertIn("autoExposureHistogramFrames", postprocess)
+        self.assertIn("GLX_CompatAutoExposureNeedsSamples", renderer_arb)
+        self.assertIn("qglReadPixels( 0, 0, width, height, GL_RGBA, GL_FLOAT", renderer_arb)
+
+    def test_hdr_screenshot_capture_policy_stays_sdr_by_default(self) -> None:
+        renderer_init = (ROOT / "code" / "renderer" / "tr_init.c").read_text(encoding="utf-8")
+        glx_render_ir = (ROOT / "code" / "rendererglx" / "glx_render_ir.h").read_text(encoding="utf-8")
+        glx_module = (ROOT / "code" / "rendererglx" / "glx_module.cpp").read_text(encoding="utf-8")
+        glx_postprocess = (ROOT / "code" / "rendererglx" / "glx_postprocess.cpp").read_text(encoding="utf-8")
+        screenshots_doc = (ROOT / "docs" / "SCREENSHOTS.md").read_text(encoding="utf-8")
+        audit_doc = COLORSPACE_AUDIT_PATH.read_text(encoding="utf-8")
+        sweep = (ROOT / "scripts" / "glx_runtime_sweep.py").read_text(encoding="utf-8")
+
+        self.assertIn('r_screenshotCaptureMode = ri.Cvar_Get( "r_screenshotCaptureMode", "0"', renderer_init)
+        self.assertIn("R_ScreenshotCaptureModeName", renderer_init)
+        self.assertIn('return "sdr-srgb";', renderer_init)
+        self.assertIn("R_WarnExplicitHdrScreenshotCapture", renderer_init)
+        self.assertIn("captureMode %s", renderer_init)
+        self.assertIn("captureColorSpace %s", renderer_init)
+        self.assertIn("CaptureExportPolicy", glx_render_ir)
+        self.assertIn("GLX_RenderIR_CaptureOutputTransform", glx_render_ir)
+        self.assertIn("OutputTransfer::ScreenshotSrgb", glx_render_ir)
+        self.assertIn("capture-request", glx_module)
+        self.assertIn("capture policy", glx_postprocess)
+        self.assertIn("default to SDR sRGB byte output", screenshots_doc)
+        self.assertIn("`r_screenshotCaptureMode` records the explicit capture policy", screenshots_doc)
+        self.assertIn("Reserved scene-linear HDR export request", screenshots_doc)
+        self.assertIn("reserved HDR-output request", renderer_init)
+        self.assertIn("Screenshot capture/export", audit_doc)
+        self.assertIn("capture-request", audit_doc)
+        self.assertIn("GLX_SCREENSHOT_CAPTURE_POLICY_CONTRACT", sweep)
+        self.assertIn("capturePolicyRequest", sweep)
+        self.assertIn('"defaultColorSpace": "sdr-srgb"', sweep)
+        self.assertIn('"hdr-scene-linear"', sweep)
+        self.assertIn('"hdr-output"', sweep)
+        self.assertIn('"hdrExportStatus": "explicit-reserved"', sweep)
+
+    def test_hdr_bloom_intermediates_have_role_based_format_policy(self) -> None:
+        fbo_source = (ROOT / "code" / "renderer" / "tr_arb.c").read_text(encoding="utf-8")
+        init_source = (ROOT / "code" / "renderer" / "tr_init.c").read_text(encoding="utf-8")
+        cmds_source = (ROOT / "code" / "renderer" / "tr_cmds.c").read_text(encoding="utf-8")
+        glx_postprocess = (ROOT / "code" / "rendererglx" / "glx_postprocess.cpp").read_text(encoding="utf-8")
+        display_doc = (ROOT / "docs" / "DISPLAY.md").read_text(encoding="utf-8")
+        audit_doc = COLORSPACE_AUDIT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("return GL_RGBA16F;", fbo_source[fbo_source.index("static GLint FBO_MainInternalFormat"):])
+        self.assertIn("FBO_PositiveIntermediateCandidates( qtrue", fbo_source)
+        self.assertIn("GL_R11F_G11F_B10F", fbo_source)
+        self.assertIn("GL_RG16F", fbo_source)
+        self.assertIn("FBO_AddFormatCandidate( formats, count, GL_RGBA16F );", fbo_source)
+        self.assertIn("FBO_CreateWithFormat", fbo_source)
+        self.assertIn("fboBloomInternalFormat = fb->internalFormat;", fbo_source)
+        self.assertIn("r_hdrBloomFormat", init_source)
+        self.assertIn("r_hdrBloomFormat->modified", cmds_source)
+        self.assertIn("bloom storage: policy", glx_postprocess)
+        self.assertIn("`r_hdrBloomFormat`", display_doc)
+        self.assertIn("positive-only bloom/extract", audit_doc)
 
     def test_task_q_color_pipeline_sources_are_audited(self) -> None:
         renderer_common = (ROOT / "code" / "renderer" / "tr_common.h").read_text(encoding="utf-8")
@@ -1755,7 +1922,6 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("scripts/glx_promotion.py --require-ready --proof-root <dir> --rollback-metadata <json>", final_contract)
 
     def test_task_x_productization_sources_are_covered(self) -> None:
-        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         meson_options = (ROOT / "meson_options.txt").read_text(encoding="utf-8")
         meson_build = (ROOT / "meson.build").read_text(encoding="utf-8")
@@ -1767,7 +1933,6 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         readme_template = (ROOT / "docs" / "templates" / "README.md.in").read_text(encoding="utf-8")
         release_script = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
 
-        self.assertIn('OPTION(USE_GLX "Build the GLx OpenGL-lineage renderer module" ON)', cmake)
         self.assertRegex(makefile, r"(?m)^USE_GLX\s*=\s*1$")
         self.assertIn("'glx'", meson_options)
         self.assertIn("renderer_prefix + '_glx_'", meson_build)
@@ -1810,6 +1975,8 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
             comparison = glx_runtime_sweep.compare_png_files(path, path, 0.0, 0.0)
             self.assertEqual(comparison["status"], "passed")
             self.assertEqual(comparison["changedPixels"], 0)
+            self.assertEqual(comparison["psnr"], "inf")
+            self.assertEqual(comparison["ssim"], 1.0)
 
     def test_screenshot_results_attach_color_histogram(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1843,6 +2010,13 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
             self.assertTrue(false_color_path.exists())
             width, height, _pixels = glx_runtime_sweep.read_png_rgba(false_color_path)
             self.assertEqual((width, height), (1, 1))
+            self.assertEqual(results[0]["exposureFalseColor"]["status"], "passed")
+            exposure_path = Path(results[0]["exposureFalseColorPath"])
+            self.assertTrue(exposure_path.exists())
+            width, height, _pixels = glx_runtime_sweep.read_png_rgba(exposure_path)
+            self.assertEqual((width, height), (1, 1))
+            self.assertEqual(results[0]["capturePolicy"]["defaultColorSpace"], "sdr-srgb")
+            self.assertEqual(results[0]["capturePolicy"]["hdrExportStatus"], "explicit-reserved")
 
     def test_png_compare_reports_threshold_failure_and_writes_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1873,7 +2047,58 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
             )
             self.assertEqual(comparison["status"], "failed")
             self.assertEqual(comparison["changedPixels"], 1)
+            self.assertIn("psnr", comparison)
+            self.assertIn("ssim", comparison)
             self.assertTrue(diff.exists())
+
+    def test_shader_reference_ramps_are_deterministic_offline_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records = glx_runtime_sweep.write_shader_reference_ramps(root)
+
+            self.assertEqual(len(records), len(glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX))
+            first = records[0]
+            self.assertTrue(Path(first["path"]).exists())
+            self.assertTrue(Path(first["histogramPath"]).exists())
+            self.assertTrue(Path(first["falseColorPath"]).exists())
+            self.assertTrue(Path(first["exposureFalseColorPath"]).exists())
+            width, height, _pixels = glx_runtime_sweep.read_png_rgba(Path(first["path"]))
+            self.assertEqual((width, height), (
+                glx_runtime_sweep.GLX_SHADER_REFERENCE_RAMP_WIDTH,
+                glx_runtime_sweep.GLX_SHADER_REFERENCE_RAMP_HEIGHT,
+            ))
+
+            failures = glx_runtime_sweep.validate_image_evidence_manifest(
+                {
+                    "imageEvidence": {
+                        "version": glx_runtime_sweep.GLX_IMAGE_EVIDENCE_VERSION,
+                        "requiredSidecars": list(glx_runtime_sweep.GLX_IMAGE_EVIDENCE_SIDECARS),
+                        "shaderReferenceRamps": records,
+                    }
+                }
+            )
+            self.assertEqual(failures, [])
+
+    def test_shader_reference_ramp_compare_reports_psnr_and_ssim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            row_id = str(glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX[0]["id"])
+            reference = glx_runtime_sweep.write_shader_reference_ramp(
+                root / "candidate-source",
+                dict(glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX[0]),
+            )
+
+            result = glx_runtime_sweep.compare_shader_reference_ramp(
+                row_id,
+                Path(reference["path"]),
+                root / "comparison",
+                max_rms=0.0,
+                max_pixel_ratio=0.0,
+            )
+
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["comparison"]["psnr"], "inf")
+            self.assertEqual(result["comparison"]["ssim"], 1.0)
 
     def test_screenshot_baseline_approval_then_compare(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1939,6 +2164,9 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
 class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
     def test_glx_diagnostics_accept_clean_rc_log(self) -> None:
+        self.assertEqual(glx_runtime_sweep.normalize_tone_map_name("aces"), "aces-fitted")
+        self.assertEqual(glx_runtime_sweep.normalize_tone_map_name("reinhard"), "reinhard-simple")
+
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "switch.log"
             log.write_text(
@@ -1966,15 +2194,21 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "  frames: 3 post, 1 bloom-final, 0 gamma-direct, 3 gamma-blit, 0 minimized output, 1 screenshots",
                         "  frame features: 1 bloom-available, 1 scene-linear, 1 tone-mapped, 1 graded, 1 render-scale, 1 greyscale, 1 window-adjusted, 0 minimized",
                         "  FBO lifecycle: 1 init attempts, 1 ready, 0 failed, 0 disabled, 0 shutdowns",
-                        "  color pipeline: space scene-linear, transfer sdr-srgb, tone-map aces, exposure 1.00, grade lgg-lut3d, paper-white 203 nits, max 203 nits",
+                        "  color pipeline: space scene-linear, transfer sdr-srgb, tone-map aces-fitted, exposure 1.00, grade lgg-lut3d, paper-white 203 nits, max 203 nits",
+                        "  exposure reduction: mode 1, algorithm simple-average, enabled yes, fallback yes, samples 1024/32x32, percentile 80.0, target-luma 0.180, measured-log2 -1.000, measured-luma 0.5000, manual 1.00, scale 0.360, target 0.36, frames 3 histogram/0 simple/3 failures/0",
                         "  color grade stage: mode lgg-lut3d, lift 0.01/0.02/0.03, gamma 1.10/1.00/0.95, gain 1.05/1.00/0.98, white-point 6504->6000 K, lut-size 16, lut-scale 4.00",
-                        "  color audit: srgb-decode yes requested yes available yes, framebuffer-srgb no requested yes available yes, capture sdr-srgb, target-float yes, final-encode shader-srgb, contract yes",
+                        "  color audit: srgb-decode yes requested yes available yes, framebuffer-srgb no requested yes available yes, capture sdr-srgb, capture-request sdr-srgb, capture-hdr-aware no, capture-supported yes, target-float yes, final-encode shader-srgb, contract yes",
                         "  texture audit: srgb 4 decode 4, linear 2 decode 0, data 2 decode 0, unknown 0 decode 0, missing-srgb-decode 0, unexpected-decode 0",
                         '  glx: color-frame-json {"frame":1,"backend":"sdr-srgb","space":"scene-linear","transfer":"sdr-srgb","exposure":1.0000,"paperWhiteNits":203.0,"maxOutputNits":203.0,"srgbDecode":true,"framebufferSrgb":false,"internalFormat":"0x881a","textureFormat":"0x1908","textureType":"0x140b","sceneTargetFloat":true,"shaderSrgbEncode":true,"contractValid":true}',
                         "  output backend: request auto, selected sdr-srgb, native windows-scrgb, hardware no, experimental no, display-hdr yes, headroom 4.00, sdr-white 203 nits, display-max 812 nits, icc yes/2048, driver windows, display HDR Panel, reason: test",
+                        "  display state: queries 4, changes 1, capability 1, backend 1, hdr 1, headroom 1, luminance 1, icc 1, last-frame 2, flags 0x000000fe, hash 0x12345678, previous 0x01020304",
                         "  bloom create: last success, 1/1 ready, texture-unit failures 0, FBO failures 0",
+                        "  bloom storage: policy auto, format 0x8c3a (0x1907:0x140b)",
                         "  bloom passes: calls 1, rendered 1, final 1, pre-final 0, skipped 0, failures 0, mode1 0, mode2 1, reflections 0",
                         "  copies/blits: screen-map copies 0, MSAA blits 0 (0 depth), SSAA blits 0, last output bloom-final",
+                        "  post pass counters: blits 4, binds 9, clears 1, fullscreen passes 6",
+                        "  pass timer queries: active yes, queries 7, unavailable frames 0, ring-full skips 0",
+                        "  pass GPU timings: backend=0.270ms/1 postprocess=0.420ms/1 bloom=0.250ms/1 bloom-extract=0.030ms/1 bloom-downscale=0.010ms/3 bloom-blur=0.090ms/2 bloom-blend=0.080ms/1 bloom-final=0.060ms/1 bloom-lens-reflection=n/a/0 gamma-direct=n/a/0 gamma-blit=0.110ms/1 fbo-blit=0.040ms/2 copy-screen=n/a/0 flare=0.020ms/1",
                         "  dynamic stream buffer: yes",
                         "  dynamic stream sync: yes, fences 1, waits 0, timeouts 0, failures 0, pending skips 0",
                         "  dynamic stream reservations: 1, commits: 1, wraps: 0, same-frame wrap rejects: 0, orphans: 0",
@@ -2092,11 +2326,22 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             color_pipeline = diagnostics["metrics"]["colorPipeline"]
             self.assertEqual(color_pipeline["space"], "scene-linear")
             self.assertEqual(color_pipeline["transfer"], "sdr-srgb")
-            self.assertEqual(color_pipeline["toneMap"], "aces")
+            self.assertEqual(color_pipeline["toneMap"], "aces-fitted")
             self.assertEqual(color_pipeline["grade"], "lgg-lut3d")
             self.assertEqual(color_pipeline["exposure"], 1.0)
             self.assertEqual(color_pipeline["paperWhite"], 203.0)
             self.assertEqual(color_pipeline["maxOutput"], 203.0)
+            auto_exposure = diagnostics["metrics"]["autoExposure"]
+            self.assertEqual(auto_exposure["mode"], 1)
+            self.assertEqual(auto_exposure["algorithm"], "simple-average")
+            self.assertEqual(auto_exposure["enabled"], 1)
+            self.assertEqual(auto_exposure["fallback"], 1)
+            self.assertEqual(auto_exposure["sampleCount"], 1024)
+            self.assertEqual(auto_exposure["sampleWidth"], 32)
+            self.assertEqual(auto_exposure["sampleHeight"], 32)
+            self.assertEqual(auto_exposure["targetLuma"], 0.18)
+            self.assertEqual(auto_exposure["measuredLuma"], 0.5)
+            self.assertEqual(auto_exposure["sampleFailures"], 0)
             color_grade = diagnostics["metrics"]["colorGrade"]
             self.assertEqual(color_grade["mode"], "lgg-lut3d")
             self.assertEqual(color_grade["liftR"], 0.01)
@@ -2113,6 +2358,9 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(color_audit["framebufferRequested"], 1)
             self.assertEqual(color_audit["framebufferAvailable"], 1)
             self.assertEqual(color_audit["capture"], "sdr-srgb")
+            self.assertEqual(color_audit["captureRequest"], "sdr-srgb")
+            self.assertEqual(color_audit["captureHdrAware"], 0)
+            self.assertEqual(color_audit["captureSupported"], 1)
             self.assertEqual(color_audit["targetFloat"], 1)
             self.assertEqual(color_audit["finalEncode"], "shader-srgb")
             self.assertEqual(color_audit["contract"], 1)
@@ -2138,6 +2386,25 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(post_features["greyscale"], 1)
             self.assertEqual(post_features["windowAdjusted"], 1)
             self.assertEqual(post_features["minimized"], 0)
+            postprocess = diagnostics["metrics"]["postprocess"]
+            self.assertEqual(postprocess["bloomStoragePolicy"], "auto")
+            self.assertEqual(postprocess["bloomStorageInternalFormat"], 0x8C3A)
+            self.assertEqual(postprocess["bloomStorageTextureFormat"], 0x1907)
+            self.assertEqual(postprocess["bloomStorageTextureType"], 0x140B)
+            pass_counters = diagnostics["metrics"]["gpuPassCounters"]
+            self.assertEqual(pass_counters["blits"], 4)
+            self.assertEqual(pass_counters["binds"], 9)
+            self.assertEqual(pass_counters["clears"], 1)
+            self.assertEqual(pass_counters["fullscreen"], 6)
+            pass_timing = diagnostics["metrics"]["gpuPassTiming"]
+            self.assertEqual(pass_timing["active"], 1)
+            self.assertEqual(pass_timing["queries"], 7)
+            pass_timings = diagnostics["metrics"]["gpuPassTimings"]
+            self.assertEqual(pass_timings["backend"]["lastMs"], 0.27)
+            self.assertEqual(pass_timings["postprocess"]["lastMs"], 0.42)
+            self.assertEqual(pass_timings["bloom-downscale"]["samples"], 3)
+            self.assertEqual(pass_timings["bloom-blur"]["samples"], 2)
+            self.assertEqual(pass_timings["flare"]["lastMs"], 0.02)
             color_frame = diagnostics["metrics"]["colorFrame"]
             self.assertEqual(color_frame["samples"], 1)
             self.assertEqual(color_frame["latest"]["backend"], "sdr-srgb")
@@ -2151,6 +2418,19 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(output_backend["headroom"], 4.0)
             self.assertEqual(output_backend["displayMax"], 812.0)
             self.assertEqual(output_backend["icc"], 1)
+            display_state = diagnostics["metrics"]["displayState"]
+            self.assertEqual(display_state["queries"], 4)
+            self.assertEqual(display_state["changes"], 1)
+            self.assertEqual(display_state["capability"], 1)
+            self.assertEqual(display_state["backend"], 1)
+            self.assertEqual(display_state["hdr"], 1)
+            self.assertEqual(display_state["headroom"], 1)
+            self.assertEqual(display_state["luminance"], 1)
+            self.assertEqual(display_state["icc"], 1)
+            self.assertEqual(display_state["lastFrame"], 2)
+            self.assertEqual(display_state["flags"], 0x000000FE)
+            self.assertEqual(display_state["hash"], 0x12345678)
+            self.assertEqual(display_state["previous"], 0x01020304)
 
     def test_glx_color_frame_csv_is_gate_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2185,7 +2465,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             log = Path(tmp) / "sdr-headroom.log"
             log.write_text(
                 "glx: color pipeline scene-linear precision 16 transfer sdr-srgb "
-                "tone-map aces exposure 1.00 bloom-threshold 0.75/2 knee 0.50 "
+                "tone-map aces-fitted exposure 1.00 bloom-threshold 0.75/2 knee 0.50 "
                 "grade none paper-white 203 max 1000\n",
                 encoding="utf-8",
             )
@@ -2196,6 +2476,32 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertTrue(
                 any("HDR max-output headroom" in failure for failure in diagnostics["failures"])
             )
+
+    def test_glx_display_state_diagnostics_allow_sdr_fallback_after_hdr_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "display-state.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "glx: output backend request auto selected sdr-srgb native sdr-srgb hardware no experimental no display-hdr no headroom 1.00 sdr-white 203 display-max 203 icc no/0",
+                        "glx: display state queries 6 changes 2 capability 2 backend 1 hdr 1 headroom 1 luminance 1 icc 0 last-frame 5 flags 0x0000003e hash 0x22222222 previous 0x11111111",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-color")
+
+            self.assertTrue(diagnostics["found"])
+            self.assertEqual(diagnostics["failures"], [])
+            display_state = diagnostics["metrics"]["displayState"]
+            self.assertEqual(display_state["changes"], 2)
+            self.assertEqual(display_state["capability"], 2)
+            self.assertEqual(display_state["backend"], 1)
+            self.assertEqual(display_state["flags"], 0x0000003E)
+            output_backend = diagnostics["metrics"]["outputBackend"]
+            self.assertEqual(output_backend["selected"], "sdr-srgb")
+            self.assertEqual(output_backend["hardware"], 0)
 
     def test_glx_ownership_profile_reports_legacy_delegation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3406,6 +3712,27 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
         self.assertTrue(any("luma false-color sidecar" in failure for failure in failures))
 
+    def test_color_sweep_requires_exposure_false_color_sidecars(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        color_run = next(
+            run
+            for run in manifest["runs"]
+            if run.get("type") == "color-sweep"
+        )
+        color_run["screenshots"][0].pop("exposureFalseColor")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("exposure false-color sidecar" in failure for failure in failures))
+
+    def test_color_sweep_requires_shader_reference_ramps(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        manifest["imageEvidence"]["shaderReferenceRamps"].pop()
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("shader-vs-reference ramp evidence" in failure for failure in failures))
+
 
 class GlxRuntimeSweepProfileTests(unittest.TestCase):
     def test_frozen_profiles_match_runtime_module_table(self) -> None:
@@ -3618,6 +3945,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(profile["r_glxMaterialRenderer"], "1")
         self.assertEqual(profile["r_glxMaterialPrecache"], "1")
         self.assertEqual(profile["r_glxGpuTiming"], "1")
+        self.assertEqual(profile["r_glxGpuPassTiming"], "1")
 
     def test_diagnostic_gates_force_per_frame_color_debug(self) -> None:
         args = argparse.Namespace(
@@ -3919,10 +4247,10 @@ class GlxPromotionTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "blocked")
         self.assertFalse(report["policyViolation"])
-        self.assertEqual(report["sourcePolicy"]["cmakeDefault"], "opengl")
         self.assertEqual(report["sourcePolicy"]["makeDefault"], "opengl")
-        self.assertEqual(report["sourcePolicy"]["cmakeUseGlxDefault"], "ON")
+        self.assertEqual(report["sourcePolicy"]["mesonDefault"], "opengl")
         self.assertEqual(report["sourcePolicy"]["makeUseGlxDefault"], "1")
+        self.assertEqual(report["sourcePolicy"]["mesonUseGlxDefault"], "glx")
         checks = {check["name"]: check for check in report["checks"]}
         self.assertEqual(checks["feature-matrix-green"]["status"], "blocked")
         self.assertGreater(len(checks["feature-matrix-green"]["blockers"]), 0)
@@ -3957,7 +4285,7 @@ class GlxPromotionTests(unittest.TestCase):
         self.assertIn("code/renderer/tr_shade.c", check["sources"])
 
         builds = check["builds"]
-        self.assertEqual(builds["cmake"]["sources"], check["sources"])
+        self.assertEqual(builds["meson"]["sources"], check["sources"])
         self.assertEqual(builds["makefile"]["sources"], check["sources"])
         self.assertEqual(builds["msvc"]["sources"], check["sources"])
 
@@ -4227,14 +4555,18 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                         "glx: material renderer on/ready programs 25, binds 12/13 attempts, switches 4, cache 5/6, failures 0 compile/0 link/0 precache/0 bind, labels 8",
                         "glx: material parameters blocks 12 invalid 0 hash 0x1234abcd, last sort 0 passes 1 features 0x0 flags 0x0 state 0x0",
                         "glx: postprocess fbo ready 640x480 capture 640x480 bloom 2, frames 3 final 2 prefinal 1 gamma 0/3, copies 4, msaa 5, ssaa 6, last bloom-final",
+                        "glx: pass counters blits 7, binds 11, clears 2, fullscreen 8, pass queries 9, unavailable 1, ring skips 0",
+                        "glx: pass gpu: backend=0.270ms/1 postprocess=0.420ms/1 bloom=0.250ms/1 bloom-extract=0.030ms/1 bloom-downscale=0.010ms/3 bloom-blur=0.090ms/2 bloom-blend=0.080ms/1 bloom-final=0.060ms/1 bloom-lens-reflection=n/a/0 gamma-direct=n/a/0 gamma-blit=0.110ms/1 fbo-blit=0.040ms/2 copy-screen=n/a/0 flare=0.020ms/1",
+                        "glx: bloom storage policy auto format 0x8c3a (0x1907:0x140b)",
                         "target: render 640x480, capture 640x480, window 640x480, format 0x881a (0x1908:0x140b)",
                         "controls: scene-linear HDR yes, precision 16, renderScale 1, bloom 2, MSAA no, supersample no, adjusted window yes, greyscale 1.00",
                         "frames: 3 post, 1 bloom-final, 0 gamma-direct, 3 gamma-blit, 0 minimized output, 1 screenshots",
                         "frame features: 1 bloom-available, 1 scene-linear, 1 tone-mapped, 1 graded, 1 render-scale, 1 greyscale, 1 window-adjusted, 0 minimized",
-                        "glx: color pipeline scene-linear precision 16 transfer hdr10-pq tone-map aces exposure 1.00 bloom-threshold 0.75/2 knee 0.50 grade lgg-lut3d paper-white 203 max 812",
+                        "glx: color pipeline scene-linear precision 16 transfer hdr10-pq tone-map aces-fitted exposure 1.00 bloom-threshold 0.75/2 knee 0.50 grade lgg-lut3d paper-white 203 max 812",
+                        "glx: auto exposure mode 3 algorithm histogram-percentile enabled yes fallback no samples 1024/32x32 percentile 80.0 target-luma 0.180 measured-log2 -1.000 measured-luma 0.5000 manual 1.00 scale 0.360 target 0.36 frames 3 histogram 3 simple 0 sample-failures 0",
                         "glx: color grade mode lgg-lut3d lift 0.01/0.02/0.03 gamma 1.10/1.00/0.95 gain 1.05/1.00/0.98 white-point 6504->6000 lut-size 16 lut-scale 4.00",
                         "glx: output colorimetry primaries bt2020 gamut-map compress precision-request 0 precision-resolved 16",
-                        "glx: color audit srgb-decode yes requested yes available yes framebuffer-srgb no requested yes available yes capture sdr-srgb target-float yes final-encode shader-srgb contract yes",
+                        "glx: color audit srgb-decode yes requested yes available yes framebuffer-srgb no requested yes available yes capture sdr-srgb capture-request sdr-srgb capture-hdr-aware no capture-supported yes target-float yes final-encode shader-srgb contract yes",
                         "glx: texture audit srgb 4 decode 4, linear 2 decode 0, data 2 decode 0, unknown 0 decode 0, missing-srgb-decode 0, unexpected-decode 0",
                         'glx: color-frame-json {"frame":1,"backend":"hdr10-pq","space":"scene-linear","transfer":"hdr10-pq","exposure":1.0000,"paperWhiteNits":203.0,"maxOutputNits":812.0,"srgbDecode":true,"framebufferSrgb":false,"internalFormat":"0x881a","textureFormat":"0x1908","textureType":"0x140b","sceneTargetFloat":true,"shaderSrgbEncode":true,"contractValid":true}',
                         "glx: output backend request hdr10-pq selected hdr10-pq native windows-scrgb hardware yes experimental no display-hdr yes headroom 4.00 sdr-white 203 display-max 812 icc yes/2048",
@@ -4261,6 +4593,16 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["productTier"], "GL2X")
             self.assertEqual(performance["latest"]["drawIndexes"], 300)
             self.assertEqual(performance["latest"]["gpuFrameMs"], 0.27)
+            self.assertEqual(performance["latest"]["gpuPassBlits"], 7)
+            self.assertEqual(performance["latest"]["gpuPassBinds"], 11)
+            self.assertEqual(performance["latest"]["gpuPassClears"], 2)
+            self.assertEqual(performance["latest"]["gpuPassFullscreen"], 8)
+            self.assertEqual(performance["latest"]["gpuPassQueries"], 9)
+            self.assertEqual(performance["latest"]["gpuPassUnavailable"], 1)
+            self.assertEqual(performance["latest"]["gpuPassBackendMs"], 0.27)
+            self.assertEqual(performance["latest"]["gpuPassPostprocessSamples"], 1)
+            self.assertEqual(performance["latest"]["gpuPassBloomDownscaleSamples"], 3)
+            self.assertEqual(performance["latest"]["gpuPassFlareMs"], 0.02)
             self.assertEqual(performance["latest"]["passScheduleValid"], 1)
             self.assertEqual(performance["latest"]["passScheduleCount"], 9)
             self.assertEqual(performance["latest"]["passScheduleHash"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH)
@@ -4311,11 +4653,21 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["colorSpace"], "scene-linear")
             self.assertEqual(performance["latest"]["hdrPrecision"], 16)
             self.assertEqual(performance["latest"]["outputTransfer"], "hdr10-pq")
-            self.assertEqual(performance["latest"]["toneMap"], "aces")
+            self.assertEqual(performance["latest"]["toneMap"], "aces-fitted")
             self.assertEqual(performance["latest"]["toneMapExposure"], 1.0)
             self.assertEqual(performance["latest"]["bloomThreshold"], 0.75)
             self.assertEqual(performance["latest"]["bloomThresholdMode"], 2)
             self.assertEqual(performance["latest"]["bloomSoftKnee"], 0.5)
+            self.assertEqual(performance["latest"]["autoExposureMode"], 3)
+            self.assertEqual(performance["latest"]["autoExposureAlgorithm"], "histogram-percentile")
+            self.assertEqual(performance["latest"]["autoExposureEnabled"], 1)
+            self.assertEqual(performance["latest"]["autoExposureFallback"], 0)
+            self.assertEqual(performance["latest"]["autoExposureSampleCount"], 1024)
+            self.assertEqual(performance["latest"]["autoExposureSampleWidth"], 32)
+            self.assertEqual(performance["latest"]["autoExposureSampleHeight"], 32)
+            self.assertEqual(performance["latest"]["autoExposureTargetLuma"], 0.18)
+            self.assertEqual(performance["latest"]["autoExposureMeasuredLuma"], 0.5)
+            self.assertEqual(performance["latest"]["autoExposureSampleFailures"], 0)
             self.assertEqual(performance["latest"]["colorGrade"], "lgg-lut3d")
             self.assertEqual(performance["latest"]["colorGradeMode"], "lgg-lut3d")
             self.assertEqual(performance["latest"]["colorGradeLiftR"], 0.01)
@@ -4337,6 +4689,9 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["colorFinalEncode"], "shader-srgb")
             self.assertEqual(performance["latest"]["colorOutputContract"], 1)
             self.assertEqual(performance["latest"]["captureColorSpace"], "sdr-srgb")
+            self.assertEqual(performance["latest"]["capturePolicyRequest"], "sdr-srgb")
+            self.assertEqual(performance["latest"]["captureHdrAware"], 0)
+            self.assertEqual(performance["latest"]["capturePolicySupported"], 1)
             self.assertEqual(performance["latest"]["textureAuditSrgb"], 4)
             self.assertEqual(performance["latest"]["textureAuditSrgbDecode"], 4)
             self.assertEqual(performance["latest"]["textureAuditMissingSrgbDecode"], 0)
@@ -4354,6 +4709,18 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["postprocessFeatureGreyscale"], 1)
             self.assertEqual(performance["latest"]["postprocessFeatureWindowAdjusted"], 1)
             self.assertEqual(performance["latest"]["postprocessFeatureMinimized"], 0)
+            self.assertEqual(performance["latest"]["gpuPassBlits"], 7)
+            self.assertEqual(performance["latest"]["gpuPassBinds"], 11)
+            self.assertEqual(performance["latest"]["gpuPassClears"], 2)
+            self.assertEqual(performance["latest"]["gpuPassFullscreen"], 8)
+            self.assertEqual(performance["latest"]["gpuPassQueries"], 9)
+            self.assertEqual(performance["latest"]["gpuPassUnavailable"], 1)
+            self.assertEqual(performance["latest"]["gpuPassPostprocessMs"], 0.42)
+            self.assertEqual(performance["latest"]["gpuPassBloomBlurSamples"], 2)
+            self.assertEqual(performance["latest"]["bloomStoragePolicy"], "auto")
+            self.assertEqual(performance["latest"]["bloomStorageInternalFormat"], 0x8C3A)
+            self.assertEqual(performance["latest"]["bloomStorageTextureFormat"], 0x1907)
+            self.assertEqual(performance["latest"]["bloomStorageTextureType"], 0x140B)
             self.assertEqual(performance["latest"]["colorFrameSamples"], 1)
             self.assertEqual(performance["latest"]["colorFrameBackend"], "hdr10-pq")
             self.assertEqual(performance["latest"]["colorFrameTransfer"], "hdr10-pq")

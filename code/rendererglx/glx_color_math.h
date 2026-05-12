@@ -28,20 +28,97 @@ struct ColorMathLutAddress {
 	float tb;
 };
 
+static constexpr int GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS = 64;
+
+struct ColorMathExposureHistogram {
+	unsigned int bins[GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS];
+	unsigned int sampleCount;
+	float minLog2;
+	float maxLog2;
+	float logLumaSum;
+	float lumaSum;
+	float minLuma;
+	float maxLuma;
+};
+
+struct ColorMathExposureResult {
+	bool valid;
+	float measuredLog2Luma;
+	float measuredLuma;
+	float exposureScale;
+	int bin;
+};
+
 static inline float GLX_ColorMath_Clamp( float value, float minValue, float maxValue )
 {
+	if ( !std::isfinite( minValue ) ) {
+		minValue = 0.0f;
+	}
+	if ( !std::isfinite( maxValue ) ) {
+		maxValue = minValue;
+	}
+	if ( maxValue < minValue ) {
+		const float tmp = minValue;
+		minValue = maxValue;
+		maxValue = tmp;
+	}
 	if ( value < minValue ) {
 		return minValue;
 	}
 	if ( value > maxValue ) {
 		return maxValue;
 	}
+	if ( !std::isfinite( value ) ) {
+		return minValue;
+	}
 	return value;
+}
+
+static inline float GLX_ColorMath_SanitizeFinite( float value, float fallback )
+{
+	return std::isfinite( value ) ? value : fallback;
+}
+
+static inline float GLX_ColorMath_SanitizeFiniteRange( float value,
+	float minValue, float maxValue, float fallback )
+{
+	value = GLX_ColorMath_SanitizeFinite( value, fallback );
+	return GLX_ColorMath_Clamp( value, minValue, maxValue );
 }
 
 static inline float GLX_ColorMath_Clamp01( float value )
 {
 	return GLX_ColorMath_Clamp( value, 0.0f, 1.0f );
+}
+
+static inline ColorMathVec3 GLX_ColorMath_SanitizeVec3( const ColorMathVec3 &color,
+	float fallback )
+{
+	ColorMathVec3 out {};
+	out.r = GLX_ColorMath_SanitizeFinite( color.r, fallback );
+	out.g = GLX_ColorMath_SanitizeFinite( color.g, fallback );
+	out.b = GLX_ColorMath_SanitizeFinite( color.b, fallback );
+	return out;
+}
+
+static inline ColorMathVec3 GLX_ColorMath_Max0( const ColorMathVec3 &color )
+{
+	const ColorMathVec3 finite = GLX_ColorMath_SanitizeVec3( color, 0.0f );
+	ColorMathVec3 out {};
+	out.r = finite.r > 0.0f ? finite.r : 0.0f;
+	out.g = finite.g > 0.0f ? finite.g : 0.0f;
+	out.b = finite.b > 0.0f ? finite.b : 0.0f;
+	return out;
+}
+
+static inline ColorMathVec3 GLX_ColorMath_ClampVec3( const ColorMathVec3 &color,
+	float minValue, float maxValue )
+{
+	ColorMathVec3 out {};
+	out.r = GLX_ColorMath_Clamp( color.r, minValue, maxValue );
+	out.g = GLX_ColorMath_Clamp( color.g, minValue, maxValue );
+	out.b = GLX_ColorMath_Clamp( color.b, minValue, maxValue );
+	return out;
 }
 
 static inline float GLX_ColorMath_SrgbToLinear( float srgb )
@@ -55,6 +132,7 @@ static inline float GLX_ColorMath_SrgbToLinear( float srgb )
 
 static inline float GLX_ColorMath_LinearToSrgb( float linear )
 {
+	linear = GLX_ColorMath_SanitizeFinite( linear, 0.0f );
 	linear = linear < 0.0f ? 0.0f : linear;
 	if ( linear <= 0.0031308f ) {
 		return linear * 12.92f;
@@ -62,10 +140,18 @@ static inline float GLX_ColorMath_LinearToSrgb( float linear )
 	return 1.055f * std::pow( linear, 1.0f / 2.4f ) - 0.055f;
 }
 
-static inline float GLX_ColorMath_ToneMapReinhard( float value )
+static inline float GLX_ColorMath_ToneMapReinhardSimple( float value )
 {
+	if ( !std::isfinite( value ) ) {
+		return value > 0.0f ? 1.0f : 0.0f;
+	}
 	value = value < 0.0f ? 0.0f : value;
 	return value / ( 1.0f + value );
+}
+
+static inline float GLX_ColorMath_ToneMapReinhard( float value )
+{
+	return GLX_ColorMath_ToneMapReinhardSimple( value );
 }
 
 static inline float GLX_ColorMath_ToneMapAcesFitted( float value )
@@ -76,7 +162,11 @@ static inline float GLX_ColorMath_ToneMapAcesFitted( float value )
 	static constexpr float d = 0.59f;
 	static constexpr float e = 0.14f;
 
+	if ( !std::isfinite( value ) ) {
+		return value > 0.0f ? 1.0f : 0.0f;
+	}
 	value = value < 0.0f ? 0.0f : value;
+	value = value > 65504.0f ? 65504.0f : value;
 	return GLX_ColorMath_Clamp01( ( value * ( a * value + b ) ) /
 		( value * ( c * value + d ) + e ) );
 }
@@ -89,8 +179,12 @@ static inline float GLX_ColorMath_PqEncodeNits( float nits, float maxNits )
 	static constexpr float c2 = 18.8515625f;
 	static constexpr float c3 = 18.6875f;
 
-	if ( maxNits <= 0.0f ) {
+	if ( !std::isfinite( maxNits ) || maxNits <= 0.0f ) {
 		maxNits = 10000.0f;
+	}
+	maxNits = GLX_ColorMath_Clamp( maxNits, 1.0f, 10000.0f );
+	if ( !std::isfinite( nits ) ) {
+		nits = nits > 0.0f ? maxNits : 0.0f;
 	}
 	nits = GLX_ColorMath_Clamp( nits, 0.0f, maxNits );
 	const float y = std::pow( nits / 10000.0f, m1 );
@@ -99,28 +193,41 @@ static inline float GLX_ColorMath_PqEncodeNits( float nits, float maxNits )
 
 static inline ColorMathVec3 GLX_ColorMath_LinearSrgbToBt2020( const ColorMathVec3 &color )
 {
+	const ColorMathVec3 finite = GLX_ColorMath_SanitizeVec3( color, 0.0f );
 	ColorMathVec3 out {};
-	out.r = color.r * 0.6274040f + color.g * 0.3292820f + color.b * 0.0433136f;
-	out.g = color.r * 0.0690970f + color.g * 0.9195400f + color.b * 0.0113612f;
-	out.b = color.r * 0.0163916f + color.g * 0.0880132f + color.b * 0.8955950f;
+	out.r = finite.r * 0.6274040f + finite.g * 0.3292820f + finite.b * 0.0433136f;
+	out.g = finite.r * 0.0690970f + finite.g * 0.9195400f + finite.b * 0.0113612f;
+	out.b = finite.r * 0.0163916f + finite.g * 0.0880132f + finite.b * 0.8955950f;
+	return out;
+}
+
+static inline ColorMathVec3 GLX_ColorMath_LinearSrgbToDisplayP3( const ColorMathVec3 &color )
+{
+	const ColorMathVec3 finite = GLX_ColorMath_SanitizeVec3( color, 0.0f );
+	ColorMathVec3 out {};
+	out.r = finite.r * 0.8224621f + finite.g * 0.1775380f;
+	out.g = finite.r * 0.0331941f + finite.g * 0.9668059f;
+	out.b = finite.r * 0.0170827f + finite.g * 0.0723974f + finite.b * 0.9105199f;
 	return out;
 }
 
 static inline ColorMathVec3 GLX_ColorMath_LinearSrgbToXyz( const ColorMathVec3 &color )
 {
+	const ColorMathVec3 finite = GLX_ColorMath_SanitizeVec3( color, 0.0f );
 	ColorMathVec3 out {};
-	out.r = color.r * 0.4124564f + color.g * 0.3575761f + color.b * 0.1804375f;
-	out.g = color.r * 0.2126729f + color.g * 0.7151522f + color.b * 0.0721750f;
-	out.b = color.r * 0.0193339f + color.g * 0.1191920f + color.b * 0.9503041f;
+	out.r = finite.r * 0.4124564f + finite.g * 0.3575761f + finite.b * 0.1804375f;
+	out.g = finite.r * 0.2126729f + finite.g * 0.7151522f + finite.b * 0.0721750f;
+	out.b = finite.r * 0.0193339f + finite.g * 0.1191920f + finite.b * 0.9503041f;
 	return out;
 }
 
 static inline ColorMathVec3 GLX_ColorMath_XyzToLinearSrgb( const ColorMathVec3 &color )
 {
+	const ColorMathVec3 finite = GLX_ColorMath_SanitizeVec3( color, 0.0f );
 	ColorMathVec3 out {};
-	out.r = color.r * 3.2404542f + color.g * -1.5371385f + color.b * -0.4985314f;
-	out.g = color.r * -0.9692660f + color.g * 1.8760108f + color.b * 0.0415560f;
-	out.b = color.r * 0.0556434f + color.g * -0.2040259f + color.b * 1.0572252f;
+	out.r = finite.r * 3.2404542f + finite.g * -1.5371385f + finite.b * -0.4985314f;
+	out.g = finite.r * -0.9692660f + finite.g * 1.8760108f + finite.b * 0.0415560f;
+	out.b = finite.r * 0.0556434f + finite.g * -0.2040259f + finite.b * 1.0572252f;
 	return out;
 }
 
@@ -163,19 +270,21 @@ static inline ColorMathVec3 GLX_ColorMath_WhitePointXyzFromKelvin( float kelvin 
 
 static inline ColorMathVec3 GLX_ColorMath_XyzToBradfordLms( const ColorMathVec3 &xyz )
 {
+	const ColorMathVec3 finite = GLX_ColorMath_SanitizeVec3( xyz, 0.0f );
 	ColorMathVec3 out {};
-	out.r = xyz.r * 0.8951f + xyz.g * 0.2664f + xyz.b * -0.1614f;
-	out.g = xyz.r * -0.7502f + xyz.g * 1.7135f + xyz.b * 0.0367f;
-	out.b = xyz.r * 0.0389f + xyz.g * -0.0685f + xyz.b * 1.0296f;
+	out.r = finite.r * 0.8951f + finite.g * 0.2664f + finite.b * -0.1614f;
+	out.g = finite.r * -0.7502f + finite.g * 1.7135f + finite.b * 0.0367f;
+	out.b = finite.r * 0.0389f + finite.g * -0.0685f + finite.b * 1.0296f;
 	return out;
 }
 
 static inline ColorMathVec3 GLX_ColorMath_BradfordLmsToXyz( const ColorMathVec3 &lms )
 {
+	const ColorMathVec3 finite = GLX_ColorMath_SanitizeVec3( lms, 0.0f );
 	ColorMathVec3 out {};
-	out.r = lms.r * 0.9869929f + lms.g * -0.1470543f + lms.b * 0.1599627f;
-	out.g = lms.r * 0.4323053f + lms.g * 0.5183603f + lms.b * 0.0492912f;
-	out.b = lms.r * -0.0085287f + lms.g * 0.0400428f + lms.b * 0.9684867f;
+	out.r = finite.r * 0.9869929f + finite.g * -0.1470543f + finite.b * 0.1599627f;
+	out.g = finite.r * 0.4323053f + finite.g * 0.5183603f + finite.b * 0.0492912f;
+	out.b = finite.r * -0.0085287f + finite.g * 0.0400428f + finite.b * 0.9684867f;
 	return out;
 }
 
@@ -248,24 +357,30 @@ static inline ColorMathVec3 GLX_ColorMath_AdaptWhitePointBradford(
 
 static inline float GLX_ColorMath_Luma( const ColorMathVec3 &color )
 {
-	return color.r * 0.2126f + color.g * 0.7152f + color.b * 0.0722f;
+	const ColorMathVec3 finite = GLX_ColorMath_SanitizeVec3( color, 0.0f );
+	return finite.r * 0.2126f + finite.g * 0.7152f + finite.b * 0.0722f;
 }
 
 static inline float GLX_ColorMath_BloomMetric( const ColorMathVec3 &color, int mode )
 {
+	const ColorMathVec3 finite = GLX_ColorMath_SanitizeVec3( color, 0.0f );
+
 	if ( mode == 1 ) {
-		return ( color.r + color.g + color.b ) * 0.33333333f;
+		return ( finite.r + finite.g + finite.b ) * 0.33333333f;
 	}
 	if ( mode == 2 ) {
-		return GLX_ColorMath_Luma( color );
+		return GLX_ColorMath_Luma( finite );
 	}
 
-	float maxChannel = color.r > color.g ? color.r : color.g;
-	return maxChannel > color.b ? maxChannel : color.b;
+	float maxChannel = finite.r > finite.g ? finite.r : finite.g;
+	return maxChannel > finite.b ? maxChannel : finite.b;
 }
 
 static inline float GLX_ColorMath_SmoothStep( float edge0, float edge1, float value )
 {
+	edge0 = GLX_ColorMath_SanitizeFinite( edge0, 0.0f );
+	edge1 = GLX_ColorMath_SanitizeFinite( edge1, 0.0f );
+	value = GLX_ColorMath_SanitizeFinite( value, 0.0f );
 	if ( edge1 <= edge0 ) {
 		return value >= edge1 ? 1.0f : 0.0f;
 	}
@@ -279,6 +394,9 @@ static inline float GLX_ColorMath_BloomWeight( const ColorMathVec3 &color, int m
 {
 	float metric = GLX_ColorMath_BloomMetric( color, mode );
 
+	threshold = GLX_ColorMath_SanitizeFinite( threshold, 0.0f );
+	exposure = GLX_ColorMath_SanitizeFinite( exposure, 0.0f );
+	softKnee = GLX_ColorMath_SanitizeFinite( softKnee, 0.0f );
 	if ( toneMapMode != 0 ) {
 		metric *= exposure > 0.0f ? exposure : 0.0f;
 	}
@@ -288,6 +406,188 @@ static inline float GLX_ColorMath_BloomWeight( const ColorMathVec3 &color, int m
 
 	const float knee = threshold * softKnee > 0.0001f ? threshold * softKnee : 0.0001f;
 	return GLX_ColorMath_SmoothStep( threshold - knee, threshold + knee, metric );
+}
+
+static inline ColorMathVec3 GLX_ColorMath_FlareSceneColor(
+	const ColorMathVec3 &displayColor, bool sceneLinear, bool legacyCompatibility )
+{
+	const ColorMathVec3 finite = GLX_ColorMath_Max0( displayColor );
+
+	if ( !sceneLinear || legacyCompatibility ) {
+		return finite;
+	}
+
+	ColorMathVec3 out {};
+	out.r = GLX_ColorMath_SrgbToLinear( finite.r );
+	out.g = GLX_ColorMath_SrgbToLinear( finite.g );
+	out.b = GLX_ColorMath_SrgbToLinear( finite.b );
+	return out;
+}
+
+static inline float GLX_ColorMath_SceneLinearBloomWeight( const ColorMathVec3 &color,
+	int mode, float threshold, float exposure, float softKnee )
+{
+	ColorMathVec3 exposed = GLX_ColorMath_Max0( color );
+
+	exposure = GLX_ColorMath_SanitizeFinite( exposure, 0.0f );
+	if ( exposure < 0.0f ) {
+		exposure = 0.0f;
+	}
+	exposed.r *= exposure;
+	exposed.g *= exposure;
+	exposed.b *= exposure;
+
+	return GLX_ColorMath_BloomWeight( exposed, mode, threshold, 1.0f, 0, softKnee );
+}
+
+static inline void GLX_ColorMath_ExposureHistogramReset(
+	ColorMathExposureHistogram *histogram, float minLog2, float maxLog2 )
+{
+	if ( !histogram ) {
+		return;
+	}
+	for ( int i = 0; i < GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS; i++ ) {
+		histogram->bins[i] = 0u;
+	}
+	minLog2 = GLX_ColorMath_SanitizeFinite( minLog2, -12.0f );
+	maxLog2 = GLX_ColorMath_SanitizeFinite( maxLog2, 12.0f );
+	if ( maxLog2 <= minLog2 + 0.001f ) {
+		maxLog2 = minLog2 + 0.001f;
+	}
+	histogram->sampleCount = 0u;
+	histogram->minLog2 = minLog2;
+	histogram->maxLog2 = maxLog2;
+	histogram->logLumaSum = 0.0f;
+	histogram->lumaSum = 0.0f;
+	histogram->minLuma = 1048576.0f;
+	histogram->maxLuma = 0.0f;
+}
+
+static inline float GLX_ColorMath_ExposureLuma( const ColorMathVec3 &color )
+{
+	const float luma = GLX_ColorMath_Luma( GLX_ColorMath_Max0( color ) );
+
+	if ( !std::isfinite( luma ) || luma <= 0.000001f ) {
+		return 0.000001f;
+	}
+	return luma > 1048576.0f ? 1048576.0f : luma;
+}
+
+static inline bool GLX_ColorMath_ExposureHistogramAddLuma(
+	ColorMathExposureHistogram *histogram, float luma )
+{
+	float logLuma;
+	float t;
+	int bin;
+
+	if ( !histogram ) {
+		return false;
+	}
+	luma = GLX_ColorMath_SanitizeFinite( luma, 0.0f );
+	if ( luma <= 0.0f ) {
+		return false;
+	}
+	luma = luma > 1048576.0f ? 1048576.0f : luma;
+	logLuma = std::log2( luma );
+	logLuma = GLX_ColorMath_Clamp( logLuma, histogram->minLog2, histogram->maxLog2 );
+	t = ( logLuma - histogram->minLog2 ) /
+		( histogram->maxLog2 - histogram->minLog2 );
+	bin = static_cast<int>( std::floor( t *
+		static_cast<float>( GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS ) ) );
+	if ( bin < 0 ) {
+		bin = 0;
+	} else if ( bin >= GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS ) {
+		bin = GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS - 1;
+	}
+	histogram->bins[bin]++;
+	histogram->sampleCount++;
+	histogram->logLumaSum += logLuma;
+	histogram->lumaSum += luma;
+	histogram->minLuma = luma < histogram->minLuma ? luma : histogram->minLuma;
+	histogram->maxLuma = luma > histogram->maxLuma ? luma : histogram->maxLuma;
+	return true;
+}
+
+static inline bool GLX_ColorMath_ExposureHistogramAddColor(
+	ColorMathExposureHistogram *histogram, const ColorMathVec3 &color )
+{
+	return GLX_ColorMath_ExposureHistogramAddLuma( histogram,
+		GLX_ColorMath_ExposureLuma( color ) );
+}
+
+static inline float GLX_ColorMath_ExposureScaleForLuma( float measuredLuma,
+	float targetLuma, float minScale, float maxScale )
+{
+	measuredLuma = GLX_ColorMath_SanitizeFiniteRange( measuredLuma,
+		0.000001f, 1048576.0f, 1.0f );
+	targetLuma = GLX_ColorMath_SanitizeFiniteRange( targetLuma,
+		0.000001f, 64.0f, 0.18f );
+	return GLX_ColorMath_Clamp( targetLuma / measuredLuma, minScale, maxScale );
+}
+
+static inline ColorMathExposureResult GLX_ColorMath_ExposureResultForLogLuma(
+	float measuredLog2Luma, float targetLuma, float minScale, float maxScale, int bin )
+{
+	ColorMathExposureResult result {};
+
+	measuredLog2Luma = GLX_ColorMath_SanitizeFiniteRange( measuredLog2Luma,
+		-24.0f, 24.0f, 0.0f );
+	result.valid = true;
+	result.measuredLog2Luma = measuredLog2Luma;
+	result.measuredLuma = std::pow( 2.0f, measuredLog2Luma );
+	result.exposureScale = GLX_ColorMath_ExposureScaleForLuma( result.measuredLuma,
+		targetLuma, minScale, maxScale );
+	result.bin = bin;
+	return result;
+}
+
+static inline ColorMathExposureResult GLX_ColorMath_ExposureSimpleAverage(
+	const ColorMathExposureHistogram &histogram, float targetLuma,
+	float minScale, float maxScale )
+{
+	ColorMathExposureResult result {};
+
+	if ( histogram.sampleCount == 0u ) {
+		return result;
+	}
+	return GLX_ColorMath_ExposureResultForLogLuma(
+		histogram.logLumaSum / static_cast<float>( histogram.sampleCount ),
+		targetLuma, minScale, maxScale, -1 );
+}
+
+static inline ColorMathExposureResult GLX_ColorMath_ExposureHistogramPercentile(
+	const ColorMathExposureHistogram &histogram, float percentile, float targetLuma,
+	float minScale, float maxScale )
+{
+	ColorMathExposureResult result {};
+	unsigned int threshold;
+	unsigned int cumulative = 0u;
+	float binCenter;
+
+	if ( histogram.sampleCount == 0u ) {
+		return result;
+	}
+	percentile = GLX_ColorMath_SanitizeFiniteRange( percentile, 1.0f, 99.0f, 80.0f );
+	threshold = static_cast<unsigned int>( std::ceil(
+		static_cast<float>( histogram.sampleCount ) * ( percentile * 0.01f ) ) );
+	if ( threshold == 0u ) {
+		threshold = 1u;
+	}
+	for ( int i = 0; i < GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS; i++ ) {
+		cumulative += histogram.bins[i];
+		if ( cumulative >= threshold ) {
+			binCenter = ( static_cast<float>( i ) + 0.5f ) /
+				static_cast<float>( GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS );
+			return GLX_ColorMath_ExposureResultForLogLuma(
+				histogram.minLog2 +
+				binCenter * ( histogram.maxLog2 - histogram.minLog2 ),
+				targetLuma, minScale, maxScale, i );
+		}
+	}
+
+	return GLX_ColorMath_ExposureResultForLogLuma( histogram.maxLog2,
+		targetLuma, minScale, maxScale,
+		GLX_COLOR_MATH_EXPOSURE_HISTOGRAM_BINS - 1 );
 }
 
 static inline bool GLX_ColorMath_LutAtlasSize( int width, int height, int *size )
@@ -313,7 +613,7 @@ static inline bool GLX_ColorMath_LutAtlasAddress( int size, const ColorMathVec3 
 	if ( !address || size < 2 || size > 64 ) {
 		return false;
 	}
-	scale = scale > 0.0f ? scale : 1.0f;
+	scale = GLX_ColorMath_SanitizeFiniteRange( scale, 0.0001f, 64.0f, 1.0f );
 
 	const float maxIndex = static_cast<float>( size - 1 );
 	const float fr = GLX_ColorMath_Clamp01( color.r / scale ) * maxIndex;
@@ -344,7 +644,7 @@ static inline ColorMathVec3 GLX_ColorMath_LutIdentityTexel( int size, int x, int
 	if ( size < 2 ) {
 		return out;
 	}
-	scale = scale > 0.0f ? scale : 1.0f;
+	scale = GLX_ColorMath_SanitizeFiniteRange( scale, 0.0001f, 64.0f, 1.0f );
 
 	const int r = x % size;
 	const int b = x / size;
@@ -357,10 +657,14 @@ static inline ColorMathVec3 GLX_ColorMath_LutIdentityTexel( int size, int x, int
 static inline ColorMathVec3 GLX_ColorMath_Mix( const ColorMathVec3 &a,
 	const ColorMathVec3 &b, float t )
 {
+	const ColorMathVec3 finiteA = GLX_ColorMath_SanitizeVec3( a, 0.0f );
+	const ColorMathVec3 finiteB = GLX_ColorMath_SanitizeVec3( b, 0.0f );
+	t = GLX_ColorMath_Clamp01( t );
+
 	ColorMathVec3 out {};
-	out.r = a.r + ( b.r - a.r ) * t;
-	out.g = a.g + ( b.g - a.g ) * t;
-	out.b = a.b + ( b.b - a.b ) * t;
+	out.r = finiteA.r + ( finiteB.r - finiteA.r ) * t;
+	out.g = finiteA.g + ( finiteB.g - finiteA.g ) * t;
+	out.b = finiteA.b + ( finiteB.b - finiteA.b ) * t;
 	return out;
 }
 

@@ -21,6 +21,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 // server.h
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 #include "../qcommon/vm_local.h"
@@ -331,7 +335,7 @@ extern	int serverBansCount;
 //===========================================================
 
 //
-// sv_main.c
+// sv_main.cpp
 //
 qboolean SVC_RateLimit( rateLimit_t *bucket, int burst, int period );
 qboolean SVC_RateLimitAddress( const netadr_t *from, int burst, int period );
@@ -349,7 +353,7 @@ int SV_RateMsec( const client_t *client );
 
 
 //
-// sv_init.c
+// sv_init.cpp
 //
 void SV_SetConfigstring( int index, const char *val );
 void SV_GetConfigstring( int index, char *buffer, int bufferSize );
@@ -363,7 +367,7 @@ void SV_SpawnServer( const char *mapname, qboolean killBots );
 
 
 //
-// sv_client.c
+// sv_client.cpp
 //
 void SV_GetChallenge( const netadr_t *from );
 void SV_InitChallenger( void );
@@ -391,13 +395,13 @@ void SV_FreeIP4DB( void );
 void SV_PrintLocations_f( client_t *client );
 
 //
-// sv_ccmds.c
+// sv_ccmds.cpp
 //
 void SV_Heartbeat_f( void );
 client_t *SV_GetPlayerByHandle( void );
 
 //
-// sv_snapshot.c
+// sv_snapshot.cpp
 //
 void SV_AddServerCommand( client_t *client, const char *cmd );
 void SV_UpdateServerCommandsToClient( client_t *client, msg_t *msg );
@@ -412,7 +416,7 @@ void SV_IssueNewSnapshot( void );
 int SV_RemainingGameState( void );
 
 //
-// sv_game.c
+// sv_game.cpp
 //
 int	SV_NumForGentity( sharedEntity_t *ent );
 sharedEntity_t *SV_GentityNum( int num );
@@ -425,7 +429,7 @@ void		SV_RestartGameProgs( void );
 qboolean	SV_inPVS (const vec3_t p1, const vec3_t p2);
 
 //
-// sv_bot.c
+// sv_bot.cpp
 //
 void		SV_BotFrame( int time );
 int			SV_BotAllocateClient(void);
@@ -439,6 +443,7 @@ int			SV_BotGetConsoleMessage( int client, char *buf, int size );
 
 int BotImport_DebugPolygonCreate(int color, int numPoints, vec3_t *points);
 void BotImport_DebugPolygonDelete(int id);
+void BotDrawDebugPolygons(void (*drawPoly)(int color, int numPoints, float *points), int value);
 
 void SV_BotInitBotLib(void);
 
@@ -497,7 +502,7 @@ void SV_ClipToEntity( trace_t *trace, const vec3_t start, const vec3_t mins, con
 // clip to a specific entity
 
 //
-// sv_net_chan.c
+// sv_net_chan.cpp
 //
 void SV_Netchan_Transmit( client_t *client, msg_t *msg);
 int SV_Netchan_TransmitNextFragment( client_t *client );
@@ -505,9 +510,267 @@ qboolean SV_Netchan_Process( client_t *client, msg_t *msg );
 void SV_Netchan_FreeQueue( client_t *client );
 
 //
-// sv_filter.c
+// sv_filter.cpp
 //
 void SV_LoadFilters( const char *filename );
 const char *SV_RunFilters( const char *userinfo, const netadr_t *addr );
 void SV_AddFilter_f( void );
 void SV_AddFilterCmd_f( void );
+
+#ifdef __cplusplus
+}
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdlib>
+#include <limits>
+#include <utility>
+
+static inline qboolean SV_QBool( bool value ) {
+	return value ? qtrue : qfalse;
+}
+
+static inline bool SV_AsBool( qboolean value ) {
+	return value != qfalse;
+}
+
+static inline int SV_ClientIndex( const client_t *client ) {
+	return static_cast<int>( client - svs.clients );
+}
+
+static inline int SV_SvEntityIndex( const svEntity_t *entity ) {
+	return static_cast<int>( entity - sv.svEntities );
+}
+
+static inline bool SV_IsClientIndex( int clientNum ) {
+	return clientNum >= 0 && clientNum < sv.maxclients;
+}
+
+class SV_IndexIterator {
+public:
+	explicit SV_IndexIterator( int value ) : value_( value ) {}
+
+	bool operator!=( const SV_IndexIterator &other ) const { return value_ != other.value_; }
+	void operator++() { ++value_; }
+	int operator*() const { return value_; }
+
+private:
+	int value_;
+};
+
+struct SV_IndexRange {
+	int first;
+	int last;
+
+	SV_IndexIterator begin() const { return SV_IndexIterator( first ); }
+	SV_IndexIterator end() const { return SV_IndexIterator( last ); }
+};
+
+static inline SV_IndexRange SV_Indices( int count ) {
+	return { 0, count };
+}
+
+static inline SV_IndexRange SV_Indices( int first, int last ) {
+	return { first, last };
+}
+
+static inline client_t &SV_ClientForIndex( int clientNum ) {
+	return svs.clients[clientNum];
+}
+
+static inline client_t *SV_ClientBegin( void ) {
+	return svs.clients;
+}
+
+static inline client_t *SV_ClientEnd( void ) {
+	return svs.clients ? svs.clients + sv.maxclients : nullptr;
+}
+
+struct SV_ClientRange {
+	client_t *begin() const { return SV_ClientBegin(); }
+	client_t *end() const { return SV_ClientEnd(); }
+};
+
+static inline SV_ClientRange SV_Clients( void ) {
+	return {};
+}
+
+struct SV_ClientSlot {
+	int index;
+	client_t &client;
+};
+
+class SV_ClientSlotIterator {
+public:
+	SV_ClientSlotIterator( int index, client_t *client ) : index_( index ), client_( client ) {}
+
+	bool operator!=( const SV_ClientSlotIterator &other ) const { return index_ != other.index_; }
+	void operator++() { ++index_; ++client_; }
+	SV_ClientSlot operator*() const { return { index_, *client_ }; }
+
+private:
+	int index_;
+	client_t *client_;
+};
+
+struct SV_ClientSlotRange {
+	SV_ClientSlotIterator begin() const { return { 0, SV_ClientBegin() }; }
+	SV_ClientSlotIterator end() const { return { svs.clients ? sv.maxclients : 0, SV_ClientEnd() }; }
+};
+
+static inline SV_ClientSlotRange SV_ClientSlots( void ) {
+	return {};
+}
+
+#ifdef USE_BANS
+static inline serverBan_t &SV_BanForIndex( int index ) {
+	return serverBans[index];
+}
+
+static inline serverBan_t *SV_BanBegin( void ) {
+	return serverBans;
+}
+
+static inline serverBan_t *SV_BanEnd( void ) {
+	return serverBans + serverBansCount;
+}
+
+struct SV_BanRange {
+	serverBan_t *begin() const { return SV_BanBegin(); }
+	serverBan_t *end() const { return SV_BanEnd(); }
+};
+
+static inline SV_BanRange SV_Bans( void ) {
+	return {};
+}
+
+struct SV_BanSlot {
+	int index;
+	serverBan_t &ban;
+};
+
+class SV_BanSlotIterator {
+public:
+	SV_BanSlotIterator( int index, serverBan_t *ban ) : index_( index ), ban_( ban ) {}
+
+	bool operator!=( const SV_BanSlotIterator &other ) const { return index_ != other.index_; }
+	void operator++() { ++index_; ++ban_; }
+	SV_BanSlot operator*() const { return { index_, *ban_ }; }
+
+private:
+	int index_;
+	serverBan_t *ban_;
+};
+
+struct SV_BanSlotRange {
+	SV_BanSlotIterator begin() const { return { 0, SV_BanBegin() }; }
+	SV_BanSlotIterator end() const { return { serverBansCount, SV_BanEnd() }; }
+};
+
+static inline SV_BanSlotRange SV_BanSlots( void ) {
+	return {};
+}
+#endif
+
+static inline int SV_ParseInt( const char *text ) {
+	return text ? static_cast<int>( std::strtol( text, nullptr, 10 ) ) : 0;
+}
+
+static inline void SV_CloseFileHandle( fileHandle_t &handle ) {
+	if ( handle != FS_INVALID_HANDLE ) {
+		FS_FCloseFile( handle );
+		handle = FS_INVALID_HANDLE;
+	}
+}
+
+static inline void SV_CloseStdFile( FILE *&file ) {
+	if ( file != nullptr ) {
+		fclose( file );
+		file = nullptr;
+	}
+}
+
+template <typename T>
+static inline void SV_ZFree( T *&ptr ) {
+	if ( ptr != nullptr ) {
+		Z_Free( ptr );
+		ptr = nullptr;
+	}
+}
+
+template <typename T>
+static inline void SV_HunkFreeTemp( T *&ptr ) {
+	if ( ptr != nullptr ) {
+		Hunk_FreeTempMemory( ptr );
+		ptr = nullptr;
+	}
+}
+
+template <typename T, std::size_t N>
+static constexpr int SV_ArraySize( const std::array<T, N> & ) {
+	static_assert( N <= static_cast<std::size_t>( (std::numeric_limits<int>::max)() ), "array size exceeds int range" );
+	return static_cast<int>( N );
+}
+
+template <typename T, std::size_t N>
+static constexpr int SV_ArraySize( const T (&)[N] ) {
+	static_assert( N <= static_cast<std::size_t>( (std::numeric_limits<int>::max)() ), "array size exceeds int range" );
+	return static_cast<int>( N );
+}
+
+template <typename F>
+class SV_ScopeExit {
+public:
+	explicit SV_ScopeExit( F &&func ) : func_( std::move( func ) ) {}
+	SV_ScopeExit( const SV_ScopeExit & ) = delete;
+	SV_ScopeExit &operator=( const SV_ScopeExit & ) = delete;
+	~SV_ScopeExit() { func_(); }
+
+private:
+	F func_;
+};
+
+template <typename F>
+static inline SV_ScopeExit<F> SV_MakeScopeExit( F &&func ) {
+	return SV_ScopeExit<F>( std::forward<F>( func ) );
+}
+
+template <typename T>
+static inline int SV_AllocByteCount( int count ) {
+	if ( count < 0 || static_cast<std::size_t>( count ) > static_cast<std::size_t>( (std::numeric_limits<int>::max)() ) / sizeof( T ) ) {
+		Com_Error( ERR_FATAL, "SV_AllocByteCount: allocation size overflow" );
+	}
+	return static_cast<int>( sizeof( T ) * static_cast<std::size_t>( count ) );
+}
+
+template <typename T>
+static inline T *SV_ZMalloc( void ) {
+	return static_cast<T *>( Z_Malloc( sizeof( T ) ) );
+}
+
+template <typename T>
+static inline T *SV_ZMallocArray( int count ) {
+	return static_cast<T *>( Z_Malloc( SV_AllocByteCount<T>( count ) ) );
+}
+
+template <typename T>
+static inline T *SV_ZMallocBytes( int bytes ) {
+	return static_cast<T *>( Z_Malloc( bytes ) );
+}
+
+template <typename T>
+static inline T *SV_ZTagMallocArray( int count, memtag_t tag ) {
+	return static_cast<T *>( Z_TagMalloc( SV_AllocByteCount<T>( count ), tag ) );
+}
+
+template <typename T>
+static inline T *SV_HunkAllocArray( int count, ha_pref preference ) {
+	return static_cast<T *>( Hunk_Alloc( SV_AllocByteCount<T>( count ), preference ) );
+}
+
+template <typename T>
+static inline T *SV_HunkTempAllocArray( int count ) {
+	return static_cast<T *>( Hunk_AllocateTempMemory( SV_AllocByteCount<T>( count ) ) );
+}
+#endif

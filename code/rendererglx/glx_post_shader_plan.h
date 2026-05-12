@@ -11,16 +11,29 @@ static constexpr unsigned int GLX_POST_SHADER_FEATURE_SCENE_LINEAR = 0x00000002u
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_LIFT_GAMMA_GAIN = 0x00000004u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_WHITE_POINT = 0x00000008u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_LUT_3D = 0x00000010u;
-static constexpr unsigned int GLX_POST_SHADER_FEATURE_TONEMAP_REINHARD = 0x00000020u;
-static constexpr unsigned int GLX_POST_SHADER_FEATURE_TONEMAP_ACES = 0x00000040u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_TONEMAP_REINHARD_SIMPLE = 0x00000020u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_TONEMAP_ACES_FITTED = 0x00000040u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_TONEMAP_REINHARD =
+	GLX_POST_SHADER_FEATURE_TONEMAP_REINHARD_SIMPLE;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_TONEMAP_ACES =
+	GLX_POST_SHADER_FEATURE_TONEMAP_ACES_FITTED;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_ENCODE_SRGB = 0x00000080u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_ENCODE_HDR10_PQ = 0x00000100u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_LINEAR_OUTPUT = 0x00000200u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_BT2020_OUTPUT = 0x00000400u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_GAMUT_COMPRESS = 0x00000800u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM = 0x00001000u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_BLOOM_COMBINE = 0x00002000u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_GREYSCALE = 0x00004000u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_DISPLAY_P3_OUTPUT = 0x00008000u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT = 0x00010000u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_GAMUT_CLIP = 0x00020000u;
 
 struct PostShaderKey {
 	qboolean sceneLinear;
+	qboolean outputTransform;
+	qboolean bloomComposite;
+	qboolean greyscale;
 	ColorGradeMode grade;
 	ToneMapOperator toneMap;
 	OutputTransfer transfer;
@@ -57,6 +70,12 @@ static ID_INLINE qboolean GLX_PostShader_WhitePointAdaptationActive(
 	if ( !GLX_PostShader_GradeUsesLiftGammaGain( transform.grade ) ) {
 		return qfalse;
 	}
+	if ( transform.whitePointSourceKelvin < 1000.0f ||
+		transform.whitePointSourceKelvin > 40000.0f ||
+		transform.whitePointTargetKelvin < 1000.0f ||
+		transform.whitePointTargetKelvin > 40000.0f ) {
+		return qfalse;
+	}
 	const float delta = transform.whitePointSourceKelvin - transform.whitePointTargetKelvin;
 	return ( delta > 1.0f || delta < -1.0f ) ? qtrue : qfalse;
 }
@@ -64,32 +83,58 @@ static ID_INLINE qboolean GLX_PostShader_WhitePointAdaptationActive(
 static ID_INLINE qboolean GLX_PostShader_LutActive( const OutputTransform &transform )
 {
 	return ( GLX_PostShader_GradeUsesLut( transform.grade ) &&
-		transform.lutSize >= 2.0f ) ? qtrue : qfalse;
+		transform.lutSize >= 2.0f && transform.lutSize <= 64.0f &&
+		transform.lutScale > 0.0f && transform.lutScale <= 64.0f ) ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean GLX_PostShader_TransferUsesHdrHeadroom(
+	OutputTransfer transfer )
+{
+	return transfer == OutputTransfer::LinearSrgb ||
+		transfer == OutputTransfer::ScRgb ||
+		transfer == OutputTransfer::MacEdr ? qtrue : qfalse;
 }
 
 static ID_INLINE unsigned int GLX_PostShader_FeaturesForKey( const PostShaderKey &key )
 {
 	unsigned int features = GLX_POST_SHADER_FEATURE_NONE;
 
+	if ( key.outputTransform ) {
+		features |= GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM;
+	}
+	if ( key.bloomComposite ) {
+		features |= GLX_POST_SHADER_FEATURE_BLOOM_COMBINE;
+	}
+	if ( key.greyscale ) {
+		features |= GLX_POST_SHADER_FEATURE_GREYSCALE;
+	}
 	if ( key.sceneLinear ) {
 		features |= GLX_POST_SHADER_FEATURE_SCENE_LINEAR;
-	} else {
+	} else if ( key.outputTransform ) {
 		features |= GLX_POST_SHADER_FEATURE_LEGACY_GAMMA;
 	}
-	if ( key.sceneLinear && GLX_PostShader_GradeUsesLiftGammaGain( key.grade ) ) {
+	if ( key.outputTransform && key.sceneLinear &&
+		GLX_PostShader_GradeUsesLiftGammaGain( key.grade ) ) {
 		features |= GLX_POST_SHADER_FEATURE_LIFT_GAMMA_GAIN;
 	}
-	if ( key.sceneLinear && key.whitePointAdaptation ) {
+	if ( key.outputTransform && key.sceneLinear && key.whitePointAdaptation ) {
 		features |= GLX_POST_SHADER_FEATURE_WHITE_POINT;
 	}
-	if ( key.sceneLinear && key.lutActive ) {
+	if ( key.outputTransform && key.sceneLinear && key.lutActive ) {
 		features |= GLX_POST_SHADER_FEATURE_LUT_3D;
 	}
-	if ( key.sceneLinear && key.toneMap == ToneMapOperator::Reinhard ) {
-		features |= GLX_POST_SHADER_FEATURE_TONEMAP_REINHARD;
+	if ( key.outputTransform && key.sceneLinear &&
+		key.toneMap == ToneMapOperator::ReinhardSimple ) {
+		features |= GLX_POST_SHADER_FEATURE_TONEMAP_REINHARD_SIMPLE;
 	}
-	if ( key.sceneLinear && key.toneMap == ToneMapOperator::Aces ) {
-		features |= GLX_POST_SHADER_FEATURE_TONEMAP_ACES;
+	if ( key.outputTransform && key.sceneLinear &&
+		key.toneMap == ToneMapOperator::AcesFitted ) {
+		features |= GLX_POST_SHADER_FEATURE_TONEMAP_ACES_FITTED;
+	}
+
+	if ( !key.outputTransform ) {
+		features |= GLX_POST_SHADER_FEATURE_LINEAR_OUTPUT;
+		return features;
 	}
 
 	switch ( key.transfer ) {
@@ -108,11 +153,19 @@ static ID_INLINE unsigned int GLX_PostShader_FeaturesForKey( const PostShaderKey
 		features |= GLX_POST_SHADER_FEATURE_LINEAR_OUTPUT;
 		break;
 	}
+	if ( GLX_PostShader_TransferUsesHdrHeadroom( key.transfer ) ) {
+		features |= GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT;
+	}
+	if ( key.outputPrimaries == OutputPrimaries::DisplayP3 ) {
+		features |= GLX_POST_SHADER_FEATURE_DISPLAY_P3_OUTPUT;
+	}
 	if ( key.outputPrimaries == OutputPrimaries::Bt2020 ) {
 		features |= GLX_POST_SHADER_FEATURE_BT2020_OUTPUT;
 	}
 	if ( key.gamutMap == GamutMapMode::CompressToOutput ) {
 		features |= GLX_POST_SHADER_FEATURE_GAMUT_COMPRESS;
+	} else if ( key.gamutMap == GamutMapMode::Clip ) {
+		features |= GLX_POST_SHADER_FEATURE_GAMUT_CLIP;
 	}
 	return features;
 }
@@ -123,6 +176,9 @@ static ID_INLINE unsigned int GLX_PostShader_HashKey( const PostShaderKey &key,
 	unsigned int hash = 2166136261u;
 
 	hash = GLX_RenderIR_HashValue( hash, key.sceneLinear ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, key.outputTransform ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, key.bloomComposite ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, key.greyscale ? 1u : 0u );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( key.grade ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( key.toneMap ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( key.transfer ) );
@@ -134,25 +190,41 @@ static ID_INLINE unsigned int GLX_PostShader_HashKey( const PostShaderKey &key,
 	return hash ? hash : 1u;
 }
 
-static ID_INLINE PostShaderPlan GLX_PostShader_BuildPlan(
-	const OutputTransform &transform )
+static ID_INLINE PostShaderPlan GLX_PostShader_BuildPlanForPass(
+	const OutputTransform &transform, qboolean bloomComposite,
+	qboolean outputTransform )
 {
 	PostShaderPlan plan {};
 
 	plan.valid = GLX_RenderIR_ValidateOutputTransform( transform );
 	plan.key.sceneLinear = ( transform.sceneColorSpace == SceneColorSpace::SceneLinear ) ?
 		qtrue : qfalse;
-	plan.key.grade = plan.key.sceneLinear ? transform.grade : ColorGradeMode::None;
-	plan.key.toneMap = plan.key.sceneLinear ? transform.toneMap : ToneMapOperator::Legacy;
+	plan.key.outputTransform = outputTransform;
+	plan.key.bloomComposite = bloomComposite;
+	plan.key.greyscale = ( outputTransform && transform.greyscale != 0.0f ) ? qtrue : qfalse;
+	plan.key.grade = ( outputTransform && plan.key.sceneLinear ) ? transform.grade :
+		ColorGradeMode::None;
+	plan.key.toneMap = ( outputTransform && plan.key.sceneLinear ) ? transform.toneMap :
+		ToneMapOperator::Legacy;
 	plan.key.transfer = transform.transfer;
 	plan.key.outputPrimaries = transform.outputPrimaries;
 	plan.key.gamutMap = transform.gamutMap;
-	plan.key.lutActive = plan.key.sceneLinear ? GLX_PostShader_LutActive( transform ) : qfalse;
-	plan.key.whitePointAdaptation = plan.key.sceneLinear ?
+	plan.key.lutActive = ( outputTransform && plan.key.sceneLinear ) ?
+		GLX_PostShader_LutActive( transform ) : qfalse;
+	plan.key.whitePointAdaptation = ( outputTransform && plan.key.sceneLinear ) ?
 		GLX_PostShader_WhitePointAdaptationActive( transform ) : qfalse;
 	plan.featureMask = GLX_PostShader_FeaturesForKey( plan.key );
-	plan.textureCount = plan.key.lutActive ? 2 : 1;
+	plan.textureCount = 1;
+	if ( plan.key.bloomComposite ) {
+		plan.textureCount++;
+	}
+	if ( plan.key.lutActive ) {
+		plan.textureCount++;
+	}
 	plan.uniformVec4Count = 4;
+	if ( plan.key.bloomComposite ) {
+		plan.uniformVec4Count += 1;
+	}
 	if ( GLX_PostShader_GradeUsesLiftGammaGain( plan.key.grade ) ) {
 		plan.uniformVec4Count += 6;
 	}
@@ -162,8 +234,25 @@ static ID_INLINE PostShaderPlan GLX_PostShader_BuildPlan(
 	if ( plan.key.transfer == OutputTransfer::Hdr10Pq ) {
 		plan.uniformVec4Count += 1;
 	}
+	if ( ( plan.featureMask &
+		( GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT |
+		GLX_POST_SHADER_FEATURE_GAMUT_COMPRESS ) ) != 0u ) {
+		plan.uniformVec4Count += 1;
+	}
 	plan.hash = GLX_PostShader_HashKey( plan.key, plan.featureMask );
 	return plan;
+}
+
+static ID_INLINE PostShaderPlan GLX_PostShader_BuildPlanForOutput(
+	const OutputTransform &transform, qboolean bloomComposite )
+{
+	return GLX_PostShader_BuildPlanForPass( transform, bloomComposite, qtrue );
+}
+
+static ID_INLINE PostShaderPlan GLX_PostShader_BuildPlan(
+	const OutputTransform &transform )
+{
+	return GLX_PostShader_BuildPlanForOutput( transform, qfalse );
 }
 
 } // namespace glx

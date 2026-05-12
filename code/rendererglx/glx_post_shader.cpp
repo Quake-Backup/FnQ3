@@ -1,6 +1,8 @@
 #include "glx_post_shader.h"
 #include "glx_color_math.h"
 
+#include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -48,6 +50,83 @@ static void GLX_PostShader_SetLastError( PostShaderState *state, const char *err
 static void *GLX_PostShader_GetProc( const char *name )
 {
 	return RI().GL_GetProcAddress ? RI().GL_GetProcAddress( name ) : nullptr;
+}
+
+static int GLX_PostShader_Stricmp( const char *lhs, const char *rhs )
+{
+	if ( !lhs ) {
+		lhs = "";
+	}
+	if ( !rhs ) {
+		rhs = "";
+	}
+
+	while ( *lhs || *rhs ) {
+		const int l = std::tolower( static_cast<unsigned char>( *lhs ) );
+		const int r = std::tolower( static_cast<unsigned char>( *rhs ) );
+		if ( l != r ) {
+			return l - r;
+		}
+		if ( *lhs ) {
+			lhs++;
+		}
+		if ( *rhs ) {
+			rhs++;
+		}
+	}
+
+	return 0;
+}
+
+static PostShaderSourceTarget GLX_PostShader_ParseTargetCvar( const cvar_t *cvar,
+	qboolean *explicitTarget )
+{
+	const char *value = ( cvar && cvar->string ) ? cvar->string : "auto";
+
+	if ( explicitTarget ) {
+		*explicitTarget = qfalse;
+	}
+
+	if ( !value[0] || !GLX_PostShader_Stricmp( value, "auto" ) ||
+		!GLX_PostShader_Stricmp( value, "0" ) ) {
+		return PostShaderSourceTarget::Glsl120;
+	}
+	if ( explicitTarget ) {
+		*explicitTarget = qtrue;
+	}
+	if ( !GLX_PostShader_Stricmp( value, "120" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl120" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl-120" ) ) {
+		return PostShaderSourceTarget::Glsl120;
+	}
+	if ( !GLX_PostShader_Stricmp( value, "130" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl130" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl-130" ) ) {
+		return PostShaderSourceTarget::Glsl130;
+	}
+	if ( !GLX_PostShader_Stricmp( value, "150" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl150" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl150-compat" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl-150-compat" ) ) {
+		return PostShaderSourceTarget::Glsl150Compatibility;
+	}
+	if ( !GLX_PostShader_Stricmp( value, "330" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl330" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl330-compat" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl-330-compat" ) ) {
+		return PostShaderSourceTarget::Glsl330Compatibility;
+	}
+	if ( !GLX_PostShader_Stricmp( value, "410" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl410" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl410-compat" ) ||
+		!GLX_PostShader_Stricmp( value, "glsl-410-compat" ) ) {
+		return PostShaderSourceTarget::Glsl410Compatibility;
+	}
+
+	if ( explicitTarget ) {
+		*explicitTarget = qfalse;
+	}
+	return PostShaderSourceTarget::Glsl120;
 }
 
 static void GLX_PostShader_LoadFunctions( PostShaderState *state )
@@ -129,6 +208,9 @@ static void GLX_PostShader_ResetCounters( PostShaderState *state )
 	state->linkFailures = 0;
 	state->sourceFailures = 0;
 	state->programLimitSkips = 0;
+	state->cacheEvictions = 0;
+	state->targetFallbacks = 0;
+	state->targetCapabilityFallbacks = 0;
 	state->precacheAttempts = 0;
 	state->precacheFailures = 0;
 	state->debugLabels = 0;
@@ -145,11 +227,24 @@ static void GLX_PostShader_ResetCounters( PostShaderState *state )
 	state->lastFeatureMask = 0;
 	state->lastSourceHash = 0;
 	state->lastProgram = 0;
+	state->lastEvictedSourceHash = 0;
+	state->lastEvictedFeatureMask = 0;
+	state->lastEvictedUses = 0;
 	state->lastDirectFinalRejectMask = GLX_POST_SHADER_DIRECT_REJECT_NONE;
+	state->useSerial = 0;
+	state->preferredTarget = state->activeTarget;
+	state->lastRequestedTarget = state->activeTarget;
+	state->lastCompileTarget = state->activeTarget;
+	state->lastFallbackFromTarget = state->activeTarget;
+	state->lastFallbackToTarget = state->activeTarget;
+	state->lastEvictedTarget = state->activeTarget;
 	state->lastSource = {};
 	state->lastPlanValid = qfalse;
 	state->lastDirectFinalEligible = qfalse;
 	state->lastDirectFinalBound = qfalse;
+	state->lastTargetFallbackUsed = qfalse;
+	state->lastTargetUnsupported = qfalse;
+	state->modernTargetSuppressed = qfalse;
 	GLX_PostShader_SetLastError( state, "" );
 }
 
@@ -192,7 +287,7 @@ static void GLX_PostShader_PrintObjectLog( const PostShaderState &state, GLuint 
 }
 
 static GLuint GLX_PostShader_CompileShader( PostShaderState *state, GLenum shaderType,
-	const char *source )
+	const char *source, PostShaderSourceTarget target, unsigned int featureMask )
 {
 	GLuint shader;
 	GLint ok = 0;
@@ -215,11 +310,17 @@ static GLuint GLX_PostShader_CompileShader( PostShaderState *state, GLenum shade
 
 	if ( !ok ) {
 		state->compileFailures++;
-		GLX_PostShader_SetLastError( state,
-			shaderType == GL_VERTEX_SHADER ? "vertex shader compile failed" :
-			"fragment shader compile failed" );
-		RI().Printf( PRINT_WARNING, "GLx post %s shader compile failed:\n",
-			shaderType == GL_VERTEX_SHADER ? "vertex" : "fragment" );
+		std::snprintf( state->lastError, sizeof( state->lastError ),
+			"%s %s shader compile failed for features 0x%08x",
+			GLX_PostShaderSource_TargetName( target ),
+			shaderType == GL_VERTEX_SHADER ? "vertex" : "fragment",
+			featureMask );
+		state->lastError[sizeof( state->lastError ) - 1] = '\0';
+		RI().Printf( PRINT_WARNING,
+			"GLx post %s %s shader compile failed for features 0x%08x:\n",
+			GLX_PostShaderSource_TargetName( target ),
+			shaderType == GL_VERTEX_SHADER ? "vertex" : "fragment",
+			featureMask );
 		GLX_PostShader_PrintObjectLog( *state, shader, qfalse, PRINT_WARNING );
 		if ( state->r_glxPostShaderDebug && state->r_glxPostShaderDebug->integer > 1 ) {
 			RI().Printf( PRINT_ALL, "%s\n", source );
@@ -291,12 +392,136 @@ static void GLX_PostShader_ResetRuntime( PostShaderState *state, qboolean delete
 	GLX_PostShader_SetReason( state, "not initialized" );
 }
 
+static PostShaderSourceTarget GLX_PostShader_ResolveTarget( PostShaderState *state )
+{
+	qboolean explicitTarget = qfalse;
+	PostShaderSourceTarget target;
+
+	if ( !state ) {
+		return PostShaderSourceTarget::Glsl120;
+	}
+
+	target = GLX_PostShader_ParseTargetCvar( state->r_glxPostShaderTarget,
+		&explicitTarget );
+	if ( !explicitTarget ) {
+		target = GLX_PostShaderSource_TargetForTier( state->tier, state->glMajor,
+			state->glMinor );
+		state->preferredTarget = target;
+		if ( state->modernTargetSuppressed &&
+			GLX_PostShaderSource_ModernTarget( target ) ) {
+			target = PostShaderSourceTarget::Glsl120;
+		}
+	} else {
+		state->preferredTarget = target;
+	}
+	state->lastRequestedTarget = target;
+	state->lastTargetUnsupported = qfalse;
+
+	if ( !GLX_PostShaderSource_TargetSupportedByVersion( target,
+		state->glMajor, state->glMinor ) ) {
+		state->targetCapabilityFallbacks++;
+		state->lastTargetUnsupported = qtrue;
+		target = PostShaderSourceTarget::Glsl120;
+	}
+
+	return target;
+}
+
+static PostShaderSourceSummary GLX_PostShader_BuildSourceSummary(
+	PostShaderState *state, const PostShaderPlan &plan )
+{
+	PostShaderSourceTarget target = GLX_PostShader_ResolveTarget( state );
+	PostShaderSourceSummary source = GLX_PostShaderSource_BuildSummary( plan, target );
+
+	if ( state ) {
+		state->activeTarget = target;
+		state->lastSource = source;
+		state->lastSourceHash = source.sourceHash;
+	}
+	return source;
+}
+
+static void GLX_PostShader_TouchProgram( PostShaderState *state,
+	PostShaderProgram *program )
+{
+	if ( !state || !program ) {
+		return;
+	}
+	state->useSerial++;
+	if ( state->useSerial == 0 ) {
+		state->useSerial = 1;
+	}
+	program->lastUseSerial = state->useSerial;
+}
+
+static PostShaderProgram *GLX_PostShader_AllocateProgramSlot( PostShaderState *state,
+	qboolean *appendSlot )
+{
+	int victim = -1;
+	unsigned int oldestSerial = 0xffffffffu;
+
+	if ( appendSlot ) {
+		*appendSlot = qfalse;
+	}
+	if ( !state ) {
+		return nullptr;
+	}
+
+	for ( int i = 0; i < state->programCount; i++ ) {
+		if ( !state->programs[i].valid ) {
+			return &state->programs[i];
+		}
+	}
+
+	if ( state->programCount < GLX_POST_SHADER_PROGRAM_LIMIT ) {
+		if ( appendSlot ) {
+			*appendSlot = qtrue;
+		}
+		return &state->programs[state->programCount];
+	}
+
+	for ( int i = 0; i < state->programCount; i++ ) {
+		const PostShaderProgram &program = state->programs[i];
+		if ( state->currentProgram && program.program == state->currentProgram ) {
+			continue;
+		}
+		if ( victim < 0 || program.lastUseSerial < oldestSerial ) {
+			victim = i;
+			oldestSerial = program.lastUseSerial;
+		}
+	}
+	if ( victim < 0 && state->programCount > 0 ) {
+		victim = 0;
+	}
+	if ( victim < 0 ) {
+		state->programLimitSkips++;
+		GLX_PostShader_SetLastError( state, "post shader program cache has no evictable slot" );
+		return nullptr;
+	}
+
+	state->lastEvictedSourceHash = state->programs[victim].source.sourceHash;
+	state->lastEvictedFeatureMask = state->programs[victim].plan.featureMask;
+	state->lastEvictedUses = state->programs[victim].uses;
+	state->lastEvictedTarget = state->programs[victim].source.target;
+	if ( state->r_glxPostShaderDebug && state->r_glxPostShaderDebug->integer ) {
+		RI().Printf( PRINT_ALL,
+			"GLx post shader evicting %s source 0x%08x features 0x%08x uses %u.\n",
+			GLX_PostShaderSource_TargetName( state->lastEvictedTarget ),
+			state->lastEvictedSourceHash, state->lastEvictedFeatureMask,
+			state->lastEvictedUses );
+	}
+	GLX_PostShader_DeleteProgram( state, &state->programs[victim] );
+	state->cacheEvictions++;
+	return &state->programs[victim];
+}
+
 static qboolean GLX_PostShader_SameProgramShape( const PostShaderProgram &program,
 	const PostShaderPlan &plan, const PostShaderSourceSummary &source )
 {
 	return program.valid &&
 		program.plan.hash == plan.hash &&
 		program.plan.featureMask == plan.featureMask &&
+		program.source.target == source.target &&
 		program.source.sourceHash == source.sourceHash ? qtrue : qfalse;
 }
 
@@ -310,6 +535,7 @@ static PostShaderProgram *GLX_PostShader_FindProgram( PostShaderState *state,
 	for ( int i = 0; i < state->programCount; i++ ) {
 		if ( GLX_PostShader_SameProgramShape( state->programs[i], plan, source ) ) {
 			state->cacheHits++;
+			GLX_PostShader_TouchProgram( state, &state->programs[i] );
 			return &state->programs[i];
 		}
 	}
@@ -327,6 +553,7 @@ static PostShaderProgram *GLX_PostShader_FindProgramForUse( PostShaderState *sta
 
 	for ( int i = 0; i < state->programCount; i++ ) {
 		if ( GLX_PostShader_SameProgramShape( state->programs[i], plan, source ) ) {
+			GLX_PostShader_TouchProgram( state, &state->programs[i] );
 			return &state->programs[i];
 		}
 	}
@@ -342,7 +569,8 @@ static void GLX_PostShader_LabelProgram( PostShaderState *state, PostShaderProgr
 		return;
 	}
 
-	std::snprintf( label, sizeof( label ), "GLx post shader 0x%08x features 0x%08x",
+	std::snprintf( label, sizeof( label ), "GLx post shader %s 0x%08x features 0x%08x",
+		GLX_PostShaderSource_TargetName( program->source.target ),
 		program->source.sourceHash, program->plan.featureMask );
 	label[sizeof( label ) - 1] = '\0';
 	state->fns.ObjectLabel( GL_PROGRAM, program->program, static_cast<GLsizei>( -1 ), label );
@@ -357,14 +585,9 @@ static PostShaderProgram *GLX_PostShader_CreateProgram( PostShaderState *state,
 	PostShaderProgram *program;
 	GLint ok = 0;
 	int ignoredBytes = 0;
+	qboolean appendSlot = qfalse;
 
 	if ( !state ) {
-		return nullptr;
-	}
-
-	if ( state->programCount >= GLX_POST_SHADER_PROGRAM_LIMIT ) {
-		state->programLimitSkips++;
-		GLX_PostShader_SetLastError( state, "post shader program cache is full" );
 		return nullptr;
 	}
 
@@ -374,21 +597,30 @@ static PostShaderProgram *GLX_PostShader_CreateProgram( PostShaderState *state,
 		return nullptr;
 	}
 
-	if ( !GLX_PostShaderSource_WriteVertex( vertexSource, sizeof( vertexSource ), &ignoredBytes ) ||
-		!GLX_PostShaderSource_WriteFragment( plan, fragmentSource, sizeof( fragmentSource ), &ignoredBytes ) ) {
+	if ( !GLX_PostShaderSource_WriteVertex( source.target, vertexSource,
+		sizeof( vertexSource ), &ignoredBytes ) ||
+		!GLX_PostShaderSource_WriteFragment( plan, source.target, fragmentSource,
+		sizeof( fragmentSource ), &ignoredBytes ) ) {
 		state->sourceFailures++;
 		GLX_PostShader_SetLastError( state, "post shader source exceeded generator buffer" );
 		return nullptr;
 	}
 
+	program = GLX_PostShader_AllocateProgramSlot( state, &appendSlot );
+	if ( !program ) {
+		return nullptr;
+	}
+
 	state->compileAttempts++;
-	program = &state->programs[state->programCount];
 	*program = {};
 	program->plan = plan;
 	program->source = source;
 	program->sceneUniform = -1;
+	program->bloomUniform = -1;
 	program->lutUniform = -1;
 	program->postParams0Uniform = -1;
+	program->outputParams1Uniform = -1;
+	program->bloomParamsUniform = -1;
 	program->liftUniform = -1;
 	program->invGammaUniform = -1;
 	program->gainUniform = -1;
@@ -397,8 +629,10 @@ static PostShaderProgram *GLX_PostShader_CreateProgram( PostShaderState *state,
 	program->whitePoint2Uniform = -1;
 	program->lutParamsUniform = -1;
 
-	program->vertexShader = GLX_PostShader_CompileShader( state, GL_VERTEX_SHADER, vertexSource );
-	program->fragmentShader = GLX_PostShader_CompileShader( state, GL_FRAGMENT_SHADER, fragmentSource );
+	program->vertexShader = GLX_PostShader_CompileShader( state, GL_VERTEX_SHADER,
+		vertexSource, source.target, plan.featureMask );
+	program->fragmentShader = GLX_PostShader_CompileShader( state, GL_FRAGMENT_SHADER,
+		fragmentSource, source.target, plan.featureMask );
 	if ( !program->vertexShader || !program->fragmentShader ) {
 		GLX_PostShader_DeleteProgram( state, program );
 		return nullptr;
@@ -418,17 +652,26 @@ static PostShaderProgram *GLX_PostShader_CreateProgram( PostShaderState *state,
 
 	if ( !ok ) {
 		state->linkFailures++;
-		GLX_PostShader_SetLastError( state, "program link failed" );
-		RI().Printf( PRINT_WARNING, "GLx post shader program link failed for source 0x%08x:\n",
-			source.sourceHash );
+		std::snprintf( state->lastError, sizeof( state->lastError ),
+			"%s program link failed for source 0x%08x features 0x%08x",
+			GLX_PostShaderSource_TargetName( source.target ), source.sourceHash,
+			plan.featureMask );
+		state->lastError[sizeof( state->lastError ) - 1] = '\0';
+		RI().Printf( PRINT_WARNING,
+			"GLx post shader %s program link failed for source 0x%08x features 0x%08x:\n",
+			GLX_PostShaderSource_TargetName( source.target ), source.sourceHash,
+			plan.featureMask );
 		GLX_PostShader_PrintObjectLog( *state, program->program, qtrue, PRINT_WARNING );
 		GLX_PostShader_DeleteProgram( state, program );
 		return nullptr;
 	}
 
 	program->sceneUniform = state->fns.GetUniformLocation( program->program, "u_Scene" );
+	program->bloomUniform = state->fns.GetUniformLocation( program->program, "u_Bloom" );
 	program->lutUniform = state->fns.GetUniformLocation( program->program, "u_ColorGradeLut" );
 	program->postParams0Uniform = state->fns.GetUniformLocation( program->program, "u_PostParams0" );
+	program->outputParams1Uniform = state->fns.GetUniformLocation( program->program, "u_OutputParams1" );
+	program->bloomParamsUniform = state->fns.GetUniformLocation( program->program, "u_BloomParams" );
 	program->liftUniform = state->fns.GetUniformLocation( program->program, "u_Lift" );
 	program->invGammaUniform = state->fns.GetUniformLocation( program->program, "u_InvGamma" );
 	program->gainUniform = state->fns.GetUniformLocation( program->program, "u_Gain" );
@@ -440,6 +683,9 @@ static PostShaderProgram *GLX_PostShader_CreateProgram( PostShaderState *state,
 	if ( program->sceneUniform >= 0 ) {
 		state->fns.Uniform1i( program->sceneUniform, 0 );
 	}
+	if ( program->bloomUniform >= 0 ) {
+		state->fns.Uniform1i( program->bloomUniform, 1 );
+	}
 	if ( program->lutUniform >= 0 ) {
 		state->fns.Uniform1i( program->lutUniform, 2 );
 	}
@@ -447,15 +693,20 @@ static PostShaderProgram *GLX_PostShader_CreateProgram( PostShaderState *state,
 	state->currentProgram = 0;
 
 	program->valid = qtrue;
+	GLX_PostShader_TouchProgram( state, program );
 	GLX_PostShader_LabelProgram( state, program );
-	state->programCount++;
+	if ( appendSlot ) {
+		state->programCount++;
+	}
 	state->lastProgram = program->program;
+	state->lastCompileTarget = source.target;
 	GLX_PostShader_SetLastError( state, "" );
 
 	if ( state->r_glxPostShaderDebug && state->r_glxPostShaderDebug->integer ) {
 		RI().Printf( PRINT_ALL,
-			"GLx post shader compiled source 0x%08x features 0x%08x program %u.\n",
-			source.sourceHash, plan.featureMask, program->program );
+			"GLx post shader compiled %s source 0x%08x features 0x%08x program %u.\n",
+			GLX_PostShaderSource_TargetName( source.target ), source.sourceHash,
+			plan.featureMask, program->program );
 	}
 
 	return program;
@@ -464,12 +715,15 @@ static PostShaderProgram *GLX_PostShader_CreateProgram( PostShaderState *state,
 static qboolean GLX_PostShader_CacheProgram( PostShaderState *state,
 	const PostShaderPlan &plan )
 {
-	const PostShaderSourceSummary source = GLX_PostShaderSource_BuildSummary( plan );
+	PostShaderSourceSummary source;
 	PostShaderProgram *program;
 
 	if ( !state ) {
 		return qfalse;
 	}
+
+	state->lastTargetFallbackUsed = qfalse;
+	source = GLX_PostShader_BuildSourceSummary( state, plan );
 
 	state->lastPlanHash = plan.hash;
 	state->lastFeatureMask = plan.featureMask;
@@ -493,6 +747,27 @@ static qboolean GLX_PostShader_CacheProgram( PostShaderState *state,
 	program = GLX_PostShader_FindProgram( state, plan, source );
 	if ( !program ) {
 		program = GLX_PostShader_CreateProgram( state, plan, source );
+		if ( !program && state->activeTarget != PostShaderSourceTarget::Glsl120 ) {
+			const PostShaderSourceTarget failedTarget = state->activeTarget;
+			state->targetFallbacks++;
+			state->lastTargetFallbackUsed = qtrue;
+			state->lastFallbackFromTarget = failedTarget;
+			state->lastFallbackToTarget = PostShaderSourceTarget::Glsl120;
+			state->activeTarget = PostShaderSourceTarget::Glsl120;
+			state->modernTargetSuppressed = qtrue;
+			source = GLX_PostShaderSource_BuildSummary( plan,
+				PostShaderSourceTarget::Glsl120 );
+			state->lastSource = source;
+			state->lastSourceHash = source.sourceHash;
+			program = GLX_PostShader_FindProgram( state, plan, source );
+			if ( !program ) {
+				program = GLX_PostShader_CreateProgram( state, plan, source );
+			}
+			if ( program ) {
+				GLX_PostShader_SetReason( state,
+					"GLSL 1.20 fallback after modern post shader compile/link failure" );
+			}
+		}
 	}
 	if ( !program ) {
 		return qfalse;
@@ -503,31 +778,59 @@ static qboolean GLX_PostShader_CacheProgram( PostShaderState *state,
 	return qtrue;
 }
 
-static unsigned int GLX_PostShader_DirectFinalCompatibilityRejectMask(
-	const PostShaderPlan &plan, const OutputTransform &output, float greyscale )
+static qboolean GLX_PostShader_FinalTransferSupported( OutputTransfer transfer )
+{
+	switch ( transfer ) {
+	case OutputTransfer::SdrSrgb:
+	case OutputTransfer::ScreenshotSrgb:
+	case OutputTransfer::LinearSrgb:
+	case OutputTransfer::ScRgb:
+	case OutputTransfer::Hdr10Pq:
+	case OutputTransfer::MacEdr:
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
+static unsigned int GLX_PostShader_FinalCompatibilityRejectMask(
+	const PostShaderPlan &plan, const OutputTransform &output,
+	qboolean bloomComposite, qboolean outputTransform )
 {
 	unsigned int rejectMask = GLX_POST_SHADER_DIRECT_REJECT_NONE;
 
 	if ( !plan.valid || !GLX_RenderIR_ValidateOutputTransform( output ) ) {
 		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_INVALID_PLAN;
 	}
-	if ( !plan.key.sceneLinear ||
+	if ( plan.key.bloomComposite != bloomComposite ||
+		plan.key.outputTransform != outputTransform ) {
+		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_INVALID_PLAN;
+	}
+	if ( outputTransform && ( !plan.key.sceneLinear ||
 		output.sceneColorSpace != SceneColorSpace::SceneLinear ||
-		output.hdrMode <= 0 ) {
+		output.hdrMode <= 0 ) ) {
 		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_NOT_SCENE_LINEAR;
 	}
-	if ( plan.key.transfer != OutputTransfer::SdrSrgb ||
-		output.transfer != OutputTransfer::SdrSrgb ) {
+	if ( outputTransform && ( plan.key.transfer != output.transfer ||
+		!GLX_PostShader_FinalTransferSupported( output.transfer ) ) ) {
 		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_TRANSFER;
 	}
-	if ( plan.key.outputPrimaries != OutputPrimaries::SrgbBt709 ||
-		output.outputPrimaries != OutputPrimaries::SrgbBt709 ||
-		plan.key.gamutMap != GamutMapMode::None ||
-		output.gamutMap != GamutMapMode::None ) {
-		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_OUTPUT_COLORIMETRY;
-	}
-	if ( greyscale > 0.0f || greyscale < 0.0f ) {
-		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_GREYSCALE;
+	if ( outputTransform ) {
+		if ( plan.key.outputPrimaries != output.outputPrimaries ||
+			plan.key.gamutMap != output.gamutMap ) {
+			rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_OUTPUT_COLORIMETRY;
+		}
+		switch ( output.outputPrimaries ) {
+		case OutputPrimaries::SrgbBt709:
+		case OutputPrimaries::DisplayP3:
+		case OutputPrimaries::Bt2020:
+		case OutputPrimaries::Native:
+		case OutputPrimaries::Unknown:
+			break;
+		default:
+			rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_OUTPUT_COLORIMETRY;
+			break;
+		}
 	}
 
 	return rejectMask;
@@ -557,47 +860,157 @@ static qboolean GLX_PostShader_SetOptionalVec4( PostShaderState *state,
 	return qtrue;
 }
 
-static qboolean GLX_PostShader_SetDirectFinalUniforms( PostShaderState *state,
-	PostShaderProgram *program, const OutputTransform &output )
+static float GLX_PostShader_SanitizeFloat( float value, float fallback,
+	float minValue, float maxValue )
+{
+	if ( !std::isfinite( value ) ) {
+		value = fallback;
+	}
+	if ( value < minValue ) {
+		return minValue;
+	}
+	if ( value > maxValue ) {
+		return maxValue;
+	}
+	return value;
+}
+
+static void GLX_PostShader_SanitizeVec3( const float in[3], const float fallback[3],
+	float minValue, float maxValue, float out[3] )
+{
+	for ( int i = 0; i < 3; i++ ) {
+		out[i] = GLX_PostShader_SanitizeFloat( in ? in[i] : fallback[i],
+			fallback[i], minValue, maxValue );
+	}
+}
+
+static float GLX_PostShader_SanitizePaperWhite( const OutputTransform &output )
+{
+	return GLX_PostShader_SanitizeFloat( output.paperWhiteNits, 203.0f,
+		1.0f, 10000.0f );
+}
+
+static float GLX_PostShader_SanitizeMaxOutput( const OutputTransform &output,
+	float paperWhite )
+{
+	return GLX_PostShader_SanitizeFloat( output.maxOutputNits, paperWhite,
+		paperWhite, 10000.0f );
+}
+
+static float GLX_PostShader_SanitizeHeadroom( const OutputTransform &output,
+	float paperWhite, float maxOutput )
+{
+	const float nitsHeadroom = maxOutput / ( paperWhite > 0.001f ? paperWhite : 0.001f );
+	float headroom = nitsHeadroom;
+
+	if ( output.displayHdrHeadroomValid ) {
+		headroom = GLX_PostShader_SanitizeFloat( output.displayHdrHeadroom,
+			nitsHeadroom, 1.0f, 64.0f );
+		if ( headroom > nitsHeadroom ) {
+			headroom = nitsHeadroom;
+		}
+	}
+	return GLX_PostShader_SanitizeFloat( headroom, nitsHeadroom, 1.0f, 64.0f );
+}
+
+static float GLX_PostShader_SanitizeKelvin( float kelvin )
+{
+	return GLX_PostShader_SanitizeFloat( kelvin, 6504.0f, 1000.0f, 40000.0f );
+}
+
+static qboolean GLX_PostShader_SetFinalUniforms( PostShaderState *state,
+	PostShaderProgram *program, const OutputTransform &output, float bloomIntensity )
 {
 	float whitePointMatrix[9];
-	const qboolean lgg = GLX_PostShader_GradeUsesLiftGammaGain( output.grade );
-	const qboolean lut = GLX_PostShader_LutActive( output );
-	const float invGamma0 = output.gradeGamma[0] > 0.0001f ?
-		1.0f / output.gradeGamma[0] : 1.0f;
-	const float invGamma1 = output.gradeGamma[1] > 0.0001f ?
-		1.0f / output.gradeGamma[1] : 1.0f;
-	const float invGamma2 = output.gradeGamma[2] > 0.0001f ?
-		1.0f / output.gradeGamma[2] : 1.0f;
+	float lift[3];
+	float gamma[3];
+	float invGamma[3];
+	float gain[3];
+	const float liftFallback[3] = { 0.0f, 0.0f, 0.0f };
+	const float gammaFallback[3] = { 1.0f, 1.0f, 1.0f };
+	const float gainFallback[3] = { 1.0f, 1.0f, 1.0f };
+	const float exposure = GLX_PostShader_SanitizeFloat( output.exposure, 1.0f,
+		0.0f, 64.0f );
+	const float paperWhite = GLX_PostShader_SanitizePaperWhite( output );
+	const float maxOutput = GLX_PostShader_SanitizeMaxOutput( output, paperWhite );
+	const float headroom = GLX_PostShader_SanitizeHeadroom( output, paperWhite,
+		maxOutput );
+	const float displaySdrWhite = GLX_PostShader_SanitizeFloat(
+		output.displaySdrWhiteNits, paperWhite, 1.0f, 10000.0f );
+	const float displayMax = GLX_PostShader_SanitizeFloat( output.displayMaxNits,
+		maxOutput, displaySdrWhite, 10000.0f );
+	const float greyscale = GLX_PostShader_SanitizeFloat( output.greyscale, 0.0f,
+		0.0f, 1.0f );
+	const float bloom = GLX_PostShader_SanitizeFloat( bloomIntensity, 0.0f,
+		0.0f, 64.0f );
+	const float sourceKelvin = GLX_PostShader_SanitizeKelvin(
+		output.whitePointSourceKelvin );
+	const float targetKelvin = GLX_PostShader_SanitizeKelvin(
+		output.whitePointTargetKelvin );
+	const qboolean lgg = program ?
+		GLX_PostShader_GradeUsesLiftGammaGain( program->plan.key.grade ) : qfalse;
+	const qboolean lut = ( program && program->plan.key.lutActive ) ? qtrue : qfalse;
+	const qboolean postParamsRequired =
+		( program && ( program->plan.featureMask &
+		( GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM |
+		GLX_POST_SHADER_FEATURE_GREYSCALE |
+		GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT ) ) != 0u ) ? qtrue : qfalse;
+	const qboolean outputParamsRequired =
+		( program && ( program->plan.featureMask &
+		( GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT |
+		GLX_POST_SHADER_FEATURE_GAMUT_COMPRESS ) ) != 0u ) ? qtrue : qfalse;
 
 	if ( !state || !program || !state->fns.Uniform4f ) {
 		return qfalse;
 	}
-	if ( program->postParams0Uniform < 0 ) {
-		GLX_PostShader_SetLastError( state, "post shader direct final missing u_PostParams0" );
+	if ( postParamsRequired && program->postParams0Uniform < 0 ) {
+		GLX_PostShader_SetLastError( state, "post shader final missing u_PostParams0" );
+		return qfalse;
+	}
+	if ( outputParamsRequired && program->outputParams1Uniform < 0 ) {
+		GLX_PostShader_SetLastError( state, "post shader final missing u_OutputParams1" );
 		return qfalse;
 	}
 	if ( lut && program->lutUniform < 0 ) {
-		GLX_PostShader_SetLastError( state, "post shader direct final missing u_ColorGradeLut" );
+		GLX_PostShader_SetLastError( state, "post shader final missing u_ColorGradeLut" );
 		return qfalse;
 	}
 
-	state->fns.Uniform4f( program->postParams0Uniform, output.exposure,
-		output.paperWhiteNits, output.maxOutputNits, 0.0f );
-	if ( lgg && output.whitePointSourceKelvin != output.whitePointTargetKelvin ) {
-		GLX_ColorMath_BuildBradfordAdaptationMatrix( output.whitePointSourceKelvin,
-			output.whitePointTargetKelvin, whitePointMatrix );
+	if ( program->postParams0Uniform >= 0 ) {
+		state->fns.Uniform4f( program->postParams0Uniform, exposure,
+			paperWhite, maxOutput, greyscale );
+	}
+	if ( program->outputParams1Uniform >= 0 ) {
+		state->fns.Uniform4f( program->outputParams1Uniform, headroom,
+			displaySdrWhite, displayMax, 0.0f );
+	}
+	if ( !GLX_PostShader_SetOptionalVec4( state, program, program->bloomParamsUniform,
+		bloom, 0.0f, 0.0f, 0.0f,
+		GLX_POST_SHADER_FEATURE_BLOOM_COMBINE ) ) {
+		GLX_PostShader_SetLastError( state, "post shader final missing bloom uniform" );
+		return qfalse;
+	}
+	if ( lgg && sourceKelvin != targetKelvin ) {
+		GLX_ColorMath_BuildBradfordAdaptationMatrix( sourceKelvin,
+			targetKelvin, whitePointMatrix );
 	} else {
 		GLX_PostShader_Identity3x3( whitePointMatrix );
 	}
+	GLX_PostShader_SanitizeVec3( output.gradeLift, liftFallback, -1.0f, 1.0f, lift );
+	GLX_PostShader_SanitizeVec3( output.gradeGamma, gammaFallback, 0.0001f, 10000.0f,
+		gamma );
+	GLX_PostShader_SanitizeVec3( output.gradeGain, gainFallback, 0.0f, 64.0f, gain );
+	invGamma[0] = 1.0f / gamma[0];
+	invGamma[1] = 1.0f / gamma[1];
+	invGamma[2] = 1.0f / gamma[2];
 	if ( !GLX_PostShader_SetOptionalVec4( state, program, program->liftUniform,
-		output.gradeLift[0], output.gradeLift[1], output.gradeLift[2], 0.0f,
+		lift[0], lift[1], lift[2], 0.0f,
 		GLX_POST_SHADER_FEATURE_LIFT_GAMMA_GAIN ) ||
 		!GLX_PostShader_SetOptionalVec4( state, program, program->invGammaUniform,
-		invGamma0, invGamma1, invGamma2, 1.0f,
+		invGamma[0], invGamma[1], invGamma[2], 1.0f,
 		GLX_POST_SHADER_FEATURE_LIFT_GAMMA_GAIN ) ||
 		!GLX_PostShader_SetOptionalVec4( state, program, program->gainUniform,
-		output.gradeGain[0], output.gradeGain[1], output.gradeGain[2], 1.0f,
+		gain[0], gain[1], gain[2], 1.0f,
 		GLX_POST_SHADER_FEATURE_LIFT_GAMMA_GAIN ) ||
 		!GLX_PostShader_SetOptionalVec4( state, program, program->whitePoint0Uniform,
 		whitePointMatrix[0], whitePointMatrix[1], whitePointMatrix[2], 0.0f,
@@ -608,18 +1021,21 @@ static qboolean GLX_PostShader_SetDirectFinalUniforms( PostShaderState *state,
 		!GLX_PostShader_SetOptionalVec4( state, program, program->whitePoint2Uniform,
 		whitePointMatrix[6], whitePointMatrix[7], whitePointMatrix[8], 0.0f,
 		GLX_POST_SHADER_FEATURE_WHITE_POINT ) ) {
-		GLX_PostShader_SetLastError( state, "post shader direct final missing grade uniform" );
+		GLX_PostShader_SetLastError( state, "post shader final missing grade uniform" );
 		return qfalse;
 	}
 	if ( lut ) {
-		const int lutSize = static_cast<int>( output.lutSize + 0.5f );
-		const float lutScale = output.lutScale > 0.0f ? output.lutScale : 4.0f;
-		if ( lutSize < 2 ) {
-			GLX_PostShader_SetLastError( state, "post shader direct final LUT size is invalid" );
+		const float lutSizeFloat = GLX_PostShader_SanitizeFloat( output.lutSize,
+			0.0f, 0.0f, 64.0f );
+		const int lutSize = static_cast<int>( lutSizeFloat + 0.5f );
+		const float lutScale = GLX_PostShader_SanitizeFloat( output.lutScale,
+			4.0f, 0.001f, 64.0f );
+		if ( lutSize < 2 || lutSize > 64 ) {
+			GLX_PostShader_SetLastError( state, "post shader final LUT size is invalid" );
 			return qfalse;
 		}
 		if ( program->lutParamsUniform < 0 ) {
-			GLX_PostShader_SetLastError( state, "post shader direct final missing u_LutParams" );
+			GLX_PostShader_SetLastError( state, "post shader final missing u_LutParams" );
 			return qfalse;
 		}
 		state->fns.Uniform4f( program->lutParamsUniform, lutScale,
@@ -652,6 +1068,8 @@ static qboolean GLX_PostShader_PrecachePrograms( PostShaderState *state )
 	output.grade = ColorGradeMode::None;
 	plan = GLX_PostShader_BuildPlan( output );
 	ok = ( GLX_PostShader_CacheProgram( state, plan ) && ok ) ? qtrue : qfalse;
+	plan = GLX_PostShader_BuildPlanForOutput( output, qtrue );
+	ok = ( GLX_PostShader_CacheProgram( state, plan ) && ok ) ? qtrue : qfalse;
 
 	output.transfer = OutputTransfer::Hdr10Pq;
 	output.outputPrimaries = OutputPrimaries::Bt2020;
@@ -659,6 +1077,12 @@ static qboolean GLX_PostShader_PrecachePrograms( PostShaderState *state )
 	output.paperWhiteNits = 203.0f;
 	output.maxOutputNits = 1000.0f;
 	plan = GLX_PostShader_BuildPlan( output );
+	ok = ( GLX_PostShader_CacheProgram( state, plan ) && ok ) ? qtrue : qfalse;
+
+	output.transfer = OutputTransfer::MacEdr;
+	output.outputPrimaries = OutputPrimaries::DisplayP3;
+	output.gamutMap = GamutMapMode::CompressToOutput;
+	plan = GLX_PostShader_BuildPlanForOutput( output, qtrue );
 	ok = ( GLX_PostShader_CacheProgram( state, plan ) && ok ) ? qtrue : qfalse;
 
 	if ( !ok ) {
@@ -686,7 +1110,12 @@ void GLX_PostShader_RegisterCvars( PostShaderState *state )
 	state->r_glxPostShaderExecute = RI().Cvar_Get( "r_glxPostShaderExecute", "0",
 		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxPostShaderExecute,
-		"Experimentally bind the generated GLx GLSL shader for eligible scene-linear SDR direct final-pass output, including color grade/LUT uniforms. Falls back to the legacy ARB path when disabled or unsupported." );
+		"Experimentally bind the generated GLx GLSL shader for eligible scene-linear post/output passes, including bloom composite, greyscale, blit/capture, and hardware HDR output. Falls back to the legacy ARB path when disabled or unsupported." );
+
+	state->r_glxPostShaderTarget = RI().Cvar_Get( "r_glxPostShaderTarget", "0",
+		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxPostShaderTarget,
+		"Generated GLx post shader GLSL target: 0 auto, 120 compatibility fallback, 130, 150 compatibility, 330 compatibility, or 410 compatibility." );
 
 	state->r_glxPostShaderDebug = RI().Cvar_Get( "r_glxPostShaderDebug", "0",
 		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
@@ -703,6 +1132,10 @@ void GLX_PostShader_OnOpenGLReady( PostShaderState *state, const Capabilities &c
 	GLX_PostShader_Shutdown( state, qtrue );
 	GLX_PostShader_ResetCounters( state );
 	state->tier = caps.tier;
+	state->glMajor = caps.major;
+	state->glMinor = caps.minor;
+	state->activeTarget = GLX_PostShader_ResolveTarget( state );
+	state->modernTargetSuppressed = qfalse;
 	GLX_PostShader_SetReason( state, "not initialized" );
 
 	if ( caps.tier == RenderProductTier::GL12 ) {
@@ -749,6 +1182,12 @@ qboolean GLX_PostShader_Ready( const PostShaderState &state )
 		state.r_glxPostShaderCache->integer ? qtrue : qfalse;
 }
 
+qboolean GLX_PostShader_ExecutionEnabled( const PostShaderState &state )
+{
+	return GLX_PostShader_Ready( state ) && state.r_glxPostShaderExecute &&
+		state.r_glxPostShaderExecute->integer ? qtrue : qfalse;
+}
+
 qboolean GLX_PostShader_RecordPlan( PostShaderState *state, const PostShaderPlan &plan )
 {
 	if ( !state ) {
@@ -759,7 +1198,7 @@ qboolean GLX_PostShader_RecordPlan( PostShaderState *state, const PostShaderPlan
 	if ( !GLX_PostShader_Ready( *state ) ) {
 		state->lastPlanHash = plan.hash;
 		state->lastFeatureMask = plan.featureMask;
-		state->lastSource = GLX_PostShaderSource_BuildSummary( plan );
+		state->lastSource = GLX_PostShader_BuildSourceSummary( state, plan );
 		state->lastSourceHash = state->lastSource.sourceHash;
 		state->lastPlanValid = plan.valid;
 		if ( plan.valid ) {
@@ -773,8 +1212,9 @@ qboolean GLX_PostShader_RecordPlan( PostShaderState *state, const PostShaderPlan
 	return GLX_PostShader_CacheProgram( state, plan );
 }
 
-qboolean GLX_PostShader_TryBindDirectFinal( PostShaderState *state,
-	const PostShaderPlan &plan, const OutputTransform &output, float greyscale )
+qboolean GLX_PostShader_TryBindFinal( PostShaderState *state,
+	const PostShaderPlan &plan, const OutputTransform &output,
+	qboolean bloomComposite, qboolean outputTransform, float bloomIntensity )
 {
 	PostShaderSourceSummary source;
 	PostShaderProgram *program;
@@ -786,7 +1226,8 @@ qboolean GLX_PostShader_TryBindDirectFinal( PostShaderState *state,
 
 	state->directFinalCandidates++;
 	state->lastDirectFinalBound = qfalse;
-	rejectMask = GLX_PostShader_DirectFinalCompatibilityRejectMask( plan, output, greyscale );
+	rejectMask = GLX_PostShader_FinalCompatibilityRejectMask( plan, output,
+		bloomComposite, outputTransform );
 	if ( !GLX_PostShader_Ready( *state ) ) {
 		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_NOT_READY;
 	}
@@ -808,11 +1249,33 @@ qboolean GLX_PostShader_TryBindDirectFinal( PostShaderState *state,
 	}
 
 	state->directFinalAttempts++;
-	source = GLX_PostShaderSource_BuildSummary( plan );
+	state->lastTargetFallbackUsed = qfalse;
+	source = GLX_PostShader_BuildSourceSummary( state, plan );
 	program = GLX_PostShader_FindProgramForUse( state, plan, source );
 	if ( !program ) {
 		state->directFinalProgramMisses++;
 		program = GLX_PostShader_CreateProgram( state, plan, source );
+		if ( !program && state->activeTarget != PostShaderSourceTarget::Glsl120 ) {
+			const PostShaderSourceTarget failedTarget = state->activeTarget;
+			state->targetFallbacks++;
+			state->lastTargetFallbackUsed = qtrue;
+			state->lastFallbackFromTarget = failedTarget;
+			state->lastFallbackToTarget = PostShaderSourceTarget::Glsl120;
+			state->activeTarget = PostShaderSourceTarget::Glsl120;
+			state->modernTargetSuppressed = qtrue;
+			source = GLX_PostShaderSource_BuildSummary( plan,
+				PostShaderSourceTarget::Glsl120 );
+			state->lastSource = source;
+			state->lastSourceHash = source.sourceHash;
+			program = GLX_PostShader_FindProgramForUse( state, plan, source );
+			if ( !program ) {
+				program = GLX_PostShader_CreateProgram( state, plan, source );
+			}
+			if ( program ) {
+				GLX_PostShader_SetReason( state,
+					"GLSL 1.20 fallback after modern post shader compile/link failure" );
+			}
+		}
 	}
 	if ( !program ) {
 		state->lastDirectFinalRejectMask = GLX_POST_SHADER_DIRECT_REJECT_PROGRAM;
@@ -823,7 +1286,7 @@ qboolean GLX_PostShader_TryBindDirectFinal( PostShaderState *state,
 
 	state->fns.UseProgram( program->program );
 	state->currentProgram = program->program;
-	if ( !GLX_PostShader_SetDirectFinalUniforms( state, program, output ) ) {
+	if ( !GLX_PostShader_SetFinalUniforms( state, program, output, bloomIntensity ) ) {
 		GLX_PostShader_Unbind( state );
 		state->lastDirectFinalRejectMask = GLX_POST_SHADER_DIRECT_REJECT_UNIFORM;
 		state->directFinalUniformFailures++;
@@ -841,6 +1304,13 @@ qboolean GLX_PostShader_TryBindDirectFinal( PostShaderState *state,
 	return qtrue;
 }
 
+qboolean GLX_PostShader_TryBindDirectFinal( PostShaderState *state,
+	const PostShaderPlan &plan, const OutputTransform &output, float greyscale )
+{
+	(void)greyscale;
+	return GLX_PostShader_TryBindFinal( state, plan, output, qfalse, qtrue, 0.0f );
+}
+
 void GLX_PostShader_Unbind( PostShaderState *state )
 {
 	if ( !state || !state->fns.UseProgram ) {
@@ -855,7 +1325,7 @@ void GLX_PostShader_Unbind( PostShaderState *state )
 void GLX_PostShader_PrintInfo( const PostShaderState &state )
 {
 	RI().Printf( PRINT_ALL,
-		"  post shader cache: ready %s, programs %i/%i, plans %u valid/%u invalid, cache %u hits/%u misses, compile %u attempts/%u failures, link failures %u, source failures %u, precache %u/%u failures, labels %u, contextless deletes %u\n",
+		"  post shader cache: ready %s, programs %i/%i, plans %u valid/%u invalid, cache %u hits/%u misses, compile %u attempts/%u failures, link failures %u, source failures %u, precache %u/%u failures, labels %u, contextless deletes %u, evictions %u\n",
 		BoolName( GLX_PostShader_Ready( state ) ),
 		state.programCount, GLX_POST_SHADER_PROGRAM_LIMIT,
 		state.validPlansObserved, state.invalidPlansObserved,
@@ -863,10 +1333,25 @@ void GLX_PostShader_PrintInfo( const PostShaderState &state )
 		state.compileAttempts, state.compileFailures,
 		state.linkFailures, state.sourceFailures,
 		state.precacheAttempts, state.precacheFailures,
-		state.debugLabels, state.contextlessDeletes );
+		state.debugLabels, state.contextlessDeletes, state.cacheEvictions );
 	RI().Printf( PRINT_ALL,
-		"  post shader source: plan valid %s, features 0x%08x, plan hash 0x%08x, source hash 0x%08x, source valid %s, truncated %s, vertex bytes %i, fragment bytes %i, last program %u, reason: %s\n",
+		"  post shader target: active %s, preferred %s, requested %s, last compile %s, fallback used %s %s->%s, target fallbacks %u, capability fallbacks %u, unsupported %s, modern suppressed %s\n",
+		GLX_PostShaderSource_TargetName( state.activeTarget ),
+		GLX_PostShaderSource_TargetName( state.preferredTarget ),
+		GLX_PostShaderSource_TargetName( state.lastRequestedTarget ),
+		GLX_PostShaderSource_TargetName( state.lastCompileTarget ),
+		BoolName( state.lastTargetFallbackUsed ),
+		GLX_PostShaderSource_TargetName( state.lastFallbackFromTarget ),
+		GLX_PostShaderSource_TargetName( state.lastFallbackToTarget ),
+		state.targetFallbacks,
+		state.targetCapabilityFallbacks,
+		BoolName( state.lastTargetUnsupported ),
+		BoolName( state.modernTargetSuppressed ) );
+	RI().Printf( PRINT_ALL,
+		"  post shader source: plan valid %s, target %s v%i, features 0x%08x, plan hash 0x%08x, source hash 0x%08x, source valid %s, truncated %s, vertex bytes %i, fragment bytes %i, last program %u, evicted 0x%08x features 0x%08x uses %u target %s, reason: %s\n",
 		BoolName( state.lastPlanValid ),
+		GLX_PostShaderSource_TargetName( state.lastSource.target ),
+		state.lastSource.targetVersion,
 		state.lastFeatureMask,
 		state.lastPlanHash,
 		state.lastSourceHash,
@@ -875,6 +1360,10 @@ void GLX_PostShader_PrintInfo( const PostShaderState &state )
 		state.lastSource.vertexBytes,
 		state.lastSource.fragmentBytes,
 		state.lastProgram,
+		state.lastEvictedSourceHash,
+		state.lastEvictedFeatureMask,
+		state.lastEvictedUses,
+		GLX_PostShaderSource_TargetName( state.lastEvictedTarget ),
 		state.reason[0] ? state.reason : "none" );
 	RI().Printf( PRINT_ALL,
 		"  post shader direct-final: execute %s, eligible %s, bound %s, reject 0x%08x, candidates %u, eligible frames %u, attempts %u, binds %u, fallbacks %u, rejects %u, program misses %u, uniform failures %u\n",

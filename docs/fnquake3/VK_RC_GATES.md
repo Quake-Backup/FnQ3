@@ -57,7 +57,7 @@ Use `--dry-run` to generate configs, manifests, and Markdown summaries without r
 
 `.github/workflows/vulkan-verification.yml` provides the renderer-focused automation surface:
 
-- `Vulkan renderer build` configures a focused CMake build and compiles the Vulkan renderer target on hosted Ubuntu.
+- `Vulkan renderer build` configures a focused Meson build and compiles the Vulkan renderer target on hosted Ubuntu.
 - `Vulkan gate plans` runs the sweep parser tests, lists gate presets, generates dry-run artifacts for every named gate, and uploads them for review.
 - `Vulkan runtime sweep` is a manual `workflow_dispatch` job for self-hosted Vulkan runners. It requires a built client executable and a retail `baseq3` basepath, writes a Markdown summary, and uploads the full sweep output.
 

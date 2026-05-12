@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|ARM64">
@@ -444,8 +444,8 @@ cscript.exe /nologo glsl_stringify.vbs ..\..\renderer2\glsl\tonemap_vp.glsl .\bu
     <ClCompile Include="..\..\renderercommon\tr_image_tga.c" />
     <ClCompile Include="..\..\renderercommon\tr_image_wal.c" />
     <ClCompile Include="..\..\renderercommon\tr_noise.c" />
-    <ClCompile Include="..\win_glimp.c" />
-    <ClCompile Include="..\win_qgl.c" />
+    <ClCompile Include="..\win_glimp.cpp" />
+    <ClCompile Include="..\win_qgl.cpp" />
     <ClCompile Include="build\dynamic\renderer2\bokeh_fp.c" />
     <ClCompile Include="build\dynamic\renderer2\bokeh_vp.c" />
     <ClCompile Include="build\dynamic\renderer2\calclevels4x_fp.c" />

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -34,6 +35,20 @@ GLX_RELEASE_REQUIRED_GATES = ("rc-smoke", "rc-parity", "rc-proof")
 GLX_RELEASE_PROOF_VERSION = 1
 GLX_COLOR_CONTRACT_VERSION = "2026-05-10-p0"
 GLX_VISUAL_DOSSIER_VERSION = "2026-05-10-visual-dossier-v1"
+GLX_IMAGE_EVIDENCE_VERSION = "2026-05-12-p2-image-evidence-v1"
+GLX_SHADER_REFERENCE_RAMP_WIDTH = 256
+GLX_SHADER_REFERENCE_RAMP_HEIGHT = 16
+GLX_SHADER_REFERENCE_RAMP_ROWS = (
+    "linear-gray-ramp",
+    "linear-step-wedge",
+    "saturated-primaries",
+    "hdr-highlight-ramp",
+)
+GLX_IMAGE_EVIDENCE_SIDECARS = (
+    "histogram-json",
+    "luma-falsecolor-png",
+    "exposure-falsecolor-png",
+)
 GLX_SWITCH_LIFECYCLE_VERSION = 1
 GLX_OWNERSHIP_PROOF_VERSION = 3
 GLX_WORLD_PROOF_VERSION = 1
@@ -41,6 +56,8 @@ GLX_MATERIAL_PROOF_VERSION = 1
 GLX_DYNAMIC_PROOF_VERSION = 1
 GLX_POST_PROOF_VERSION = 2
 GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED = 0x00000400
+GLX_POST_OUTPUT_FALLBACK_EXECUTOR_DISABLED = 0x00000800
+GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_BOUND = 0x00001000
 GLX_PRODUCT_TIER_ORDER = ("GL12", "GL2X", "GL3X", "GL41", "GL46")
 GLX_WORLD_PROOF_TAGS = ("stock-map", "high-geometry", "lightmap", "fog-heavy", "visibility")
 GLX_MATERIAL_PROOF_TAGS = (
@@ -191,6 +208,27 @@ PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "gl46StaticMdiAttempts",
     "gl46StaticMdiIndexes",
     "gpuFrameMs",
+    "gpuPassBlits",
+    "gpuPassBinds",
+    "gpuPassClears",
+    "gpuPassFullscreen",
+    "gpuPassQueries",
+    "gpuPassUnavailable",
+    "gpuPassRingSkips",
+    "gpuPassBackendMs",
+    "gpuPassPostprocessMs",
+    "gpuPassBloomMs",
+    "gpuPassBloomExtractMs",
+    "gpuPassBloomDownscaleMs",
+    "gpuPassBloomBlurMs",
+    "gpuPassBloomBlendMs",
+    "gpuPassBloomFinalMs",
+    "gpuPassBloomLensReflectionMs",
+    "gpuPassGammaDirectMs",
+    "gpuPassGammaBlitMs",
+    "gpuPassFboBlitMs",
+    "gpuPassCopyScreenMs",
+    "gpuPassFlareMs",
     "materialBinds",
     "materialBindAttempts",
     "materialSwitches",
@@ -745,6 +783,12 @@ POSTPROCESS_BLOOM_CREATE_RE = re.compile(
     r"FBO failures\s+(?P<fboFailures>\d+)",
     re.IGNORECASE,
 )
+POSTPROCESS_BLOOM_STORAGE_RE = re.compile(
+    r"(?:glx:\s*)?bloom storage:?\s*policy\s+(?P<policy>[A-Za-z0-9_-]+),?\s*"
+    r"format\s+(?P<internalFormat>0x[0-9a-fA-F]+)\s*"
+    r"\((?P<textureFormat>0x[0-9a-fA-F]+):(?P<textureType>0x[0-9a-fA-F]+)\)",
+    re.IGNORECASE,
+)
 POSTPROCESS_BLOOM_PASSES_RE = re.compile(
     r"bloom passes:\s*calls\s+(?P<calls>\d+),\s*rendered\s+(?P<rendered>\d+),\s*"
     r"final\s+(?P<final>\d+),\s*pre-final\s+(?P<preFinal>\d+),\s*"
@@ -753,6 +797,23 @@ POSTPROCESS_BLOOM_PASSES_RE = re.compile(
 )
 POSTPROCESS_OUTPUT_RE = re.compile(
     r"copies/blits:.*last output\s+(?P<output>[A-Za-z0-9_-]+)",
+    re.IGNORECASE,
+)
+GLX_PASS_COUNTERS_RE = re.compile(
+    r"(?:glx:\s*)?(?:post\s+)?pass counters:?\s*"
+    r"blits\s+(?P<blits>\d+),\s*binds\s+(?P<binds>\d+),\s*"
+    r"clears\s+(?P<clears>\d+),\s*fullscreen(?:\s+passes)?\s+(?P<fullscreen>\d+)"
+    r"(?:,\s*pass queries\s+(?P<queries>\d+),\s*unavailable\s+(?P<unavailable>\d+),\s*"
+    r"ring skips\s+(?P<ringSkips>\d+))?",
+    re.IGNORECASE,
+)
+GLX_PASS_TIMER_RE = re.compile(
+    r"pass timer queries:\s*active\s+(?P<active>\w+),\s*queries\s+(?P<queries>\d+),\s*"
+    r"unavailable frames\s+(?P<unavailable>\d+),\s*ring-full skips\s+(?P<ringSkips>\d+)",
+    re.IGNORECASE,
+)
+GLX_PASS_GPU_RE = re.compile(
+    r"(?:glx:\s*)?pass GPU(?: timings)?(?::)?\s*(?P<body>.*)",
     re.IGNORECASE,
 )
 STREAM_BUFFER_RE = re.compile(r"dynamic stream buffer:\s*(?P<ready>\w+)", re.IGNORECASE)
@@ -926,6 +987,38 @@ GLX_COLOR_PIPELINE_RE = re.compile(
     r"max\s+(?P<maxOutput>-?\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
+GLX_AUTO_EXPOSURE_RE = re.compile(
+    r"(?:glx:\s*)?(?:auto exposure|exposure reduction):?\s*"
+    r"mode\s+(?P<mode>-?\d+),?\s+"
+    r"algorithm\s+(?P<algorithm>[A-Za-z0-9_-]+),?\s+"
+    r"enabled\s+(?P<enabled>\w+),?\s+"
+    r"fallback\s+(?P<fallback>\w+),?\s+"
+    r"samples\s+(?P<sampleCount>\d+)/(?P<sampleWidth>\d+)x(?P<sampleHeight>\d+),?\s+"
+    r"percentile\s+(?P<percentile>-?\d+(?:\.\d+)?),?\s+"
+    r"target-luma\s+(?P<targetLuma>-?\d+(?:\.\d+)?),?\s+"
+    r"measured-log2\s+(?P<measuredLog2>-?\d+(?:\.\d+)?),?\s+"
+    r"measured-luma\s+(?P<measuredLuma>-?\d+(?:\.\d+)?),?\s+"
+    r"manual\s+(?P<manual>-?\d+(?:\.\d+)?),?\s+"
+    r"scale\s+(?P<scale>-?\d+(?:\.\d+)?),?\s+"
+    r"target\s+(?P<target>-?\d+(?:\.\d+)?),?\s+"
+    r"frames\s+(?P<frames>\d+)"
+    r"(?:\s+histogram/(?P<histogramFramesSlash>\d+)\s+simple/(?P<simpleFramesSlash>\d+)\s+"
+    r"failures/(?P<sampleFailuresSlash>\d+)|"
+    r"\s+histogram\s+(?P<histogramFrames>\d+)\s+simple\s+(?P<simpleFrames>\d+)\s+"
+    r"sample-failures\s+(?P<sampleFailures>\d+))",
+    re.IGNORECASE,
+)
+GLX_TONE_MAP_ALIASES = {
+    "reinhard": "reinhard-simple",
+    "aces": "aces-fitted",
+}
+
+
+def normalize_tone_map_name(name: object) -> str:
+    value = str(name).strip().lower()
+    return GLX_TONE_MAP_ALIASES.get(value, value)
+
+
 GLX_COLOR_GRADE_RE = re.compile(
     r"(?:glx:\s*)?color grade(?: stage)?:?\s*"
     r"mode\s+(?P<mode>[A-Za-z0-9_-]+),?\s+"
@@ -954,6 +1047,9 @@ GLX_COLOR_AUDIT_RE = re.compile(
     r"requested\s+(?P<framebufferRequested>\w+)\s+"
     r"available\s+(?P<framebufferAvailable>\w+),?\s+"
     r"capture\s+(?P<capture>[A-Za-z0-9_-]+)"
+    r"(?:,?\s+capture-request\s+(?P<captureRequest>[A-Za-z0-9_-]+),?"
+    r"\s+capture-hdr-aware\s+(?P<captureHdrAware>\w+),?"
+    r"\s+capture-supported\s+(?P<captureSupported>\w+))?"
     r"(?:,?\s+target-float\s+(?P<targetFloat>\w+),?"
     r"\s+final-encode\s+(?P<finalEncode>[A-Za-z0-9_-]+),?"
     r"\s+contract\s+(?P<contract>\w+))?",
@@ -1004,6 +1100,22 @@ GLX_OUTPUT_BACKEND_RE = re.compile(
     r"sdr-white\s+(?P<sdrWhite>-?\d+(?:\.\d+)?)(?:\s+nits)?,?\s+"
     r"display-max\s+(?P<displayMax>-?\d+(?:\.\d+)?)(?:\s+nits)?,?\s+"
     r"icc\s+(?P<icc>\w+)/(?P<iccBytes>\d+)",
+    re.IGNORECASE,
+)
+GLX_DISPLAY_STATE_RE = re.compile(
+    r"(?:glx:\s*)?display state:?\s*"
+    r"queries\s+(?P<queries>\d+),?\s+"
+    r"changes\s+(?P<changes>\d+),?\s+"
+    r"capability\s+(?P<capability>\d+),?\s+"
+    r"backend\s+(?P<backend>\d+),?\s+"
+    r"hdr\s+(?P<hdr>\d+),?\s+"
+    r"headroom\s+(?P<headroom>\d+),?\s+"
+    r"luminance\s+(?P<luminance>\d+),?\s+"
+    r"icc\s+(?P<icc>\d+),?\s+"
+    r"last-frame\s+(?P<lastFrame>\d+),?\s+"
+    r"flags\s+(?P<flags>0x[0-9a-fA-F]+),?\s+"
+    r"hash\s+(?P<hash>0x[0-9a-fA-F]+),?\s+"
+    r"previous\s+(?P<previous>0x[0-9a-fA-F]+)",
     re.IGNORECASE,
 )
 GLX_STREAM_DRAW_SUMMARY_RE = re.compile(
@@ -1132,6 +1244,7 @@ COMMON_CVARS = {
     "r_fullscreen": "0",
     "r_mode": "-1",
     "r_swapInterval": "0",
+    "r_screenshotCaptureMode": "0",
     "r_screenshotWriteViewpos": "1",
 }
 
@@ -1142,6 +1255,7 @@ GLX_RC_PROFILE_CVARS = {
     "r_fbo": "1",
     "r_bloom": "2",
     "r_bloom_passes": "3",
+    "r_hdrBloomFormat": "0",
     "r_vbo": "1",
     "r_glxWorldRenderer": "1",
     "r_glxStreamDraw": "1",
@@ -1160,6 +1274,7 @@ GLX_RC_PROFILE_CVARS = {
     "r_glxMaterialRenderer": "1",
     "r_glxMaterialPrecache": "1",
     "r_glxGpuTiming": "1",
+    "r_glxGpuPassTiming": "1",
     "r_glxStaticWorldArena": "1",
     "r_glxStaticWorldArenaDraw": "1",
     "r_glxStaticWorldDraw": "1",
@@ -1204,6 +1319,7 @@ PROFILE_CVARS = {
         "r_vbo": "1",
         "r_glxWorldRenderer": "1",
         "r_glxGpuTiming": "1",
+        "r_glxGpuPassTiming": "1",
     },
     "glx-material": {
         "r_glxStreamDraw": "1",
@@ -1221,12 +1337,14 @@ PROFILE_CVARS = {
         "r_glxMaterialRenderer": "1",
         "r_glxMaterialPrecache": "1",
         "r_glxGpuTiming": "1",
+        "r_glxGpuPassTiming": "1",
     },
     "glx-bloom": {
         "r_fbo": "1",
         "r_bloom": "2",
         "r_bloom_passes": "3",
         "r_glxGpuTiming": "1",
+        "r_glxGpuPassTiming": "1",
     },
     "glx-color": GLX_COLOR_PROFILE_CVARS,
     "glx-parity": {
@@ -1244,7 +1362,7 @@ PROFILE_CVARS = {
     },
 }
 
-GLX_PROOF_CORPUS_VERSION = "2026-05-11-post-proof-v1"
+GLX_PROOF_CORPUS_VERSION = "2026-05-12-image-evidence-v1"
 GLX_PROOF_CORPUS_DOC = "docs/fnquake3/GLX_PROOF_CORPUS.md"
 GLX_PARITY_SUITE_VERSION = "2026-05-11-post-v1"
 
@@ -1403,6 +1521,59 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "dynamic-light",
         ),
         "description": "Optional GLx proof-corpus timedemo for particles, marks, transient polys, and UI churn.",
+    },
+}
+
+GLX_IMAGE_EVIDENCE_CORPUS: dict[str, dict[str, object]] = {
+    "stock-q3dm1-hud": {
+        "role": "hud-over-lit-world",
+        "probes": ("hud-over-bright-world", "baseline-luma", "greyscale-final"),
+        "expectedSidecars": GLX_IMAGE_EVIDENCE_SIDECARS,
+    },
+    "stock-q3dm17-open": {
+        "role": "open-bright-bloom",
+        "probes": ("bloom-threshold", "sky-highlight", "tone-map-highlight-rolloff"),
+        "expectedSidecars": GLX_IMAGE_EVIDENCE_SIDECARS,
+    },
+    "stock-q3dm6-geometry": {
+        "role": "geometry-and-specular-contrast",
+        "probes": ("high-contrast-geometry", "planar-shadow", "specular-highlight"),
+        "expectedSidecars": GLX_IMAGE_EVIDENCE_SIDECARS,
+    },
+    "stock-q3dm11-shader": {
+        "role": "saturated-materials",
+        "probes": ("saturated-primaries", "color-grade", "out-of-gamut-risk"),
+        "expectedSidecars": GLX_IMAGE_EVIDENCE_SIDECARS,
+    },
+    "stock-q3dm15-fog": {
+        "role": "low-contrast-fog",
+        "probes": ("fog-luma-compression", "low-light-exposure", "histogram-spread"),
+        "expectedSidecars": GLX_IMAGE_EVIDENCE_SIDECARS,
+    },
+    "modern-fnq3glx-heavy01": {
+        "role": "stress-geometry",
+        "probes": ("large-scene-histogram", "performance-correlation"),
+        "expectedSidecars": GLX_IMAGE_EVIDENCE_SIDECARS,
+    },
+    "modern-fnq3glx-shader01": {
+        "role": "stress-material-color",
+        "probes": ("animated-materials", "saturated-primaries", "screen-video-map-color"),
+        "expectedSidecars": GLX_IMAGE_EVIDENCE_SIDECARS,
+    },
+    "modern-fnq3glx-fog01": {
+        "role": "stress-fog-exposure",
+        "probes": ("fog-luma-compression", "exposure-transition"),
+        "expectedSidecars": GLX_IMAGE_EVIDENCE_SIDECARS,
+    },
+    "timedemo-demo1": {
+        "role": "retail-demo-motion",
+        "probes": ("timedemo-parity", "dynamic-light-reference"),
+        "expectedSidecars": (),
+    },
+    "timedemo-fnq3glx-particles01": {
+        "role": "emissive-particles",
+        "probes": ("emissive-bursts", "exposure-transition", "bloom-threshold"),
+        "expectedSidecars": GLX_IMAGE_EVIDENCE_SIDECARS,
     },
 }
 
@@ -1578,6 +1749,14 @@ GLX_SDR_OUTPUT_CONTRACT = {
     "maxOutputNits": 203.0,
 }
 
+GLX_SCREENSHOT_CAPTURE_POLICY_CONTRACT = {
+    "version": 1,
+    "defaultMode": "sdr-srgb",
+    "defaultColorSpace": "sdr-srgb",
+    "hdrAwareModes": ("hdr-scene-linear", "hdr-output"),
+    "hdrExportStatus": "explicit-reserved",
+}
+
 GLX_TEXTURE_CLASSIFICATION_DOC = "docs/fnquake3/GLX_COLORSPACE_AUDIT.md"
 GLX_TEXTURE_CLASSIFICATION_CONTRACT = {
     "authored-color": {
@@ -1670,7 +1849,7 @@ GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
     },
     {
         "id": "scene-linear-sdr-reinhard-exposure-low",
-        "purpose": "Scene-linear SDR output through Reinhard tone mapping at low exposure for mid-gray placement.",
+        "purpose": "Scene-linear SDR output through simple Reinhard tone mapping at low exposure for mid-gray placement.",
         "probe": "mid-gray-exposure-low",
         "cvars": {
             "r_fbo": "1",
@@ -1687,7 +1866,7 @@ GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
         "expect": {
             "space": "scene-linear",
             "transfer": "sdr-srgb",
-            "toneMap": "reinhard",
+            "toneMap": "reinhard-simple",
             "exposure": 0.5,
             "paperWhiteNits": 203.0,
             "maxOutputNits": 203.0,
@@ -1704,7 +1883,7 @@ GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
     },
     {
         "id": "scene-linear-sdr-aces",
-        "purpose": "Scene-linear SDR output through ACES tone mapping and shader sRGB encode.",
+        "purpose": "Scene-linear SDR output through the ACES-fitted curve and shader sRGB encode.",
         "probe": "color-checker-tone-map",
         "cvars": {
             "r_fbo": "1",
@@ -1721,7 +1900,7 @@ GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
         "expect": {
             "space": "scene-linear",
             "transfer": "sdr-srgb",
-            "toneMap": "aces",
+            "toneMap": "aces-fitted",
             "exposure": 1.0,
             "paperWhiteNits": 203.0,
             "maxOutputNits": 203.0,
@@ -1738,7 +1917,7 @@ GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
     },
     {
         "id": "scene-linear-sdr-aces-exposure-high",
-        "purpose": "Scene-linear SDR output through ACES tone mapping at high exposure for highlight clipping evidence.",
+        "purpose": "Scene-linear SDR output through the ACES-fitted curve at high exposure for highlight clipping evidence.",
         "probe": "highlight-clipping-exposure-high",
         "cvars": {
             "r_fbo": "1",
@@ -1755,7 +1934,7 @@ GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
         "expect": {
             "space": "scene-linear",
             "transfer": "sdr-srgb",
-            "toneMap": "aces",
+            "toneMap": "aces-fitted",
             "exposure": 2.0,
             "paperWhiteNits": 203.0,
             "maxOutputNits": 203.0,
@@ -1789,7 +1968,7 @@ GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
         "expect": {
             "space": "scene-linear",
             "transfer": "sdr-srgb",
-            "toneMap": "aces",
+            "toneMap": "aces-fitted",
             "exposure": 1.0,
             "paperWhiteNits": 203.0,
             "maxOutputNits": 203.0,
@@ -1823,7 +2002,7 @@ GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
         },
         "expect": {
             "space": "scene-linear",
-            "toneMap": "aces",
+            "toneMap": "aces-fitted",
             "exposure": 1.0,
             "sceneTargetFloat": 1,
             "contract": 1,
@@ -1852,7 +2031,7 @@ GLX_COLOR_SWEEP_MATRIX: tuple[dict[str, object], ...] = (
         },
         "expect": {
             "space": "scene-linear",
-            "toneMap": "aces",
+            "toneMap": "aces-fitted",
             "exposure": 1.0,
             "sceneTargetFloat": 1,
             "contract": 1,
@@ -1909,6 +2088,7 @@ def corpus_scene_records(scene_ids: Iterable[str]) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
     for scene_id in validate_corpus_scene_ids(scene_ids):
         scene = GLX_PROOF_CORPUS_SCENES[scene_id]
+        image_evidence = GLX_IMAGE_EVIDENCE_CORPUS.get(scene_id, {})
         records.append(
             {
                 "id": scene_id,
@@ -1917,6 +2097,11 @@ def corpus_scene_records(scene_ids: Iterable[str]) -> list[dict[str, object]]:
                 "assetTier": scene["assetTier"],
                 "tags": list(scene.get("tags", ())),
                 "description": scene["description"],
+                "imageEvidence": {
+                    "role": image_evidence.get("role", ""),
+                    "probes": list(image_evidence.get("probes", ())),
+                    "expectedSidecars": list(image_evidence.get("expectedSidecars", ())),
+                },
             }
         )
     return records
@@ -2023,6 +2208,8 @@ def proof_corpus_manifest(
         "paritySuiteVersion": GLX_PARITY_SUITE_VERSION,
         "paritySuiteIds": selected_parity_suite_ids,
         "paritySuites": parity_suite_records(selected_parity_suite_ids),
+        "imageEvidenceVersion": GLX_IMAGE_EVIDENCE_VERSION,
+        "imageEvidenceSceneIds": sorted(GLX_IMAGE_EVIDENCE_CORPUS),
         "allSceneIds": sorted(GLX_PROOF_CORPUS_SCENES),
     }
 
@@ -2043,6 +2230,8 @@ def release_corpus_manifest() -> dict[str, object]:
             gate: list(suite_ids)
             for gate, suite_ids in sorted(GLX_GATE_PARITY_SUITES.items())
         },
+        "imageEvidenceVersion": GLX_IMAGE_EVIDENCE_VERSION,
+        "imageEvidenceSceneIds": sorted(GLX_IMAGE_EVIDENCE_CORPUS),
         "tags": corpus_tags(GLX_PROOF_CORPUS_SCENES.keys()),
     }
 
@@ -2111,6 +2300,7 @@ STARTUP_CVARS = {
     "r_bloom_passes",
     "r_hdr",
     "r_hdrPrecision",
+    "r_hdrBloomFormat",
     "r_srgbTextures",
     "r_framebufferSRGB",
     "r_tonemap",
@@ -2577,6 +2767,14 @@ def parse_args() -> argparse.Namespace:
         "--no-color-sweep",
         action="store_true",
         help="Disable a color sweep requested by a gate preset.",
+    )
+    parser.add_argument(
+        "--write-image-evidence",
+        action="store_true",
+        help=(
+            "Write deterministic offline shader-reference ramp PNGs plus histogram, "
+            "luma false-color, and exposure false-color sidecars."
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -3510,11 +3708,21 @@ def png_luma_histogram(path: Path) -> dict[str, object]:
 
     clipped_black = luma_histogram[0]
     clipped_white = luma_histogram[255]
+    histogram_payload = json.dumps(
+        {
+            "luma": luma_histogram,
+            "red": red_histogram,
+            "green": green_histogram,
+            "blue": blue_histogram,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
     return {
         "status": "passed",
         "width": width,
         "height": height,
         "pixels": pixel_count,
+        "histogramHash": hashlib.sha256(histogram_payload).hexdigest()[:16],
         "meanLuma": round(total_luma / pixel_count, 3) if pixel_count else 0.0,
         "meanRed": round(total_red / pixel_count, 3) if pixel_count else 0.0,
         "meanGreen": round(total_green / pixel_count, 3) if pixel_count else 0.0,
@@ -3543,6 +3751,22 @@ def false_color_luma_rgb(luma: int) -> tuple[int, int, int]:
         return int(round(255 * t)), 255, 0
     t = (value - 0.75) / 0.25
     return 255, int(round(255 * (1.0 - t))), 0
+
+
+def false_color_exposure_rgb(luma: int) -> tuple[int, int, int]:
+    value = max(1, min(255, luma))
+    stops = max(-4.0, min(4.0, math.log2(value / 128.0)))
+    if stops < -2.0:
+        t = (stops + 4.0) / 2.0
+        return 0, int(round(96 * t)), int(round(192 + 63 * t))
+    if stops < 0.0:
+        t = (stops + 2.0) / 2.0
+        return int(round(96 * t)), int(round(96 + 64 * t)), 255
+    if stops < 2.0:
+        t = stops / 2.0
+        return int(round(128 + 127 * t)), int(round(128 + 96 * t)), int(round(128 * (1.0 - t)))
+    t = (stops - 2.0) / 2.0
+    return 255, int(round(224 * (1.0 - t))), 0
 
 
 def png_filter_none_rows(width: int, height: int, pixels: bytes) -> bytes:
@@ -3594,6 +3818,202 @@ def write_luma_false_color_png(source_path: Path, output_path: Path) -> None:
     write_png_rgba(output_path, width, height, bytes(out))
 
 
+def write_exposure_false_color_png(source_path: Path, output_path: Path) -> None:
+    width, height, pixels = read_png_rgba(source_path)
+    out = bytearray(width * height * 4)
+    for offset in range(0, len(pixels), 4):
+        r, g, b, a = pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]
+        luma = int(round(0.2126 * r + 0.7152 * g + 0.0722 * b))
+        false_r, false_g, false_b = false_color_exposure_rgb(luma)
+        out[offset:offset + 4] = bytes((false_r, false_g, false_b, a))
+    write_png_rgba(output_path, width, height, bytes(out))
+
+
+def rgba_psnr(squared_error: int, channel_count: int) -> float | str:
+    if channel_count <= 0:
+        return 0.0
+    if squared_error == 0:
+        return "inf"
+    mse = squared_error / channel_count
+    return round(20.0 * math.log10(255.0 / math.sqrt(mse)), 6)
+
+
+def rgba_luma_ssim(width: int, height: int, baseline_pixels: bytes, candidate_pixels: bytes) -> float:
+    pixel_count = width * height
+    if pixel_count <= 0:
+        return 1.0
+
+    base_luma: list[float] = []
+    candidate_luma: list[float] = []
+    for offset in range(0, len(baseline_pixels), 4):
+        br, bg, bb = baseline_pixels[offset], baseline_pixels[offset + 1], baseline_pixels[offset + 2]
+        cr, cg, cb = candidate_pixels[offset], candidate_pixels[offset + 1], candidate_pixels[offset + 2]
+        base_luma.append(0.2126 * br + 0.7152 * bg + 0.0722 * bb)
+        candidate_luma.append(0.2126 * cr + 0.7152 * cg + 0.0722 * cb)
+
+    mean_base = sum(base_luma) / pixel_count
+    mean_candidate = sum(candidate_luma) / pixel_count
+    variance_base = sum((value - mean_base) ** 2 for value in base_luma) / pixel_count
+    variance_candidate = sum((value - mean_candidate) ** 2 for value in candidate_luma) / pixel_count
+    covariance = sum(
+        (base_luma[index] - mean_base) * (candidate_luma[index] - mean_candidate)
+        for index in range(pixel_count)
+    ) / pixel_count
+    c1 = (0.01 * 255.0) ** 2
+    c2 = (0.03 * 255.0) ** 2
+    denominator = (mean_base ** 2 + mean_candidate ** 2 + c1) * (
+        variance_base + variance_candidate + c2
+    )
+    if denominator <= 0.0:
+        return 1.0
+    ssim = ((2.0 * mean_base * mean_candidate + c1) * (2.0 * covariance + c2)) / denominator
+    return round(max(-1.0, min(1.0, ssim)), 6)
+
+
+def clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def srgb_encode_linear(value: float) -> float:
+    value = clamp01(value)
+    if value <= 0.0031308:
+        return 12.92 * value
+    return 1.055 * (value ** (1.0 / 2.4)) - 0.055
+
+
+def aces_fitted(value: float) -> float:
+    value = max(0.0, value)
+    return clamp01((value * (2.51 * value + 0.03)) / (value * (2.43 * value + 0.59) + 0.14))
+
+
+def reference_tonemap(value: float, tone_map: str) -> float:
+    if tone_map == "reinhard-simple":
+        value = max(0.0, value)
+        return value / (1.0 + value)
+    if tone_map == "aces-fitted":
+        return aces_fitted(value)
+    return clamp01(value)
+
+
+def reference_ramp_source_rgb(x: int, y: int, width: int, height: int) -> tuple[float, float, float]:
+    del height
+    t = x / max(1, width - 1)
+    row = y * len(GLX_SHADER_REFERENCE_RAMP_ROWS) // GLX_SHADER_REFERENCE_RAMP_HEIGHT
+    row = max(0, min(len(GLX_SHADER_REFERENCE_RAMP_ROWS) - 1, row))
+    row_id = GLX_SHADER_REFERENCE_RAMP_ROWS[row]
+    if row_id == "linear-step-wedge":
+        step = math.floor(t * 16.0) / 15.0
+        return step, step, step
+    if row_id == "saturated-primaries":
+        segment = int(t * 6.0)
+        local = (t * 6.0) - segment
+        primaries = (
+            (1.0, local, 0.0),
+            (1.0 - local, 1.0, 0.0),
+            (0.0, 1.0, local),
+            (0.0, 1.0 - local, 1.0),
+            (local, 0.0, 1.0),
+            (1.0, 0.0, 1.0 - local),
+        )
+        return primaries[min(segment, len(primaries) - 1)]
+    if row_id == "hdr-highlight-ramp":
+        value = t * 4.0
+        return value, value * 0.75, value * 0.5
+    return t, t, t
+
+
+def reference_transform_rgb(rgb: tuple[float, float, float], row: dict[str, object]) -> tuple[int, int, int]:
+    expect = row.get("expect", {}) if isinstance(row.get("expect"), dict) else {}
+    exposure = float(expect.get("exposure", 1.0)) if isinstance(expect.get("exposure", 1.0), (int, float)) else 1.0
+    tone_map = str(expect.get("toneMap", "legacy"))
+    final_encode = str(expect.get("finalEncode", "none"))
+    out: list[int] = []
+    for channel in rgb:
+        value = reference_tonemap(channel * exposure, tone_map)
+        if final_encode == "shader-srgb":
+            value = srgb_encode_linear(value)
+        out.append(int(round(clamp01(value) * 255.0)))
+    return out[0], out[1], out[2]
+
+
+def shader_reference_ramp_pixels(row: dict[str, object]) -> bytes:
+    width = GLX_SHADER_REFERENCE_RAMP_WIDTH
+    height = GLX_SHADER_REFERENCE_RAMP_HEIGHT
+    pixels = bytearray(width * height * 4)
+    for y in range(height):
+        for x in range(width):
+            r, g, b = reference_transform_rgb(reference_ramp_source_rgb(x, y, width, height), row)
+            offset = (y * width + x) * 4
+            pixels[offset:offset + 4] = bytes((r, g, b, 255))
+    return bytes(pixels)
+
+
+def write_shader_reference_ramp(output_dir: Path, row: dict[str, object]) -> dict[str, object]:
+    row_id = str(row["id"])
+    path = output_dir / f"{sanitize(row_id)}.reference-ramp.png"
+    write_png_rgba(
+        path,
+        GLX_SHADER_REFERENCE_RAMP_WIDTH,
+        GLX_SHADER_REFERENCE_RAMP_HEIGHT,
+        shader_reference_ramp_pixels(row),
+    )
+    histogram_path = path.with_name(f"{path.stem}.histogram.json")
+    luma_path = path.with_name(f"{path.stem}.luma-falsecolor.png")
+    exposure_path = path.with_name(f"{path.stem}.exposure-falsecolor.png")
+    histogram = png_luma_histogram(path)
+    histogram_path.write_text(json.dumps(histogram, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_luma_false_color_png(path, luma_path)
+    write_exposure_false_color_png(path, exposure_path)
+    return {
+        "rowId": row_id,
+        "path": str(path),
+        "width": GLX_SHADER_REFERENCE_RAMP_WIDTH,
+        "height": GLX_SHADER_REFERENCE_RAMP_HEIGHT,
+        "rampRows": list(GLX_SHADER_REFERENCE_RAMP_ROWS),
+        "histogram": histogram,
+        "histogramPath": str(histogram_path),
+        "falseColorPath": str(luma_path),
+        "exposureFalseColorPath": str(exposure_path),
+    }
+
+
+def write_shader_reference_ramps(output_dir: Path) -> list[dict[str, object]]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return [write_shader_reference_ramp(output_dir, row) for row in GLX_COLOR_SWEEP_MATRIX]
+
+
+def color_sweep_row_by_id(row_id: str) -> dict[str, object]:
+    for row in GLX_COLOR_SWEEP_MATRIX:
+        if str(row["id"]) == row_id:
+            return dict(row)
+    raise ValueError(f"Unknown GLx color sweep row id: {row_id}")
+
+
+def compare_shader_reference_ramp(
+    row_id: str,
+    shader_capture_path: Path,
+    output_dir: Path,
+    max_rms: float = 1.0,
+    max_pixel_ratio: float = 0.01,
+) -> dict[str, object]:
+    reference = write_shader_reference_ramp(output_dir, color_sweep_row_by_id(row_id))
+    diff_path = output_dir / f"{sanitize(row_id)}.shader-vs-reference.diff.png"
+    comparison = compare_png_files(
+        Path(str(reference["path"])),
+        shader_capture_path,
+        max_rms,
+        max_pixel_ratio,
+        diff_path,
+    )
+    return {
+        "rowId": row_id,
+        "status": comparison.get("status", "failed"),
+        "reference": reference,
+        "shaderCapturePath": str(shader_capture_path),
+        "comparison": comparison,
+    }
+
+
 def compare_rgba_pixels(
     width: int,
     height: int,
@@ -3639,6 +4059,8 @@ def compare_rgba_pixels(
         "changedPixels": changed_pixels,
         "changedPixelRatio": changed_ratio,
         "rms": rms,
+        "psnr": rgba_psnr(squared_error, channel_count),
+        "ssim": rgba_luma_ssim(width, height, baseline_pixels, candidate_pixels),
         "meanAbsolute": mean_absolute,
         "maxDelta": max_delta,
     }
@@ -3708,11 +4130,13 @@ def screenshot_results(
                 "path": str(path),
                 "found": path.exists(),
                 "bytes": path.stat().st_size if path.exists() else 0,
+                "capturePolicy": dict(GLX_SCREENSHOT_CAPTURE_POLICY_CONTRACT),
             }
         )
         if path.exists():
             histogram_path = path.with_name(f"{path.stem}.histogram.json")
             false_color_path = path.with_name(f"{path.stem}.luma-falsecolor.png")
+            exposure_false_color_path = path.with_name(f"{path.stem}.exposure-falsecolor.png")
             try:
                 histogram = png_luma_histogram(path)
                 result["histogram"] = histogram
@@ -3729,6 +4153,12 @@ def screenshot_results(
                 result["falseColorPath"] = str(false_color_path)
             except Exception as exc:
                 result["falseColor"] = {"status": "failed", "reason": str(exc)}
+            try:
+                write_exposure_false_color_png(path, exposure_false_color_path)
+                result["exposureFalseColor"] = {"status": "passed"}
+                result["exposureFalseColorPath"] = str(exposure_false_color_path)
+            except Exception as exc:
+                result["exposureFalseColor"] = {"status": "failed", "reason": str(exc)}
         results.append(result)
     return results
 
@@ -3827,6 +4257,14 @@ def record_metric_max(metrics: dict[str, object], section_name: str, key: str, v
 
 def int_group(match: re.Match[str], name: str) -> int:
     return int(match.group(name))
+
+
+def int_group_any(match: re.Match[str], *names: str) -> int:
+    for name in names:
+        value = match.group(name)
+        if value is not None:
+            return int(value)
+    raise KeyError(names)
 
 
 def normalize_color_frame_payload(payload: dict[str, object]) -> dict[str, object]:
@@ -3985,6 +4423,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             or line.startswith("color-frame-json")
             or line.startswith("color-frame-csv")
             or line.startswith("output backend")
+            or line.startswith("display state")
             or line.startswith("target:")
             or line.startswith("product tier ")
             or line.startswith("capability hint ")
@@ -4582,6 +5021,13 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 failures.append(f"GLx bloom FBO failures: {int_group(match, 'fboFailures')}.")
             continue
 
+        match = POSTPROCESS_BLOOM_STORAGE_RE.search(line)
+        if match:
+            record_metric_max(metrics, "postprocess", "bloomStoragePolicy", match.group("policy").lower())
+            for key in ("internalFormat", "textureFormat", "textureType"):
+                record_metric_max(metrics, "postprocess", f"bloomStorage{key[0].upper()}{key[1:]}", int(match.group(key), 16))
+            continue
+
         match = POSTPROCESS_BLOOM_PASSES_RE.search(line)
         if match:
             for key in ("calls", "rendered", "final", "preFinal", "skipped", "failures"):
@@ -4598,11 +5044,34 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 failures.append("GLx postprocess last output was minimized.")
             continue
 
+        match = GLX_PASS_COUNTERS_RE.search(line)
+        if match:
+            for key in ("blits", "binds", "clears", "fullscreen"):
+                record_metric_max(metrics, "gpuPassCounters", key, int_group(match, key))
+            for key in ("queries", "unavailable", "ringSkips"):
+                if match.group(key) is not None:
+                    record_metric_max(metrics, "gpuPassCounters", key, int_group(match, key))
+            continue
+
+        match = GLX_PASS_TIMER_RE.search(line)
+        if match:
+            record_metric_max(metrics, "gpuPassTiming", "active", 1 if q3_bool(match.group("active")) else 0)
+            for key in ("queries", "unavailable", "ringSkips"):
+                record_metric_max(metrics, "gpuPassTiming", key, int_group(match, key))
+            continue
+
+        match = GLX_PASS_GPU_RE.search(line)
+        if match:
+            timings = parse_pass_gpu_tokens(match.group("body"))
+            if timings:
+                metric_section(metrics, "gpuPassTimings").update(timings)
+            continue
+
         match = GLX_COLOR_PIPELINE_RE.search(line)
         if match:
             record_metric_max(metrics, "colorPipeline", "space", match.group("space").lower())
             record_metric_max(metrics, "colorPipeline", "transfer", match.group("transfer").lower())
-            record_metric_max(metrics, "colorPipeline", "toneMap", match.group("toneMap").lower())
+            record_metric_max(metrics, "colorPipeline", "toneMap", normalize_tone_map_name(match.group("toneMap")))
             record_metric_max(metrics, "colorPipeline", "grade", match.group("grade").lower())
             record_metric_max(metrics, "colorPipeline", "exposure", float(match.group("exposure")))
             if match.group("precision") is not None:
@@ -4625,6 +5094,51 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 failures.append(
                     "GLx SDR output contract used HDR max-output headroom while hardware HDR is inactive."
                 )
+            continue
+
+        match = GLX_AUTO_EXPOSURE_RE.search(line)
+        if match:
+            algorithm = match.group("algorithm").lower()
+            enabled = 1 if q3_bool(match.group("enabled")) else 0
+            fallback = 1 if q3_bool(match.group("fallback")) else 0
+            record_metric_max(metrics, "autoExposure", "mode", int_group(match, "mode"))
+            record_metric_max(metrics, "autoExposure", "algorithm", algorithm)
+            record_metric_max(metrics, "autoExposure", "enabled", enabled)
+            record_metric_max(metrics, "autoExposure", "fallback", fallback)
+            for key in ("sampleCount", "sampleWidth", "sampleHeight", "frames"):
+                record_metric_max(metrics, "autoExposure", key, int_group(match, key))
+            for key in (
+                "percentile",
+                "targetLuma",
+                "measuredLog2",
+                "measuredLuma",
+                "manual",
+                "scale",
+                "target",
+            ):
+                record_metric_max(metrics, "autoExposure", key, float(match.group(key)))
+            record_metric_max(
+                metrics,
+                "autoExposure",
+                "histogramFrames",
+                int_group_any(match, "histogramFrames", "histogramFramesSlash"),
+            )
+            record_metric_max(
+                metrics,
+                "autoExposure",
+                "simpleFrames",
+                int_group_any(match, "simpleFrames", "simpleFramesSlash"),
+            )
+            record_metric_max(
+                metrics,
+                "autoExposure",
+                "sampleFailures",
+                int_group_any(match, "sampleFailures", "sampleFailuresSlash"),
+            )
+            if enabled and algorithm not in {"simple-average", "histogram-percentile"}:
+                failures.append(f"GLx auto exposure reported unsupported algorithm {algorithm}.")
+            if enabled and float(match.group("target")) <= 0.0:
+                failures.append("GLx auto exposure target exposure must be positive.")
             continue
 
         match = GLX_COLOR_GRADE_RE.search(line)
@@ -4651,6 +5165,13 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             record_metric_max(metrics, "colorAudit", "framebufferRequested", 1 if q3_bool(match.group("framebufferRequested")) else 0)
             record_metric_max(metrics, "colorAudit", "framebufferAvailable", 1 if q3_bool(match.group("framebufferAvailable")) else 0)
             record_metric_max(metrics, "colorAudit", "capture", match.group("capture").lower())
+            if match.group("captureRequest") is not None:
+                record_metric_max(metrics, "colorAudit", "captureRequest", match.group("captureRequest").lower())
+            if match.group("captureHdrAware") is not None:
+                record_metric_max(metrics, "colorAudit", "captureHdrAware", 1 if q3_bool(match.group("captureHdrAware")) else 0)
+            if match.group("captureSupported") is not None:
+                capture_supported = q3_bool(match.group("captureSupported"))
+                record_metric_max(metrics, "colorAudit", "captureSupported", 1 if capture_supported else 0)
             if match.group("targetFloat") is not None:
                 record_metric_max(metrics, "colorAudit", "targetFloat", 1 if q3_bool(match.group("targetFloat")) else 0)
             if match.group("finalEncode") is not None:
@@ -4726,6 +5247,21 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 failures.append("GLx output backend luminance values must be positive.")
             if q3_bool(match.group("experimental")) and match.group("selected").lower() != "linux-experimental-hdr":
                 failures.append("GLx output backend reported experimental state without selecting the Linux experimental backend.")
+            continue
+
+        match = GLX_DISPLAY_STATE_RE.search(line)
+        if match:
+            for key in ("queries", "changes", "capability", "backend", "hdr", "headroom", "luminance", "icc", "lastFrame"):
+                record_metric_max(metrics, "displayState", key, int_group(match, key))
+            record_metric_max(metrics, "displayState", "flags", int(match.group("flags"), 16))
+            record_metric_max(metrics, "displayState", "hash", int(match.group("hash"), 16))
+            record_metric_max(metrics, "displayState", "previous", int(match.group("previous"), 16))
+            if int_group(match, "queries") <= 0:
+                failures.append("GLx display-state diagnostics did not record any output queries.")
+            if int(match.group("hash"), 16) == 0:
+                failures.append("GLx display-state diagnostics reported a zero output hash.")
+            if int_group(match, "changes") > 0 and int(match.group("flags"), 16) == 0:
+                failures.append("GLx display-state diagnostics reported changes without change flags.")
             continue
 
         match = STREAM_BUFFER_RE.search(line)
@@ -5231,6 +5767,30 @@ def parse_gpu_milliseconds(text: str) -> float | None:
     return float(match.group(1))
 
 
+def pass_metric_suffix(name: str) -> str:
+    parts = [part for part in re.split(r"[^A-Za-z0-9]+", name) if part]
+    return "".join(part[:1].upper() + part[1:] for part in parts)
+
+
+def parse_pass_gpu_tokens(body: str) -> dict[str, dict[str, object]]:
+    timings: dict[str, dict[str, object]] = {}
+    for token in body.split():
+        if "=" not in token or "/" not in token:
+            continue
+        name, rest = token.split("=", 1)
+        value, samples_text = rest.rsplit("/", 1)
+        try:
+            samples = int(samples_text)
+        except ValueError:
+            continue
+        entry: dict[str, object] = {"text": value, "samples": samples}
+        milliseconds = parse_gpu_milliseconds(value)
+        if milliseconds is not None:
+            entry["lastMs"] = milliseconds
+        timings[name.strip().lower()] = entry
+    return timings
+
+
 def analyze_glx_performance(log_path: Path) -> dict[str, object]:
     performance: dict[str, object] = {
         "log": str(log_path),
@@ -5252,6 +5812,8 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             or line.startswith("controls:")
             or line.startswith("frames:")
             or line.startswith("frame features:")
+            or line.startswith("pass ")
+            or line.startswith("post pass ")
         ):
             continue
 
@@ -5288,6 +5850,41 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             perf_record_numeric(performance, "streamSameFrameWrapRejects", int_group(match, "streamRejects"))
             for key in ("streamMegabytes", "staticMegabytes", "arenaMegabytes"):
                 perf_record_numeric(performance, key, float(match.group(key)))
+            continue
+
+        match = GLX_PASS_COUNTERS_RE.search(line)
+        if match:
+            for key, metric in (
+                ("blits", "gpuPassBlits"),
+                ("binds", "gpuPassBinds"),
+                ("clears", "gpuPassClears"),
+                ("fullscreen", "gpuPassFullscreen"),
+            ):
+                perf_record_numeric(performance, metric, int_group(match, key))
+            for key, metric in (
+                ("queries", "gpuPassQueries"),
+                ("unavailable", "gpuPassUnavailable"),
+                ("ringSkips", "gpuPassRingSkips"),
+            ):
+                if match.group(key) is not None:
+                    perf_record_numeric(performance, metric, int_group(match, key))
+            continue
+
+        match = GLX_PASS_TIMER_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "gpuPassTimerActive", 1 if q3_bool(match.group("active")) else 0)
+            perf_record_numeric(performance, "gpuPassQueries", int_group(match, "queries"))
+            perf_record_numeric(performance, "gpuPassUnavailable", int_group(match, "unavailable"))
+            perf_record_numeric(performance, "gpuPassRingSkips", int_group(match, "ringSkips"))
+            continue
+
+        match = GLX_PASS_GPU_RE.search(line)
+        if match:
+            for pass_name, timing in parse_pass_gpu_tokens(match.group("body")).items():
+                suffix = pass_metric_suffix(pass_name)
+                if "lastMs" in timing:
+                    perf_record_numeric(performance, f"gpuPass{suffix}Ms", timing["lastMs"])
+                perf_record_numeric(performance, f"gpuPass{suffix}Samples", timing["samples"])
             continue
 
         match = GLX_PASS_SCHEDULE_RE.search(line)
@@ -5529,6 +6126,13 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             perf_record_numeric(performance, "postprocessGreyscale", float(match.group("greyscale")))
             continue
 
+        match = POSTPROCESS_BLOOM_STORAGE_RE.search(line)
+        if match:
+            perf_record_string(performance, "bloomStoragePolicy", match.group("policy").lower())
+            for key in ("internalFormat", "textureFormat", "textureType"):
+                perf_record_numeric(performance, f"bloomStorage{key[0].upper()}{key[1:]}", int(match.group(key), 16))
+            continue
+
         match = POSTPROCESS_FRAMES_RE.search(line)
         if match:
             for key in ("frames", "bloomFinal", "gammaDirect", "gammaBlit", "minimizedOutput", "screenshots"):
@@ -5545,7 +6149,7 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
         if match:
             perf_record_string(performance, "colorSpace", match.group("space").lower())
             perf_record_string(performance, "outputTransfer", match.group("transfer").lower())
-            perf_record_string(performance, "toneMap", match.group("toneMap").lower())
+            perf_record_string(performance, "toneMap", normalize_tone_map_name(match.group("toneMap")))
             perf_record_string(performance, "colorGrade", match.group("grade").lower())
             perf_record_numeric(performance, "toneMapExposure", float(match.group("exposure")))
             if match.group("precision") is not None:
@@ -5559,6 +6163,46 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             if match.group("paperWhite") is not None:
                 perf_record_numeric(performance, "paperWhiteNits", float(match.group("paperWhite")))
             perf_record_numeric(performance, "maxOutputNits", float(match.group("maxOutput")))
+            continue
+
+        match = GLX_AUTO_EXPOSURE_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "autoExposureMode", int_group(match, "mode"))
+            perf_record_string(performance, "autoExposureAlgorithm", match.group("algorithm").lower())
+            perf_record_numeric(performance, "autoExposureEnabled", 1 if q3_bool(match.group("enabled")) else 0)
+            perf_record_numeric(performance, "autoExposureFallback", 1 if q3_bool(match.group("fallback")) else 0)
+            for key, metric in (
+                ("sampleCount", "autoExposureSampleCount"),
+                ("sampleWidth", "autoExposureSampleWidth"),
+                ("sampleHeight", "autoExposureSampleHeight"),
+                ("frames", "autoExposureFrames"),
+            ):
+                perf_record_numeric(performance, metric, int_group(match, key))
+            for key, metric in (
+                ("percentile", "autoExposurePercentile"),
+                ("targetLuma", "autoExposureTargetLuma"),
+                ("measuredLog2", "autoExposureMeasuredLog2"),
+                ("measuredLuma", "autoExposureMeasuredLuma"),
+                ("manual", "autoExposureManual"),
+                ("scale", "autoExposureScale"),
+                ("target", "autoExposureTarget"),
+            ):
+                perf_record_numeric(performance, metric, float(match.group(key)))
+            perf_record_numeric(
+                performance,
+                "autoExposureHistogramFrames",
+                int_group_any(match, "histogramFrames", "histogramFramesSlash"),
+            )
+            perf_record_numeric(
+                performance,
+                "autoExposureSimpleFrames",
+                int_group_any(match, "simpleFrames", "simpleFramesSlash"),
+            )
+            perf_record_numeric(
+                performance,
+                "autoExposureSampleFailures",
+                int_group_any(match, "sampleFailures", "sampleFailuresSlash"),
+            )
             continue
 
         match = GLX_COLOR_GRADE_RE.search(line)
@@ -5588,6 +6232,12 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             perf_record_numeric(performance, "colorFramebufferSrgb", 1 if q3_bool(match.group("framebufferSrgb")) else 0)
             perf_record_numeric(performance, "colorFramebufferSrgbAvailable", 1 if q3_bool(match.group("framebufferAvailable")) else 0)
             perf_record_string(performance, "captureColorSpace", match.group("capture").lower())
+            if match.group("captureRequest") is not None:
+                perf_record_string(performance, "capturePolicyRequest", match.group("captureRequest").lower())
+            if match.group("captureHdrAware") is not None:
+                perf_record_numeric(performance, "captureHdrAware", 1 if q3_bool(match.group("captureHdrAware")) else 0)
+            if match.group("captureSupported") is not None:
+                perf_record_numeric(performance, "capturePolicySupported", 1 if q3_bool(match.group("captureSupported")) else 0)
             if match.group("targetFloat") is not None:
                 perf_record_numeric(performance, "colorSceneTargetFloat", 1 if q3_bool(match.group("targetFloat")) else 0)
             if match.group("finalEncode") is not None:
@@ -5908,6 +6558,17 @@ def color_contract_manifest() -> dict[str, object]:
         "version": GLX_COLOR_CONTRACT_VERSION,
         "sceneTargetFormat": dict(GLX_SCENE_TARGET_FORMAT_CONTRACT),
         "sdrOutput": dict(GLX_SDR_OUTPUT_CONTRACT),
+        "imageEvidence": {
+            "version": GLX_IMAGE_EVIDENCE_VERSION,
+            "shaderReferenceRamp": {
+                "width": GLX_SHADER_REFERENCE_RAMP_WIDTH,
+                "height": GLX_SHADER_REFERENCE_RAMP_HEIGHT,
+                "rows": list(GLX_SHADER_REFERENCE_RAMP_ROWS),
+                "source": "deterministic-cpu-reference",
+            },
+            "requiredSidecars": list(GLX_IMAGE_EVIDENCE_SIDECARS),
+            "metrics": ("psnr", "ssim", "histogram", "luma-false-color", "exposure-false-color"),
+        },
         "textureClassificationManifest": texture_classification_manifest(),
         "colorSweepMatrix": color_sweep_matrix_manifest(),
     }
@@ -5939,6 +6600,29 @@ def validate_color_contract_manifest(manifest: dict[str, object]) -> list[str]:
                 failures.append(
                     f"GLx SDR output contract {key} is {sdr_output.get(key)!r}; expected {expected!r}."
                 )
+
+    image_evidence = contracts.get("imageEvidence")
+    if not isinstance(image_evidence, dict):
+        failures.append("GLx image evidence contract is missing.")
+    else:
+        if image_evidence.get("version") != GLX_IMAGE_EVIDENCE_VERSION:
+            failures.append(
+                "GLx image evidence contract version is "
+                f"{image_evidence.get('version')!r}; expected {GLX_IMAGE_EVIDENCE_VERSION!r}."
+            )
+        ramp = image_evidence.get("shaderReferenceRamp")
+        if not isinstance(ramp, dict):
+            failures.append("GLx shader reference ramp contract is missing.")
+        else:
+            if ramp.get("width") != GLX_SHADER_REFERENCE_RAMP_WIDTH:
+                failures.append("GLx shader reference ramp width does not match the deterministic contract.")
+            if ramp.get("height") != GLX_SHADER_REFERENCE_RAMP_HEIGHT:
+                failures.append("GLx shader reference ramp height does not match the deterministic contract.")
+            if tuple(ramp.get("rows", ())) != GLX_SHADER_REFERENCE_RAMP_ROWS:
+                failures.append("GLx shader reference ramp rows do not match the deterministic contract.")
+        required_sidecars = tuple(image_evidence.get("requiredSidecars", ()))
+        if required_sidecars != GLX_IMAGE_EVIDENCE_SIDECARS:
+            failures.append("GLx image evidence required sidecars do not match the deterministic contract.")
 
     texture_manifest = contracts.get("textureClassificationManifest")
     rows = texture_manifest.get("rows", []) if isinstance(texture_manifest, dict) else []
@@ -6001,6 +6685,49 @@ def validate_color_contract_manifest(manifest: dict[str, object]) -> list[str]:
             f"{','.join(sorted(matrix_ids)) or '-'}; expected {','.join(sorted(expected_ids))}."
         )
 
+    return failures
+
+
+def validate_image_evidence_manifest(manifest: dict[str, object]) -> list[str]:
+    failures: list[str] = []
+    evidence = manifest.get("imageEvidence")
+    if not isinstance(evidence, dict):
+        return ["GLx image evidence manifest is missing."]
+    if evidence.get("version") != GLX_IMAGE_EVIDENCE_VERSION:
+        failures.append(
+            "GLx image evidence manifest version is "
+            f"{evidence.get('version')!r}; expected {GLX_IMAGE_EVIDENCE_VERSION!r}."
+        )
+    if tuple(evidence.get("requiredSidecars", ())) != GLX_IMAGE_EVIDENCE_SIDECARS:
+        failures.append("GLx image evidence manifest sidecar contract does not match the deterministic registry.")
+
+    ramps = evidence.get("shaderReferenceRamps")
+    ramp_rows = ramps if isinstance(ramps, list) else []
+    expected_row_ids = {str(row["id"]) for row in GLX_COLOR_SWEEP_MATRIX}
+    actual_row_ids = {
+        str(row.get("rowId"))
+        for row in ramp_rows
+        if isinstance(row, dict) and str(row.get("rowId", "")).strip()
+    }
+    if actual_row_ids != expected_row_ids:
+        failures.append(
+            "GLx shader-vs-reference ramp evidence does not cover every color-sweep row: "
+            f"{','.join(sorted(actual_row_ids)) or '-'}; expected {','.join(sorted(expected_row_ids))}."
+        )
+    for row in ramp_rows:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("rowId", ""))
+        if row.get("width") != GLX_SHADER_REFERENCE_RAMP_WIDTH or row.get("height") != GLX_SHADER_REFERENCE_RAMP_HEIGHT:
+            failures.append(f"GLx shader reference ramp {row_id or '-'} has unexpected dimensions.")
+        if tuple(row.get("rampRows", ())) != GLX_SHADER_REFERENCE_RAMP_ROWS:
+            failures.append(f"GLx shader reference ramp {row_id or '-'} has unexpected ramp-row metadata.")
+        histogram = row.get("histogram")
+        if not isinstance(histogram, dict) or histogram.get("status") != "passed":
+            failures.append(f"GLx shader reference ramp {row_id or '-'} is missing histogram metadata.")
+        for key in ("path", "histogramPath", "falseColorPath", "exposureFalseColorPath"):
+            if not str(row.get(key, "")).strip():
+                failures.append(f"GLx shader reference ramp {row_id or '-'} is missing {key}.")
     return failures
 
 
@@ -6339,6 +7066,11 @@ def evaluate_proof_corpus(
             "GLx parity suite version mismatch: "
             f"{proof_corpus.get('paritySuiteVersion', '-')}; expected {GLX_PARITY_SUITE_VERSION}."
         )
+    if proof_corpus.get("imageEvidenceVersion") != GLX_IMAGE_EVIDENCE_VERSION:
+        failures.append(
+            "GLx image evidence version mismatch: "
+            f"{proof_corpus.get('imageEvidenceVersion', '-')}; expected {GLX_IMAGE_EVIDENCE_VERSION}."
+        )
 
     selected_scene_ids = [
         str(scene_id)
@@ -6406,6 +7138,11 @@ def evaluate_proof_corpus(
     expected_suite_records = parity_suite_records(selected_parity_suite_ids)
     if actual_suite_records != expected_suite_records:
         failures.append("GLx parity suite records do not match the versioned suite registry.")
+
+    selected_scene_records = proof_corpus.get("selectedScenes", [])
+    expected_scene_records = corpus_scene_records(selected_scene_ids)
+    if selected_scene_records != expected_scene_records:
+        failures.append("GLx proof corpus scene records do not match the versioned scene/image-evidence registry.")
 
     selected_scene_id_set = set(selected_scene_ids)
     for suite_id in selected_parity_suite_ids:
@@ -6528,6 +7265,18 @@ def screenshot_luma_false_color_passed(shot: dict[str, object]) -> bool:
         if status == "passed":
             return True
     path = shot.get("falseColorPath")
+    return isinstance(path, str) and bool(path.strip())
+
+
+def screenshot_exposure_false_color_passed(shot: dict[str, object]) -> bool:
+    false_color = shot.get("exposureFalseColor")
+    if isinstance(false_color, dict):
+        status = str(false_color.get("status", "")).strip().lower()
+        if status == "failed":
+            return False
+        if status == "passed":
+            return True
+    path = shot.get("exposureFalseColorPath")
     return isinstance(path, str) and bool(path.strip())
 
 
@@ -9258,6 +10007,8 @@ def evaluate_color_sweep(manifest: dict[str, object]) -> list[str]:
                 failures.append(f"GLx color sweep row {row_id} is missing screenshot histogram metadata.")
             if shot.get("found") and not screenshot_luma_false_color_passed(shot):
                 failures.append(f"GLx color sweep row {row_id} is missing luma false-color sidecar metadata.")
+            if shot.get("found") and not screenshot_exposure_false_color_passed(shot):
+                failures.append(f"GLx color sweep row {row_id} is missing exposure false-color sidecar metadata.")
 
         diagnostics = run.get("diagnostics")
         if not isinstance(diagnostics, dict) or not diagnostics.get("found"):
@@ -9292,6 +10043,10 @@ def evaluate_color_sweep(manifest: dict[str, object]) -> list[str]:
             "framebufferSrgb": ("colorAudit", "framebufferSrgb"),
             "srgbDecode": ("colorAudit", "srgbDecode"),
             "srgbRequested": ("colorAudit", "srgbRequested"),
+            "capture": ("colorAudit", "capture"),
+            "captureRequest": ("colorAudit", "captureRequest"),
+            "captureHdrAware": ("colorAudit", "captureHdrAware"),
+            "captureSupported": ("colorAudit", "captureSupported"),
             "outputRequest": ("outputBackend", "request"),
             "outputSelected": ("outputBackend", "selected"),
             "internalFormat": ("targetFormat", "internalFormat"),
@@ -9370,6 +10125,7 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
     if requirements.get("require_glx_diagnostics") or require_color_sweep:
         failures.extend(validate_color_contract_manifest(manifest))
     if require_color_sweep:
+        failures.extend(validate_image_evidence_manifest(manifest))
         failures.extend(evaluate_color_sweep(manifest))
 
     failed_runs = [
@@ -9467,6 +10223,10 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                 "colorSrgbDecode",
                 "colorFramebufferSrgb",
                 "colorOutputContract",
+                "captureColorSpace",
+                "capturePolicyRequest",
+                "captureHdrAware",
+                "capturePolicySupported",
                 "outputBackendSelected",
                 "textureAuditSrgb",
                 "textureAuditSrgbDecode",
@@ -9564,6 +10324,22 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                 f"Screenshot color histogram metadata is missing or invalid: {len(missing_histograms)}/{len(screenshots)} "
                 f"({', '.join(str(name) for name in missing_histograms[:6])}"
                 f"{'...' if len(missing_histograms) > 6 else ''})"
+            )
+        invalid_capture_policy = [
+            shot.get("name", "screenshot")
+            for shot in screenshots
+            if shot.get("found")
+            and (
+                not isinstance(shot.get("capturePolicy"), dict)
+                or shot["capturePolicy"].get("defaultColorSpace") != "sdr-srgb"  # type: ignore[index]
+                or shot["capturePolicy"].get("hdrExportStatus") != "explicit-reserved"  # type: ignore[index]
+            )
+        ]
+        if (requirements.get("require_screenshots") or manifest.get("screenshotBaselineDir")) and invalid_capture_policy:
+            failures.append(
+                f"Screenshot capture policy metadata is missing or not SDR-default: {len(invalid_capture_policy)}/{len(screenshots)} "
+                f"({', '.join(str(name) for name in invalid_capture_policy[:6])}"
+                f"{'...' if len(invalid_capture_policy) > 6 else ''})"
             )
 
         if manifest.get("screenshotBaselineDir") and not manifest.get("approveScreenshotBaselines"):
@@ -10311,8 +11087,8 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
             [
                 "## Histogram And False-Color Evidence",
                 "",
-                "| Screenshot | Found | Mean Luma | P01 | P50 | P99 | Black Clip | White Clip | Histogram | False Color |",
-                "|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
+                "| Screenshot | Found | Mean Luma | P01 | P50 | P99 | Black Clip | White Clip | Histogram | Luma Map | Exposure Map |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
             ]
         )
         for shot in screenshots:
@@ -10334,7 +11110,8 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
                 f"{markdown_escape_cell(black)} | "
                 f"{markdown_escape_cell(white)} | "
                 f"{markdown_artifact_link(shot.get('histogramPath'), manifest_path)} | "
-                f"{markdown_artifact_link(shot.get('falseColorPath'), manifest_path)} |"
+                f"{markdown_artifact_link(shot.get('falseColorPath'), manifest_path)} | "
+                f"{markdown_artifact_link(shot.get('exposureFalseColorPath'), manifest_path)} |"
             )
         lines.append("")
 
@@ -10342,8 +11119,8 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
             [
                 "## Parity Diff Sheet",
                 "",
-                "| Screenshot | Baseline Status | Candidate | Baseline | Diff | RMS | Changed Pixels |",
-                "|---|---:|---|---|---|---:|---:|",
+                "| Screenshot | Baseline Status | Candidate | Baseline | Diff | RMS | PSNR | SSIM | Changed Pixels |",
+                "|---|---:|---|---|---|---:|---:|---:|---:|",
             ]
         )
         for shot in screenshots:
@@ -10354,6 +11131,12 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
             rms = comparison.get("rms", "-")
             if isinstance(rms, (int, float)):
                 rms = f"{float(rms):.3f}"
+            psnr = comparison.get("psnr", "-")
+            if isinstance(psnr, (int, float)):
+                psnr = f"{float(psnr):.3f}"
+            ssim = comparison.get("ssim", "-")
+            if isinstance(ssim, (int, float)):
+                ssim = f"{float(ssim):.6f}"
             lines.append(
                 "| "
                 f"{markdown_escape_cell(shot.get('baselineKey', shot.get('name', '-')))} | "
@@ -10362,6 +11145,8 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
                 f"{markdown_artifact_link(shot.get('baselinePath'), manifest_path)} | "
                 f"{markdown_artifact_link(comparison.get('diffPath'), manifest_path)} | "
                 f"{markdown_escape_cell(rms)} | "
+                f"{markdown_escape_cell(psnr)} | "
+                f"{markdown_escape_cell(ssim)} | "
                 f"{markdown_escape_cell(changed)} |"
             )
         lines.append("")
@@ -10401,6 +11186,7 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
             "- Confirm the backend state overlay matches the expected SDR/HDR request for the run.",
             "- Compare histogram mid-gray and clipping values before trusting visual parity by eye.",
             "- Use the luma false-color sidecars to spot crushed shadows, clipped highlights, and flat tone mapping.",
+            "- Use the exposure false-color sidecars to spot stop-scale drift across tone-map and HDR-output rows.",
             "- Inspect parity diffs for structured changes before accepting screenshot threshold passes.",
             "- Confirm modern tiers show executable GLx-owned post/output evidence before treating the run as promotion evidence.",
             "",
@@ -11542,6 +12328,10 @@ def main() -> int:
                     result["timedemoMetrics"] = metrics
                 runs.append(result)
 
+    shader_reference_ramps: list[dict[str, object]] = []
+    if args.write_image_evidence or args.color_sweep:
+        shader_reference_ramps = write_shader_reference_ramps(output_root / "image-evidence" / "shader-reference-ramps")
+
     manifest = {
         "runId": run_id,
         "runtimeQpathToken": qpath_run_token,
@@ -11573,6 +12363,11 @@ def main() -> int:
         "proofCorpus": proof_corpus,
         "colorContracts": color_contract_manifest(),
         "colorSweepEnabled": bool(args.color_sweep),
+        "imageEvidence": {
+            "version": GLX_IMAGE_EVIDENCE_VERSION,
+            "shaderReferenceRamps": shader_reference_ramps,
+            "requiredSidecars": list(GLX_IMAGE_EVIDENCE_SIDECARS),
+        },
         "perfSamplesEnabled": not args.no_perf_samples,
         "perfSampleWait": args.perf_sample_wait,
         "performanceBudget": performance_budget,

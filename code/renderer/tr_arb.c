@@ -2,6 +2,14 @@
 #include "tr_common.h"
 #include "tr_glx_compat.h"
 
+#ifndef GL_RG
+#define GL_RG 0x8227
+#endif
+
+#ifndef GL_RG16F
+#define GL_RG16F 0x822F
+#endif
+
 #define COMMON_DEPTH_STENCIL
 //#define DEPTH_RENDER_BUFFER
 //#define USE_FBO_BLIT
@@ -30,10 +38,19 @@ int      fboReadIndex = 0;
 GLint    fboInternalFormat;
 GLint    fboTextureFormat;
 GLint    fboTextureType;
+static GLint fboBloomInternalFormat;
+static GLint fboBloomTextureFormat;
+static GLint fboBloomTextureType;
+static int   fboBloomFormatMode;
 static qboolean framebufferSrgbEnabled = qfalse;
 int      fboBloomPasses;
 int      fboBloomBlendBase;
 int      fboBloomFilterSize;
+static float fboEffectiveTonemapExposure = 1.0f;
+static int   fboExposureFrame = -1;
+#ifdef RENDERER_GLX
+static GLfloat fboExposureSamplePixels[ 128 * 128 * 4 ];
+#endif
 
 qboolean windowAdjusted;
 int		blitX0, blitX1;
@@ -50,10 +67,13 @@ typedef struct frameBuffer_s {
 	GLint  width;
 	GLint  height;
 	qboolean multiSampled;
+	GLint  internalFormat;
 } frameBuffer_t;
 
 #ifdef USE_FBO
 static GLuint commonDepthStencil;
+static GLuint depthFadeTexture;
+static qboolean depthFadeCopied;
 
 static frameBuffer_t frameBufferMS;
 static frameBuffer_t frameBuffers[ FBO_COUNT ];
@@ -88,7 +108,95 @@ static int FBO_HdrPrecisionMode( void )
 static qboolean FBO_InternalFormatIsFloat( GLint internalFormat )
 {
 	return ( internalFormat == GL_RGBA16F || internalFormat == GL_RGB16F ||
-		internalFormat == GL_R11F_G11F_B10F ) ? qtrue : qfalse;
+		internalFormat == GL_R11F_G11F_B10F || internalFormat == GL_RG16F ) ? qtrue : qfalse;
+}
+
+static int FBO_HdrBloomFormatMode( void )
+{
+	const int mode = r_hdrBloomFormat ? r_hdrBloomFormat->integer : GLX_HDR_BLOOM_FORMAT_AUTO;
+
+	if ( mode >= GLX_HDR_BLOOM_FORMAT_AUTO && mode <= GLX_HDR_BLOOM_FORMAT_RG16F ) {
+		return mode;
+	}
+	return GLX_HDR_BLOOM_FORMAT_AUTO;
+}
+
+static const char *FBO_HdrBloomFormatModeName( int mode )
+{
+	switch ( mode )
+	{
+		case GLX_HDR_BLOOM_FORMAT_RGBA16F:
+			return "rgba16f";
+		case GLX_HDR_BLOOM_FORMAT_R11G11B10F:
+			return "r11g11b10f";
+		case GLX_HDR_BLOOM_FORMAT_RG16F:
+			return "rg16f";
+		case GLX_HDR_BLOOM_FORMAT_AUTO:
+		default:
+			return "auto";
+	}
+}
+
+static qboolean FBO_FrameBufferIsBloom( const frameBuffer_t *fb )
+{
+	const int index = (int)( fb - frameBuffers );
+
+	return ( index >= BLOOM_BASE && index < FBO_COUNT ) ? qtrue : qfalse;
+}
+
+static void FBO_AddFormatCandidate( GLint *formats, int *count, GLint format )
+{
+	int i;
+
+	for ( i = 0; i < *count; i++ )
+	{
+		if ( formats[i] == format ) {
+			return;
+		}
+	}
+
+	formats[*count] = format;
+	(*count)++;
+}
+
+static void FBO_PositiveIntermediateCandidates( qboolean rgb, GLint *formats, int *count )
+{
+	const int mode = FBO_HdrBloomFormatMode();
+
+	*count = 0;
+
+	if ( !FBO_HdrSceneLinearMode() ) {
+		FBO_AddFormatCandidate( formats, count, GL_RGB10_A2 );
+		return;
+	}
+
+	if ( mode == GLX_HDR_BLOOM_FORMAT_RGBA16F ) {
+		FBO_AddFormatCandidate( formats, count, GL_RGBA16F );
+		return;
+	}
+
+	if ( rgb ) {
+		if ( mode != GLX_HDR_BLOOM_FORMAT_RG16F ) {
+			FBO_AddFormatCandidate( formats, count, GL_R11F_G11F_B10F );
+		}
+	} else {
+		if ( mode != GLX_HDR_BLOOM_FORMAT_R11G11B10F ) {
+			FBO_AddFormatCandidate( formats, count, GL_RG16F );
+		}
+	}
+
+	FBO_AddFormatCandidate( formats, count, GL_RGBA16F );
+}
+
+static void FBO_FormatCandidatesForBuffer( const frameBuffer_t *fb, GLint *formats, int *count )
+{
+	if ( FBO_FrameBufferIsBloom( fb ) ) {
+		FBO_PositiveIntermediateCandidates( qtrue, formats, count );
+		return;
+	}
+
+	*count = 0;
+	FBO_AddFormatCandidate( formats, count, fboInternalFormat );
 }
 
 static GLint FBO_MainInternalFormat( void )
@@ -125,12 +233,23 @@ static int FBO_ToneMapMode( void )
 	return mode;
 }
 
-static float FBO_TonemapExposure( void )
+static float FBO_TonemapExposureCvar( void )
 {
 	if ( !FBO_HdrSceneLinearMode() || !r_tonemapExposure ) {
 		return 1.0f;
 	}
 	return Com_Clamp( 0.1f, 8.0f, r_tonemapExposure->value );
+}
+
+static float FBO_TonemapExposure( void )
+{
+	if ( !FBO_HdrSceneLinearMode() ) {
+		return 1.0f;
+	}
+	if ( fboExposureFrame != tr.frameCount ) {
+		fboEffectiveTonemapExposure = FBO_TonemapExposureCvar();
+	}
+	return fboEffectiveTonemapExposure;
 }
 
 static int FBO_ColorGradeMode( void )
@@ -530,7 +649,8 @@ static void GLX_RecordBloomCreateState( int result )
 {
 	GLX_CompatRecordBloomCreate( result,
 		r_bloom_passes ? r_bloom_passes->integer : 0, fboBloomPasses,
-		glConfig.numTextureUnits );
+		glConfig.numTextureUnits, fboBloomFormatMode,
+		fboBloomInternalFormat, fboBloomTextureFormat, fboBloomTextureType );
 }
 
 static void GLX_RecordBloomState( int result, qboolean finalStage )
@@ -1244,6 +1364,74 @@ static const char *spriteFP = {
 	"END \n"
 };
 
+static const char *depthFadeFP = {
+	"!!ARBfp1.0 \n"
+	"OPTION ARB_precision_hint_fastest; \n"
+	"PARAM invTexRes = program.local[0]; \n"
+	"PARAM fadeInfo = program.local[1]; \n"
+	"PARAM fadeScale = program.local[2]; \n"
+	"PARAM fadeBias = program.local[3]; \n"
+	"PARAM one = { 1.0, 1.0, 1.0, 1.0 }; \n"
+	"PARAM smooth = { -2.0, 3.0, 0.0, 0.0 }; \n"
+	"TEMP base, faded, depthTC, sceneDepth, denom, sceneLinear, fragLinear, fade; \n"
+	"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
+	"MUL base, base, fragment.color; \n"
+	"MUL depthTC.xy, fragment.position, invTexRes; \n"
+	"TEX sceneDepth, depthTC, texture[1], 2D; \n"
+	"LRP denom.x, sceneDepth.x, one.x, fadeInfo.x; \n"
+	"RCP sceneLinear.x, denom.x; \n"
+	"MUL sceneLinear.x, sceneLinear.x, fadeInfo.y; \n"
+	"LRP denom.x, fragment.position.z, one.x, fadeInfo.x; \n"
+	"RCP fragLinear.x, denom.x; \n"
+	"MUL fragLinear.x, fragLinear.x, fadeInfo.y; \n"
+	"SUB fade.x, sceneLinear.x, fragLinear.x; \n"
+	"ADD fade.x, fade.x, fadeInfo.w; \n"
+	"MUL_SAT fade.x, fade.x, fadeInfo.z; \n"
+	"MUL fade.y, fade.x, fade.x; \n"
+	"MAD fade.z, smooth.x, fade.x, smooth.y; \n"
+	"MUL fade.x, fade.y, fade.z; \n"
+	"MUL faded, base, fadeScale; \n"
+	"ADD faded, faded, fadeBias; \n"
+	"LRP result.color, fade.x, base, faded; \n"
+	"END \n"
+};
+
+qboolean GL_DepthFadeProgramAvailable( void )
+{
+#ifdef USE_FBO
+	return programCompiled && FBO_DepthFadeAvailable();
+#else
+	return qfalse;
+#endif
+}
+
+void GL_DepthFadeProgramEnable( const shader_t *shader )
+{
+#ifdef USE_FBO
+	const byte scaleAndBias = r_depthFadeScaleAndBias[shader->dfType];
+	vec4_t scale;
+	vec4_t bias;
+	int i;
+
+	if ( !GL_DepthFadeProgramAvailable() ) {
+		return;
+	}
+
+	for ( i = 0; i < 4; i++ ) {
+		scale[i] = ( scaleAndBias & ( 1 << i ) ) ? 1.0f : 0.0f;
+		bias[i] = ( scaleAndBias & ( 1 << ( i + 4 ) ) ) ? 1.0f : 0.0f;
+	}
+
+	ARB_ProgramEnable( DUMMY_VERTEX, DEPTH_FADE_FRAGMENT );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0,
+		1.0f / (float)glConfig.vidWidth, 1.0f / (float)glConfig.vidHeight, 0.0f, 0.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1,
+		backEnd.viewParms.zFar / r_znear->value, backEnd.viewParms.zFar, shader->dfInvDist, shader->dfBias );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 2, scale[0], scale[1], scale[2], scale[3] );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 3, bias[0], bias[1], bias[2], bias[3] );
+#endif
+}
+
 
 #ifdef USE_FBO
 static char *ARB_BuildGreyscaleProgram( char *buf ) {
@@ -1432,43 +1620,52 @@ static const char *gammaFP = {
 };
 
 static char *ARB_BuildBloomProgram( char *buf ) {
-	qboolean intensityCalculated;
 	char *s = buf;
 
-	intensityCalculated = qfalse;
 	s = Q_stradd( s,
 		"!!ARBfp1.0 \n"
 		"OPTION ARB_precision_hint_fastest; \n"
 		"PARAM thres = program.local[0]; \n"
 		"PARAM exposure = program.local[1]; \n"
+		"PARAM knee = program.local[2]; \n"
 		"TEMP base; \n"
+		"TEMP intensity; \n"
 		"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
 		"MUL base.xyz, base, exposure.x; \n" );
 
 	if ( r_bloom_threshold_mode->integer == 0 ) {
-		// (r|g|b) >= threshold
+		// max(r, g, b)
 		s = Q_stradd( s,
-			"TEMP minv; \n"
-			"SGE minv, base, thres; \n"
-			"DP3_SAT minv.w, minv, minv; \n"
-			"MUL base.rgb, base, minv.w; \n" );
+			"MAX intensity.x, base.x, base.y; \n"
+			"MAX intensity.x, intensity.x, base.z; \n" );
 	} else if ( r_bloom_threshold_mode->integer == 1 ) {
-		// (r+g+b)/3 >= threshold
+		// (r+g+b)/3
 		s = Q_stradd( s,
 			"PARAM scale = { 0.3333, 0.3334, 0.3333, 1.0 }; \n"
-			"TEMP avg; \n"
-			"DP3_SAT avg, base, scale; \n"
-			"SGE avg.w, avg.x, thres.x; \n"
-			"MUL base.rgb, base, avg.w; \n" );
+			"DP3 intensity.x, base, scale; \n" );
 	} else {
-		// luma(r,g,b) >= threshold
+		// luma(r,g,b)
 		s = Q_stradd( s,
 			"PARAM luma = { 0.2126, 0.7152, 0.0722, 1.0 }; \n"
-			"TEMP intensity; \n"
-			"DP3_SAT intensity, base, luma; \n"
+			"DP3 intensity.x, base, luma; \n" );
+	}
+
+	if ( r_bloom_soft_knee && r_bloom_soft_knee->value > 0.0f ) {
+		s = Q_stradd( s,
+			"PARAM smooth = { -2.0, 3.0, 0.0, 1.0 }; \n"
+			"TEMP weight; \n"
+			"TEMP weight2; \n"
+			"TEMP smoothTerm; \n"
+			"ADD weight.x, intensity.x, -knee.x; \n"
+			"MUL_SAT weight.x, weight.x, knee.y; \n"
+			"MUL weight2.x, weight.x, weight.x; \n"
+			"MAD smoothTerm.x, smooth.x, weight.x, smooth.y; \n"
+			"MUL weight.x, weight2.x, smoothTerm.x; \n"
+			"MUL base.rgb, base, weight.x; \n" );
+	} else {
+		s = Q_stradd( s,
 			"SGE intensity.w, intensity.x, thres.x; \n"
 			"MUL base.rgb, base, intensity.w; \n" );
-		intensityCalculated = qtrue;
 	}
 
 	// modulation
@@ -1478,13 +1675,12 @@ static char *ARB_BuildBloomProgram( char *buf ) {
 			s = Q_stradd( s, "MUL base, base, base; \n" );
 		} else {
 			// by intensity
-			if ( !intensityCalculated ) {
+			if ( r_bloom_threshold_mode->integer != 2 ) {
 				s = Q_stradd( s,
-					"PARAM luma = { 0.2126, 0.7152, 0.0722, 1.0 }; \n"
-					"TEMP intensity; \n"
-					"DP3_SAT intensity, base, luma; \n" );
+					"PARAM modLuma = { 0.2126, 0.7152, 0.0722, 1.0 }; \n"
+					"DP3 intensity.x, base, modLuma; \n" );
 			}
-			s = Q_stradd( s, "MUL base, base, intensity; \n" );
+			s = Q_stradd( s, "MUL base, base, intensity.x; \n" );
 		}
 	}
 
@@ -1616,6 +1812,9 @@ static void RenderQuad( int w, int h )
 	v[3][1] = h;
 
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY );
+#ifdef RENDERER_GLX
+	GLX_CompatRecordFullscreenPass();
+#endif
 
 	qglVertexPointer( 3, GL_FLOAT, 0, v );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, t );
@@ -1820,6 +2019,9 @@ qboolean ARB_UpdatePrograms( void )
 	if ( !ARB_CompileProgram( Fragment, spriteFP, programs[ SPRITE_FRAGMENT ] ) )
 		return qfalse;
 
+	if ( !ARB_CompileProgram( Fragment, depthFadeFP, programs[ DEPTH_FADE_FRAGMENT ] ) )
+		return qfalse;
+
 #ifdef USE_FBO
 	if ( !ARB_CompileProgram( Fragment, va( gammaFP,
 			ARB_BuildColorGradeProgram( buf ), ARB_BuildToneMapProgram( buf2 ),
@@ -1864,6 +2066,8 @@ qboolean ARB_UpdatePrograms( void )
 #ifdef USE_FBO
 
 static void FBO_Bind( GLuint target, GLuint buffer );
+static qboolean FBO_Create( frameBuffer_t *fb, GLsizei width, GLsizei height,
+	qboolean depthStencil, GLint *outFormat, GLint *outType );
 
 void FBO_Clean( frameBuffer_t *fb )
 {
@@ -1936,6 +2140,14 @@ static void FBO_CleanBloom( void )
 
 static void FBO_CleanDepth( void )
 {
+	if ( depthFadeTexture )
+	{
+		GL_BindTexture( 1, 0 );
+		qglDeleteTextures( 1, &depthFadeTexture );
+		depthFadeTexture = 0;
+		depthFadeCopied = qfalse;
+	}
+
 #ifdef COMMON_DEPTH_STENCIL
 	if ( commonDepthStencil )
 	{
@@ -1948,6 +2160,22 @@ static void FBO_CleanDepth( void )
 		commonDepthStencil = 0;
 	}
 #endif
+}
+
+
+static GLuint FBO_CreateDepthFadeTexture( GLsizei width, GLsizei height )
+{
+	GLuint tex;
+
+	qglGenTextures( 1, &tex );
+	GL_BindTexture( 1, tex );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+	qglTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL );
+
+	return tex;
 }
 
 
@@ -1989,12 +2217,14 @@ static const char *glDefToStr( GLint define )
 		// texture formats
 		CASE_STR(GL_BGR);
 		CASE_STR(GL_BGRA);
+		CASE_STR(GL_RG);
 		CASE_STR(GL_RGB);
 		CASE_STR(GL_RGBA);
 		CASE_STR(GL_RGBA4);
 		CASE_STR(GL_RGBA8);
 		CASE_STR(GL_RGBA12);
 		CASE_STR(GL_RGBA16);
+		CASE_STR(GL_RG16F);
 		CASE_STR(GL_RGBA16F);
 		CASE_STR(GL_RGB16F);
 		CASE_STR(GL_RGB10_A2);
@@ -2053,6 +2283,11 @@ static void getPreferredFormatAndType( GLint format, GLint *pFormat, GLint *pTyp
 		*pType = GL_HALF_FLOAT;
 		return;
 	}
+	if ( format == GL_RG16F ) {
+		*pFormat = GL_RG;
+		*pType = GL_HALF_FLOAT;
+		return;
+	}
 	if ( format == GL_RGB16F || format == GL_R11F_G11F_B10F ) {
 		*pFormat = GL_RGB;
 		*pType = GL_HALF_FLOAT;
@@ -2071,7 +2306,8 @@ static void getPreferredFormatAndType( GLint format, GLint *pFormat, GLint *pTyp
 		if ( preferredFormat == 0 ) // nVidia ION drivers can do that
 			preferredFormat = GL_RGBA;
 		if ( preferredType == GL_UNSIGNED_NORMALIZED ) { // Intel HD 530 drivers can do that as well
-			if ( format == GL_RGBA16F || format == GL_RGB16F || format == GL_R11F_G11F_B10F )
+			if ( format == GL_RGBA16F || format == GL_RGB16F ||
+				format == GL_R11F_G11F_B10F || format == GL_RG16F )
 				preferredType = GL_HALF_FLOAT;
 			else if ( format == GL_RGBA12 || format == GL_RGBA16 )
 				preferredType = GL_UNSIGNED_SHORT;
@@ -2082,6 +2318,9 @@ static void getPreferredFormatAndType( GLint format, GLint *pFormat, GLint *pTyp
 __fallback:
 		if ( format == GL_RGBA16F ) {
 			preferredFormat = GL_RGBA;
+			preferredType = GL_HALF_FLOAT;
+		} else if ( format == GL_RG16F ) {
+			preferredFormat = GL_RG;
 			preferredType = GL_HALF_FLOAT;
 		} else if ( format == GL_RGB16F || format == GL_R11F_G11F_B10F ) {
 			preferredFormat = GL_RGB;
@@ -2100,15 +2339,16 @@ __fallback:
 }
 
 
-static qboolean FBO_Create( frameBuffer_t *fb, GLsizei width, GLsizei height, qboolean depthStencil, GLint *outFormat, GLint *outType )
+static qboolean FBO_CreateWithFormat( frameBuffer_t *fb, GLsizei width, GLsizei height,
+	qboolean depthStencil, GLint internalFormat, GLint *outFormat, GLint *outType )
 {
 	int fboStatus;
-	GLint internalFormat;
 	GLint textureFormat;
 	GLint textureType;
 
 	fb->multiSampled = qfalse;
 	fb->depthStencil = 0;
+	fb->internalFormat = internalFormat;
 
 	// color texture
 	qglGenTextures( 1, &fb->color );
@@ -2118,15 +2358,6 @@ static qboolean FBO_Create( frameBuffer_t *fb, GLsizei width, GLsizei height, qb
 
 	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, gl_clamp_mode );
 	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, gl_clamp_mode );
-
-	// always use GL_RGB10_A2 for bloom textures which is fast as usual GL_RGBA8
-	// (GL_R11F_G11F_B10F is a bit slower at least on AMD GPUs)
-	// but can provide better precision for blurring, also we barely need more than 10 bits for that,
-	// texture formats that doesn't fit into 32bits are just performance-killers for bloom
-	if ( fb - frameBuffers >= BLOOM_BASE )
-		internalFormat = GL_RGB10_A2;
-	else
-		internalFormat = fboInternalFormat;
 
 	getPreferredFormatAndType( internalFormat, &textureFormat, &textureType );
 
@@ -2180,12 +2411,16 @@ static qboolean FBO_Create( frameBuffer_t *fb, GLsizei width, GLsizei height, qb
 
 	fb->width = width;
 	fb->height = height;
+	fb->internalFormat = internalFormat;
 
 	qglClearColor( 0.0, 0.0, 0.0, 1.0 );
 	if ( depthStencil )
 		qglClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT );
 	else
 		qglClear( GL_COLOR_BUFFER_BIT );
+#ifdef RENDERER_GLX
+	GLX_CompatRecordPostClear();
+#endif
 
 	FBO_Bind( GL_FRAMEBUFFER, 0 );
 
@@ -2260,6 +2495,9 @@ static qboolean FBO_CreateMS( frameBuffer_t *fb, int width, int height )
 
 	qglClearColor( 0.0, 0.0, 0.0, 1.0 );
 	qglClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT );
+#ifdef RENDERER_GLX
+	GLX_CompatRecordPostClear();
+#endif
 
 	FBO_Bind( GL_FRAMEBUFFER, 0 );
 
@@ -2274,6 +2512,17 @@ static qboolean FBO_CreateBloom( void )
 	int i;
 
 	fboBloomPasses = 0;
+	fboBloomInternalFormat = 0;
+	fboBloomTextureFormat = 0;
+	fboBloomTextureType = 0;
+	fboBloomFormatMode = FBO_HdrBloomFormatMode();
+
+	if ( FBO_HdrSceneLinearMode() && fboBloomFormatMode == GLX_HDR_BLOOM_FORMAT_RG16F )
+	{
+		ri.Printf( PRINT_WARNING,
+			"...r_hdrBloomFormat %s is reserved for positive RG intermediates; RGB bloom will use the conservative fallback\n",
+			FBO_HdrBloomFormatModeName( fboBloomFormatMode ) );
+	}
 
 	if ( glConfig.numTextureUnits < r_bloom_passes->integer )
 	{
@@ -2290,6 +2539,7 @@ static qboolean FBO_CreateBloom( void )
 		// we may need depth/stencil buffers for first bloom buffer in \r_bloom 2 mode
 		if ( !FBO_Create( &frameBuffers[ i*2 + BLOOM_BASE + 0 ], width, height, i == 0 ? qtrue : qfalse, NULL, NULL ) ||
 			!FBO_Create( &frameBuffers[ i*2 + BLOOM_BASE + 1 ], width, height, qfalse, NULL, NULL ) ) {
+			FBO_CleanBloom();
 #ifdef RENDERER_GLX
 			GLX_RecordBloomCreateState( GLX_BLOOM_CREATE_FBO );
 #endif
@@ -2303,6 +2553,14 @@ static qboolean FBO_CreateBloom( void )
 	}
 
 	ri.Printf( PRINT_ALL, "...%i bloom passes\n", fboBloomPasses );
+	if ( fboBloomInternalFormat )
+	{
+		ri.Printf( PRINT_ALL, "...bloom intermediate policy %s, format %s (%s:%s)\n",
+			FBO_HdrBloomFormatModeName( fboBloomFormatMode ),
+			glDefToStr( fboBloomInternalFormat ),
+			glDefToStr( fboBloomTextureFormat ),
+			glDefToStr( fboBloomTextureType ) );
+	}
 #ifdef RENDERER_GLX
 	GLX_RecordBloomCreateState( GLX_BLOOM_CREATE_SUCCESS );
 #endif
@@ -2311,9 +2569,65 @@ static qboolean FBO_CreateBloom( void )
 }
 
 
+static qboolean FBO_Create( frameBuffer_t *fb, GLsizei width, GLsizei height,
+	qboolean depthStencil, GLint *outFormat, GLint *outType )
+{
+	GLint formats[4];
+	int formatCount;
+	int i;
+
+	FBO_FormatCandidatesForBuffer( fb, formats, &formatCount );
+
+	for ( i = 0; i < formatCount; i++ )
+	{
+		if ( FBO_CreateWithFormat( fb, width, height, depthStencil, formats[i], outFormat, outType ) )
+		{
+			if ( FBO_FrameBufferIsBloom( fb ) ) {
+				fboBloomInternalFormat = fb->internalFormat;
+				getPreferredFormatAndType( fboBloomInternalFormat,
+					&fboBloomTextureFormat, &fboBloomTextureType );
+				fboBloomFormatMode = FBO_HdrBloomFormatMode();
+			}
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+
 GLuint FBO_ScreenTexture( void )
 {
 	return frameBuffers[ 2 ].color;
+}
+
+qboolean FBO_DepthFadeAvailable( void )
+{
+	return ( fboEnabled && depthFadeTexture && r_depthFade && r_depthFade->integer ) ? qtrue : qfalse;
+}
+
+void FBO_CopyDepthFade( void )
+{
+	if ( !FBO_DepthFadeAvailable() ) {
+		return;
+	}
+
+	if ( frameBufferMultiSampling ) {
+		FBO_BlitMS( qtrue );
+	}
+
+	FBO_Bind( GL_READ_FRAMEBUFFER, frameBuffers[ 0 ].fbo );
+	GL_BindTexture( 1, depthFadeTexture );
+	qglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, 0, 0, frameBuffers[ 0 ].width, frameBuffers[ 0 ].height );
+	GL_SelectTexture( 0 );
+	depthFadeCopied = qtrue;
+
+	FBO_BindMain();
+}
+
+void FBO_BindDepthFadeTexture( int texUnit )
+{
+	GL_BindTexture( texUnit, ( FBO_DepthFadeAvailable() && depthFadeCopied ) ? depthFadeTexture : 0 );
 }
 
 
@@ -2323,23 +2637,38 @@ static void FBO_Bind( GLuint target, GLuint buffer )
 	static GLuint draw_buffer = (GLuint)-1;
 	static GLuint read_buffer = (GLuint)-1;
 	if ( target == GL_FRAMEBUFFER ) {
-		if ( draw_buffer != buffer || read_buffer != buffer )
+		if ( draw_buffer != buffer || read_buffer != buffer ) {
 			qglBindFramebuffer( GL_FRAMEBUFFER, buffer );
+#ifdef RENDERER_GLX
+			GLX_CompatRecordFboBind();
+#endif
+		}
 		draw_buffer = buffer;
 		read_buffer = buffer;
 	} else {
 		if ( target == GL_READ_FRAMEBUFFER ) {
-			if ( read_buffer != buffer )
+			if ( read_buffer != buffer ) {
 				qglBindFramebuffer( GL_READ_FRAMEBUFFER, buffer );
+#ifdef RENDERER_GLX
+				GLX_CompatRecordFboBind();
+#endif
+			}
 			read_buffer = buffer;
 		} else {
-			if ( draw_buffer != buffer )
+			if ( draw_buffer != buffer ) {
 				qglBindFramebuffer( GL_DRAW_FRAMEBUFFER, buffer );
+#ifdef RENDERER_GLX
+				GLX_CompatRecordFboBind();
+#endif
+			}
 			draw_buffer = buffer;
 		}
 	}
 #else
 	qglBindFramebuffer( target, buffer );
+#ifdef RENDERER_GLX
+	GLX_CompatRecordFboBind();
+#endif
 #endif
 	FBO_SetFramebufferSrgb( qfalse );
 }
@@ -2365,10 +2694,71 @@ void FBO_BindMain( void )
 	}
 }
 
+static void FBO_UpdateTonemapExposure( void )
+{
+	float manualExposure;
+
+	if ( fboExposureFrame == tr.frameCount ) {
+		return;
+	}
+
+	manualExposure = FBO_TonemapExposureCvar();
+	fboExposureFrame = tr.frameCount;
+	fboEffectiveTonemapExposure = manualExposure;
+
+#ifdef RENDERER_GLX
+	if ( FBO_HdrSceneLinearMode() )
+	{
+		int width = 0;
+		int height = 0;
+		qboolean sampled = qfalse;
+
+		if ( GLX_CompatAutoExposureNeedsSamples( &width, &height ) )
+		{
+			if ( width > 128 ) {
+				width = 128;
+			}
+			if ( height > 128 ) {
+				height = 128;
+			}
+			if ( width > 0 && height > 0 && frameBuffers[ 0 ].color &&
+				frameBuffers[ 3 ].fbo && width <= frameBuffers[ 3 ].width &&
+				height <= frameBuffers[ 3 ].height )
+			{
+				GLenum error;
+
+				ARB_ProgramDisable();
+				FBO_Bind( GL_FRAMEBUFFER, frameBuffers[ 3 ].fbo );
+				GL_BindTexture( 0, frameBuffers[ 0 ].color );
+				GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
+				qglViewport( 0, 0, width, height );
+				qglScissor( 0, 0, width, height );
+				RenderQuad( glConfig.vidWidth, glConfig.vidHeight );
+				qglReadPixels( 0, 0, width, height, GL_RGBA, GL_FLOAT,
+					fboExposureSamplePixels );
+				error = qglGetError();
+				sampled = ( error == GL_NO_ERROR ) ? qtrue : qfalse;
+				qglViewport( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
+				qglScissor( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
+			}
+		}
+
+		fboEffectiveTonemapExposure = GLX_CompatUpdateAutoExposure(
+			manualExposure, sampled ? fboExposureSamplePixels : NULL,
+			sampled ? width : 0, sampled ? height : 0 );
+	}
+#endif
+}
+
 
 static void FBO_BlitToBackBuffer( int index )
 {
 	const frameBuffer_t *src = &frameBuffers[ index ];
+#ifdef RENDERER_GLX
+	GLX_CompatRecordFboBlit( GLX_FBO_BLIT_BACKBUFFER, qfalse,
+		src->width, src->height, blitX1 - blitX0, blitY1 - blitY0 );
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_FBO_BLIT );
+#endif
 
 	FBO_Bind( GL_READ_FRAMEBUFFER, src->fbo );
 	FBO_Bind( GL_DRAW_FRAMEBUFFER, 0 );
@@ -2382,6 +2772,9 @@ static void FBO_BlitToBackBuffer( int index )
 			blitClear--;
 			qglClearColor( 0.0, 0.0, 0.0, 1.0 );
 			qglClear( GL_COLOR_BUFFER_BIT );
+#ifdef RENDERER_GLX
+			GLX_CompatRecordPostClear();
+#endif
 		}
 		qglViewport( blitX0, blitY0, blitX1 - blitX0, blitY1 - blitY0 );
 		qglScissor( blitX0, blitY0, blitX1 - blitX0, blitY1 - blitY0 );
@@ -2389,6 +2782,9 @@ static void FBO_BlitToBackBuffer( int index )
 
 	qglBlitFramebuffer( 0, 0, src->width, src->height, blitX0, blitY0, blitX1, blitY1, GL_COLOR_BUFFER_BIT, blitFilter );
 	fboReadIndex = index;
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_FBO_BLIT );
+#endif
 }
 
 
@@ -2399,6 +2795,7 @@ void FBO_BlitSS( void )
 #ifdef RENDERER_GLX
 	GLX_CompatRecordFboBlit( GLX_FBO_BLIT_SS, qfalse,
 		src->width, src->height, dst->width, dst->height );
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_FBO_BLIT );
 #endif
 
 	FBO_Bind( GL_DRAW_FRAMEBUFFER, dst->fbo );
@@ -2406,6 +2803,9 @@ void FBO_BlitSS( void )
 	qglBlitFramebuffer( 0, 0, src->width, src->height, 0, 0, dst->width, dst->height, GL_COLOR_BUFFER_BIT, GL_LINEAR );
 
 	FBO_Bind( GL_READ_FRAMEBUFFER, dst->fbo );
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_FBO_BLIT );
+#endif
 }
 
 
@@ -2421,6 +2821,7 @@ void FBO_BlitMS( qboolean depthOnly )
 #ifdef RENDERER_GLX
 	GLX_CompatRecordFboBlit( GLX_FBO_BLIT_MS, depthOnly,
 		r->width, r->height, d->width, d->height );
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_FBO_BLIT );
 #endif
 
 	fboReadIndex = 0;
@@ -2432,12 +2833,18 @@ void FBO_BlitMS( qboolean depthOnly )
 	{
 		qglBlitFramebuffer( 0, 0, w, h, 0, 0, w, h, GL_DEPTH_BUFFER_BIT, GL_NEAREST );
 		FBO_Bind( GL_READ_FRAMEBUFFER, d->fbo );
+#ifdef RENDERER_GLX
+		GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_FBO_BLIT );
+#endif
 		return;
 	}
 
 	qglBlitFramebuffer( 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST );
 	// bind all further reads to main buffer
 	FBO_Bind( GL_READ_FRAMEBUFFER, d->fbo );
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_FBO_BLIT );
+#endif
 }
 
 
@@ -2445,6 +2852,9 @@ static void FBO_Blur( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  const
 {
 	const int w = glConfig.vidWidth;
 	const int h = glConfig.vidHeight;
+#ifdef RENDERER_GLX
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_BLOOM_BLUR );
+#endif
 
 	qglViewport( 0, 0, fb1->width, fb1->height );
 
@@ -2460,6 +2870,9 @@ static void FBO_Blur( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  const
 	GL_BindTexture( 0, fb2->color );
 	ARB_BlurParams( fb1->width, fb1->height, fboBloomFilterSize, qfalse );
 	RenderQuad( w, h );
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_BLUR );
+#endif
 }
 
 
@@ -2467,6 +2880,9 @@ static void FBO_Blur2( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  cons
 {
 	const int w = glConfig.vidWidth;
 	const int h = glConfig.vidHeight;
+#ifdef RENDERER_GLX
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_BLOOM_BLUR );
+#endif
 
 	qglViewport( 0, 0, fb1->width, fb1->height );
 
@@ -2482,6 +2898,9 @@ static void FBO_Blur2( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  cons
 	GL_BindTexture( 0, fb2->color );
 	ARB_BlurParams( fb1->width, fb1->height, 6, qfalse );
 	RenderQuad( w, h );
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_BLUR );
+#endif
 }
 
 
@@ -2493,6 +2912,7 @@ void FBO_CopyScreen( void )
 #ifdef RENDERER_GLX
 	GLX_CompatRecordFboCopyScreen( backEnd.viewParms.viewportWidth,
 		backEnd.viewParms.viewportHeight );
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_COPY_SCREEN );
 #endif
 
 	qglViewport( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
@@ -2503,6 +2923,10 @@ void FBO_CopyScreen( void )
 	{
 		src = &frameBufferMS;
 		dst = &frameBuffers[ 0 ];
+#ifdef RENDERER_GLX
+		GLX_CompatRecordFboBlit( GLX_FBO_BLIT_COPY_SCREEN, qfalse,
+			src->width, src->height, dst->width, dst->height );
+#endif
 		FBO_Bind( GL_READ_FRAMEBUFFER, src->fbo );
 		FBO_Bind( GL_DRAW_FRAMEBUFFER, dst->fbo );
 		qglBlitFramebuffer( 0, 0, src->width, src->height, 0, 0, dst->width, dst->height, GL_COLOR_BUFFER_BIT, GL_NEAREST );
@@ -2510,6 +2934,10 @@ void FBO_CopyScreen( void )
 
 	src = &frameBuffers[ 0 ];
 	dst = &frameBuffers[ 2 ];
+#ifdef RENDERER_GLX
+	GLX_CompatRecordFboBlit( GLX_FBO_BLIT_COPY_SCREEN, qfalse,
+		src->width, src->height, dst->width, dst->height );
+#endif
 	FBO_Bind( GL_READ_FRAMEBUFFER, src->fbo );
 	FBO_Bind( GL_DRAW_FRAMEBUFFER, dst->fbo );
 
@@ -2542,6 +2970,9 @@ void FBO_CopyScreen( void )
 		backEnd.viewParms.scissorWidth, backEnd.viewParms.scissorHeight ); 
 
 	FBO_BindMain();
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_COPY_SCREEN );
+#endif
 }
 
 
@@ -2646,6 +3077,12 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 	frameBuffer_t *src, *dst;
 	int finalBloomFBO;
 	int i;
+	float bloomThreshold;
+	float bloomSoftKnee;
+	float bloomKneeWidth;
+#ifdef RENDERER_GLX
+	qboolean glxPostShaderBound = qfalse;
+#endif
 
 	if ( backEnd.doneBloom || !backEnd.doneSurfaces )
 	{
@@ -2656,6 +3093,9 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 	}
 
 	backEnd.doneBloom = qtrue;
+#ifdef RENDERER_GLX
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_BLOOM );
+#endif
 
 	if ( !fboBloomInited )
 	{
@@ -2666,6 +3106,7 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 			FBO_CleanBloom();
 #ifdef RENDERER_GLX
 			GLX_RecordBloomState( GLX_BLOOM_RESULT_CREATE_FAILED, finalStage );
+			GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM );
 #endif
 			return qfalse;
 		}
@@ -2680,25 +3121,43 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 		FBO_BlitMS( qfalse );
 		blitMSfbo = qfalse;
 	}
+	FBO_UpdateTonemapExposure();
 	
 	// extract intensity from main FBO to BLOOM_BASE
 	src = &frameBuffers[ 0 ];
 	dst = &frameBuffers[ BLOOM_BASE ];
+#ifdef RENDERER_GLX
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_BLOOM_EXTRACT );
+#endif
 	FBO_Bind( GL_FRAMEBUFFER, dst->fbo );
 	GL_BindTexture( 0, src->color );
 	qglViewport( 0, 0, dst->width, dst->height );
 	ARB_ProgramEnable( DUMMY_VERTEX, BLOOM_EXTRACT_FRAGMENT );
-	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, r_bloom_threshold->value, r_bloom_threshold->value,
-		r_bloom_threshold->value, 1.0 );
+	bloomThreshold = r_bloom_threshold ? Com_Clamp( 0.0f, 64.0f, r_bloom_threshold->value ) : 0.75f;
+	bloomSoftKnee = r_bloom_soft_knee ? Com_Clamp( 0.0f, 1.0f, r_bloom_soft_knee->value ) : 0.0f;
+	bloomKneeWidth = bloomThreshold * bloomSoftKnee;
+	if ( bloomKneeWidth < 0.0001f ) {
+		bloomKneeWidth = 0.0001f;
+	}
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, bloomThreshold, bloomThreshold,
+		bloomThreshold, 1.0 );
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1, FBO_TonemapExposure(), FBO_TonemapExposure(),
 		FBO_TonemapExposure(), 1.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 2, bloomThreshold - bloomKneeWidth,
+		1.0f / ( bloomKneeWidth * 2.0f ), 0.0f, 1.0f );
 	RenderQuad( w, h );
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_EXTRACT );
+#endif
 
 	// downscale and blur
 	src = frameBuffers + BLOOM_BASE;
 	for ( i = 1; i < fboBloomPasses; i++, src+=2 ) {
 		dst = src + 2;
 		// copy image to next level
+#ifdef RENDERER_GLX
+		GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_BLOOM_DOWNSCALE );
+#endif
 #ifdef USE_FBO_BLIT
 		FBO_Bind( GL_READ_FRAMEBUFFER, src->fbo );
 		FBO_Bind( GL_DRAW_FRAMEBUFFER, dst->fbo );
@@ -2711,6 +3170,9 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 		qglViewport( 0, 0, dst->width, dst->height );
 		RenderQuad( w, h );
 #endif
+#ifdef RENDERER_GLX
+		GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_DOWNSCALE );
+#endif
 		FBO_Blur( dst, dst+1, dst );
 	}
 
@@ -2720,6 +3182,9 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 	// blend all bloom buffers to BLOOM_BASE+1 texture
 	finalBloomFBO = BLOOM_BASE+1;
 	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
+#ifdef RENDERER_GLX
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_BLOOM_BLEND );
+#endif
 	FBO_Bind( GL_FRAMEBUFFER, frameBuffers[ finalBloomFBO ].fbo );
 	ARB_ProgramEnable( DUMMY_VERTEX, BLENDX_FRAGMENT );
 	// setup all texture units
@@ -2727,9 +3192,15 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 		GL_BindTexture( i, frameBuffers[ (i+fboBloomBlendBase)*2 + BLOOM_BASE ].color );
 	}
 	RenderQuad( w, h );
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_BLEND );
+#endif
 
 	if ( r_bloom_reflection->value )
 	{
+#ifdef RENDERER_GLX
+		GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_BLOOM_LENS_REFLECTION );
+#endif
 		ARB_ProgramDisable();
 
 		// copy final bloom image to some downscaled buffer
@@ -2767,6 +3238,9 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 
 		// restore blend mode
 		GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
+#ifdef RENDERER_GLX
+		GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_LENS_REFLECTION );
+#endif
 	}
 
 	if ( windowAdjusted || backEnd.screenshotMask ) {
@@ -2786,19 +3260,48 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 
 	GL_BindTexture( 1, frameBuffers[ finalBloomFBO ].color ); // final bloom texture
 	GL_BindTexture( 0, frameBuffers[ 0 ].color ); // original image
+#ifdef RENDERER_GLX
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_BLOOM_FINAL );
+#endif
 	if ( finalStage ) {
+#ifdef RENDERER_GLX
+		FBO_PrepareGlxPostShaderColorGradeLut();
+		glxPostShaderBound = GLX_CompatTryBindPostShaderFinal( qtrue, qtrue,
+			r_bloom_intensity->value );
+		if ( !glxPostShaderBound ) {
+#endif
 		// blend & apply gamma in one pass
 		ARB_ProgramEnable( DUMMY_VERTEX, BLEND2_GAMMA_FRAGMENT );
 		FBO_SetOutputTransformParams( gamma, obScale );
 		FBO_BindColorGradeLut();
 		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1, r_bloom_intensity->value, 0, 0, 0 );
+#ifdef RENDERER_GLX
+		}
+#endif
 	} else {
+#ifdef RENDERER_GLX
+		glxPostShaderBound = GLX_CompatTryBindPostShaderFinal( qtrue, qfalse,
+			r_bloom_intensity->value );
+		if ( !glxPostShaderBound ) {
+#endif
 		// just blend
 		ARB_ProgramEnable( DUMMY_VERTEX, BLEND2_FRAGMENT );
 		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1, r_bloom_intensity->value, 0, 0, 0 );
+#ifdef RENDERER_GLX
+		}
+#endif
 	}
 	RenderQuad( w, h );
+#ifdef RENDERER_GLX
+	if ( glxPostShaderBound ) {
+		GLX_CompatUnbindPostShader();
+	} else {
+		ARB_ProgramDisable();
+	}
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_FINAL );
+#else
 	ARB_ProgramDisable();
+#endif
 
 	if ( finalStage ) {
 		if ( backEnd.screenshotMask ) {
@@ -2816,6 +3319,7 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 #ifdef RENDERER_GLX
 	GLX_RecordBloomState( finalStage ? GLX_BLOOM_RESULT_FINAL : GLX_BLOOM_RESULT_INTERMEDIATE,
 		finalStage );
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM );
 #endif
 
 	return finalStage;
@@ -2863,6 +3367,7 @@ void FBO_PostProcess( void )
 		FBO_BlitMS( qfalse );
 		blitMSfbo = qfalse;
 	}
+	FBO_UpdateTonemapExposure();
 
 	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
@@ -2876,12 +3381,14 @@ void FBO_PostProcess( void )
 		( r_bloom->integer && programCompiled && qglActiveTextureARB ) ? qtrue : qfalse,
 		programCompiled ? qtrue : qfalse, backEnd.screenshotMask, windowAdjusted,
 		fboReadIndex, FBO_HdrSceneLinearMode(), r_renderScale->integer, r_greyscale->value );
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_POSTPROCESS );
 #endif
 
 	if ( r_bloom->integer && programCompiled && qglActiveTextureARB ) {
 		if ( FBO_Bloom( gamma, obScale, !minimized ) ) {
 #ifdef RENDERER_GLX
 			GLX_CompatRecordPostProcessResult( GLX_POSTPROCESS_RESULT_BLOOM_FINAL );
+			GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_POSTPROCESS );
 #endif
 			return;
 		}
@@ -2896,8 +3403,9 @@ void FBO_PostProcess( void )
 		FBO_Bind( GL_FRAMEBUFFER, 0 );
 		GL_BindTexture( 0, frameBuffers[ fboReadIndex ].color );
 #ifdef RENDERER_GLX
+		GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_GAMMA_DIRECT );
 		FBO_PrepareGlxPostShaderColorGradeLut();
-		glxPostShaderBound = GLX_CompatTryBindPostShaderDirectFinal();
+		glxPostShaderBound = GLX_CompatTryBindPostShaderFinal( qfalse, qtrue, 0.0f );
 		if ( !glxPostShaderBound ) {
 #endif
 		ARB_ProgramEnable( DUMMY_VERTEX, GAMMA_FRAGMENT );
@@ -2918,18 +3426,43 @@ void FBO_PostProcess( void )
 #endif
 #ifdef RENDERER_GLX
 		GLX_CompatRecordPostProcessResult( GLX_POSTPROCESS_RESULT_GAMMA_DIRECT );
+		GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_GAMMA_DIRECT );
+		GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_POSTPROCESS );
 #endif
 		return;
 	}
 
 	// apply gamma shader
+#ifdef RENDERER_GLX
+	{
+	qboolean glxPostShaderBound = qfalse;
+#endif
 	FBO_Bind( GL_FRAMEBUFFER, frameBuffers[ 1 ].fbo ); // destination - secondary buffer
 	GL_BindTexture( 0, frameBuffers[ fboReadIndex ].color );  // source - main color buffer
+#ifdef RENDERER_GLX
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_GAMMA_BLIT );
+	FBO_PrepareGlxPostShaderColorGradeLut();
+	glxPostShaderBound = GLX_CompatTryBindPostShaderFinal( qfalse, qtrue, 0.0f );
+	if ( !glxPostShaderBound ) {
+#endif
 	ARB_ProgramEnable( DUMMY_VERTEX, GAMMA_FRAGMENT );
 	FBO_SetOutputTransformParams( gamma, obScale );
 	FBO_BindColorGradeLut();
+#ifdef RENDERER_GLX
+	}
+#endif
 	RenderQuad( w, h );
+#ifdef RENDERER_GLX
+	if ( glxPostShaderBound ) {
+		GLX_CompatUnbindPostShader();
+	} else {
+		ARB_ProgramDisable();
+	}
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_GAMMA_BLIT );
+	}
+#else
 	ARB_ProgramDisable();
+#endif
 
 	if ( !minimized ) {
 		FBO_BlitToBackBuffer( 1 );
@@ -2941,6 +3474,9 @@ void FBO_PostProcess( void )
 		GLX_CompatRecordPostProcessResult( GLX_POSTPROCESS_RESULT_MINIMIZED );
 #endif
 	}
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_POSTPROCESS );
+#endif
 }
 
 
@@ -3138,6 +3674,7 @@ void QGL_InitFBO( void )
 	if ( result )
 	{
 		fboEnabled = qtrue;
+		depthFadeTexture = FBO_CreateDepthFadeTexture( w, h );
 		FBO_BindMain();
 		ri.Printf( PRINT_ALL, "...using %s (%s:%s) FBO\n", glDefToStr( fboInternalFormat ),
 			glDefToStr( fboTextureFormat ), glDefToStr( fboTextureType ) );

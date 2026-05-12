@@ -33,7 +33,7 @@
 #define USE_DEDICATED_ALLOCATION
 #endif
 //#define MIN_IMAGE_ALIGN (128*1024)
-#define MAX_ATTACHMENTS_IN_POOL (8+VK_NUM_BLOOM_PASSES*2) // depth + msaa + msaa-resolve + depth-resolve + screenmap.msaa + screenmap.resolve + screenmap.depth + bloom_extract + blur pairs
+#define MAX_ATTACHMENTS_IN_POOL (9+VK_NUM_BLOOM_PASSES*2) // depth + depth fade + msaa + msaa-resolve + depth-resolve + screenmap.msaa + screenmap.resolve + screenmap.depth + bloom_extract + blur pairs
 #define VK_MAX_FRAME_TIMESTAMPS 64
 #define VK_PIPELINE_CACHE_MAX_BYTES (32 * 1024 * 1024)
 
@@ -43,7 +43,8 @@
 #define VK_DESC_TEXTURE1     2
 #define VK_DESC_TEXTURE2     3
 #define VK_DESC_FOG_COLLAPSE 4
-#define VK_DESC_COUNT        5
+#define VK_DESC_DEPTH_FADE   5
+#define VK_DESC_COUNT        6
 
 #define VK_DESC_TEXTURE_BASE VK_DESC_TEXTURE0
 #define VK_DESC_FOG_ONLY     VK_DESC_TEXTURE1
@@ -188,6 +189,7 @@ typedef struct {
 	Vk_Primitive_Topology primitives;
 	int line_width;
 	int fog_stage; // off, fog-in / fog-out
+	int depth_fade;
 	int abs_light;
 	int allow_discard;
 	int acff; // none, rgb, rgba, alpha
@@ -247,6 +249,9 @@ typedef struct vkUniform_s {
 	vec4_t fogEyeT;				// vertex
 	vec4_t fogColor;			// fragment
 	vec4_t texFactors;			// fragment
+	vec4_t depthFadeInfo;		// fragment: zfar/znear, zfar, invDist, bias
+	vec4_t depthFadeScale;		// fragment
+	vec4_t depthFadeBias;		// fragment
 } vkUniform_t;
 
 #define TESS_XYZ   (1)
@@ -311,10 +316,14 @@ void vk_clear_color( const vec4_t color );
 void vk_clear_depth( qboolean clear_stencil );
 void vk_begin_frame( void );
 void vk_end_frame( void );
+qboolean vk_depth_fade_supported( void );
+qboolean vk_depth_fade_available( void );
+void vk_copy_depth_fade( void );
 void vk_present_frame( void );
 
 void vk_end_render_pass( void );
 void vk_begin_main_render_pass( void );
+void vk_begin_main_render_pass_load( void );
 
 void vk_bind_pipeline( uint32_t pipeline );
 void vk_bind_index( void );
@@ -397,7 +406,7 @@ typedef struct vk_tess_s {
 
 	struct {
 		uint32_t		start, end;
-		VkDescriptorSet	current[5]; // 0:uniform, 1:color0, 2:color1, 3:color2, 4:fog
+		VkDescriptorSet	current[VK_DESC_COUNT]; // 0:uniform, 1:color0, 2:color1, 3:color2, 4:fog, 5:depth fade
 		uint32_t		offset[1]; // 0 (uniform)
 	} descriptor_set;
 
@@ -447,6 +456,7 @@ typedef struct {
 
 	struct {
 		VkRenderPass main;
+		VkRenderPass main_load;
 		VkRenderPass screenmap;
 		VkRenderPass gamma;
 		VkRenderPass capture;
@@ -477,6 +487,9 @@ typedef struct {
 
 	VkImage depth_image;
 	VkImageView depth_image_view;
+	VkImage depth_fade_image;
+	VkImageView depth_fade_image_view;
+	VkDescriptorSet depth_fade_descriptor;
 
 	VkImage msaa_image;
 	VkImageView msaa_image_view;
@@ -504,6 +517,7 @@ typedef struct {
 		VkFramebuffer blur[VK_NUM_BLOOM_PASSES*2];
 		VkFramebuffer bloom_extract;
 		VkFramebuffer main[MAX_SWAPCHAIN_IMAGES];
+		VkFramebuffer main_load[MAX_SWAPCHAIN_IMAGES];
 		VkFramebuffer gamma[MAX_SWAPCHAIN_IMAGES];
 		VkFramebuffer screenmap;
 		VkFramebuffer capture;

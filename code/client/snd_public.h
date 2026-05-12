@@ -21,6 +21,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void S_Init( void );
 void S_Shutdown( void );
 
@@ -75,7 +79,7 @@ void SNDDMA_Activate( void );
 #define S_SPATIAL_DEBUG_MAX_LINES 10
 #define S_SPATIAL_DEBUG_LINE_CHARS 128
 
-typedef struct {
+struct spatialAudioDebugInfo_t {
 	qboolean	active;
 	qboolean	hasSelectedVoice;
 	int			lineCount;
@@ -85,8 +89,15 @@ typedef struct {
 	float		occlusion;
 	float		pan;
 	float		pitch;
-} spatialAudioDebugInfo_t;
+};
+#ifndef __cplusplus
+#define spatialAudioDebugInfo_t struct spatialAudioDebugInfo_t
+#endif
 
 #endif
 
 qboolean S_GetSpatialAudioDebugInfo( spatialAudioDebugInfo_t *info );
+
+#ifdef __cplusplus
+}
+#endif

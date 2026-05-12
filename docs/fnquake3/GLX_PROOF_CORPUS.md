@@ -6,7 +6,7 @@ The GLx proof corpus is the single scene list used by RC gate dry runs, runtime 
 
 `scripts/glx_runtime_sweep.py` owns the machine-readable corpus. This document is the maintainer-facing description of the same corpus and must stay in sync with `GLX_PROOF_CORPUS_VERSION`.
 
-Current corpus version: `2026-05-11-post-proof-v1`.
+Current corpus version: `2026-05-12-image-evidence-v1`.
 
 Current parity suite version: `2026-05-11-post-v1`.
 
@@ -48,6 +48,12 @@ Current parity suite version: `2026-05-11-post-v1`.
 | `modern-fnq3glx-fog01` | map | `fnq3_glx_fog01` | `glx-proof-corpus` | `modern-map`, `fog-heavy`, `visibility`, `screenshot-parity` |
 | `timedemo-demo1` | demo | `demo1` | `retail-baseq3` | `stock-demo`, `demo-playback-parity`, `performance-comparison`, `dynamic-entity`, `dynamic-light` |
 | `timedemo-fnq3glx-particles01` | demo | `fnq3_glx_particles01` | `glx-proof-corpus` | `particle-heavy-demo`, `demo-playback-parity`, `modern-map`, `performance-comparison`, `particle`, `transient-poly`, `mark-decal`, `beam`, `dynamic-light` |
+
+## Image Evidence Metadata
+
+The corpus manifest carries compact image-evidence metadata for each selected scene through `selectedScenes[].imageEvidence`. The current schema is `2026-05-12-p2-image-evidence-v1` and records each scene's review role, compact probe labels, and expected sidecars. Screenshot-capable scenes expect `.histogram.json`, `.luma-falsecolor.png`, and `.exposure-falsecolor.png` sidecars. Timedemo-only scenes can opt out of sidecars while still keeping their motion/performance role visible in the same metadata.
+
+The runtime sweep also writes deterministic offline shader-reference ramps under `image-evidence/shader-reference-ramps/` whenever the color sweep is enabled or `--write-image-evidence` is requested. These ramps cover the color-sweep rows with linear gray ramps, step wedges, saturated primaries, and HDR highlight ramps so shader captures can be compared against CPU reference output without requiring a live GPU in offline tests.
 
 ## Artifact Contract
 

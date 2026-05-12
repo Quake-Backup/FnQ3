@@ -438,11 +438,11 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\win32\win_glimp.c"
+				RelativePath="..\..\win32\win_glimp.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\win32\win_qgl.c"
+				RelativePath="..\..\win32\win_qgl.cpp"
 				>
 			</File>
 		</Filter>

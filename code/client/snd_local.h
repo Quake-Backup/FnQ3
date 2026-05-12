@@ -26,30 +26,44 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qcommon.h"
 #include "snd_public.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define	PAINTBUFFER_SIZE		4096					// this is in samples
 
 #define SND_CHUNK_SIZE			1024					// samples
 #define SND_CHUNK_SIZE_FLOAT	(SND_CHUNK_SIZE/2)		// floats
 #define SND_CHUNK_SIZE_BYTE		(SND_CHUNK_SIZE*2)		// floats
 
-typedef struct {
+typedef struct portable_samplepair_t portable_samplepair_t;
+typedef struct adpcm_state_t adpcm_state_t;
+typedef struct sndBuffer sndBuffer;
+typedef struct sfx_t sfx_t;
+typedef struct dma_t dma_t;
+typedef struct loopSound_t loopSound_t;
+typedef struct channel_t channel_t;
+typedef struct wavinfo_t wavinfo_t;
+typedef struct soundInterface_t soundInterface_t;
+
+struct portable_samplepair_t {
 	int			left;	// the final values will be clamped to +/- 0x00ffff00 and shifted down
 	int			right;
-} portable_samplepair_t;
+};
 
-typedef struct adpcm_state {
+struct adpcm_state_t {
 	short	sample;		/* Previous output value */
 	char	index;		/* Index into stepsize table */
-} adpcm_state_t;
+};
 
-typedef	struct sndBuffer_s {
+struct sndBuffer {
 	short					sndChunk[SND_CHUNK_SIZE];
-	struct sndBuffer_s		*next;
+	sndBuffer				*next;
 	int						size;
 	adpcm_state_t			adpcm;
-} sndBuffer;
+};
 
-typedef struct sfx_s {
+struct sfx_t {
 	sndBuffer		*soundData;
 	qboolean		defaultSound;			// couldn't be loaded, so use buzz
 	qboolean		inMemory;				// not in Memory
@@ -59,10 +73,10 @@ typedef struct sfx_s {
 	int				soundChannels;
 	char 			soundName[MAX_QPATH];
 	int				lastTimeUsed;
-	struct sfx_s	*next;
-} sfx_t;
+	sfx_t			*next;
+};
 
-typedef struct {
+struct dma_t {
 	unsigned int channels;
 	unsigned int samples;				// mono samples in buffer
 	int			fullsamples;			// samples with all channels in buffer (samples divided by channels)
@@ -72,7 +86,7 @@ typedef struct {
 	int			speed;
 	byte		*buffer;
 	const char	*driver;
-} dma_t;
+};
 
 extern byte *dma_buffer2;
 
@@ -80,7 +94,7 @@ extern byte *dma_buffer2;
 
 #define MAX_DOPPLER_SCALE 50.0f //arbitrary
 
-typedef struct loopSound_s {
+struct loopSound_t {
 	vec3_t		origin;
 	vec3_t		velocity;
 	sfx_t		*sfx;
@@ -91,10 +105,9 @@ typedef struct loopSound_s {
 	float		dopplerScale;
 	float		oldDopplerScale;
 	int			framenum;
-} loopSound_t;
+};
 
-typedef struct
-{
+struct channel_t {
 	int			allocTime;
 	int			startSample;	// START_SAMPLE_IMMEDIATE = set immediately on next mix
 	int			entnum;			// to allow overriding a specific sound
@@ -108,24 +121,23 @@ typedef struct
 	qboolean	fixed_origin;	// use origin instead of fetching entnum's origin
 	sfx_t		*thesfx;		// sfx structure
 	qboolean	doppler;
-} channel_t;
+};
 
 
 #define WAV_FORMAT_PCM			0x0001
 #define WAVE_FORMAT_IEEE_FLOAT	0x0003
 
-typedef struct {
+struct wavinfo_t {
 	int			format;
 	int			rate;
 	int			width;
 	int			channels;
 	int			samples;
 	int			dataofs;		// chunk starts this many bytes from file start
-} wavinfo_t;
+};
 
 // Interface between Q3 sound "api" and the sound backend
-typedef struct
-{
+struct soundInterface_t {
 	void (*Shutdown)(void);
 	void (*StartSound)( const vec3_t origin, int entnum, int entchannel, sfxHandle_t sfx );
 	void (*StartLocalSound)( sfxHandle_t sfx, int channelNum );
@@ -148,7 +160,7 @@ typedef struct
 	void (*SoundList)( void );
 	qboolean (*GetSpatialDebugInfo)( spatialAudioDebugInfo_t *info );
 	void (*DumpSpatialDebug)( void );
-} soundInterface_t;
+};
 
 
 /*
@@ -196,6 +208,7 @@ extern cvar_t *s_musicVolume;
 extern cvar_t *s_doppler;
 extern cvar_t *s_muteWhenUnfocused;
 extern cvar_t *s_muteWhenMinimized;
+extern cvar_t *s_khz;
 extern cvar_t *s_backend;
 extern cvar_t *s_backendActive;
 extern cvar_t *s_alDevice;
@@ -254,3 +267,7 @@ void S_OpenAL_ListDevices( void );
 void S_OpenAL_ListHrtfs( void );
 void S_OpenAL_ConfigHints( void );
 qboolean S_OpenAL_RecoverDevice( qboolean force );
+
+#ifdef __cplusplus
+}
+#endif

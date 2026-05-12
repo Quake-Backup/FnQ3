@@ -193,7 +193,8 @@ $setupArgs = @(
 	"--buildtype=$buildType",
 	'-Drenderer-dlopen=true',
 	"-Drenderers=$rendererCsv",
-	"-Drenderer-default=$RendererDefault"
+	"-Drenderer-default=$RendererDefault",
+	'-Dogg:default_library=static'
 )
 
 if ($Target -eq 'client') {

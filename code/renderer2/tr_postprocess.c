@@ -22,70 +22,370 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_local.h"
 
+#define AUTO_EXPOSURE_SEED_SIZE          256
+#define AUTO_EXPOSURE_LOG_LUMINANCE_MIN -10.0f
+#define AUTO_EXPOSURE_LOG_LUMINANCE_MAX  10.0f
+#define AUTO_EXPOSURE_EV_MIN            -16.0f
+#define AUTO_EXPOSURE_EV_MAX             16.0f
+#define AUTO_EXPOSURE_MAX_DELTA_SECONDS   0.25f
+#define AUTO_EXPOSURE_EXP2_E              1.4426950408889634f
+#define AUTO_EXPOSURE_FLOAT_TAU_SECONDS   0.55f
+#define AUTO_EXPOSURE_FIXED_TAU_SECONDS   0.16f
+#define AUTO_EXPOSURE_HISTOGRAM_LOW_INDEX 1
+#define AUTO_EXPOSURE_HISTOGRAM_MID_INDEX 8
+#define AUTO_EXPOSURE_HISTOGRAM_HIGH_INDEX 14
+#define TONEMAP_LINEAR_MIN_FALLBACK       0.00390625f
+#define TONEMAP_LINEAR_AVG_FALLBACK       0.25f
+#define TONEMAP_LINEAR_MAX_FALLBACK       1.0f
+
+typedef struct
+{
+	autoExposureMode_t mode;
+	qboolean initialized;
+	int lastFrameCount;
+	int lastTime;
+} autoExposureState_t;
+
+static autoExposureState_t autoExposureState;
+
+static float RB_ClampFiniteFloat(float value, float minValue, float maxValue, float fallback)
+{
+	if (Q_isnan(value))
+		value = fallback;
+
+	if (value < minValue)
+		return minValue;
+	if (value > maxValue)
+		return maxValue;
+
+	return value;
+}
+
+static qboolean RB_AutoExposureHistogramPercentileAvailable(void)
+{
+	// The percentile path depends on float targets preserving log-luminance bins
+	// through the reduction chain. Older/fixed-point tiers keep the robust mode-1
+	// reduction instead of silently changing exposure behavior.
+	return glRefConfig.textureFloat ? qtrue : qfalse;
+}
+
+static autoExposureMode_t RB_GetAutoExposureMode(int autoExposure)
+{
+	if (!autoExposure)
+		return AUTO_EXPOSURE_MODE_OFF;
+
+	if (r_autoExposure && r_autoExposure->integer >= AUTO_EXPOSURE_MODE_HISTOGRAM_PERCENTILE)
+	{
+		if (RB_AutoExposureHistogramPercentileAvailable())
+			return AUTO_EXPOSURE_MODE_HISTOGRAM_PERCENTILE;
+
+		return AUTO_EXPOSURE_MODE_TIME_CONSTANT;
+	}
+
+	if (r_autoExposure && r_autoExposure->integer >= AUTO_EXPOSURE_MODE_LEGACY)
+		return AUTO_EXPOSURE_MODE_LEGACY;
+
+	return AUTO_EXPOSURE_MODE_TIME_CONSTANT;
+}
+
+static void RB_SanitizeToneMapInputs(void)
+{
+	float autoExposureMin = RB_ClampFiniteFloat(tr.refdef.autoExposureMinMax[0],
+		AUTO_EXPOSURE_LOG_LUMINANCE_MIN, AUTO_EXPOSURE_LOG_LUMINANCE_MAX, -2.0f);
+	float autoExposureMax = RB_ClampFiniteFloat(tr.refdef.autoExposureMinMax[1],
+		AUTO_EXPOSURE_LOG_LUMINANCE_MIN, AUTO_EXPOSURE_LOG_LUMINANCE_MAX, 2.0f);
+	float toneMin = RB_ClampFiniteFloat(tr.refdef.toneMinAvgMaxLinear[0],
+		0.000001f, 1048576.0f, TONEMAP_LINEAR_MIN_FALLBACK);
+	float toneAvg = RB_ClampFiniteFloat(tr.refdef.toneMinAvgMaxLinear[1],
+		0.000001f, 1048576.0f, TONEMAP_LINEAR_AVG_FALLBACK);
+	float toneMax = RB_ClampFiniteFloat(tr.refdef.toneMinAvgMaxLinear[2],
+		0.000001f, 1048576.0f, TONEMAP_LINEAR_MAX_FALLBACK);
+
+	if (autoExposureMin > autoExposureMax)
+	{
+		float tmp = autoExposureMin;
+		autoExposureMin = autoExposureMax;
+		autoExposureMax = tmp;
+	}
+
+	if (toneMin > toneMax)
+	{
+		float tmp = toneMin;
+		toneMin = toneMax;
+		toneMax = tmp;
+	}
+
+	if (toneMax <= toneMin + 0.000001f)
+		toneMax = toneMin + 0.000001f;
+
+	toneAvg = RB_ClampFiniteFloat(toneAvg, toneMin, toneMax, TONEMAP_LINEAR_AVG_FALLBACK);
+
+	tr.refdef.autoExposureMinMax[0] = autoExposureMin;
+	tr.refdef.autoExposureMinMax[1] = autoExposureMax;
+	tr.refdef.toneMinAvgMaxLinear[0] = toneMin;
+	tr.refdef.toneMinAvgMaxLinear[1] = toneAvg;
+	tr.refdef.toneMinAvgMaxLinear[2] = toneMax;
+}
+
+static float RB_CameraExposureScale(qboolean autoExposureEnabled)
+{
+	float cameraExposure = RB_ClampFiniteFloat(r_cameraExposure->value,
+		AUTO_EXPOSURE_EV_MIN, AUTO_EXPOSURE_EV_MAX, 1.0f);
+	float exposureEV = cameraExposure - (autoExposureEnabled ? 1.0f : 0.0f);
+
+	exposureEV = RB_ClampFiniteFloat(exposureEV,
+		AUTO_EXPOSURE_EV_MIN, AUTO_EXPOSURE_EV_MAX, autoExposureEnabled ? 0.0f : 1.0f);
+
+	return Q_exp2f(exposureEV);
+}
+
+static void RB_CalculateAutoExposureTargetLegacy(FBO_t *hdrFbo, ivec4_t hdrBox)
+{
+	FBO_t *srcFbo, *dstFbo, *tmp;
+	ivec4_t srcBox, dstBox;
+	int size = AUTO_EXPOSURE_SEED_SIZE;
+
+	VectorSet4(dstBox, 0, 0, size, size);
+
+	FBO_Blit(hdrFbo, hdrBox, NULL, tr.textureScratchFbo[0], dstBox, &tr.calclevels4xShader[0], NULL, 0);
+
+	srcFbo = tr.textureScratchFbo[0];
+	dstFbo = tr.textureScratchFbo[1];
+
+	// Legacy parity path: keep the old frame-cadenced GL_LINEAR mip-style reduction.
+	while (size > 1)
+	{
+		VectorSet4(srcBox, 0, 0, size, size);
+		size >>= 1;
+		VectorSet4(dstBox, 0, 0, size, size);
+
+		if (size == 1)
+			dstFbo = tr.targetLevelsFbo;
+
+		FBO_FastBlit(srcFbo, srcBox, dstFbo, dstBox, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+		tmp = srcFbo;
+		srcFbo = dstFbo;
+		dstFbo = tmp;
+	}
+}
+
+static void RB_CalculateAutoExposureTargetRobust(FBO_t *hdrFbo, ivec4_t hdrBox)
+{
+	FBO_t *srcFbo, *dstFbo, *tmp;
+	ivec4_t srcBox, dstBox;
+	int size = AUTO_EXPOSURE_SEED_SIZE;
+
+	VectorSet4(dstBox, 0, 0, size, size);
+
+	FBO_Blit(hdrFbo, hdrBox, NULL, tr.textureScratchFbo[0], dstBox, &tr.calclevels4xShader[0], NULL, 0);
+
+	srcFbo = tr.textureScratchFbo[0];
+	dstFbo = tr.textureScratchFbo[1];
+
+	// The reduction shader preserves average log luminance while tracking min/max,
+	// avoiding driver-dependent GL_LINEAR filtering of packed statistics.
+	while (size > 1)
+	{
+		VectorSet4(srcBox, 0, 0, size, size);
+		size = (size > 4) ? (size >> 2) : 1;
+		VectorSet4(dstBox, 0, 0, size, size);
+
+		if (size == 1)
+			dstFbo = tr.targetLevelsFbo;
+
+		FBO_Blit(srcFbo, srcBox, NULL, dstFbo, dstBox, &tr.calclevels4xShader[1], NULL, 0);
+
+		tmp = srcFbo;
+		srcFbo = dstFbo;
+		dstFbo = tmp;
+	}
+}
+
+static void RB_CalculateAutoExposureTargetHistogramPercentile(FBO_t *hdrFbo, ivec4_t hdrBox)
+{
+	FBO_t *srcFbo, *dstFbo, *tmp;
+	ivec4_t srcBox, dstBox;
+	int size = AUTO_EXPOSURE_SEED_SIZE;
+
+	VectorSet4(dstBox, 0, 0, size, size);
+
+	FBO_Blit(hdrFbo, hdrBox, NULL, tr.textureScratchFbo[0], dstBox, &tr.calclevels4xShader[0], NULL, 0);
+
+	srcFbo = tr.textureScratchFbo[0];
+	dstFbo = tr.textureScratchFbo[1];
+
+	// Modern-tier path: each 4x4 reduction sorts the local log-luminance
+	// histogram and carries low/median/high percentile samples instead of
+	// frame-global min/mean/max outliers.
+	while (size > 1)
+	{
+		VectorSet4(srcBox, 0, 0, size, size);
+		size = (size > 4) ? (size >> 2) : 1;
+		VectorSet4(dstBox, 0, 0, size, size);
+
+		if (size == 1)
+			dstFbo = tr.targetLevelsFbo;
+
+		FBO_Blit(srcFbo, srcBox, NULL, dstFbo, dstBox, &tr.calclevels4xShader[2], NULL, 0);
+
+		tmp = srcFbo;
+		srcFbo = dstFbo;
+		dstFbo = tmp;
+	}
+}
+
+static void RB_BlendAutoExposureTarget(float alpha)
+{
+	vec4_t color;
+
+	alpha = RB_ClampFiniteFloat(alpha, 0.0f, 1.0f, 1.0f);
+	if (alpha <= 0.0f)
+		return;
+
+	color[0] =
+	color[1] =
+	color[2] = 1.0f;
+	color[3] = alpha;
+
+	if (alpha >= 1.0f)
+		FBO_Blit(tr.targetLevelsFbo, NULL, NULL, tr.calcLevelsFbo, NULL, NULL, color, 0);
+	else
+		FBO_Blit(tr.targetLevelsFbo, NULL, NULL, tr.calcLevelsFbo, NULL, NULL, color, GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA);
+}
+
+static float RB_TimeConstantAutoExposureAlpha(autoExposureMode_t mode, qboolean *updateTarget)
+{
+	int now = ri.Milliseconds();
+	float deltaSeconds;
+	float tauSeconds;
+	float alpha;
+	qboolean reset;
+
+	*updateTarget = qfalse;
+
+	reset = !autoExposureState.initialized ||
+		autoExposureState.mode != mode ||
+		tr.frameCount < autoExposureState.lastFrameCount ||
+		now < autoExposureState.lastTime;
+
+	if (autoExposureState.initialized && tr.frameCount == autoExposureState.lastFrameCount)
+		return 0.0f;
+
+	*updateTarget = qtrue;
+
+	if (reset)
+	{
+		autoExposureState.initialized = qtrue;
+		autoExposureState.mode = mode;
+		autoExposureState.lastFrameCount = tr.frameCount;
+		autoExposureState.lastTime = now;
+		return 1.0f;
+	}
+
+	deltaSeconds = (now - autoExposureState.lastTime) * 0.001f;
+
+	autoExposureState.mode = mode;
+	autoExposureState.lastFrameCount = tr.frameCount;
+	autoExposureState.lastTime = now;
+
+	deltaSeconds = RB_ClampFiniteFloat(deltaSeconds, 0.0f, AUTO_EXPOSURE_MAX_DELTA_SECONDS, 0.0f);
+	if (deltaSeconds <= 0.0f)
+		return 0.0f;
+
+	tauSeconds = glRefConfig.textureFloat ? AUTO_EXPOSURE_FLOAT_TAU_SECONDS : AUTO_EXPOSURE_FIXED_TAU_SECONDS;
+	alpha = 1.0f - Q_exp2f((-deltaSeconds * AUTO_EXPOSURE_EXP2_E) / tauSeconds);
+
+	return RB_ClampFiniteFloat(alpha, 0.0f, 1.0f, 0.0f);
+}
+
+static void RB_UpdateAutoExposureLegacy(FBO_t *hdrFbo, ivec4_t hdrBox)
+{
+	static int lastFrameCount = 0;
+	vec4_t color;
+	ivec4_t srcBox;
+
+	if (lastFrameCount == 0 || tr.frameCount < lastFrameCount || tr.frameCount - lastFrameCount > 5)
+	{
+		lastFrameCount = tr.frameCount;
+		RB_CalculateAutoExposureTargetLegacy(hdrFbo, hdrBox);
+	}
+
+	// Blend with old log luminance for gradual change.
+	VectorSet4(srcBox, 0, 0, 0, 0);
+
+	color[0] =
+	color[1] =
+	color[2] = 1.0f;
+	if (glRefConfig.textureFloat)
+		color[3] = 0.03f;
+	else
+		color[3] = 0.1f;
+
+	FBO_Blit(tr.targetLevelsFbo, srcBox, NULL, tr.calcLevelsFbo, NULL, NULL, color, GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA);
+}
+
+static void RB_UpdateAutoExposureTimeConstant(FBO_t *hdrFbo, ivec4_t hdrBox)
+{
+	qboolean updateTarget;
+	float alpha = RB_TimeConstantAutoExposureAlpha(AUTO_EXPOSURE_MODE_TIME_CONSTANT, &updateTarget);
+
+	if (!updateTarget)
+		return;
+
+	RB_CalculateAutoExposureTargetRobust(hdrFbo, hdrBox);
+	RB_BlendAutoExposureTarget(alpha);
+}
+
+static void RB_UpdateAutoExposureHistogramPercentile(FBO_t *hdrFbo, ivec4_t hdrBox)
+{
+	qboolean updateTarget;
+	float alpha = RB_TimeConstantAutoExposureAlpha(AUTO_EXPOSURE_MODE_HISTOGRAM_PERCENTILE, &updateTarget);
+
+	if (!updateTarget)
+		return;
+
+	if (!RB_AutoExposureHistogramPercentileAvailable())
+		RB_CalculateAutoExposureTargetRobust(hdrFbo, hdrBox);
+	else
+		RB_CalculateAutoExposureTargetHistogramPercentile(hdrFbo, hdrBox);
+
+	RB_BlendAutoExposureTarget(alpha);
+}
+
 void RB_ToneMap(FBO_t *hdrFbo, ivec4_t hdrBox, FBO_t *ldrFbo, ivec4_t ldrBox, int autoExposure)
 {
-	ivec4_t srcBox, dstBox;
 	vec4_t color;
-	static int lastFrameCount = 0;
+	autoExposureMode_t autoExposureMode = RB_GetAutoExposureMode(autoExposure);
+	qboolean autoExposureEnabled = (autoExposureMode != AUTO_EXPOSURE_MODE_OFF);
 
-	if (autoExposure)
+	RB_SanitizeToneMapInputs();
+
+	if (autoExposureMode == AUTO_EXPOSURE_MODE_LEGACY)
 	{
-		if (lastFrameCount == 0 || tr.frameCount < lastFrameCount || tr.frameCount - lastFrameCount > 5)
-		{
-			// determine average log luminance
-			FBO_t *srcFbo, *dstFbo, *tmp;
-			int size = 256;
-
-			lastFrameCount = tr.frameCount;
-
-			VectorSet4(dstBox, 0, 0, size, size);
-
-			FBO_Blit(hdrFbo, hdrBox, NULL, tr.textureScratchFbo[0], dstBox, &tr.calclevels4xShader[0], NULL, 0);
-
-			srcFbo = tr.textureScratchFbo[0];
-			dstFbo = tr.textureScratchFbo[1];
-
-			// downscale to 1x1 texture
-			while (size > 1)
-			{
-				VectorSet4(srcBox, 0, 0, size, size);
-				//size >>= 2;
-				size >>= 1;
-				VectorSet4(dstBox, 0, 0, size, size);
-
-				if (size == 1)
-					dstFbo = tr.targetLevelsFbo;
-
-				//FBO_Blit(targetFbo, srcBox, NULL, tr.textureScratchFbo[nextScratch], dstBox, &tr.calclevels4xShader[1], NULL, 0);
-				FBO_FastBlit(srcFbo, srcBox, dstFbo, dstBox, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-
-				tmp = srcFbo;
-				srcFbo = dstFbo;
-				dstFbo = tmp;
-			}
-		}
-
-		// blend with old log luminance for gradual change
-		VectorSet4(srcBox, 0, 0, 0, 0);
-
-		color[0] = 
-		color[1] =
-		color[2] = 1.0f;
-		if (glRefConfig.textureFloat)
-			color[3] = 0.03f;
-		else
-			color[3] = 0.1f;
-
-		FBO_Blit(tr.targetLevelsFbo, srcBox, NULL, tr.calcLevelsFbo, NULL,  NULL, color, GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA);
+		autoExposureState.initialized = qfalse;
+		RB_UpdateAutoExposureLegacy(hdrFbo, hdrBox);
+	}
+	else if (autoExposureMode == AUTO_EXPOSURE_MODE_TIME_CONSTANT)
+	{
+		RB_UpdateAutoExposureTimeConstant(hdrFbo, hdrBox);
+	}
+	else if (autoExposureMode == AUTO_EXPOSURE_MODE_HISTOGRAM_PERCENTILE)
+	{
+		RB_UpdateAutoExposureHistogramPercentile(hdrFbo, hdrBox);
+	}
+	else
+	{
+		autoExposureState.initialized = qfalse;
 	}
 
 	// tonemap
 	color[0] =
 	color[1] =
-	color[2] = pow(2, r_cameraExposure->value - autoExposure); //exp2(r_cameraExposure->value);
+	color[2] = RB_CameraExposureScale(autoExposureEnabled);
 	color[3] = 1.0f;
 
-	if (autoExposure)
+	if (autoExposureEnabled)
 		GL_BindToTMU(tr.calcLevelsImage,  TB_LEVELSMAP);
 	else
 		GL_BindToTMU(tr.fixedLevelsImage, TB_LEVELSMAP);

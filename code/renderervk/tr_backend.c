@@ -600,6 +600,9 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #ifdef USE_PMLIGHT
 	float			oldShaderSort;
 #endif
+#ifdef USE_VULKAN
+	qboolean		depthFadeSnapshot;
+#endif
 	double			originalTime; // -EC-
 
 	// save original time for entity shader offsets
@@ -617,6 +620,9 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #ifdef USE_PMLIGHT
 	oldShaderSort = -1;
 #endif
+#ifdef USE_VULKAN
+	depthFadeSnapshot = qfalse;
+#endif
 	depthRange = qfalse;
 
 	backEnd.pc.c_surfaces += numDrawSurfs;
@@ -632,6 +638,14 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #ifdef USE_VULKAN
 		if ( vk.renderPassIndex == RENDER_PASS_SCREENMAP && entityNum != REFENTITYNUM_WORLD && backEnd.refdef.entities[ entityNum ].e.renderfx & RF_DEPTHHACK ) {
 			continue;
+		}
+		if ( !depthFadeSnapshot && shader && shader->sort > SS_OPAQUE && vk.renderPassIndex == RENDER_PASS_MAIN && vk_depth_fade_available() ) {
+			RB_EndSurface();
+			vk_copy_depth_fade();
+			depthFadeSnapshot = qtrue;
+			oldShader = NULL;
+			oldSort = MAX_UINT;
+			oldEntityNum = -1;
 		}
 #endif
 		//

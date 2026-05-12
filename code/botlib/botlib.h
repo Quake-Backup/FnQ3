@@ -31,6 +31,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #define	BOTLIB_API_VERSION		2
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct aas_clientmove_s;
 struct aas_entityinfo_s;
 struct aas_areainfo_s;
@@ -434,6 +438,10 @@ typedef struct botlib_export_s
 
 //linking of bot library
 botlib_export_t *GetBotLibAPI( int apiVersion, botlib_import_t *import );
+
+#ifdef __cplusplus
+}
+#endif
 
 /* Library variables:
 

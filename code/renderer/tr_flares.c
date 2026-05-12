@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // tr_flares.c
 
 #include "tr_local.h"
+#include "tr_glx_compat.h"
 
 /*
 =============================================================================
@@ -303,6 +304,53 @@ static void RB_TestFlare( flare_t *f ) {
 
 /*
 ==================
+R_FlareUseSceneLinearColor
+==================
+*/
+static qboolean R_FlareUseSceneLinearColor( void ) {
+#ifdef USE_FBO
+	return ( r_hdr && r_hdr->integer > 0 && ( !r_flareSceneLinear || r_flareSceneLinear->integer ) ) ?
+		qtrue : qfalse;
+#else
+	return qfalse;
+#endif
+}
+
+/*
+==================
+R_FlareSrgbToLinear
+==================
+*/
+static float R_FlareSrgbToLinear( float value ) {
+	if ( value <= 0.0f ) {
+		return 0.0f;
+	}
+	if ( value >= 1.0f ) {
+		return 1.0f;
+	}
+	if ( value <= 0.04045f ) {
+		return value / 12.92f;
+	}
+	return powf( ( value + 0.055f ) / 1.055f, 2.4f );
+}
+
+/*
+==================
+R_FlareApplyColorContract
+==================
+*/
+static void R_FlareApplyColorContract( vec3_t color ) {
+	if ( !R_FlareUseSceneLinearColor() ) {
+		return;
+	}
+
+	color[0] = R_FlareSrgbToLinear( color[0] );
+	color[1] = R_FlareSrgbToLinear( color[1] );
+	color[2] = R_FlareSrgbToLinear( color[2] );
+}
+
+/*
+==================
 RB_RenderFlare
 ==================
 */
@@ -350,6 +398,7 @@ static void RB_RenderFlare( flare_t *f ) {
 	intensity = r_flareCoeff->value * size * size / (factor * factor);
 
 	VectorScale(f->color, f->drawIntensity * intensity, color);
+	R_FlareApplyColorContract( color );
 
 	// Calculations for fogging
 	if ( tr.world && f->fogNum > 0 && f->fogNum < tr.world->numfogs )
@@ -473,11 +522,17 @@ void RB_RenderFlares (void) {
 	qglLoadMatrixf( GL_Ortho( backEnd.viewParms.viewportX, backEnd.viewParms.viewportX + backEnd.viewParms.viewportWidth,
 		backEnd.viewParms.viewportY, backEnd.viewParms.viewportY + backEnd.viewParms.viewportHeight, -99999, 99999 ) );
 
+#ifdef RENDERER_GLX
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_FLARE );
+#endif
 	for ( f = r_activeFlares ; f ; f = f->next ) {
 		if ( f->frameSceneNum == backEnd.viewParms.frameSceneNum && f->portalView == backEnd.viewParms.portalView && f->drawIntensity ) {
 			RB_RenderFlare( f );
 		}
 	}
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_FLARE );
+#endif
 
 	qglPopMatrix();
 	qglMatrixMode( GL_MODELVIEW );

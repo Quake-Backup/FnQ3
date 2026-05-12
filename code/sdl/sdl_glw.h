@@ -31,6 +31,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 //#define USE_JOYSTICK
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct
 {
 	FILE *log_fp;
@@ -57,10 +61,17 @@ extern cvar_t *in_nograb;
 
 void IN_Init( void );
 void IN_Shutdown( void );
+void IN_Frame( void );
+void HandleEvents( void );
 void GLW_UpdateWindowState( void );
+void GLW_HideFullscreenWindow( void );
 void GLW_RestoreGamma( void );
 
 // signals.c
 void InitSig( void );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

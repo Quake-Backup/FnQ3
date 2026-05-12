@@ -27,6 +27,9 @@ layout(set = 0, binding = 0) uniform UBO {
 	vec4 fogEyeT;				// vertex
 	vec4 fogColor;				// fragment
 	vec4 texFactors;			// fragment
+	vec4 depthFadeInfo;			// fragment: zfar/znear, zfar, invDist, bias
+	vec4 depthFadeScale;		// fragment
+	vec4 depthFadeBias;			// fragment
 };
 
 layout(set = 1, binding = 0) uniform sampler2D texture0;
@@ -39,6 +42,7 @@ layout(set = 3, binding = 0) uniform sampler2D texture2;
 #ifdef USE_FOG
 layout(set = 4, binding = 0) uniform sampler2D fog_texture;
 #endif
+layout(set = 5, binding = 0) uniform sampler2D depth_texture;
 
 #if defined (USE_CLX_IDENT)
 // fixed identity (1.0) color for all textures
@@ -98,6 +102,24 @@ layout (constant_id = 9) const float identity_alpha = 1.0;
 #ifdef USE_FOG
 layout (constant_id = 10) const int acff = 0; // NONE, RGB, RGBA, ALPHA
 #endif
+layout (constant_id = 11) const int depth_fade = 0;
+
+float DepthFadeLinearDepth(float depth)
+{
+	return depthFadeInfo.y / mix(1.0, depthFadeInfo.x, depth);
+}
+
+vec4 ApplyDepthFade(vec4 color)
+{
+	vec2 depthUV = gl_FragCoord.xy / vec2(textureSize(depth_texture, 0));
+	float sceneDepth = texture(depth_texture, depthUV).r;
+	float sceneLinear = DepthFadeLinearDepth(sceneDepth);
+	float fragLinear = DepthFadeLinearDepth(gl_FragCoord.z);
+	float fade = clamp((sceneLinear - fragLinear + depthFadeInfo.w) * depthFadeInfo.z, 0.0, 1.0);
+
+	fade = fade * fade * (3.0 - 2.0 * fade);
+	return mix(color * depthFadeScale + depthFadeBias, color, fade);
+}
 
 #ifdef USE_ATEST
 #if 0
@@ -509,6 +531,9 @@ void main() {
 
 	gl_FragDepth = gl_FragCoord.z;
 #else
+	if ( depth_fade != 0 ) {
+		base = ApplyDepthFade(base);
+	}
 	out_color = base;
 #endif
 }

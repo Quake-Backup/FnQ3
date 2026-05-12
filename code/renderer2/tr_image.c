@@ -2744,7 +2744,7 @@ static void R_CreateBuiltinImages( void ) {
 		if (r_shadowBlur->integer || !glConfig.deviceSupportsGamma)
 			tr.screenScratchImage = R_CreateImage("screenScratch", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, rgbFormat);
 
-		if (r_shadowBlur->integer || r_ssao->integer)
+		if (r_shadowBlur->integer || r_ssao->integer || r_depthFade->integer)
 			tr.hdrDepthImage = R_CreateImage("*hdrDepth", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_R32F);
 
 		if (r_drawSunRays->integer)

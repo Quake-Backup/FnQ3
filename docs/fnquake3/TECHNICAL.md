@@ -38,7 +38,7 @@ That header feeds:
 
 - runtime version strings via [`code/qcommon/q_shared.h`](../../code/qcommon/q_shared.h)
 - Windows resource metadata via [`code/win32/win_resource.rc`](../../code/win32/win_resource.rc)
-- Meson, Make, and CMake version reporting
+- Meson and Make version reporting
 - documentation rendering
 - nightly and tagged release archive naming
 
@@ -123,7 +123,7 @@ Dry-run renderer gate artifacts are planning evidence only. Blocking release evi
 
 - The default client audio path is the OpenAL backend selected by `s_backend openal`.
 - `s_backend legacy` keeps the original Quake III mixer/device backend available as a fallback path.
-- OpenAL headers are vendored under [`code/openal/include`](../../code/openal/include), and Windows x86/x64 package builds stage a matching `OpenAL32.dll` from [`code/openal/windows`](../../code/openal/windows).
+- OpenAL headers are provided through the Meson `openal-soft` subproject fallback or a system OpenAL development package. The client still loads the OpenAL runtime dynamically so startup can fall back to the legacy mixer when the runtime is unavailable.
 - The runtime reporting cvar is `s_backendActive`. Device selection for the OpenAL backend uses `s_alDevice`.
 - The OpenAL backend also exposes `s_alReverb`, `s_alOcclusion`, `s_alReverbGain`, and `s_alOcclusionStrength` for the environmental spatial layer. Reverb enablement is latched because the EFX reverb slot is created at backend init. Listener environment changes blend EFX preset parameters and per-source wet/tone values over a short transition, with the active-to-target environment visible in the spatial debug overlay and `s_alDebugDump`. Occlusion traces feed a smoothed per-voice target; direct-path attenuation is kept separate from tone-filter sweeps so wall transitions do not zipper. The per-voice EFX filters are intentionally limited to low-pass, high-pass, and band-pass presets chosen by source class and occlusion/environment state.
 - Modern OpenAL startup requests are exposed as latched cvars: `s_alHrtf`, `s_alHrtfId`, `s_alOutputMode`, `s_alDistanceModel`, `s_alFrequency`, `s_alRefresh`, `s_alMonoSources`, `s_alStereoSources`, `s_alOutputLimiter`, and `s_alSpatializeStereo`. Context creation first tries requested modern attributes, then standard source/frequency hints, then default attributes before the outer backend fallback can select legacy. Keep `s_info` as the canonical place to compare requested values against active runtime/device values. When `ALC_SOFT_device_clock` is available, `s_info` should refresh the clock/latency query live so latency diagnostics are current instead of just an init-time snapshot.

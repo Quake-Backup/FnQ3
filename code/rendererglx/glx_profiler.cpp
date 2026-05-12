@@ -12,10 +12,52 @@
 #ifndef GL_QUERY_RESULT
 #define GL_QUERY_RESULT 0x8866
 #endif
+#ifndef GL_TIMESTAMP
+#define GL_TIMESTAMP 0x8E28
+#endif
 
 namespace glx {
 
 static constexpr int GLX_QUERY_COUNT = 4;
+static constexpr int GLX_PASS_QUERY_COUNT = 16;
+static constexpr int GLX_PASS_QUERY_IDS = GLX_PASS_QUERY_COUNT * 2;
+static constexpr int GLX_PASS_STACK_DEPTH = 8;
+
+const char *GLX_Profiler_GpuPassName( int pass )
+{
+	switch ( pass ) {
+	case GLX_GPU_PASS_BACKEND:
+		return "backend";
+	case GLX_GPU_PASS_POSTPROCESS:
+		return "postprocess";
+	case GLX_GPU_PASS_BLOOM:
+		return "bloom";
+	case GLX_GPU_PASS_BLOOM_EXTRACT:
+		return "bloom-extract";
+	case GLX_GPU_PASS_BLOOM_DOWNSCALE:
+		return "bloom-downscale";
+	case GLX_GPU_PASS_BLOOM_BLUR:
+		return "bloom-blur";
+	case GLX_GPU_PASS_BLOOM_BLEND:
+		return "bloom-blend";
+	case GLX_GPU_PASS_BLOOM_FINAL:
+		return "bloom-final";
+	case GLX_GPU_PASS_BLOOM_LENS_REFLECTION:
+		return "bloom-lens-reflection";
+	case GLX_GPU_PASS_GAMMA_DIRECT:
+		return "gamma-direct";
+	case GLX_GPU_PASS_GAMMA_BLIT:
+		return "gamma-blit";
+	case GLX_GPU_PASS_FBO_BLIT:
+		return "fbo-blit";
+	case GLX_GPU_PASS_COPY_SCREEN:
+		return "copy-screen";
+	case GLX_GPU_PASS_FLARE:
+		return "flare";
+	default:
+		return "unknown";
+	}
+}
 
 static void GLX_Profiler_CopyName( char *dst, size_t dstSize, const char *src )
 {
@@ -212,11 +254,22 @@ static void GLX_Profiler_ClearQueryState( ProfilerState *state )
 	state->queries[1] = 0;
 	state->queries[2] = 0;
 	state->queries[3] = 0;
+	for ( int i = 0; i < GLX_PASS_QUERY_COUNT; i++ ) {
+		state->passQueries[i] = {};
+	}
+	for ( int i = 0; i < GLX_PASS_STACK_DEPTH; i++ ) {
+		state->passStack[i] = {};
+		state->passStack[i].pass = -1;
+		state->passStack[i].slot = -1;
+	}
 	state->pending[0] = qfalse;
 	state->pending[1] = qfalse;
 	state->pending[2] = qfalse;
 	state->pending[3] = qfalse;
 	state->writeIndex = 0;
+	state->passWriteIndex = 0;
+	state->passStackDepth = 0;
+	state->passTimerReady = qfalse;
 	state->initialized = qfalse;
 	state->queryActive = qfalse;
 	state->lastGpuValid = qfalse;
@@ -224,9 +277,29 @@ static void GLX_Profiler_ClearQueryState( ProfilerState *state )
 	std::snprintf( state->lastGpuText, sizeof( state->lastGpuText ), "%s", "n/a" );
 }
 
+static qboolean GLX_Profiler_PassTimingEnabled( const ProfilerState &state )
+{
+	return ( GLX_Profiler_Enabled( state ) && state.passTimerReady &&
+		state.r_glxGpuPassTiming && state.r_glxGpuPassTiming->integer ) ? qtrue : qfalse;
+}
+
+static void GLX_Profiler_RecordPassMilliseconds( ProfilerState *state, int pass, double milliseconds )
+{
+	if ( !state || pass < 0 || pass >= GLX_GPU_PASS_COUNT || milliseconds < 0.0 ) {
+		return;
+	}
+
+	GpuPassStats &stats = state->gpuPassStats[pass];
+	stats.samples++;
+	stats.lastMilliseconds = milliseconds;
+	stats.totalMilliseconds += milliseconds;
+	std::snprintf( stats.lastText, sizeof( stats.lastText ), "%.3fms", milliseconds );
+}
+
 static void GLX_Profiler_CollectResults( ProfilerState *state )
 {
 	qboolean sawUnavailable = qfalse;
+	qboolean sawPassUnavailable = qfalse;
 
 	if ( !state || !state->initialized || !state->fns.GetQueryObjectiv ) {
 		return;
@@ -256,11 +329,54 @@ static void GLX_Profiler_CollectResults( ProfilerState *state )
 
 		state->lastGpuValid = qtrue;
 		std::snprintf( state->lastGpuText, sizeof( state->lastGpuText ), "%.3fms", state->lastGpuMilliseconds );
+		GLX_Profiler_RecordPassMilliseconds( state, GLX_GPU_PASS_BACKEND, state->lastGpuMilliseconds );
 		state->pending[i] = qfalse;
+	}
+
+	for ( int i = 0; i < GLX_PASS_QUERY_COUNT; i++ ) {
+		GpuPassQuery &query = state->passQueries[i];
+
+		if ( !query.pending || !query.startQuery || !query.endQuery ) {
+			continue;
+		}
+
+		GLint startAvailable = 0;
+		GLint endAvailable = 0;
+		state->fns.GetQueryObjectiv( query.startQuery, GL_QUERY_RESULT_AVAILABLE, &startAvailable );
+		state->fns.GetQueryObjectiv( query.endQuery, GL_QUERY_RESULT_AVAILABLE, &endAvailable );
+		if ( !startAvailable || !endAvailable ) {
+			sawPassUnavailable = qtrue;
+			continue;
+		}
+
+		if ( state->fns.GetQueryObjectui64v ) {
+			GLXQueryResult64 startNanoseconds = 0;
+			GLXQueryResult64 endNanoseconds = 0;
+			state->fns.GetQueryObjectui64v( query.startQuery, GL_QUERY_RESULT, &startNanoseconds );
+			state->fns.GetQueryObjectui64v( query.endQuery, GL_QUERY_RESULT, &endNanoseconds );
+			if ( endNanoseconds >= startNanoseconds ) {
+				GLX_Profiler_RecordPassMilliseconds( state, query.pass,
+					static_cast<double>( endNanoseconds - startNanoseconds ) / 1000000.0 );
+			}
+		} else if ( state->fns.GetQueryObjectuiv ) {
+			GLuint startNanoseconds = 0;
+			GLuint endNanoseconds = 0;
+			state->fns.GetQueryObjectuiv( query.startQuery, GL_QUERY_RESULT, &startNanoseconds );
+			state->fns.GetQueryObjectuiv( query.endQuery, GL_QUERY_RESULT, &endNanoseconds );
+			if ( endNanoseconds >= startNanoseconds ) {
+				GLX_Profiler_RecordPassMilliseconds( state, query.pass,
+					static_cast<double>( endNanoseconds - startNanoseconds ) / 1000000.0 );
+			}
+		}
+
+		query.pending = qfalse;
 	}
 
 	if ( sawUnavailable ) {
 		state->queryUnavailableFrames++;
+	}
+	if ( sawPassUnavailable ) {
+		state->passQueryUnavailableFrames++;
 	}
 }
 
@@ -272,9 +388,17 @@ void GLX_Profiler_RegisterCvars( ProfilerState *state )
 
 	state->r_glxGpuTiming = RI().Cvar_Get( "r_glxGpuTiming", "1", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxGpuTiming, "Collect non-blocking GLx backend GPU timings with timer queries when supported." );
+	state->r_glxGpuPassTiming = RI().Cvar_Get( "r_glxGpuPassTiming", "1", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->r_glxGpuPassTiming, "Collect non-blocking GLx pass timings with timestamp timer queries when supported." );
 
 	if ( state->lastGpuText[0] == '\0' ) {
 		std::snprintf( state->lastGpuText, sizeof( state->lastGpuText ), "%s", "n/a" );
+	}
+	for ( int i = 0; i < GLX_GPU_PASS_COUNT; i++ ) {
+		if ( state->gpuPassStats[i].lastText[0] == '\0' ) {
+			std::snprintf( state->gpuPassStats[i].lastText,
+				sizeof( state->gpuPassStats[i].lastText ), "%s", "n/a" );
+		}
 	}
 }
 
@@ -297,6 +421,7 @@ void GLX_Profiler_OnOpenGLReady( ProfilerState *state, const Capabilities &caps 
 	state->fns.GetQueryObjectiv = reinterpret_cast<PFNGLXGETQUERYOBJECTIVPROC>( GLX_Profiler_GetProc( "glGetQueryObjectiv", "glGetQueryObjectivARB" ) );
 	state->fns.GetQueryObjectuiv = reinterpret_cast<PFNGLXGETQUERYOBJECTUIVPROC>( GLX_Profiler_GetProc( "glGetQueryObjectuiv", "glGetQueryObjectuivARB" ) );
 	state->fns.GetQueryObjectui64v = reinterpret_cast<PFNGLXGETQUERYOBJECTUI64VPROC>( GLX_Profiler_GetProc( "glGetQueryObjectui64v", "glGetQueryObjectui64vEXT" ) );
+	state->fns.QueryCounter = reinterpret_cast<PFNGLXQUERYCOUNTERPROC>( GLX_Profiler_GetProc( "glQueryCounter", "glQueryCounterARB" ) );
 
 	if ( !state->fns.GenQueries || !state->fns.DeleteQueries || !state->fns.BeginQuery ||
 		!state->fns.EndQuery || !state->fns.GetQueryObjectiv ||
@@ -315,6 +440,22 @@ void GLX_Profiler_OnOpenGLReady( ProfilerState *state, const Capabilities &caps 
 	}
 
 	state->initialized = qtrue;
+
+	if ( state->fns.QueryCounter ) {
+		GLuint passQueryIds[GLX_PASS_QUERY_IDS] = {};
+
+		state->fns.GenQueries( GLX_PASS_QUERY_IDS, passQueryIds );
+		if ( passQueryIds[0] ) {
+			for ( int i = 0; i < GLX_PASS_QUERY_COUNT; i++ ) {
+				state->passQueries[i].startQuery = passQueryIds[i * 2];
+				state->passQueries[i].endQuery = passQueryIds[i * 2 + 1];
+				state->passQueries[i].pass = -1;
+			}
+			state->passTimerReady = qtrue;
+		} else {
+			RI().Printf( PRINT_DEVELOPER, "GLx pass timer query allocation failed.\n" );
+		}
+	}
 }
 
 void GLX_Profiler_Shutdown( ProfilerState *state )
@@ -326,21 +467,38 @@ void GLX_Profiler_Shutdown( ProfilerState *state )
 	if ( state->initialized && state->fns.DeleteQueries && state->queries[0] ) {
 		state->fns.DeleteQueries( GLX_QUERY_COUNT, state->queries );
 	}
+	if ( state->initialized && state->fns.DeleteQueries && state->passQueries[0].startQuery ) {
+		GLuint passQueryIds[GLX_PASS_QUERY_IDS] = {};
+
+		for ( int i = 0; i < GLX_PASS_QUERY_COUNT; i++ ) {
+			passQueryIds[i * 2] = state->passQueries[i].startQuery;
+			passQueryIds[i * 2 + 1] = state->passQueries[i].endQuery;
+		}
+		state->fns.DeleteQueries( GLX_PASS_QUERY_IDS, passQueryIds );
+	}
 
 	const unsigned int frames = state->frames;
 	const unsigned int backendQueries = state->backendQueries;
+	const unsigned int gpuPassQueries = state->gpuPassQueries;
 	const unsigned int unavailable = state->queryUnavailableFrames;
 	const unsigned int ringFullSkips = state->queryRingFullSkips;
+	const unsigned int passUnavailable = state->passQueryUnavailableFrames;
+	const unsigned int passRingFullSkips = state->passQueryRingFullSkips;
 	cvar_t *gpuTiming = state->r_glxGpuTiming;
+	cvar_t *gpuPassTiming = state->r_glxGpuPassTiming;
 
 	state->fns = {};
 	GLX_Profiler_ClearQueryState( state );
 
 	state->frames = frames;
 	state->backendQueries = backendQueries;
+	state->gpuPassQueries = gpuPassQueries;
 	state->queryUnavailableFrames = unavailable;
 	state->queryRingFullSkips = ringFullSkips;
+	state->passQueryUnavailableFrames = passUnavailable;
+	state->passQueryRingFullSkips = passRingFullSkips;
 	state->r_glxGpuTiming = gpuTiming;
+	state->r_glxGpuPassTiming = gpuPassTiming;
 }
 
 void GLX_Profiler_BeginBackendTimer( ProfilerState *state )
@@ -373,6 +531,67 @@ void GLX_Profiler_EndBackendTimer( ProfilerState *state )
 	state->queryActive = qfalse;
 }
 
+void GLX_Profiler_BeginGpuPassTimer( ProfilerState *state, int pass )
+{
+	GpuPassQuery *query;
+
+	if ( !state || pass < 0 || pass >= GLX_GPU_PASS_COUNT ||
+		!GLX_Profiler_PassTimingEnabled( *state ) ) {
+		return;
+	}
+
+	GLX_Profiler_CollectResults( state );
+
+	if ( state->passStackDepth >= GLX_PASS_STACK_DEPTH ) {
+		state->passQueryRingFullSkips++;
+		return;
+	}
+	query = &state->passQueries[state->passWriteIndex];
+	if ( query->pending ) {
+		state->passQueryRingFullSkips++;
+		return;
+	}
+
+	query->pass = pass;
+	state->fns.QueryCounter( query->startQuery, GL_TIMESTAMP );
+	state->passStack[state->passStackDepth].pass = pass;
+	state->passStack[state->passStackDepth].slot = state->passWriteIndex;
+	state->passStackDepth++;
+	state->passWriteIndex = ( state->passWriteIndex + 1 ) % GLX_PASS_QUERY_COUNT;
+}
+
+void GLX_Profiler_EndGpuPassTimer( ProfilerState *state, int pass )
+{
+	if ( !state || pass < 0 || pass >= GLX_GPU_PASS_COUNT ||
+		!GLX_Profiler_PassTimingEnabled( *state ) || state->passStackDepth <= 0 ) {
+		return;
+	}
+
+	int stackIndex = state->passStackDepth - 1;
+	while ( stackIndex >= 0 && state->passStack[stackIndex].pass != pass ) {
+		stackIndex--;
+	}
+	if ( stackIndex < 0 ) {
+		return;
+	}
+
+	const int slot = state->passStack[stackIndex].slot;
+	for ( int i = stackIndex; i < state->passStackDepth - 1; i++ ) {
+		state->passStack[i] = state->passStack[i + 1];
+	}
+	state->passStackDepth--;
+	state->passStack[state->passStackDepth].pass = -1;
+	state->passStack[state->passStackDepth].slot = -1;
+
+	if ( slot < 0 || slot >= GLX_PASS_QUERY_COUNT || state->passQueries[slot].pending ) {
+		return;
+	}
+
+	state->fns.QueryCounter( state->passQueries[slot].endQuery, GL_TIMESTAMP );
+	state->passQueries[slot].pending = qtrue;
+	state->gpuPassQueries++;
+}
+
 void GLX_Profiler_FrameComplete( ProfilerState *state )
 {
 	if ( !state ) {
@@ -381,6 +600,34 @@ void GLX_Profiler_FrameComplete( ProfilerState *state )
 
 	state->frames++;
 	GLX_Profiler_CollectResults( state );
+}
+
+void GLX_Profiler_RecordPostBlit( ProfilerState *state )
+{
+	if ( state ) {
+		state->postBlits++;
+	}
+}
+
+void GLX_Profiler_RecordPostBind( ProfilerState *state )
+{
+	if ( state ) {
+		state->postBinds++;
+	}
+}
+
+void GLX_Profiler_RecordPostClear( ProfilerState *state )
+{
+	if ( state ) {
+		state->postClears++;
+	}
+}
+
+void GLX_Profiler_RecordFullscreenPass( ProfilerState *state )
+{
+	if ( state ) {
+		state->postFullscreenPasses++;
+	}
 }
 
 void GLX_Profiler_RecordDraw( ProfilerState *state, int indexes, int path )
@@ -579,6 +826,21 @@ void GLX_Profiler_PrintInfo( const ProfilerState &state )
 	RI().Printf( PRINT_ALL, "  last backend GPU time: %s\n", GLX_Profiler_LastGpuTimeText( state ) );
 	RI().Printf( PRINT_ALL, "  timer query unavailable frames: %u\n", state.queryUnavailableFrames );
 	RI().Printf( PRINT_ALL, "  timer query ring-full skips: %u\n", state.queryRingFullSkips );
+	RI().Printf( PRINT_ALL,
+		"  post pass counters: blits %u, binds %u, clears %u, fullscreen passes %u\n",
+		state.postBlits, state.postBinds, state.postClears, state.postFullscreenPasses );
+	RI().Printf( PRINT_ALL,
+		"  pass timer queries: active %s, queries %u, unavailable frames %u, ring-full skips %u\n",
+		BoolName( state.passTimerReady ), state.gpuPassQueries,
+		state.passQueryUnavailableFrames, state.passQueryRingFullSkips );
+	RI().Printf( PRINT_ALL, "  pass GPU timings:" );
+	for ( int i = 0; i < GLX_GPU_PASS_COUNT; i++ ) {
+		const GpuPassStats &stats = state.gpuPassStats[i];
+		const char *text = stats.samples ? stats.lastText : "n/a";
+		RI().Printf( PRINT_ALL, " %s=%s/%u",
+			GLX_Profiler_GpuPassName( i ), text, stats.samples );
+	}
+	RI().Printf( PRINT_ALL, "\n" );
 	RI().Printf( PRINT_ALL, "  draw calls: %u, indexes: %u\n", state.drawCalls, state.drawIndexes );
 	RI().Printf( PRINT_ALL, "  draw calls generic: %u calls, %u indexes\n", state.genericDrawCalls, state.genericDrawIndexes );
 	RI().Printf( PRINT_ALL, "  draw calls vbo-device: %u calls, %u indexes\n", state.vboDeviceDrawCalls, state.vboDeviceDrawIndexes );

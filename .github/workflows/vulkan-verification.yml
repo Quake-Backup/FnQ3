@@ -10,7 +10,6 @@ on:
   pull_request:
     paths:
       - '.github/workflows/vulkan-verification.yml'
-      - 'CMakeLists.txt'
       - 'meson.build'
       - 'meson_options.txt'
       - 'code/renderercommon/**'
@@ -25,7 +24,6 @@ on:
       - main
     paths:
       - '.github/workflows/vulkan-verification.yml'
-      - 'CMakeLists.txt'
       - 'meson.build'
       - 'meson_options.txt'
       - 'code/renderercommon/**'

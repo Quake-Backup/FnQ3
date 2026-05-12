@@ -8,6 +8,8 @@ Install Meson, Ninja, a C/C++ toolchain, and the platform dependencies listed be
 
 `meson setup meson/build`
 
+Meson checks for system libraries first, then uses the wrap files under `subprojects/` for SDL3, OpenAL headers, libcurl, libjpeg-turbo, and Ogg/Vorbis when fallback downloads are allowed. Use `--wrap-mode=nofallback` for a system-only build, or `--wrap-mode=forcefallback` when you want to exercise the subproject path explicitly.
+
 Then build and run tests:
 
 `meson compile -C meson/build`
@@ -16,17 +18,39 @@ Then build and run tests:
 
 The default Meson build produces one client executable (`fnquake3` with the platform suffix where applicable), one dedicated server executable, and renderer modules named `fnquake3_opengl_<arch>`, `fnquake3_glx_<arch>`, and `fnquake3_vulkan_<arch>`.
 
-Useful Meson options:
+Project Meson options:
 
-`-Drenderer-dlopen=true` - build external renderer modules and one unified client executable, enabled by default
+`-Dbuild-client=true|false` - build the unified FnQuake3 client executable, enabled by default
 
-`-Drenderers=opengl,glx,vulkan` - choose which external renderer modules are built
+`-Dbuild-server=true|false` - build the dedicated server executable, enabled by default
 
-`-Drenderer-default=opengl` - set the default value for `\cl_renderer`
+`-Drenderer-dlopen=true|false` - build external renderer modules and one unified client executable, enabled by default
+
+`-Drenderers=opengl,glx,vulkan` - choose which external renderer modules are built; valid entries are `opengl`, `glx`, `vulkan`, and `opengl2`
+
+`-Drenderer-default=opengl|glx|vulkan|opengl2` - set the default value for `\cl_renderer`, or the linked renderer when `renderer-dlopen=false`
 
 `-Drenderer-dlopen=false -Drenderer-default=vulkan` - explicit compatibility/testing mode for linking one renderer into the client
 
-Legacy Make, CMake, and MSVC project files remain available while CI and packaging finish migrating, but new local work should prefer `meson/build`.
+`-Dsdl=auto|enabled|disabled` - enable, require, or disable the SDL3 video, input, and audio backend
+
+`-Dcurl=auto|enabled|disabled` - enable, require, or disable cURL download support
+
+`-Dcurl-dlopen=true|false` - resolve cURL at runtime instead of linking libcurl, enabled by default
+
+`-Dsystem-jpeg=true|false` - require a system JPEG library instead of allowing the libjpeg-turbo subproject fallback, disabled by default
+
+`-Dogg-vorbis=true|false` - enable Ogg Vorbis codec support through system `vorbisfile` or the subproject fallback, enabled by default
+
+`-Dlocal-headers=true|false` - define `USE_LOCAL_HEADERS` for compatibility include conventions, enabled by default
+
+`-Ddefault-basedir=<path>` - compile a `DEFAULT_BASEDIR` override, empty by default
+
+`-Daudio-tests=true|false` - build audio tools and deterministic audio tests, enabled by default
+
+`-Dglx-tests=true|false` - build deterministic GLx renderer logic tests, enabled by default
+
+Legacy Make and MSVC project files remain available while CI and packaging finish migrating, but new local work should prefer `meson/build`.
 
 ### windows/msvc
 
@@ -166,5 +190,3 @@ Example:
 `make BUILD_SERVER=0 USE_RENDERER_DLOPEN=0 RENDERER_DEFAULT=vulkan` - build the client with a single static Vulkan renderer and skip the dedicated server binary
 
 `make BUILD_SERVER=0 USE_GLX=1` - include the GLx renderer module so it can be selected with `\cl_renderer glx` after a `\vid_restart`
-
-For CMake/Ninja or CMake/Visual Studio builds, pass `-DUSE_RENDERER_DLOPEN=ON -DUSE_GLX=ON` to include the GLx modular renderer beside the unified client executable.

@@ -76,6 +76,7 @@ cvar_t	*r_fastsky;
 cvar_t	*r_neatsky;
 cvar_t	*r_drawSun;
 cvar_t	*r_dynamiclight;
+cvar_t	*r_depthFade;
 cvar_t	*r_celShading;
 cvar_t	*r_celShadingSteps;
 cvar_t	*r_celOutline;
@@ -100,6 +101,7 @@ cvar_t	*r_vbo;
 cvar_t	*r_fbo;
 cvar_t	*r_hdr;
 cvar_t	*r_hdrPrecision;
+cvar_t	*r_hdrBloomFormat;
 cvar_t	*r_srgbTextures;
 cvar_t	*r_framebufferSRGB;
 cvar_t	*r_tonemap;
@@ -114,6 +116,7 @@ cvar_t	*r_colorGradeLUT;
 cvar_t	*r_colorGradeLUTScale;
 cvar_t	*r_outputBackend;
 cvar_t	*r_outputAllowExperimentalLinuxHDR;
+cvar_t	*r_flareSceneLinear;
 cvar_t	*r_bloom;
 cvar_t	*r_bloom_threshold;
 cvar_t	*r_bloom_threshold_mode;
@@ -215,6 +218,7 @@ cvar_t	*r_marksOnTriangleMeshes;
 cvar_t	*r_aviMotionJpegQuality;
 cvar_t	*r_screenshotJpegQuality;
 cvar_t	*r_screenshotNameFormat;
+cvar_t	*r_screenshotCaptureMode;
 cvar_t	*r_screenshotWriteViewpos;
 cvar_t	*r_screenshotWatermark;
 cvar_t	*r_screenshotWatermarkAlignment;
@@ -1144,10 +1148,58 @@ static void R_ViewAxisToAngles( vec3_t axis[3], vec3_t angles )
 	angles[ROLL] = atan2( dotUp, dotLeft ) * 180.0f / M_PI;
 }
 
+typedef enum {
+	SCREENSHOT_CAPTURE_SDR_SRGB = 0,
+	SCREENSHOT_CAPTURE_HDR_SCENE_LINEAR = 1,
+	SCREENSHOT_CAPTURE_HDR_OUTPUT = 2
+} screenshotCaptureMode_t;
+
+static screenshotCaptureMode_t R_ScreenshotCaptureMode( void )
+{
+	int mode = r_screenshotCaptureMode ? r_screenshotCaptureMode->integer : SCREENSHOT_CAPTURE_SDR_SRGB;
+
+	if ( mode < SCREENSHOT_CAPTURE_SDR_SRGB || mode > SCREENSHOT_CAPTURE_HDR_OUTPUT ) {
+		mode = SCREENSHOT_CAPTURE_SDR_SRGB;
+	}
+
+	return (screenshotCaptureMode_t)mode;
+}
+
+static const char *R_ScreenshotCaptureModeName( void )
+{
+	switch ( R_ScreenshotCaptureMode() ) {
+	case SCREENSHOT_CAPTURE_HDR_SCENE_LINEAR:
+		return "hdr-scene-linear";
+	case SCREENSHOT_CAPTURE_HDR_OUTPUT:
+		return "hdr-output";
+	case SCREENSHOT_CAPTURE_SDR_SRGB:
+	default:
+		return "sdr-srgb";
+	}
+}
+
+static const char *R_ScreenshotCaptureColorSpaceName( void )
+{
+	// Current screenshot encoders consume post-output RGB bytes. Explicit HDR
+	// modes are policy markers until a float/metadata export path is wired.
+	return "sdr-srgb";
+}
+
+static void R_WarnExplicitHdrScreenshotCapture( void )
+{
+	if ( R_ScreenshotCaptureMode() == SCREENSHOT_CAPTURE_SDR_SRGB ) {
+		return;
+	}
+
+	ri.Printf( PRINT_WARNING,
+		"WARNING: r_screenshotCaptureMode %s currently writes SDR sRGB screenshots; HDR export requires a future explicit capture path.\n",
+		R_ScreenshotCaptureModeName() );
+}
+
 static void R_WriteScreenshotViewpos( const char *imageFileName, const vec3_t origin, vec3_t axis[3] )
 {
 	char textName[MAX_OSPATH];
-	char text[512];
+	char text[768];
 	char mapName[MAX_QPATH];
 	vec3_t angles;
 	int len;
@@ -1168,10 +1220,13 @@ static void R_WriteScreenshotViewpos( const char *imageFileName, const vec3_t or
 	R_ViewAxisToAngles( axis, angles );
 
 	len = Com_sprintf( text, sizeof( text ),
-		"map %s\norigin %.3f %.3f %.3f\nangles %.3f %.3f %.3f\nsetviewpos %.3f %.3f %.3f %.3f %.3f %.3f\n",
+		"map %s\norigin %.3f %.3f %.3f\nangles %.3f %.3f %.3f\n"
+		"captureMode %s\ncaptureColorSpace %s\nsetviewpos %.3f %.3f %.3f %.3f %.3f %.3f\n",
 		mapName,
 		origin[0], origin[1], origin[2],
 		angles[0], angles[1], angles[2],
+		R_ScreenshotCaptureModeName(),
+		R_ScreenshotCaptureColorSpaceName(),
 		origin[0], origin[1], origin[2], angles[0], angles[1], angles[2] );
 
 	ri.FS_WriteFile( textName, text, len );
@@ -1938,6 +1993,8 @@ static void R_ScreenShot_f( void ) {
 		ext = "png";
 	}
 
+	R_WarnExplicitHdrScreenshotCapture();
+
 	if ( !strcmp( ri.Cmd_Argv( 1 ), "levelshot" ) ) {
 		R_ScheduleLevelShot();
 		return;
@@ -2409,6 +2466,9 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_drawSun, "Draw sun shader in skies." );
 	r_dynamiclight = ri.Cvar_Get( "r_dynamiclight", "1", CVAR_ARCHIVE );
 	ri.Cvar_SetDescription( r_dynamiclight, "Enables dynamic lighting." );
+	r_depthFade = ri.Cvar_Get( "r_depthFade", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_depthFade, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_depthFade, "Softens intersections between translucent particles and world geometry when the renderer supports depth-fade sampling." );
 	r_celShading = ri.Cvar_Get( "r_celShading", "0", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celShading, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_celShading, "Enable cel shading on model entities, including world models, player models, and the first-person weapon." );
@@ -2474,6 +2534,17 @@ static void R_Register( void )
 		"16: force 16-bit normalized storage for SDR; \\r_hdr 1 still uses RGBA16F\n"
 		"Applies after the current frame." );
 	ri.Cvar_SetGroup( r_hdrPrecision, CVG_RENDERER );
+	r_hdrBloomFormat = ri.Cvar_Get( "r_hdrBloomFormat", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_hdrBloomFormat );
+	ri.Cvar_CheckRange( r_hdrBloomFormat, "0", "3", CV_INTEGER );
+	ri.Cvar_SetDescription( r_hdrBloomFormat,
+		"HDR bloom/extract intermediate storage policy for positive-only postprocess buffers.\n"
+		" 0: automatic (try R11G11B10F for RGB bloom, fall back to RGBA16F)\n"
+		" 1: force RGBA16F for conservative parity\n"
+		" 2: prefer R11G11B10F for RGB bloom intermediates\n"
+		" 3: prefer RG16F for positive two-channel intermediates; RGB bloom falls back safely\n"
+		"Applies when the bloom FBO chain is recreated." );
+	ri.Cvar_SetGroup( r_hdrBloomFormat, CVG_RENDERER );
 	r_srgbTextures = ri.Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_srgbTextures, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_srgbTextures, "Use sRGB texture formats for authored color images in the scene-linear HDR pipeline. Data, lightmap, fog, and utility textures stay linear/data. Requires vid_restart so existing textures can be reloaded safely." );
@@ -2498,8 +2569,8 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_tonemap,
 		"Final-pass tone mapper used by the scene-linear HDR pipeline:\n"
 		" 0: legacy gamma/overbright\n"
-		" 1: Reinhard\n"
-		" 2: ACES fitted filmic curve" );
+		" 1: simple Reinhard (legacy alias Reinhard)\n"
+		" 2: ACES-fitted filmic curve (legacy alias ACES)" );
 	ri.Cvar_SetGroup( r_tonemap, CVG_RENDERER );
 	r_tonemapExposure = ri.Cvar_Get( "r_tonemapExposure", "1.0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_tonemapExposure, "0.1", "8.0", CV_FLOAT );
@@ -2542,6 +2613,10 @@ static void R_Register( void )
 	r_bloom = ri.Cvar_Get( "r_bloom", "0", CVAR_ARCHIVE_ND );
 	R_MakeCvarInstant( r_bloom ); // If we were running renderervk before, we need to remove latch
 	ri.Cvar_SetDescription(r_bloom, "Enables bloom post-processing effect. Requires \\r_fbo 1.");
+	r_flareSceneLinear = ri.Cvar_Get( "r_flareSceneLinear", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_flareSceneLinear, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_flareSceneLinear, "Decode flare vertex colors into scene-linear RGB when \\r_hdr 1 is active. Set to 0 for legacy display-referred flare color parity." );
+	ri.Cvar_SetGroup( r_flareSceneLinear, CVG_RENDERER );
 	r_bloom_threshold = ri.Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription(r_bloom_threshold, "Scene-linear color level to extract to bloom texture, default is 0.75.");
 	ri.Cvar_SetGroup( r_bloom_threshold, CVG_RENDERER );
@@ -2697,6 +2772,11 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_screenshotJpegQuality, "Controls quality of Jpeg screenshots when using screenshotJpeg." );
 	r_screenshotNameFormat = ri.Cvar_Get( "r_screenshotNameFormat", "shot-{date}-{time}", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_screenshotNameFormat, "Controls auto-generated screenshot names. Tokens: {map}, {date}, {time}, {datetime}, {iter[:width]}, {cmd}, {face}, {type}." );
+	r_screenshotCaptureMode = ri.Cvar_Get( "r_screenshotCaptureMode", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_screenshotCaptureMode );
+	ri.Cvar_CheckRange( r_screenshotCaptureMode, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_screenshotCaptureMode,
+		"Screenshot/video capture export policy: 0 SDR sRGB after final output transform, 1 reserved scene-linear HDR request, 2 reserved HDR-output request. HDR modes currently resolve to SDR sRGB byte output." );
 	r_screenshotWriteViewpos = ri.Cvar_Get( "r_screenshotWriteViewpos", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_screenshotWriteViewpos, "Write a companion .txt file with map, origin, angles and setviewpos for each saved screenshot." );
 	r_screenshotWatermark = ri.Cvar_Get( "r_screenshotWatermark", "", CVAR_ARCHIVE_ND );

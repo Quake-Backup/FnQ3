@@ -26,10 +26,10 @@ The gate requires all of the following:
 
 - every row in [GLX_FEATURE_MATRIX.md](GLX_FEATURE_MATRIX.md) is `covered`;
 - the five product tiers `GL12`, `GL2X`, `GL3X`, `GL41`, and `GL46` remain represented in code and documentation;
-- the [GLx legacy coupling ledger](GLX_LEGACY_COUPLING.md) exactly matches the GLx legacy renderer sources compiled by Meson, CMake, Make, and the MSVC project, and the source count stays within the current ratchet budget;
+- the [GLx legacy coupling ledger](GLX_LEGACY_COUPLING.md) exactly matches the GLx legacy renderer sources compiled by Meson, Make, and the MSVC project, and the source count stays within the current ratchet budget;
 - the [GLx rollback package metadata](GLX_ROLLBACK_PACKAGE.md) validates and names a legacy-OpenGL rollback package for the blocking Windows and Linux platforms;
 - the GLx proof root contains passing non-dry-run `rc-smoke`, `rc-parity`, and `rc-proof` manifests for the blocking Windows and Linux platforms, with `rc-parity` and `rc-proof` carrying current passing `worldProofEvidence` for the selected stock/high-geometry/lightmap/fog/visibility corpus maps and static-world counters, and `rc-proof` carrying current passing `materialProofEvidence` for material-stage/tcgen corpus maps, current passing `dynamicProofEvidence` for entity/weapon categories, dynamic-light guards, planar-shadow coverage, and conservative dynamic-scene stream counters, plus current passing `postProofEvidence` for greyscale/render-scale corpus tags, ready FBO state, render-scale dimensions, non-minimized output, and color-contract evidence;
-- the same proof root contains passing non-dry-run `glx-ownership` profile manifests for the blocking Windows and Linux platforms, each carrying current versioned `ownershipProofEvidence` with zero legacy delegation, a GL3X/GL41/GL46 tier signal, modern post-chain plus scene-linear tier diagnostics, post shader direct-final eligibility/bind diagnostics for the supported subset, and executable GLx-owned modern post/output counters (`PostNode` plus `OutputTransform`) rather than legacy fallback or the implementation-not-ready fallback;
+- the same proof root contains passing non-dry-run `glx-ownership` profile manifests for the blocking Windows and Linux platforms, each carrying current versioned `ownershipProofEvidence` with zero legacy delegation, a GL3X/GL41/GL46 tier signal, modern post-chain plus scene-linear tier diagnostics, post shader eligibility/bind diagnostics for the enabled final/output surface, and executable GLx-owned modern post/output counters (`PostNode` plus `OutputTransform`) rather than legacy fallback, disabled-executor fallback, or failed-bind fallback;
 - the release candidate has reviewed migration notes, release notes, proof summaries, and checksums tied to that rollback package metadata.
 
 ## Legacy Coupling Ledger
@@ -38,7 +38,7 @@ P2 source-coupling reduction is tracked separately from runtime ownership. The
 ledger names every legacy `code/renderer/*.c` translation unit still compiled
 into GLx, why it remains, and which extraction target should eventually shrink
 or remove it. `scripts/glx_promotion.py` compares that ledger against Meson,
-CMake, Make, and MSVC so the GLx module cannot silently grow a broader legacy
+Make, and MSVC so the GLx module cannot silently grow a broader legacy
 dependency while ownership work continues.
 
 ## Ownership Proof Evidence

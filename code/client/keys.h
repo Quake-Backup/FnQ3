@@ -21,12 +21,19 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 #include "keycodes.h"
 
-typedef struct {
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct qkey_t {
 	qboolean	down;
 	qboolean	bound;
 	int			repeats;		// if > 1, it is autorepeating
 	char		*binding;
-} qkey_t;
+};
+#ifndef __cplusplus
+#define qkey_t struct qkey_t
+#endif
 
 extern	qboolean	key_overstrikeMode;
 extern	qkey_t		keys[MAX_KEYS];
@@ -51,3 +58,7 @@ qboolean Key_GetOverstrikeMode( void );
 void Key_SetOverstrikeMode( qboolean state );
 
 void Com_InitKeyCommands( void );
+
+#ifdef __cplusplus
+}
+#endif

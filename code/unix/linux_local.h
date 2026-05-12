@@ -24,6 +24,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 // Input subsystem
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void IN_Init (void);
 void IN_Frame (void);
 void IN_Shutdown (void);
@@ -48,5 +52,9 @@ char *strlwr (char *s);
 
 // signals.c
 void InitSig(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // __LINUX_LOCAL_H__

@@ -97,6 +97,7 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_fbo", "0", "1", "1" },
 	{ "r_bloom", "0", "2", "2" },
 	{ "r_bloom_passes", "5", "3", "3" },
+	{ "r_hdrBloomFormat", "0", "0", "0" },
 	{ "r_vbo", "0", "1", "1" },
 	{ "r_glxWorldRenderer", "0", "1", "1" },
 	{ "r_glxStreamDraw", "0", "1", "1" },
@@ -115,6 +116,7 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxMaterialRenderer", "0", "1", "1" },
 	{ "r_glxMaterialPrecache", "0", "1", "1" },
 	{ "r_glxGpuTiming", "0", "1", "1" },
+	{ "r_glxGpuPassTiming", "0", "1", "1" },
 	{ "r_glxStaticWorldArena", "0", "1", "1" },
 	{ "r_glxStaticWorldArenaDraw", "0", "1", "1" },
 	{ "r_glxStaticWorldDraw", "0", "1", "1" },
@@ -395,6 +397,44 @@ static OutputTransform GLX_Module_OutputTransformIR( const PostProcessState &pos
 	return GLX_RenderIR_DefaultOutputTransform();
 }
 
+static qboolean GLX_Module_PostOutputPlanHasNode( const PostOutputPlan &plan,
+	PostNodeKind kind )
+{
+	for ( int i = 0; i < plan.nodeCount && i < GLX_RENDER_IR_MAX_POST_OUTPUT_NODES; i++ ) {
+		if ( plan.nodes[i].kind == kind ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+static unsigned int GLX_Module_PostOutputExpectedShaderBinds( const PostOutputPlan &plan )
+{
+	unsigned int binds = 0u;
+
+	for ( int i = 0; i < plan.nodeCount && i < GLX_RENDER_IR_MAX_POST_OUTPUT_NODES; i++ ) {
+		switch ( plan.nodes[i].kind ) {
+		case PostNodeKind::BloomPrefinal:
+		case PostNodeKind::BloomFinal:
+		case PostNodeKind::GammaDirect:
+		case PostNodeKind::GammaBlit:
+			binds++;
+			break;
+		default:
+			break;
+		}
+	}
+	return binds;
+}
+
+static PostShaderPlan GLX_Module_PostShaderPlanForOutputPlan(
+	const OutputTransform &output, const PostOutputPlan &plan )
+{
+	const qboolean bloomFinal = GLX_Module_PostOutputPlanHasNode( plan,
+		PostNodeKind::BloomFinal );
+	return GLX_PostShader_BuildPlanForOutput( output, bloomFinal );
+}
+
 static qboolean GLX_Module_EmitFrameSchedule( FramePass *passes, int capacity, int *count )
 {
 	return GLX_RenderIR_DefaultPassSchedule( passes, capacity, count );
@@ -408,6 +448,8 @@ public:
 	void Shutdown( int code );
 	void BeginBackendTimer();
 	void EndBackendTimer();
+	void BeginGpuPassTimer( int pass );
+	void EndGpuPassTimer( int pass );
 	void FrameComplete();
 	void PrintCaps() const;
 	void PrintInfo() const;
@@ -479,16 +521,26 @@ public:
 	void RecordPostProcessFrame( qboolean minimized, qboolean bloomAvailable, qboolean programReady,
 		int screenshotMask, qboolean windowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
 		float greyscale );
+	qboolean AutoExposureNeedsSamples( int *width, int *height ) const;
+	float UpdateAutoExposure( float manualExposure, const float *rgba, int width,
+		int height );
+	qboolean TryBindPostShaderFinal( qboolean bloomComposite, qboolean outputTransform,
+		float bloomIntensity );
 	qboolean TryBindPostShaderDirectFinal();
 	void UnbindPostShader();
 	void RecordPostProcessResult( int result );
 	void RecordColorGradeLut( qboolean active, int size, float scale );
-	void RecordBloomCreate( int result, int requestedPasses, int effectivePasses, int textureUnits );
+	void RecordBloomCreate( int result, int requestedPasses, int effectivePasses,
+		int textureUnits, int formatMode, int internalFormat, int textureFormat,
+		int textureType );
 	void RecordBloom( int result, qboolean finalStage, int bloomMode, int requestedPasses,
 		int effectivePasses, int blendBase, int filterSize, int textureUnits, int thresholdMode,
 		int modulate, float threshold, float intensity, float reflection );
 	void RecordFboCopyScreen( int viewportWidth, int viewportHeight );
 	void RecordFboBlit( int kind, qboolean depthOnly, int srcWidth, int srcHeight, int dstWidth, int dstHeight );
+	void RecordFboBind();
+	void RecordPostClear();
+	void RecordFullscreenPass();
 	void PushShaderDebugGroup( const char *shaderName, int numVertexes, int numIndexes, int numPasses );
 	void PopDebugGroup();
 	void ShadowUploadTess( int numVertexes, int numIndexes, const void *xyz, int xyzBytes, const void *indexes, int indexBytes );
@@ -527,6 +579,8 @@ private:
 	MaterialState material_ {};
 	PostProcessState postprocess_ {};
 	PostShaderState postShader_ {};
+	unsigned int postShaderBindBaseline_ {};
+	unsigned int postShaderExpectedBinds_ {};
 	ProfilerState profiler_ {};
 	cvar_t *profile_ {};
 	cvar_t *requireOwnership_ {};
@@ -683,6 +737,16 @@ void RendererModule::EndBackendTimer()
 	GLX_Profiler_EndBackendTimer( &profiler_ );
 }
 
+void RendererModule::BeginGpuPassTimer( int pass )
+{
+	GLX_Profiler_BeginGpuPassTimer( &profiler_, pass );
+}
+
+void RendererModule::EndGpuPassTimer( int pass )
+{
+	GLX_Profiler_EndGpuPassTimer( &profiler_, pass );
+}
+
 void RendererModule::FrameComplete()
 {
 	GLX_Profiler_FrameComplete( &profiler_ );
@@ -733,11 +797,13 @@ void RendererModule::PrintCaps() const
 		BoolName( material_.ready ),
 		material_.glslVersion[0] ? material_.glslVersion : "unknown",
 		material_.programCount );
-	RI().Printf( PRINT_ALL, "  post shader cache: ready %s, programs %i/%i, compile %u attempts/%u failures, link failures %u, source hash 0x%08x\n",
+	RI().Printf( PRINT_ALL, "  post shader cache: ready %s, programs %i/%i, compile %u attempts/%u failures, link failures %u, source hash 0x%08x, target %s, evictions %u\n",
 		BoolName( GLX_PostShader_Ready( postShader_ ) ),
 		postShader_.programCount, GLX_POST_SHADER_PROGRAM_LIMIT,
 		postShader_.compileAttempts, postShader_.compileFailures,
-		postShader_.linkFailures, postShader_.lastSourceHash );
+		postShader_.linkFailures, postShader_.lastSourceHash,
+		GLX_PostShaderSource_TargetName( postShader_.activeTarget ),
+		postShader_.cacheEvictions );
 	RI().Printf( PRINT_ALL, "  postprocess FBO: %s, render %ix%i, capture %ix%i, bloom %i, passes %i/%i, last %s\n",
 		BoolName( postprocess_.fboReady ), postprocess_.vidWidth, postprocess_.vidHeight,
 		postprocess_.captureWidth, postprocess_.captureHeight, postprocess_.bloomMode,
@@ -1110,6 +1176,23 @@ void RendererModule::PrintFrameCounters() const
 		GLX_StaticWorld_TotalMegabytes( staticWorld_ ),
 		staticWorld_.arenaReady ? "ready" : "off",
 		( staticWorld_.arenaVertexBytes + staticWorld_.arenaIndexBytes ) / ( 1024.0f * 1024.0f ) );
+	RI().Printf( PRINT_ALL, "glx: pass counters blits %u, binds %u, clears %u, fullscreen %u, pass queries %u, unavailable %u, ring skips %u\n",
+		profiler_.postBlits,
+		profiler_.postBinds,
+		profiler_.postClears,
+		profiler_.postFullscreenPasses,
+		profiler_.gpuPassQueries,
+		profiler_.passQueryUnavailableFrames,
+		profiler_.passQueryRingFullSkips );
+	RI().Printf( PRINT_ALL, "glx: pass gpu:" );
+	for ( int i = 0; i < GLX_GPU_PASS_COUNT; i++ ) {
+		const GpuPassStats &stats = profiler_.gpuPassStats[i];
+		RI().Printf( PRINT_ALL, " %s=%s/%u",
+			GLX_Profiler_GpuPassName( i ),
+			stats.samples ? stats.lastText : "n/a",
+			stats.samples );
+	}
+	RI().Printf( PRINT_ALL, "\n" );
 	RI().Printf( PRINT_ALL, "glx: material stages %u generic/%u vbo/%u mt/%u blend/%u texmod/%u env/%u\n",
 		profiler_.materialStages,
 		profiler_.genericMaterialStages,
@@ -1150,7 +1233,7 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.lastPostShaderUniformVec4Count,
 		postprocess_.postShaderPlanFrames,
 		postprocess_.postShaderPlanInvalidFrames );
-	RI().Printf( PRINT_ALL, "glx: post shader cache ready %s, programs %i/%i, plans %u valid/%u invalid, cache %u hits/%u misses, compile %u attempts/%u failures, link failures %u, source failures %u, source hash 0x%08x, program %u\n",
+	RI().Printf( PRINT_ALL, "glx: post shader cache ready %s, programs %i/%i, plans %u valid/%u invalid, cache %u hits/%u misses, compile %u attempts/%u failures, link failures %u, source failures %u, source hash 0x%08x, program %u, target %s, preferred %s, evictions %u, target fallbacks %u\n",
 		BoolName( GLX_PostShader_Ready( postShader_ ) ),
 		postShader_.programCount,
 		GLX_POST_SHADER_PROGRAM_LIMIT,
@@ -1163,7 +1246,11 @@ void RendererModule::PrintFrameCounters() const
 		postShader_.linkFailures,
 		postShader_.sourceFailures,
 		postShader_.lastSourceHash,
-		postShader_.lastProgram );
+		postShader_.lastProgram,
+		GLX_PostShaderSource_TargetName( postShader_.activeTarget ),
+		GLX_PostShaderSource_TargetName( postShader_.preferredTarget ),
+		postShader_.cacheEvictions,
+		postShader_.targetFallbacks );
 	RI().Printf( PRINT_ALL, "glx: post shader direct-final execute %s, eligible %s, bound %s, reject 0x%08x, candidates %u, eligible frames %u, attempts %u, binds %u, fallbacks %u, rejects %u, program misses %u, uniform failures %u\n",
 		BoolName( postShader_.r_glxPostShaderExecute && postShader_.r_glxPostShaderExecute->integer ? qtrue : qfalse ),
 		BoolName( postShader_.lastDirectFinalEligible ),
@@ -1281,6 +1368,11 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.msaaBlits,
 		postprocess_.ssaaBlits,
 		GLX_PostProcess_ResultName( postprocess_.lastResult ) );
+	RI().Printf( PRINT_ALL, "glx: bloom storage policy %s format 0x%04x (0x%04x:0x%04x)\n",
+		GLX_PostProcess_BloomFormatModeName( postprocess_.lastBloomFormatMode ),
+		postprocess_.lastBloomInternalFormat,
+		postprocess_.lastBloomTextureFormat,
+		postprocess_.lastBloomTextureType );
 	RI().Printf( PRINT_ALL, "glx: color pipeline %s precision %i transfer %s tone-map %s exposure %.2f bloom-threshold %.2f/%i knee %.2f grade %s paper-white %.0f max %.0f\n",
 		GLX_RenderIR_SceneColorSpaceName( postprocess_.lastOutput.sceneColorSpace ),
 		postprocess_.lastOutput.precisionMode,
@@ -1293,6 +1385,25 @@ void RendererModule::PrintFrameCounters() const
 		GLX_RenderIR_ColorGradeName( postprocess_.lastOutput.grade ),
 		postprocess_.lastOutput.paperWhiteNits,
 		postprocess_.lastOutput.maxOutputNits );
+	RI().Printf( PRINT_ALL, "glx: auto exposure mode %i algorithm %s enabled %s fallback %s samples %i/%ix%i percentile %.1f target-luma %.3f measured-log2 %.3f measured-luma %.4f manual %.2f scale %.3f target %.2f frames %u histogram %u simple %u sample-failures %u\n",
+		postprocess_.lastAutoExposureMode,
+		GLX_RenderIR_ExposureReductionName( postprocess_.lastExposureAlgorithm ),
+		BoolName( postprocess_.lastAutoExposureEnabled ),
+		BoolName( postprocess_.lastAutoExposureFallback ),
+		postprocess_.lastAutoExposureSampleCount,
+		postprocess_.lastAutoExposureSampleWidth,
+		postprocess_.lastAutoExposureSampleHeight,
+		postprocess_.lastAutoExposurePercentile,
+		postprocess_.lastAutoExposureTargetLuma,
+		postprocess_.lastAutoExposureLogLuma,
+		postprocess_.lastAutoExposureLuma,
+		postprocess_.lastManualExposure,
+		postprocess_.lastAutoExposureScale,
+		postprocess_.lastAutoExposureTargetExposure,
+		postprocess_.autoExposureFrames,
+		postprocess_.autoExposureHistogramFrames,
+		postprocess_.autoExposureSimpleFrames,
+		postprocess_.autoExposureSampleFailures );
 	RI().Printf( PRINT_ALL, "glx: output colorimetry primaries %s gamut-map %s precision-request %i precision-resolved %i\n",
 		GLX_RenderIR_OutputPrimariesName( postprocess_.lastOutput.outputPrimaries ),
 		GLX_RenderIR_GamutMapName( postprocess_.lastOutput.gamutMap ),
@@ -1310,6 +1421,19 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.lastOutput.displayMaxNits,
 		BoolName( postprocess_.lastOutput.displayIccProfileAvailable ),
 		postprocess_.lastOutput.displayIccProfileBytes );
+	RI().Printf( PRINT_ALL, "glx: display state queries %u changes %u capability %u backend %u hdr %u headroom %u luminance %u icc %u last-frame %u flags 0x%08x hash 0x%08x previous 0x%08x\n",
+		postprocess_.displayOutputQueries,
+		postprocess_.displayOutputStateChanges,
+		postprocess_.displayOutputCapabilityChanges,
+		postprocess_.displayOutputBackendChanges,
+		postprocess_.displayOutputHdrChanges,
+		postprocess_.displayOutputHeadroomChanges,
+		postprocess_.displayOutputLuminanceChanges,
+		postprocess_.displayOutputIccChanges,
+		postprocess_.lastDisplayOutputChangeFrame,
+		postprocess_.lastDisplayOutputChangeMask,
+		postprocess_.lastDisplayOutputHash,
+		postprocess_.previousDisplayOutputHash );
 	RI().Printf( PRINT_ALL, "glx: color grade mode %s lift %.2f/%.2f/%.2f gamma %.2f/%.2f/%.2f gain %.2f/%.2f/%.2f white-point %.0f->%.0f lut-size %.0f lut-scale %.2f\n",
 		GLX_RenderIR_ColorGradeName( postprocess_.lastOutput.grade ),
 		postprocess_.lastGradeLift[0], postprocess_.lastGradeLift[1], postprocess_.lastGradeLift[2],
@@ -1317,18 +1441,30 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.lastGradeGain[0], postprocess_.lastGradeGain[1], postprocess_.lastGradeGain[2],
 		postprocess_.lastWhitePointSourceKelvin, postprocess_.lastWhitePointTargetKelvin,
 		postprocess_.lastColorGradeLutSize, postprocess_.lastColorGradeLutScale );
-	RI().Printf( PRINT_ALL, "glx: color audit srgb-decode %s requested %s available %s framebuffer-srgb %s requested %s available %s capture sdr-srgb target-float %s final-encode %s contract %s texture-consistent %s stale-srgb-decode %u\n",
+	RI().Printf( PRINT_ALL, "glx: color audit srgb-decode %s requested %s available %s framebuffer-srgb %s requested %s available %s capture %s capture-request %s capture-hdr-aware %s capture-supported %s target-float %s final-encode %s contract %s texture-consistent %s stale-srgb-decode %u\n",
 		BoolName( postprocess_.textureSrgbDecode ),
 		BoolName( postprocess_.r_srgbTextures && postprocess_.r_srgbTextures->integer ? qtrue : qfalse ),
 		BoolName( postprocess_.textureSrgbAvailable ),
 		BoolName( postprocess_.framebufferSrgbEnabled ),
 		BoolName( postprocess_.r_framebufferSRGB && postprocess_.r_framebufferSRGB->integer ? qtrue : qfalse ),
 		BoolName( postprocess_.framebufferSrgbAvailable ),
+		GLX_RenderIR_CaptureExportPolicyName( postprocess_.lastCaptureSelected ),
+		GLX_RenderIR_CaptureExportPolicyName( postprocess_.lastCaptureRequest ),
+		BoolName( postprocess_.lastCaptureHdrAware ),
+		BoolName( postprocess_.lastCaptureSupported ),
 		BoolName( postprocess_.sceneTargetFloat ),
 		postprocess_.finalShaderSrgbEncode ? "shader-srgb" : "none",
 		BoolName( postprocess_.outputContractValid ),
 		BoolName( postprocess_.textureSrgbDecodeConsistent ),
 		postprocess_.textureSrgbStaleDecode );
+	RI().Printf( PRINT_ALL, "glx: capture policy request %s selected %s hdr-aware %s supported %s sdr-frames %u hdr-requests %u unsupported-requests %u\n",
+		GLX_RenderIR_CaptureExportPolicyName( postprocess_.lastCaptureRequest ),
+		GLX_RenderIR_CaptureExportPolicyName( postprocess_.lastCaptureSelected ),
+		BoolName( postprocess_.lastCaptureHdrAware ),
+		BoolName( postprocess_.lastCaptureSupported ),
+		postprocess_.captureSdrFrames,
+		postprocess_.captureHdrRequestFrames,
+		postprocess_.captureUnsupportedRequestFrames );
 	RI().Printf( PRINT_ALL, "glx: texture audit srgb %u decode %u, linear %u decode %u, data %u decode %u, unknown %u decode %u, missing-srgb-decode %u, unexpected-decode %u\n",
 		postprocess_.imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_SRGB],
 		postprocess_.imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_SRGB],
@@ -1867,11 +2003,13 @@ void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomA
 	PostOutputPlanInputs inputs {};
 	inputs.tier = caps_.tier;
 	inputs.output = output;
+	inputs.captureRequest = postprocess_.lastCaptureRequest;
 	inputs.fboReady = postprocess_.fboReady;
 	inputs.programReady = programReady;
 	inputs.framebufferFnsReady = postprocess_.framebufferFnsReady;
 	inputs.outputContractValid = postprocess_.outputContractValid;
 	inputs.bloomAvailable = bloomAvailable;
+	inputs.postShaderExecutorEnabled = GLX_PostShader_ExecutionEnabled( postShader_ );
 	inputs.minimized = minimized;
 	inputs.windowAdjusted = windowAdjusted;
 	inputs.screenshotMask = screenshotMask;
@@ -1881,8 +2019,15 @@ void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomA
 		( windowAdjusted ? 0x4u : 0u ) | ( screenshotMask ? 0x8u : 0u );
 
 	PostOutputPlan plan = GLX_RenderIR_BuildPostOutputPlan( inputs );
-	PostShaderPlan shaderPlan = GLX_PostShader_BuildPlan( output );
+	PostShaderPlan shaderPlan = GLX_Module_PostShaderPlanForOutputPlan( output, plan );
+	if ( GLX_Module_PostOutputPlanHasNode( plan, PostNodeKind::BloomPrefinal ) ) {
+		GLX_PostShader_RecordPlan( &postShader_,
+			GLX_PostShader_BuildPlanForPass( output, qtrue, qfalse ) );
+	}
 	GLX_PostShader_RecordPlan( &postShader_, shaderPlan );
+	postShaderBindBaseline_ = postShader_.directFinalBinds;
+	postShaderExpectedBinds_ = plan.glxOwned ?
+		GLX_Module_PostOutputExpectedShaderBinds( plan ) : 0u;
 	qboolean consumed = qtrue;
 	for ( int i = 0; i < plan.nodeCount; i++ ) {
 		if ( !GLX_Executor_ConsumePostNode( &executor_, plan.nodes[i] ) ) {
@@ -1896,13 +2041,32 @@ void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomA
 	GLX_PostProcess_RecordPostShaderPlan( &postprocess_, shaderPlan );
 }
 
-qboolean RendererModule::TryBindPostShaderDirectFinal()
+qboolean RendererModule::AutoExposureNeedsSamples( int *width, int *height ) const
+{
+	return GLX_PostProcess_AutoExposureNeedsSamples( &postprocess_, width, height );
+}
+
+float RendererModule::UpdateAutoExposure( float manualExposure, const float *rgba,
+	int width, int height )
+{
+	return GLX_PostProcess_UpdateAutoExposure( &postprocess_, manualExposure,
+		rgba, width, height );
+}
+
+qboolean RendererModule::TryBindPostShaderFinal( qboolean bloomComposite,
+	qboolean outputTransform, float bloomIntensity )
 {
 	const OutputTransform output = GLX_Module_OutputTransformIR( postprocess_ );
-	const PostShaderPlan shaderPlan = GLX_PostShader_BuildPlan( output );
+	const PostShaderPlan shaderPlan = GLX_PostShader_BuildPlanForPass( output,
+		bloomComposite, outputTransform );
 
-	return GLX_PostShader_TryBindDirectFinal( &postShader_, shaderPlan, output,
-		postprocess_.lastGreyscale );
+	return GLX_PostShader_TryBindFinal( &postShader_, shaderPlan, output,
+		bloomComposite, outputTransform, bloomIntensity );
+}
+
+qboolean RendererModule::TryBindPostShaderDirectFinal()
+{
+	return TryBindPostShaderFinal( qfalse, qtrue, 0.0f );
 }
 
 void RendererModule::UnbindPostShader()
@@ -1934,6 +2098,13 @@ void RendererModule::RecordPostProcessResult( int result )
 
 	GLX_PostProcess_RecordFrameResult( &postprocess_, result );
 	GLX_Executor_ConsumePostNode( &executor_, node );
+	if ( postShaderExpectedBinds_ > 0u &&
+		postShader_.directFinalBinds - postShaderBindBaseline_ < postShaderExpectedBinds_ ) {
+		GLX_PostProcess_RecordPostOutputExecutionFallback( &postprocess_,
+			GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_BOUND );
+	}
+	postShaderBindBaseline_ = postShader_.directFinalBinds;
+	postShaderExpectedBinds_ = 0u;
 }
 
 void RendererModule::RecordColorGradeLut( qboolean active, int size, float scale )
@@ -1941,9 +2112,13 @@ void RendererModule::RecordColorGradeLut( qboolean active, int size, float scale
 	GLX_PostProcess_RecordColorGradeLut( &postprocess_, active, size, scale );
 }
 
-void RendererModule::RecordBloomCreate( int result, int requestedPasses, int effectivePasses, int textureUnits )
+void RendererModule::RecordBloomCreate( int result, int requestedPasses, int effectivePasses,
+	int textureUnits, int formatMode, int internalFormat, int textureFormat,
+	int textureType )
 {
-	GLX_PostProcess_RecordBloomCreate( &postprocess_, result, requestedPasses, effectivePasses, textureUnits );
+	GLX_PostProcess_RecordBloomCreate( &postprocess_, result, requestedPasses,
+		effectivePasses, textureUnits, formatMode, internalFormat,
+		textureFormat, textureType );
 }
 
 void RendererModule::RecordBloom( int result, qboolean finalStage, int bloomMode, int requestedPasses,
@@ -1963,6 +2138,22 @@ void RendererModule::RecordFboCopyScreen( int viewportWidth, int viewportHeight 
 void RendererModule::RecordFboBlit( int kind, qboolean depthOnly, int srcWidth, int srcHeight, int dstWidth, int dstHeight )
 {
 	GLX_PostProcess_RecordBlit( &postprocess_, kind, depthOnly, srcWidth, srcHeight, dstWidth, dstHeight );
+	GLX_Profiler_RecordPostBlit( &profiler_ );
+}
+
+void RendererModule::RecordFboBind()
+{
+	GLX_Profiler_RecordPostBind( &profiler_ );
+}
+
+void RendererModule::RecordPostClear()
+{
+	GLX_Profiler_RecordPostClear( &profiler_ );
+}
+
+void RendererModule::RecordFullscreenPass()
+{
+	GLX_Profiler_RecordFullscreenPass( &profiler_ );
 }
 
 void RendererModule::PushShaderDebugGroup( const char *shaderName, int numVertexes, int numIndexes, int numPasses )
@@ -2158,6 +2349,16 @@ extern "C" void GLX_Renderer_BeginBackendTimer( void )
 extern "C" void GLX_Renderer_EndBackendTimer( void )
 {
 	glx::g_module.EndBackendTimer();
+}
+
+extern "C" void GLX_Renderer_BeginGpuPassTimer( int pass )
+{
+	glx::g_module.BeginGpuPassTimer( pass );
+}
+
+extern "C" void GLX_Renderer_EndGpuPassTimer( int pass )
+{
+	glx::g_module.EndGpuPassTimer( pass );
 }
 
 extern "C" void GLX_Renderer_FrameComplete( void )
@@ -2415,9 +2616,27 @@ extern "C" void GLX_Renderer_RecordPostProcessFrame( qboolean minimized, qboolea
 		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
 }
 
+extern "C" qboolean GLX_Renderer_AutoExposureNeedsSamples( int *width, int *height )
+{
+	return glx::g_module.AutoExposureNeedsSamples( width, height );
+}
+
+extern "C" float GLX_Renderer_UpdateAutoExposure( float manualExposure,
+	const float *rgba, int width, int height )
+{
+	return glx::g_module.UpdateAutoExposure( manualExposure, rgba, width, height );
+}
+
 extern "C" qboolean GLX_Renderer_TryBindPostShaderDirectFinal( void )
 {
 	return glx::g_module.TryBindPostShaderDirectFinal();
+}
+
+extern "C" qboolean GLX_Renderer_TryBindPostShaderFinal( qboolean bloomComposite,
+	qboolean outputTransform, float bloomIntensity )
+{
+	return glx::g_module.TryBindPostShaderFinal( bloomComposite, outputTransform,
+		bloomIntensity );
 }
 
 extern "C" void GLX_Renderer_UnbindPostShader( void )
@@ -2436,9 +2655,11 @@ extern "C" void GLX_Renderer_RecordColorGradeLut( qboolean active, int size, flo
 }
 
 extern "C" void GLX_Renderer_RecordBloomCreate( int result, int requestedPasses,
-	int effectivePasses, int textureUnits )
+	int effectivePasses, int textureUnits, int formatMode, int internalFormat,
+	int textureFormat, int textureType )
 {
-	glx::g_module.RecordBloomCreate( result, requestedPasses, effectivePasses, textureUnits );
+	glx::g_module.RecordBloomCreate( result, requestedPasses, effectivePasses,
+		textureUnits, formatMode, internalFormat, textureFormat, textureType );
 }
 
 extern "C" void GLX_Renderer_RecordBloom( int result, qboolean finalStage, int bloomMode,
@@ -2460,6 +2681,21 @@ extern "C" void GLX_Renderer_RecordFboBlit( int kind, qboolean depthOnly,
 	int srcWidth, int srcHeight, int dstWidth, int dstHeight )
 {
 	glx::g_module.RecordFboBlit( kind, depthOnly, srcWidth, srcHeight, dstWidth, dstHeight );
+}
+
+extern "C" void GLX_Renderer_RecordFboBind( void )
+{
+	glx::g_module.RecordFboBind();
+}
+
+extern "C" void GLX_Renderer_RecordPostClear( void )
+{
+	glx::g_module.RecordPostClear();
+}
+
+extern "C" void GLX_Renderer_RecordFullscreenPass( void )
+{
+	glx::g_module.RecordFullscreenPass();
 }
 
 extern "C" void GLX_Renderer_PushShaderDebugGroup( const char *shaderName, int numVertexes, int numIndexes, int numPasses )

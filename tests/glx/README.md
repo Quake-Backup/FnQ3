@@ -29,9 +29,9 @@ The harness currently checks:
 
 `fnq3_glx_header_boundary` scans the pure GLx headers, the renderer-common GLx API/forwarding bridge, and the renderer facade. It fails if pure logic picks up legacy renderer includes, GL object typedefs, `qgl` references, renderer ABI types, or module/local implementation headers. It also keeps the bridge headers from growing a `tr_public.h`, `qgl`, GL typedef, or shutdown-enum dependency, and keeps `tr_glx_compat.h` from including back into `code/rendererglx`.
 
-Build and run it with CMake:
+Build and run it with Meson:
 
 ```sh
-cmake --build .tmp/cmake-glx --target fnq3_glx_logic_tests --config Debug
-ctest --test-dir .tmp/cmake-glx -R "fnq3_glx_(logic|header_boundary)" --output-on-failure -C Debug
+meson compile -C meson/build fnq3_glx_logic_tests
+meson test -C meson/build -R "fnq3_glx_(logic|header_boundary)" --print-errorlogs
 ```

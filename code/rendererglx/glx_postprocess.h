@@ -13,10 +13,17 @@ struct PostProcessState {
 	cvar_t *r_glxColorPipelineDebug;
 	cvar_t *r_hdr;
 	cvar_t *r_hdrPrecision;
+	cvar_t *r_hdrBloomFormat;
 	cvar_t *r_srgbTextures;
 	cvar_t *r_framebufferSRGB;
 	cvar_t *r_tonemap;
 	cvar_t *r_tonemapExposure;
+	cvar_t *r_glxAutoExposure;
+	cvar_t *r_glxAutoExposurePercentile;
+	cvar_t *r_glxAutoExposureTargetLuma;
+	cvar_t *r_glxAutoExposureMin;
+	cvar_t *r_glxAutoExposureMax;
+	cvar_t *r_glxAutoExposureAdapt;
 	cvar_t *r_colorGrade;
 	cvar_t *r_colorGradeLift;
 	cvar_t *r_colorGradeGamma;
@@ -29,10 +36,12 @@ struct PostProcessState {
 	cvar_t *r_hdrDisplayMaxLuminance;
 	cvar_t *r_outputBackend;
 	cvar_t *r_outputAllowExperimentalLinuxHDR;
+	cvar_t *r_screenshotCaptureMode;
 	cvar_t *r_bloom_threshold;
 	cvar_t *r_bloom_threshold_mode;
 	cvar_t *r_bloom_soft_knee;
 	qboolean glReady;
+	RenderProductTier tier;
 	qboolean fboRequested;
 	qboolean fboReady;
 	qboolean programReady;
@@ -71,12 +80,33 @@ struct PostProcessState {
 	qboolean sceneTargetFloat;
 	qboolean finalShaderSrgbEncode;
 	qboolean outputContractValid;
+	CaptureExportPolicy lastCaptureRequest;
+	CaptureExportPolicy lastCaptureSelected;
+	qboolean lastCaptureHdrAware;
+	qboolean lastCaptureSupported;
 	rendererDisplayOutput_t displayOutput;
+	rendererDisplayOutput_t previousDisplayOutput;
 	OutputTransform lastOutput;
 	qboolean lastBloomAvailable;
 	qboolean lastBloomFinalStage;
 	float lastGreyscale;
 	float lastExposure;
+	qboolean lastAutoExposureEnabled;
+	qboolean lastAutoExposureFallback;
+	qboolean lastAutoExposureSamplesValid;
+	ExposureReductionAlgorithm lastExposureAlgorithm;
+	int lastAutoExposureMode;
+	int lastAutoExposureSampleWidth;
+	int lastAutoExposureSampleHeight;
+	int lastAutoExposureSampleCount;
+	int lastAutoExposureHistogramBin;
+	float lastManualExposure;
+	float lastAutoExposureScale;
+	float lastAutoExposureTargetExposure;
+	float lastAutoExposureLogLuma;
+	float lastAutoExposureLuma;
+	float lastAutoExposurePercentile;
+	float lastAutoExposureTargetLuma;
 	float lastBloomSoftKnee;
 	float lastPaperWhiteNits;
 	float lastMaxOutputNits;
@@ -105,6 +135,10 @@ struct PostProcessState {
 	int lastBloomBlendBase;
 	int lastBloomFilterSize;
 	int lastBloomTextureUnits;
+	int lastBloomFormatMode;
+	int lastBloomInternalFormat;
+	int lastBloomTextureFormat;
+	int lastBloomTextureType;
 	int lastBloomThresholdMode;
 	int lastBloomModulate;
 	float lastBloomThreshold;
@@ -118,6 +152,18 @@ struct PostProcessState {
 	int colorGradeLutModificationCount;
 	float colorGradeLutScale;
 	unsigned int lastDisplayOutputQueryFrame;
+	unsigned int displayOutputQueries;
+	unsigned int displayOutputStateChanges;
+	unsigned int displayOutputCapabilityChanges;
+	unsigned int displayOutputBackendChanges;
+	unsigned int displayOutputHdrChanges;
+	unsigned int displayOutputHeadroomChanges;
+	unsigned int displayOutputLuminanceChanges;
+	unsigned int displayOutputIccChanges;
+	unsigned int lastDisplayOutputChangeFrame;
+	unsigned int lastDisplayOutputChangeMask;
+	unsigned int lastDisplayOutputHash;
+	unsigned int previousDisplayOutputHash;
 	int lastOutputBackendModificationCount;
 	int lastOutputAllowExperimentalModificationCount;
 	int lastDisplayPaperWhiteModificationCount;
@@ -138,6 +184,9 @@ struct PostProcessState {
 	unsigned int greyscaleFrames;
 	unsigned int windowAdjustedFrames;
 	unsigned int screenshotFrames;
+	unsigned int captureSdrFrames;
+	unsigned int captureHdrRequestFrames;
+	unsigned int captureUnsupportedRequestFrames;
 	unsigned int bloomAvailableFrames;
 	unsigned int bloomFinalFrames;
 	unsigned int gammaDirectFrames;
@@ -160,6 +209,11 @@ struct PostProcessState {
 	unsigned int bloomMode1Passes;
 	unsigned int bloomMode2Passes;
 	unsigned int bloomReflectionPasses;
+	unsigned int autoExposureFrames;
+	unsigned int autoExposureHistogramFrames;
+	unsigned int autoExposureSimpleFrames;
+	unsigned int autoExposureFallbackFrames;
+	unsigned int autoExposureSampleFailures;
 	unsigned int colorPipelineDumpFrames;
 	qboolean colorPipelineCsvHeaderPrinted;
 	unsigned int postOutputPlanFrames;
@@ -192,6 +246,8 @@ struct PostProcessState {
 	unsigned int imageColorSpaceCounts[GLX_IMAGE_COLORSPACE_COUNT];
 	unsigned int imageSrgbDecodeCounts[GLX_IMAGE_COLORSPACE_COUNT];
 	unsigned int imageUnexpectedSrgbDecode;
+	qboolean autoExposureInitialized;
+	float autoExposureSmoothedExposure;
 };
 
 void GLX_PostProcess_RegisterCvars( PostProcessState *state );
@@ -208,14 +264,21 @@ void GLX_PostProcess_RecordFboShutdown( PostProcessState *state );
 void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, qboolean bloomAvailable,
 	qboolean programReady, int screenshotMask, qboolean windowAdjusted, int fboReadIndex,
 	int hdrMode, int renderScaleMode, float greyscale );
+qboolean GLX_PostProcess_AutoExposureNeedsSamples( const PostProcessState *state,
+	int *width, int *height );
+float GLX_PostProcess_UpdateAutoExposure( PostProcessState *state, float manualExposure,
+	const float *rgba, int width, int height );
 void GLX_PostProcess_RecordPostOutputPlan( PostProcessState *state, const PostOutputPlan &plan,
 	qboolean executorConsumed );
+void GLX_PostProcess_RecordPostOutputExecutionFallback( PostProcessState *state,
+	unsigned int fallbackReason );
 void GLX_PostProcess_RecordPostShaderPlan( PostProcessState *state, const PostShaderPlan &plan );
 void GLX_PostProcess_RecordFrameResult( PostProcessState *state, int result );
 void GLX_PostProcess_RecordColorGradeLut( PostProcessState *state, qboolean active,
 	int size, float scale );
 void GLX_PostProcess_RecordBloomCreate( PostProcessState *state, int result,
-	int requestedPasses, int effectivePasses, int textureUnits );
+	int requestedPasses, int effectivePasses, int textureUnits, int formatMode,
+	int internalFormat, int textureFormat, int textureType );
 void GLX_PostProcess_RecordBloom( PostProcessState *state, int result, qboolean finalStage,
 	int bloomMode, int requestedPasses, int effectivePasses, int blendBase, int filterSize,
 	int textureUnits, int thresholdMode, int modulate, float threshold, float intensity,
@@ -230,6 +293,7 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state );
 const char *GLX_PostProcess_ResultName( int result );
 const char *GLX_PostProcess_BloomCreateResultName( int result );
 const char *GLX_PostProcess_BloomResultName( int result );
+const char *GLX_PostProcess_BloomFormatModeName( int mode );
 const char *GLX_PostProcess_PostOutputModeName( qboolean glxOwned );
 
 } // namespace glx

@@ -5,18 +5,120 @@
 
 namespace glx {
 
-static constexpr int GLX_POST_SHADER_SOURCE_VERSION = 3;
+static constexpr int GLX_POST_SHADER_SOURCE_VERSION = 6;
 static constexpr int GLX_POST_SHADER_VERTEX_SOURCE_BYTES = 1024;
-static constexpr int GLX_POST_SHADER_FRAGMENT_SOURCE_BYTES = 8192;
+static constexpr int GLX_POST_SHADER_FRAGMENT_SOURCE_BYTES = 20000;
+
+enum class PostShaderSourceTarget {
+	Glsl120,
+	Glsl130,
+	Glsl150Compatibility,
+	Glsl330Compatibility,
+	Glsl410Compatibility
+};
 
 struct PostShaderSourceSummary {
 	qboolean valid;
 	qboolean truncated;
+	PostShaderSourceTarget target;
+	int targetVersion;
 	unsigned int sourceHash;
 	unsigned int featureMask;
 	int vertexBytes;
 	int fragmentBytes;
 };
+
+static ID_INLINE const char *GLX_PostShaderSource_TargetName(
+	PostShaderSourceTarget target )
+{
+	switch ( target ) {
+	case PostShaderSourceTarget::Glsl120:
+		return "glsl120";
+	case PostShaderSourceTarget::Glsl130:
+		return "glsl130";
+	case PostShaderSourceTarget::Glsl150Compatibility:
+		return "glsl150-compat";
+	case PostShaderSourceTarget::Glsl330Compatibility:
+		return "glsl330-compat";
+	case PostShaderSourceTarget::Glsl410Compatibility:
+		return "glsl410-compat";
+	default:
+		return "unknown";
+	}
+}
+
+static ID_INLINE int GLX_PostShaderSource_TargetVersion(
+	PostShaderSourceTarget target )
+{
+	switch ( target ) {
+	case PostShaderSourceTarget::Glsl120:
+		return 120;
+	case PostShaderSourceTarget::Glsl130:
+		return 130;
+	case PostShaderSourceTarget::Glsl150Compatibility:
+		return 150;
+	case PostShaderSourceTarget::Glsl330Compatibility:
+		return 330;
+	case PostShaderSourceTarget::Glsl410Compatibility:
+		return 410;
+	default:
+		return 0;
+	}
+}
+
+static ID_INLINE qboolean GLX_PostShaderSource_ModernTarget(
+	PostShaderSourceTarget target )
+{
+	return target == PostShaderSourceTarget::Glsl120 ? qfalse : qtrue;
+}
+
+static ID_INLINE qboolean GLX_PostShaderSource_TargetSupportedByVersion(
+	PostShaderSourceTarget target, int major, int minor )
+{
+	switch ( target ) {
+	case PostShaderSourceTarget::Glsl120:
+		(void)major;
+		(void)minor;
+		return qtrue;
+	case PostShaderSourceTarget::Glsl130:
+		return major > 3 || ( major == 3 && minor >= 0 ) ? qtrue : qfalse;
+	case PostShaderSourceTarget::Glsl150Compatibility:
+		return major > 3 || ( major == 3 && minor >= 2 ) ? qtrue : qfalse;
+	case PostShaderSourceTarget::Glsl330Compatibility:
+		return major > 3 || ( major == 3 && minor >= 3 ) ? qtrue : qfalse;
+	case PostShaderSourceTarget::Glsl410Compatibility:
+		return major > 4 || ( major == 4 && minor >= 1 ) ? qtrue : qfalse;
+	default:
+		return qfalse;
+	}
+}
+
+static ID_INLINE PostShaderSourceTarget GLX_PostShaderSource_TargetForTier(
+	RenderProductTier tier, int major, int minor )
+{
+	if ( tier == RenderProductTier::GL46 || tier == RenderProductTier::GL41 ) {
+		if ( GLX_PostShaderSource_TargetSupportedByVersion(
+			PostShaderSourceTarget::Glsl410Compatibility, major, minor ) ) {
+			return PostShaderSourceTarget::Glsl410Compatibility;
+		}
+	}
+	if ( tier == RenderProductTier::GL3X || tier == RenderProductTier::GL41 ||
+		tier == RenderProductTier::GL46 ) {
+		if ( GLX_PostShaderSource_TargetSupportedByVersion(
+			PostShaderSourceTarget::Glsl330Compatibility, major, minor ) ) {
+			return PostShaderSourceTarget::Glsl330Compatibility;
+		}
+		if ( GLX_PostShaderSource_TargetSupportedByVersion(
+			PostShaderSourceTarget::Glsl150Compatibility, major, minor ) ) {
+			return PostShaderSourceTarget::Glsl150Compatibility;
+		}
+		if ( GLX_PostShaderSource_TargetSupportedByVersion(
+			PostShaderSourceTarget::Glsl130, major, minor ) ) {
+			return PostShaderSourceTarget::Glsl130;
+		}
+	}
+	return PostShaderSourceTarget::Glsl120;
+}
 
 static ID_INLINE int GLX_PostShaderSource_StringLength( const char *text )
 {
@@ -87,8 +189,30 @@ static ID_INLINE unsigned int GLX_PostShaderSource_HashText( unsigned int hash,
 	return hash;
 }
 
-static ID_INLINE qboolean GLX_PostShaderSource_WriteVertex( char *out, int outSize,
-	int *bytes )
+static ID_INLINE qboolean GLX_PostShaderSource_WriteVersion(
+	PostShaderSourceTarget target, char *out, int outSize, int *used )
+{
+	switch ( target ) {
+	case PostShaderSourceTarget::Glsl120:
+		return GLX_PostShaderSource_Append( out, outSize, used, "#version 120\n" );
+	case PostShaderSourceTarget::Glsl130:
+		return GLX_PostShaderSource_Append( out, outSize, used, "#version 130\n" );
+	case PostShaderSourceTarget::Glsl150Compatibility:
+		return GLX_PostShaderSource_Append( out, outSize, used,
+			"#version 150 compatibility\n" );
+	case PostShaderSourceTarget::Glsl330Compatibility:
+		return GLX_PostShaderSource_Append( out, outSize, used,
+			"#version 330 compatibility\n" );
+	case PostShaderSourceTarget::Glsl410Compatibility:
+		return GLX_PostShaderSource_Append( out, outSize, used,
+			"#version 410 compatibility\n" );
+	default:
+		return qfalse;
+	}
+}
+
+static ID_INLINE qboolean GLX_PostShaderSource_WriteVertex(
+	PostShaderSourceTarget target, char *out, int outSize, int *bytes )
 {
 	int used = 0;
 	qboolean ok = qtrue;
@@ -97,9 +221,13 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteVertex( char *out, int outSi
 		out[0] = '\0';
 	}
 
+	ok = ( GLX_PostShaderSource_WriteVersion( target, out, outSize, &used ) && ok ) ?
+		qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
-		"#version 120\n"
-		"varying vec2 v_TexCoord;\n"
+		GLX_PostShaderSource_ModernTarget( target ) ?
+		"out vec2 v_TexCoord;\n" :
+		"varying vec2 v_TexCoord;\n" ) && ok ) ? qtrue : qfalse;
+	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
 		"void main() {\n"
 		"	v_TexCoord = gl_MultiTexCoord0.st;\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
@@ -109,6 +237,13 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteVertex( char *out, int outSi
 		*bytes = used;
 	}
 	return ok;
+}
+
+static ID_INLINE qboolean GLX_PostShaderSource_WriteVertex( char *out, int outSize,
+	int *bytes )
+{
+	return GLX_PostShaderSource_WriteVertex( PostShaderSourceTarget::Glsl120,
+		out, outSize, bytes );
 }
 
 static ID_INLINE qboolean GLX_PostShaderSource_WriteFeatureDefines(
@@ -132,11 +267,14 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFeatureDefines(
 		"GLX_POST_LUT_3D",
 		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_LUT_3D ) ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
-		"GLX_POST_TONEMAP_REINHARD",
-		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_TONEMAP_REINHARD ) ) && ok ) ? qtrue : qfalse;
+		"GLX_POST_TONEMAP_REINHARD_SIMPLE",
+		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_TONEMAP_REINHARD_SIMPLE ) ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
-		"GLX_POST_TONEMAP_ACES",
-		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_TONEMAP_ACES ) ) && ok ) ? qtrue : qfalse;
+		"GLX_POST_TONEMAP_ACES_FITTED",
+		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_TONEMAP_ACES_FITTED ) ) && ok ) ? qtrue : qfalse;
+	ok = ( GLX_PostShaderSource_Append( out, outSize, used,
+		"#define GLX_POST_TONEMAP_REINHARD GLX_POST_TONEMAP_REINHARD_SIMPLE\n"
+		"#define GLX_POST_TONEMAP_ACES GLX_POST_TONEMAP_ACES_FITTED\n" ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
 		"GLX_POST_ENCODE_SRGB",
 		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_ENCODE_SRGB ) ) && ok ) ? qtrue : qfalse;
@@ -152,12 +290,31 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFeatureDefines(
 	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
 		"GLX_POST_GAMUT_COMPRESS",
 		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_GAMUT_COMPRESS ) ) && ok ) ? qtrue : qfalse;
+	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
+		"GLX_POST_GAMUT_CLIP",
+		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_GAMUT_CLIP ) ) && ok ) ? qtrue : qfalse;
+	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
+		"GLX_POST_OUTPUT_TRANSFORM",
+		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM ) ) && ok ) ? qtrue : qfalse;
+	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
+		"GLX_POST_BLOOM_COMBINE",
+		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_BLOOM_COMBINE ) ) && ok ) ? qtrue : qfalse;
+	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
+		"GLX_POST_GREYSCALE",
+		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_GREYSCALE ) ) && ok ) ? qtrue : qfalse;
+	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
+		"GLX_POST_DISPLAY_P3_OUTPUT",
+		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_DISPLAY_P3_OUTPUT ) ) && ok ) ? qtrue : qfalse;
+	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
+		"GLX_POST_HDR_HEADROOM_OUTPUT",
+		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT ) ) && ok ) ? qtrue : qfalse;
 
 	return ok;
 }
 
 static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
-	const PostShaderPlan &plan, char *out, int outSize, int *bytes )
+	const PostShaderPlan &plan, PostShaderSourceTarget target, char *out,
+	int outSize, int *bytes )
 {
 	int used = 0;
 	qboolean ok = plan.valid;
@@ -172,16 +329,32 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 		return qfalse;
 	}
 
+	ok = ( GLX_PostShaderSource_WriteVersion( target, out, outSize, &used ) && ok ) ?
+		qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
-		"#version 120\n"
-		"// GLx generated post/output shader source v1.\n" ) && ok ) ? qtrue : qfalse;
+		"// GLx generated post/output shader source v6.\n" ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_WriteFeatureDefines( plan, out, outSize, &used ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
+		GLX_PostShaderSource_ModernTarget( target ) ?
+		"in vec2 v_TexCoord;\n"
+		"#define GLX_POST_SAMPLE2D texture\n" :
 		"varying vec2 v_TexCoord;\n"
+		"#define GLX_POST_SAMPLE2D texture2D\n"
+		"#define glx_FragColor gl_FragColor\n" ) && ok ) ? qtrue : qfalse;
+	if ( GLX_PostShaderSource_ModernTarget( target ) ) {
+		ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
+			GLX_PostShaderSource_TargetVersion( target ) >= 330 ?
+			"layout(location = 0) out vec4 glx_FragColor;\n" :
+			"out vec4 glx_FragColor;\n" ) && ok ) ? qtrue : qfalse;
+	}
+	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
 		"uniform sampler2D u_Scene;\n"
+		"uniform sampler2D u_Bloom;\n"
 		"uniform sampler2D u_ColorGradeLut;\n" ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
-		"uniform vec4 u_PostParams0; // exposure, paper white, max output, unused\n"
+		"uniform vec4 u_PostParams0; // exposure, paper white, max output, greyscale\n"
+		"uniform vec4 u_OutputParams1; // headroom, display SDR white, display max, unused\n"
+		"uniform vec4 u_BloomParams; // intensity, unused, unused, unused\n"
 		"uniform vec4 u_Lift;\n"
 		"uniform vec4 u_InvGamma;\n"
 		"uniform vec4 u_Gain;\n"
@@ -189,39 +362,85 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 		"uniform vec4 u_WhitePoint1;\n"
 		"uniform vec4 u_WhitePoint2;\n"
 		"uniform vec4 u_LutParams; // scale, sizeMinusOne, texelCenter, invScale\n"
-		"vec3 glxSaturate(vec3 color) { return clamp(color, 0.0, 1.0); }\n"
+		"const float GLX_POST_SAFE_MAX = 65504.0;\n"
+		"float glxFiniteOr(float value, float fallback) {\n"
+		"	if (!(value == value)) { return fallback; }\n"
+		"	if (value > GLX_POST_SAFE_MAX || value < -GLX_POST_SAFE_MAX) { return fallback; }\n"
+		"	return value;\n"
+		"}\n"
+		"float glxClampFinite(float value, float fallback, float minValue, float maxValue) {\n"
+		"	return clamp(glxFiniteOr(value, fallback), minValue, maxValue);\n"
+		"}\n"
+		"vec3 glxFiniteVec3(vec3 color, vec3 fallback) {\n"
+		"	return vec3(glxFiniteOr(color.r, fallback.r), glxFiniteOr(color.g, fallback.g), glxFiniteOr(color.b, fallback.b));\n"
+		"}\n"
+		"vec3 glxNonNegativeVec3(vec3 color) { return max(glxFiniteVec3(color, vec3(0.0)), vec3(0.0)); }\n"
+		"vec3 glxSaturate(vec3 color) { return clamp(glxFiniteVec3(color, vec3(0.0)), 0.0, 1.0); }\n"
+		"float glxExposure() { return glxClampFinite(u_PostParams0.x, 1.0, 0.0, 64.0); }\n"
+		"float glxPaperWhite() { return glxClampFinite(u_PostParams0.y, 203.0, 1.0, 10000.0); }\n"
+		"float glxMaxOutput() {\n"
+		"	float paperWhite = glxPaperWhite();\n"
+		"	return max(glxClampFinite(u_PostParams0.z, paperWhite, paperWhite, 10000.0), paperWhite);\n"
+		"}\n"
+		"float glxHeadroom() {\n"
+		"	float fallback = max(glxMaxOutput() / max(glxPaperWhite(), 0.001), 1.0);\n"
+		"	return max(glxClampFinite(u_OutputParams1.x, fallback, 1.0, 64.0), 1.0);\n"
+		"}\n"
+		"float glxGreyscaleAmount() { return glxClampFinite(u_PostParams0.w, 0.0, 0.0, 1.0); }\n"
+		"float glxBloomIntensity() { return glxClampFinite(u_BloomParams.x, 0.0, 0.0, 64.0); }\n"
 		"vec3 glxLinearToSrgb(vec3 color) {\n"
+		"	color = glxNonNegativeVec3(color);\n"
 		"	vec3 lo = color * 12.92;\n"
 		"	vec3 hi = 1.055 * pow(max(color, vec3(0.0)), vec3(1.0 / 2.4)) - vec3(0.055);\n"
-		"	return mix(hi, lo, step(color, vec3(0.0031308)));\n"
+		"	return glxFiniteVec3(mix(hi, lo, step(color, vec3(0.0031308))), vec3(0.0));\n"
 		"}\n"
 		"vec3 glxApplyLiftGammaGain(vec3 color) {\n"
-		"	return max(pow(max(color + u_Lift.xyz, vec3(0.0)), u_InvGamma.xyz) * u_Gain.xyz, vec3(0.0));\n"
+		"	vec3 lift = glxFiniteVec3(u_Lift.xyz, vec3(0.0));\n"
+		"	vec3 invGamma = vec3(glxClampFinite(u_InvGamma.x, 1.0, 0.0001, 10000.0), glxClampFinite(u_InvGamma.y, 1.0, 0.0001, 10000.0), glxClampFinite(u_InvGamma.z, 1.0, 0.0001, 10000.0));\n"
+		"	vec3 gain = vec3(glxClampFinite(u_Gain.x, 1.0, 0.0, 64.0), glxClampFinite(u_Gain.y, 1.0, 0.0, 64.0), glxClampFinite(u_Gain.z, 1.0, 0.0, 64.0));\n"
+		"	return glxNonNegativeVec3(pow(glxNonNegativeVec3(color + lift), invGamma) * gain);\n"
 		"}\n"
 		"vec3 glxApplyWhitePoint(vec3 color) {\n"
-		"	return max(vec3(dot(u_WhitePoint0.xyz, color), dot(u_WhitePoint1.xyz, color), dot(u_WhitePoint2.xyz, color)), vec3(0.0));\n"
+		"	color = glxNonNegativeVec3(color);\n"
+		"	vec3 row0 = glxFiniteVec3(u_WhitePoint0.xyz, vec3(1.0, 0.0, 0.0));\n"
+		"	vec3 row1 = glxFiniteVec3(u_WhitePoint1.xyz, vec3(0.0, 1.0, 0.0));\n"
+		"	vec3 row2 = glxFiniteVec3(u_WhitePoint2.xyz, vec3(0.0, 0.0, 1.0));\n"
+		"	return glxNonNegativeVec3(vec3(dot(row0, color), dot(row1, color), dot(row2, color)));\n"
 		"}\n"
 		"vec3 glxSampleLutAtlas(vec3 color) {\n"
-		"	float sizeMinusOne = max(u_LutParams.y, 1.0);\n"
+		"	float lutScale = glxClampFinite(u_LutParams.x, 4.0, 0.001, 64.0);\n"
+		"	float sizeMinusOne = glxClampFinite(u_LutParams.y, 1.0, 1.0, 63.0);\n"
 		"	float size = sizeMinusOne + 1.0;\n"
-		"	vec3 p = clamp(color * u_LutParams.w, 0.0, 1.0) * sizeMinusOne;\n"
+		"	float invScale = glxClampFinite(u_LutParams.w, 1.0 / lutScale, 0.000015258789, 1000.0);\n"
+		"	vec3 p = clamp(glxNonNegativeVec3(color) * invScale, 0.0, 1.0) * sizeMinusOne;\n"
 		"	float slice = floor(p.b);\n"
 		"	float nextSlice = min(slice + 1.0, sizeMinusOne);\n"
 		"	vec2 uv0 = (vec2(p.r + slice * size, p.g) + vec2(0.5)) / vec2(size * size, size);\n"
 		"	vec2 uv1 = (vec2(p.r + nextSlice * size, p.g) + vec2(0.5)) / vec2(size * size, size);\n"
-		"	return mix(texture2D(u_ColorGradeLut, uv0).rgb, texture2D(u_ColorGradeLut, uv1).rgb, fract(p.b)) * u_LutParams.x;\n"
+		"	vec3 sample0 = glxFiniteVec3(GLX_POST_SAMPLE2D(u_ColorGradeLut, uv0).rgb, vec3(0.0));\n"
+		"	vec3 sample1 = glxFiniteVec3(GLX_POST_SAMPLE2D(u_ColorGradeLut, uv1).rgb, vec3(0.0));\n"
+		"	return glxNonNegativeVec3(mix(sample0, sample1, fract(p.b)) * lutScale);\n"
 		"}\n"
-		"vec3 glxToneMapReinhard(vec3 color) { return color / (color + vec3(1.0)); }\n"
-		"vec3 glxToneMapAces(vec3 color) {\n"
+		"vec3 glxToneMapReinhardSimple(vec3 color) {\n"
+		"	color = glxNonNegativeVec3(color);\n"
+		"	return glxFiniteVec3(color / (color + vec3(1.0)), vec3(0.0));\n"
+		"}\n"
+		"vec3 glxToneMapReinhard(vec3 color) { return glxToneMapReinhardSimple(color); }\n"
+		"vec3 glxToneMapAcesFitted(vec3 color) {\n"
 		"	const float a = 2.51;\n"
 		"	const float b = 0.03;\n"
 		"	const float c = 2.43;\n"
 		"	const float d = 0.59;\n"
 		"	const float e = 0.14;\n"
-		"	return glxSaturate((color * (a * color + vec3(b))) / (color * (c * color + vec3(d)) + vec3(e)));\n"
+		"	color = glxNonNegativeVec3(color);\n"
+		"	return glxSaturate(glxFiniteVec3((color * (a * color + vec3(b))) / (color * (c * color + vec3(d)) + vec3(e)), vec3(0.0)));\n"
 		"}\n"
+		"vec3 glxToneMapAces(vec3 color) { return glxToneMapAcesFitted(color); }\n"
 		"vec3 glxLinearSrgbToBt2020(vec3 color) {\n"
-		"	return mat3(0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956) * color;\n"
+		"	return glxFiniteVec3(mat3(0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956) * glxNonNegativeVec3(color), vec3(0.0));\n"
+		"}\n"
+		"vec3 glxLinearSrgbToDisplayP3(vec3 color) {\n"
+		"	return glxFiniteVec3(mat3(0.8225, 0.0332, 0.0171, 0.1775, 0.9668, 0.0724, 0.0000, 0.0000, 0.9105) * glxNonNegativeVec3(color), vec3(0.0));\n"
 		"}\n"
 		"vec3 glxPqEncode(vec3 nits) {\n"
 		"	const float m1 = 0.1593017578125;\n"
@@ -229,28 +448,65 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 		"	const float c1 = 0.8359375;\n"
 		"	const float c2 = 18.8515625;\n"
 		"	const float c3 = 18.6875;\n"
-		"	vec3 p = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(m1));\n"
-		"	return pow((vec3(c1) + c2 * p) / (vec3(1.0) + c3 * p), vec3(m2));\n"
+		"	vec3 clampedNits = clamp(glxNonNegativeVec3(nits), 0.0, glxMaxOutput());\n"
+		"	vec3 p = pow(clampedNits / 10000.0, vec3(m1));\n"
+		"	return glxFiniteVec3(pow((vec3(c1) + c2 * p) / (vec3(1.0) + c3 * p), vec3(m2)), vec3(0.0));\n"
+		"}\n"
+		"vec3 glxApplyOutputPrimaries(vec3 color) {\n"
+		"	color = glxNonNegativeVec3(color);\n"
+		"#if GLX_POST_DISPLAY_P3_OUTPUT\n"
+		"	return glxLinearSrgbToDisplayP3(color);\n"
+		"#elif GLX_POST_BT2020_OUTPUT\n"
+		"	return glxLinearSrgbToBt2020(color);\n"
+		"#else\n"
+		"	return color;\n"
+		"#endif\n"
+		"}\n"
+		"vec3 glxApplyGamutMap(vec3 color) {\n"
+		"	color = glxNonNegativeVec3(color);\n"
+		"#if GLX_POST_GAMUT_COMPRESS\n"
+		"	return clamp(color, 0.0, glxHeadroom());\n"
+		"#elif GLX_POST_GAMUT_CLIP\n"
+		"	return glxSaturate(color);\n"
+		"#else\n"
+		"	return color;\n"
+		"#endif\n"
 		"}\n"
 		"vec3 glxEncodeTransfer(vec3 color) {\n"
-		"#if GLX_POST_BT2020_OUTPUT\n"
-		"	color = glxLinearSrgbToBt2020(max(color, vec3(0.0)));\n"
-		"#endif\n"
-		"#if GLX_POST_GAMUT_COMPRESS\n"
-		"	color = clamp(color, 0.0, max(u_PostParams0.z / max(u_PostParams0.y, 0.001), 1.0));\n"
-		"#endif\n"
+		"	color = glxNonNegativeVec3(color);\n"
 		"#if GLX_POST_ENCODE_HDR10_PQ\n"
-		"	return glxPqEncode(max(color, vec3(0.0)) * max(u_PostParams0.y, 1.0));\n"
+		"	return glxPqEncode(color * glxPaperWhite());\n"
 		"#elif GLX_POST_ENCODE_SRGB\n"
-		"	return glxLinearToSrgb(max(color, vec3(0.0)));\n"
+		"	return glxLinearToSrgb(color);\n"
 		"#else\n"
-		"	return max(color, vec3(0.0));\n"
+		"	return color;\n"
+		"#endif\n"
+		"}\n"
+		"vec3 glxApplyGreyscale(vec3 color) {\n"
+		"	color = glxNonNegativeVec3(color);\n"
+		"	float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));\n"
+		"	return glxNonNegativeVec3(mix(color, vec3(luma), glxGreyscaleAmount()));\n"
+		"}\n"
+		"vec3 glxFinalOutput(vec3 color) {\n"
+		"	color = glxNonNegativeVec3(color);\n"
+		"#if GLX_POST_GREYSCALE\n"
+		"	color = glxApplyGreyscale(color);\n"
+		"#endif\n"
+		"#if !GLX_POST_OUTPUT_TRANSFORM\n"
+		"	return color;\n"
+		"#elif GLX_POST_HDR_HEADROOM_OUTPUT\n"
+		"	return clamp(color, 0.0, glxHeadroom());\n"
+		"#else\n"
+		"	return clamp(color, 0.0, 1.0);\n"
 		"#endif\n"
 		"}\n"
 		"void main() {\n"
-		"	vec3 color = texture2D(u_Scene, v_TexCoord).rgb;\n"
-		"#if GLX_POST_SCENE_LINEAR\n"
-		"	color = max(color * u_PostParams0.x, vec3(0.0));\n"
+		"	vec3 color = glxFiniteVec3(GLX_POST_SAMPLE2D(u_Scene, v_TexCoord).rgb, vec3(0.0));\n"
+		"#if GLX_POST_BLOOM_COMBINE\n"
+		"	color += glxFiniteVec3(GLX_POST_SAMPLE2D(u_Bloom, v_TexCoord).rgb, vec3(0.0)) * glxBloomIntensity();\n"
+		"#endif\n"
+		"#if GLX_POST_OUTPUT_TRANSFORM && GLX_POST_SCENE_LINEAR\n"
+		"	color = glxNonNegativeVec3(color * glxExposure());\n"
 		"#if GLX_POST_LIFT_GAMMA_GAIN\n"
 		"	color = glxApplyLiftGammaGain(color);\n"
 		"#endif\n"
@@ -260,16 +516,20 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 		"#if GLX_POST_LUT_3D\n"
 		"	color = glxSampleLutAtlas(color);\n"
 		"#endif\n"
-		"#if GLX_POST_TONEMAP_REINHARD\n"
-		"	color = glxToneMapReinhard(color);\n"
-		"#elif GLX_POST_TONEMAP_ACES\n"
-		"	color = glxToneMapAces(color);\n"
+		"#if GLX_POST_TONEMAP_REINHARD_SIMPLE\n"
+		"	color = glxToneMapReinhardSimple(color);\n"
+		"#elif GLX_POST_TONEMAP_ACES_FITTED\n"
+		"	color = glxToneMapAcesFitted(color);\n"
 		"#endif\n"
+		"	color = glxApplyOutputPrimaries(color);\n"
+		"	color = glxApplyGamutMap(color);\n"
 		"	color = glxEncodeTransfer(color);\n"
-		"#elif GLX_POST_ENCODE_SRGB\n"
-		"	color = glxLinearToSrgb(max(color, vec3(0.0)));\n"
+		"#elif GLX_POST_OUTPUT_TRANSFORM && GLX_POST_ENCODE_SRGB\n"
+		"	color = glxLinearToSrgb(color);\n"
+		"#else\n"
+		"	color = glxNonNegativeVec3(color);\n"
 		"#endif\n"
-		"	gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n"
+		"	glx_FragColor = vec4(glxFinalOutput(color), 1.0);\n"
 		"}\n" ) && ok ) ? qtrue : qfalse;
 
 	if ( bytes ) {
@@ -278,8 +538,15 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 	return ok;
 }
 
+static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
+	const PostShaderPlan &plan, char *out, int outSize, int *bytes )
+{
+	return GLX_PostShaderSource_WriteFragment( plan, PostShaderSourceTarget::Glsl120,
+		out, outSize, bytes );
+}
+
 static ID_INLINE PostShaderSourceSummary GLX_PostShaderSource_BuildSummary(
-	const PostShaderPlan &plan )
+	const PostShaderPlan &plan, PostShaderSourceTarget target )
 {
 	PostShaderSourceSummary summary {};
 	char vertex[GLX_POST_SHADER_VERTEX_SOURCE_BYTES];
@@ -287,22 +554,32 @@ static ID_INLINE PostShaderSourceSummary GLX_PostShaderSource_BuildSummary(
 	qboolean vertexOk;
 	qboolean fragmentOk;
 
-	vertexOk = GLX_PostShaderSource_WriteVertex( vertex, sizeof( vertex ),
+	summary.target = target;
+	summary.targetVersion = GLX_PostShaderSource_TargetVersion( target );
+	vertexOk = GLX_PostShaderSource_WriteVertex( target, vertex, sizeof( vertex ),
 		&summary.vertexBytes );
-	fragmentOk = GLX_PostShaderSource_WriteFragment( plan, fragment, sizeof( fragment ),
-		&summary.fragmentBytes );
+	fragmentOk = GLX_PostShaderSource_WriteFragment( plan, target, fragment,
+		sizeof( fragment ), &summary.fragmentBytes );
 	summary.valid = ( plan.valid && vertexOk && fragmentOk ) ? qtrue : qfalse;
 	summary.truncated = ( plan.valid && ( !vertexOk || !fragmentOk ) ) ? qtrue : qfalse;
 	summary.featureMask = plan.featureMask;
 
 	unsigned int hash = 2166136261u;
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( GLX_POST_SHADER_SOURCE_VERSION ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( target ) );
+	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( summary.targetVersion ) );
 	hash = GLX_RenderIR_HashValue( hash, plan.hash );
 	hash = GLX_RenderIR_HashValue( hash, plan.featureMask );
 	hash = GLX_PostShaderSource_HashText( hash, vertex );
 	hash = GLX_PostShaderSource_HashText( hash, fragment );
 	summary.sourceHash = hash ? hash : 1u;
 	return summary;
+}
+
+static ID_INLINE PostShaderSourceSummary GLX_PostShaderSource_BuildSummary(
+	const PostShaderPlan &plan )
+{
+	return GLX_PostShaderSource_BuildSummary( plan, PostShaderSourceTarget::Glsl120 );
 }
 
 } // namespace glx

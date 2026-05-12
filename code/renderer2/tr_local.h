@@ -424,6 +424,18 @@ typedef enum {
 	FP_LE			// surface is translucent, but still needs a fog pass (fog surface)
 } fogPass_t;
 
+typedef enum {
+	DFT_NONE,
+	DFT_BLEND,
+	DFT_ADD,
+	DFT_MULT,
+	DFT_PMA,
+	DFT_TBD,
+	DFT_COUNT
+} depthFadeType_t;
+
+extern const byte r_depthFadeScaleAndBias[DFT_COUNT];
+
 typedef struct {
 	float		cloudHeight;
 	image_t		*outerbox[6], *innerbox[6];
@@ -470,6 +482,9 @@ typedef struct shader_s {
 	qboolean	noPicMip;				// for images that must always be full resolution
 
 	fogPass_t	fogPass;				// draw a blended pass, possibly with depth test equals
+	depthFadeType_t dfType;				// soft intersection fade for translucent surfaces
+	float		dfInvDist;
+	float		dfBias;
 
 	int         vertexAttribs;          // not all shaders will need all data to be gathered
 
@@ -554,8 +569,9 @@ enum
 	GENERICDEF_USE_FOG              = 0x0008,
 	GENERICDEF_USE_RGBAGEN          = 0x0010,
 	GENERICDEF_USE_BONE_ANIMATION   = 0x0020,
-	GENERICDEF_ALL                  = 0x003F,
-	GENERICDEF_COUNT                = 0x0040,
+	GENERICDEF_USE_DEPTH_FADE       = 0x0040,
+	GENERICDEF_ALL                  = 0x007F,
+	GENERICDEF_COUNT                = 0x0080,
 };
 
 enum
@@ -687,6 +703,9 @@ typedef enum
 	UNIFORM_VIEWUP,
 
 	UNIFORM_INVTEXRES,
+	UNIFORM_DEPTHFADEINFO,
+	UNIFORM_DEPTHFADESCALE,
+	UNIFORM_DEPTHFADEBIAS,
 	UNIFORM_AUTOEXPOSUREMINMAX,
 	UNIFORM_TONEMINAVGMAXLINEAR,
 
@@ -1592,7 +1611,7 @@ typedef struct {
 	shaderProgram_t bokehShader;
 	shaderProgram_t gammaShader;
 	shaderProgram_t tonemapShader;
-	shaderProgram_t calclevels4xShader[2];
+	shaderProgram_t calclevels4xShader[3];
 	shaderProgram_t shadowmaskShader;
 	shaderProgram_t ssaoShader;
 	shaderProgram_t depthBlurShader[4];
@@ -1698,6 +1717,7 @@ extern cvar_t	*r_teleporterFlash;		// teleport hyperspace visual
 extern cvar_t	*r_fastsky;				// controls whether sky should be cleared or drawn
 extern cvar_t	*r_drawSun;				// controls drawing of sun quad
 extern cvar_t	*r_dynamiclight;		// dynamic lights enabled/disabled
+extern cvar_t	*r_depthFade;			// soft-particle depth fade enabled/disabled
 extern cvar_t	*r_celShading;			// cel shading enabled/disabled on model entities
 extern cvar_t	*r_celShadingSteps;		// diffuse lighting bands for cel shading
 extern cvar_t	*r_celOutline;			// outline shell enabled/disabled on model entities

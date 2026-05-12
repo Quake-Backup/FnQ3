@@ -20,6 +20,12 @@ fs = import('fs')
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 
+fallback_defaults = ['default_library=static']
+quiet_fallback_defaults = fallback_defaults + ['warning_level=0', 'c_args=-w', 'cpp_args=-w']
+curl_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
+openal_fallback_defaults = quiet_fallback_defaults
+vorbis_fallback_defaults = quiet_fallback_defaults + ['tests=false', 'ogg:default_library=static']
+
 win32 = host_machine.system() == 'windows'
 darwin = host_machine.system() == 'darwin'
 cpu_family = host_machine.cpu_family()
@@ -153,7 +159,6 @@ endif
 
 include_dirs = include_directories(
   'code',
-  'code/openal/include',
 )
 
 qcommon_src = [
@@ -203,40 +208,40 @@ if win32 and cc.get_id() == 'msvc' and cpu_family == 'x86_64'
 endif
 
 server_src = [
-  'code/server/sv_bot.c',
-  'code/server/sv_ccmds.c',
-  'code/server/sv_client.c',
-  'code/server/sv_filter.c',
-  'code/server/sv_game.c',
-  'code/server/sv_init.c',
-  'code/server/sv_main.c',
-  'code/server/sv_net_chan.c',
-  'code/server/sv_snapshot.c',
-  'code/server/sv_world.c',
+  'code/server/sv_bot.cpp',
+  'code/server/sv_ccmds.cpp',
+  'code/server/sv_client.cpp',
+  'code/server/sv_filter.cpp',
+  'code/server/sv_game.cpp',
+  'code/server/sv_init.cpp',
+  'code/server/sv_main.cpp',
+  'code/server/sv_net_chan.cpp',
+  'code/server/sv_snapshot.cpp',
+  'code/server/sv_world.cpp',
 ]
 
 client_src = [
-  'code/client/cl_avi.c',
-  'code/client/cl_cgame.c',
-  'code/client/cl_cin.c',
-  'code/client/cl_console.c',
-  'code/client/cl_hud.c',
-  'code/client/cl_input.c',
-  'code/client/cl_jpeg.c',
-  'code/client/cl_keys.c',
-  'code/client/cl_main.c',
-  'code/client/cl_net_chan.c',
-  'code/client/cl_parse.c',
-  'code/client/cl_scrn.c',
-  'code/client/cl_ui.c',
-  'code/client/snd_adpcm.c',
-  'code/client/snd_codec_wav.c',
-  'code/client/snd_codec.c',
-  'code/client/snd_dma.c',
-  'code/client/snd_main.c',
-  'code/client/snd_mem.c',
-  'code/client/snd_mix.c',
-  'code/client/snd_wavelet.c',
+  'code/client/cl_avi.cpp',
+  'code/client/cl_cgame.cpp',
+  'code/client/cl_cin.cpp',
+  'code/client/cl_console.cpp',
+  'code/client/cl_hud.cpp',
+  'code/client/cl_input.cpp',
+  'code/client/cl_jpeg.cpp',
+  'code/client/cl_keys.cpp',
+  'code/client/cl_main.cpp',
+  'code/client/cl_net_chan.cpp',
+  'code/client/cl_parse.cpp',
+  'code/client/cl_scrn.cpp',
+  'code/client/cl_ui.cpp',
+  'code/client/snd_adpcm.cpp',
+  'code/client/snd_codec_wav.cpp',
+  'code/client/snd_codec.cpp',
+  'code/client/snd_dma.cpp',
+  'code/client/snd_main.cpp',
+  'code/client/snd_mem.cpp',
+  'code/client/snd_mix.cpp',
+  'code/client/snd_wavelet.cpp',
   'code/audio/AudioSystem.cpp',
 ]
 
@@ -427,84 +432,6 @@ foreach shader : renderer2_glsl_files
   )
 endforeach
 
-jpeg_src = [
-  'code/libjpeg/jaricom.c',
-  'code/libjpeg/jcapimin.c',
-  'code/libjpeg/jcapistd.c',
-  'code/libjpeg/jcarith.c',
-  'code/libjpeg/jccoefct.c',
-  'code/libjpeg/jccolor.c',
-  'code/libjpeg/jcdctmgr.c',
-  'code/libjpeg/jchuff.c',
-  'code/libjpeg/jcinit.c',
-  'code/libjpeg/jcmainct.c',
-  'code/libjpeg/jcmarker.c',
-  'code/libjpeg/jcmaster.c',
-  'code/libjpeg/jcomapi.c',
-  'code/libjpeg/jcparam.c',
-  'code/libjpeg/jcprepct.c',
-  'code/libjpeg/jcsample.c',
-  'code/libjpeg/jctrans.c',
-  'code/libjpeg/jdapimin.c',
-  'code/libjpeg/jdapistd.c',
-  'code/libjpeg/jdarith.c',
-  'code/libjpeg/jdatadst.c',
-  'code/libjpeg/jdatasrc.c',
-  'code/libjpeg/jdcoefct.c',
-  'code/libjpeg/jdcolor.c',
-  'code/libjpeg/jddctmgr.c',
-  'code/libjpeg/jdhuff.c',
-  'code/libjpeg/jdinput.c',
-  'code/libjpeg/jdmainct.c',
-  'code/libjpeg/jdmarker.c',
-  'code/libjpeg/jdmaster.c',
-  'code/libjpeg/jdmerge.c',
-  'code/libjpeg/jdpostct.c',
-  'code/libjpeg/jdsample.c',
-  'code/libjpeg/jdtrans.c',
-  'code/libjpeg/jerror.c',
-  'code/libjpeg/jfdctflt.c',
-  'code/libjpeg/jfdctfst.c',
-  'code/libjpeg/jfdctint.c',
-  'code/libjpeg/jidctflt.c',
-  'code/libjpeg/jidctfst.c',
-  'code/libjpeg/jidctint.c',
-  'code/libjpeg/jmemmgr.c',
-  'code/libjpeg/jmemnobs.c',
-  'code/libjpeg/jquant1.c',
-  'code/libjpeg/jquant2.c',
-  'code/libjpeg/jutils.c',
-]
-
-ogg_src = [
-  'code/libogg/src/bitwise.c',
-  'code/libogg/src/framing.c',
-]
-
-vorbis_src = [
-  'code/libvorbis/lib/analysis.c',
-  'code/libvorbis/lib/bitrate.c',
-  'code/libvorbis/lib/block.c',
-  'code/libvorbis/lib/codebook.c',
-  'code/libvorbis/lib/envelope.c',
-  'code/libvorbis/lib/floor0.c',
-  'code/libvorbis/lib/floor1.c',
-  'code/libvorbis/lib/info.c',
-  'code/libvorbis/lib/lookup.c',
-  'code/libvorbis/lib/lpc.c',
-  'code/libvorbis/lib/lsp.c',
-  'code/libvorbis/lib/mapping0.c',
-  'code/libvorbis/lib/mdct.c',
-  'code/libvorbis/lib/psy.c',
-  'code/libvorbis/lib/registry.c',
-  'code/libvorbis/lib/res0.c',
-  'code/libvorbis/lib/sharedbook.c',
-  'code/libvorbis/lib/smallft.c',
-  'code/libvorbis/lib/synthesis.c',
-  'code/libvorbis/lib/vorbisfile.c',
-  'code/libvorbis/lib/window.c',
-]
-
 client_deps = []
 server_deps = []
 renderer_deps = []
@@ -534,19 +461,31 @@ if win32
   endforeach
 endif
 
+openal_dep = dependency('openal',
+  required: get_option('build-client') or get_option('audio-tests'),
+  fallback: 'openal-soft',
+  default_options: openal_fallback_defaults,
+)
+openal_header_dep = dependency('', required: false)
+openal_source = 'disabled'
+if openal_dep.found()
+  openal_header_dep = openal_dep.partial_dependency(compile_args: true, includes: true)
+  openal_source = openal_dep.type_name() == 'internal' ? 'subproject headers' : 'system headers'
+  client_deps += openal_header_dep
+endif
+
 sdl_opt = get_option('sdl')
-sdl_dep = dependency('sdl3', version: '>=3.2.0', required: false)
-sdl_source = 'system'
-if not sdl_dep.found() and win32
-  sdl_libdir = (cpu_family == 'x86') ? 'code/libsdl/windows/mingw/lib32' : 'code/libsdl/windows/mingw/lib64'
-  sdl_lib = cc.find_library('SDL3', dirs: meson.current_source_dir() / sdl_libdir, required: false)
-  if sdl_lib.found()
-    sdl_dep = declare_dependency(
-      dependencies: sdl_lib,
-      include_directories: include_directories('code/libsdl/include'),
-    )
-    sdl_source = 'bundled'
-    copy_runtime_files += sdl_libdir / 'SDL3.dll'
+sdl_dep = dependency('', required: false)
+sdl_source = 'disabled'
+if not sdl_opt.disabled()
+  sdl_dep = dependency('sdl3',
+    version: '>=3.2.0',
+    required: false,
+    fallback: 'sdl3',
+    default_options: quiet_fallback_defaults,
+  )
+  if sdl_dep.found()
+    sdl_source = sdl_dep.type_name() == 'internal' ? 'subproject' : 'system'
   endif
 endif
 
@@ -565,48 +504,32 @@ curl_opt = get_option('curl')
 use_curl = false
 use_curl_dlopen = get_option('curl-dlopen')
 curl_dep = dependency('', required: false)
+curl_header_dep = dependency('', required: false)
 curl_c_args = []
+curl_source = 'disabled'
 
 if not curl_opt.disabled()
-  if win32 and fs.exists('code/libcurl/windows/include/curl/curl.h')
+  curl_dep = dependency('libcurl',
+    required: curl_opt.enabled(),
+    fallback: 'curl',
+    default_options: curl_fallback_defaults,
+  )
+
+  if curl_dep.found()
     use_curl = true
-    curl_c_args += ['-I' + meson.current_source_dir() / 'code/libcurl/windows/include']
-    if not use_curl_dlopen
-      curl_libdir = (cpu_family == 'x86') ? 'code/libcurl/windows/mingw/lib32' : 'code/libcurl/windows/mingw/lib64'
-      curl_dep = cc.find_library('curl', dirs: meson.current_source_dir() / curl_libdir, required: curl_opt.enabled())
-      if curl_dep.found()
-        client_deps += curl_dep
-        client_deps += cc.find_library('crypt32', required: true)
-        zlib_dep = dependency('zlib', required: false)
-        if zlib_dep.found()
-          client_deps += zlib_dep
-        else
-          client_deps += cc.find_library('z', required: false)
-        endif
-        common_c_args += ['-DCURL_STATICLIB']
-        common_cpp_args += ['-DCURL_STATICLIB']
-      else
-        use_curl = false
-      endif
+    curl_source = curl_dep.type_name() == 'internal' ? 'subproject' : 'system'
+    curl_header_dep = curl_dep.partial_dependency(compile_args: true, includes: true)
+    if use_curl_dlopen
+      client_deps += curl_header_dep
+    else
+      client_deps += curl_dep
     endif
-  else
-    has_curl_header = cc.has_header('curl/curl.h', required: curl_opt.enabled())
-    if has_curl_header
-      if use_curl_dlopen
-        use_curl = true
-      else
-        curl_dep = dependency('libcurl', required: curl_opt.enabled())
-        use_curl = curl_dep.found()
-        if use_curl
-          client_deps += curl_dep
-        endif
-      endif
-    endif
+    server_deps += curl_header_dep
   endif
 endif
 
 if use_curl
-  client_src += 'code/client/cl_curl.c'
+  client_src += 'code/client/cl_curl.cpp'
   common_c_args += ['-DUSE_CURL'] + curl_c_args
   common_cpp_args += ['-DUSE_CURL'] + curl_c_args
   if use_curl_dlopen
@@ -615,32 +538,41 @@ if use_curl
   endif
 endif
 
-if get_option('system-jpeg')
+jpeg_force_system = get_option('system-jpeg')
+if jpeg_force_system
   jpeg_dep = dependency('libjpeg', required: false)
   if not jpeg_dep.found()
     jpeg_dep = dependency('jpeg', required: true)
   endif
-  client_deps += jpeg_dep
-  common_c_args += ['-DUSE_SYSTEM_JPEG']
-  common_cpp_args += ['-DUSE_SYSTEM_JPEG']
+  jpeg_source = 'system'
 else
-  client_src += jpeg_src
+  jpeg_dep = dependency('libjpeg',
+    required: true,
+    fallback: 'libjpeg-turbo',
+    default_options: quiet_fallback_defaults,
+  )
+  jpeg_source = jpeg_dep.type_name() == 'internal' ? 'subproject' : 'system'
 endif
+client_deps += jpeg_dep
+common_c_args += ['-DUSE_SYSTEM_JPEG']
+common_cpp_args += ['-DUSE_SYSTEM_JPEG']
 
 if get_option('ogg-vorbis')
-  client_src += ['code/client/snd_codec_ogg.c'] + ogg_src + vorbis_src
-  common_c_args += [
-    '-DUSE_OGG_VORBIS',
-    '-I' + meson.current_source_dir() / 'code/libogg/include',
-    '-I' + meson.current_source_dir() / 'code/libvorbis/include',
-    '-I' + meson.current_source_dir() / 'code/libvorbis/lib',
-  ]
-  common_cpp_args += [
-    '-DUSE_OGG_VORBIS',
-    '-I' + meson.current_source_dir() / 'code/libogg/include',
-    '-I' + meson.current_source_dir() / 'code/libvorbis/include',
-    '-I' + meson.current_source_dir() / 'code/libvorbis/lib',
-  ]
+  vorbisfile_dep = dependency('vorbisfile',
+    required: false,
+    fallback: 'vorbis',
+    default_options: vorbis_fallback_defaults,
+  )
+  if not vorbisfile_dep.found()
+    error('Ogg Vorbis support was enabled but vorbisfile was not found')
+  endif
+  client_src += 'code/client/snd_codec_ogg.cpp'
+  client_deps += vorbisfile_dep
+  common_c_args += ['-DUSE_OGG_VORBIS']
+  common_cpp_args += ['-DUSE_OGG_VORBIS']
+  ogg_vorbis_source = vorbisfile_dep.type_name() == 'internal' ? 'subproject' : 'system'
+else
+  ogg_vorbis_source = 'disabled'
 endif
 
 if win32
@@ -664,67 +596,63 @@ if win32
     warning('No Windows resource compiler found; Meson targets will build without win_resource.rc')
   endif
   q3_platform_src = [
-    'code/win32/win_main.c',
-    'code/win32/win_shared.c',
-    'code/win32/win_syscon.c',
+    'code/win32/win_main.cpp',
+    'code/win32/win_shared.cpp',
+    'code/win32/win_syscon.cpp',
   ] + win_resource
   if use_sdl
     q3_ui_src = [
-      'code/sdl/sdl_gamma.c',
-      'code/sdl/sdl_glimp.c',
-      'code/sdl/sdl_input.c',
-      'code/sdl/sdl_snd.c',
+      'code/sdl/sdl_gamma.cpp',
+      'code/sdl/sdl_glimp.cpp',
+      'code/sdl/sdl_input.cpp',
+      'code/sdl/sdl_snd.cpp',
     ]
   else
     q3_ui_src = [
-      'code/win32/win_gamma.c',
-      'code/win32/win_glimp.c',
-      'code/win32/win_input.c',
-      'code/win32/win_minimize.c',
-      'code/win32/win_snd.c',
-      'code/win32/win_wndproc.c',
+      'code/win32/win_gamma.cpp',
+      'code/win32/win_glimp.cpp',
+      'code/win32/win_input.cpp',
+      'code/win32/win_minimize.cpp',
+      'code/win32/win_snd.cpp',
+      'code/win32/win_wndproc.cpp',
     ]
     if use_opengl_api
-      q3_ui_src += 'code/win32/win_qgl.c'
+      q3_ui_src += 'code/win32/win_qgl.cpp'
     endif
     if use_vulkan_api
-      q3_ui_src += 'code/win32/win_qvk.c'
+      q3_ui_src += 'code/win32/win_qvk.cpp'
     endif
   endif
 
-  openal_dll = (cpu_family == 'x86') ? 'code/openal/windows/x86/OpenAL32.dll' : 'code/openal/windows/x64/OpenAL32.dll'
-  if fs.exists(openal_dll)
-    copy_runtime_files += openal_dll
-  endif
 else
   q3_platform_src = [
-    'code/unix/unix_main.c',
-    'code/unix/unix_shared.c',
-    'code/unix/unix_syscon.c',
-    'code/unix/linux_signals.c',
+    'code/unix/unix_main.cpp',
+    'code/unix/unix_shared.cpp',
+    'code/unix/unix_syscon.cpp',
+    'code/unix/linux_signals.cpp',
   ]
   if use_sdl
     q3_ui_src = [
-      'code/sdl/sdl_gamma.c',
-      'code/sdl/sdl_glimp.c',
-      'code/sdl/sdl_input.c',
-      'code/sdl/sdl_snd.c',
+      'code/sdl/sdl_gamma.cpp',
+      'code/sdl/sdl_glimp.cpp',
+      'code/sdl/sdl_input.cpp',
+      'code/sdl/sdl_snd.cpp',
     ]
   else
     x11_dep = dependency('x11', required: true)
     client_deps += x11_dep
     q3_ui_src = [
-      'code/unix/linux_glimp.c',
-      'code/unix/linux_snd.c',
-      'code/unix/x11_dga.c',
-      'code/unix/x11_randr.c',
-      'code/unix/x11_vidmode.c',
+      'code/unix/linux_glimp.cpp',
+      'code/unix/linux_snd.cpp',
+      'code/unix/x11_dga.cpp',
+      'code/unix/x11_randr.cpp',
+      'code/unix/x11_vidmode.cpp',
     ]
     if use_opengl_api
-      q3_ui_src += 'code/unix/linux_qgl.c'
+      q3_ui_src += 'code/unix/linux_qgl.cpp'
     endif
     if use_vulkan_api
-      q3_ui_src += 'code/unix/linux_qvk.c'
+      q3_ui_src += 'code/unix/linux_qvk.cpp'
     endif
   endif
 endif
@@ -931,8 +859,7 @@ if get_option('audio-tests')
 
   audio_loopback_tests = executable('fnq3_audio_loopback_tests',
     'tests/audio/openal_loopback_tests.cpp',
-    include_directories: include_directories('code/openal/include'),
-    dependencies: client_deps,
+    dependencies: client_deps + [openal_header_dep],
     cpp_args: common_cpp_args,
   )
   test('fnq3_audio_loopback', audio_loopback_tests, should_fail: false)
@@ -959,7 +886,7 @@ endif
 
 curl_summary = 'disabled'
 if use_curl
-  curl_summary = use_curl_dlopen ? 'dlopen' : 'linked'
+  curl_summary = '@0@ (@1@)'.format(use_curl_dlopen ? 'dlopen' : 'linked', curl_source)
 endif
 
 summary({
@@ -971,7 +898,8 @@ summary({
   'renderer default': renderer_default,
   'renderer arch': renderer_arch,
   'SDL3': use_sdl ? sdl_source : 'disabled',
+  'OpenAL': openal_source,
   'cURL': curl_summary,
-  'JPEG': get_option('system-jpeg') ? 'system' : 'bundled',
-  'Ogg Vorbis': get_option('ogg-vorbis') ? 'bundled' : 'disabled',
+  'JPEG': jpeg_source,
+  'Ogg Vorbis': ogg_vorbis_source,
 }, section: 'FnQuake3 build')

@@ -4,6 +4,20 @@ FnQuake3 keeps the classic screenshot commands, then extends them into a more fl
 
 All screenshot output is written under the active game directory in `screenshots/`.
 
+## Color Capture Policy
+
+Screenshots, levelshots, cube-map faces, clipboard BMP captures, and AVI frame capture default to SDR sRGB byte output. This remains true even when the renderer is using the scene-linear HDR pipeline internally: the final output transform is captured after tone mapping so existing PNG, TGA, JPG, BMP, baselines, and scripts keep their historical expectations.
+
+`r_screenshotCaptureMode` records the explicit capture policy:
+
+- `0`: SDR sRGB byte capture. This is the default.
+- `1`: Reserved scene-linear HDR export request. It currently falls back to SDR sRGB byte output and prints a warning; use it only when a capture run needs to prove that an HDR-aware request was made explicitly.
+- `2`: Reserved HDR-output export request. It currently falls back to SDR sRGB byte output and prints a warning; it is a forward-compatible slot for future output-encoded HDR screenshots.
+
+GLx diagnostics report both the requested policy and the selected capture policy. Until float/HDR image export is implemented, HDR-aware requests are recorded as explicit but unsupported and the selected capture remains `sdr-srgb`.
+
+When `r_screenshotWriteViewpos 1` is enabled, sidecars include `captureMode` and `captureColorSpace` lines so proof artifacts identify the capture policy without changing the image format.
+
 ## Overview
 
 The standard commands remain familiar:
@@ -153,6 +167,8 @@ Example output:
 map q3dm17
 origin 128.000 -64.000 512.000
 angles -10.000 90.000 0.000
+captureMode sdr-srgb
+captureColorSpace sdr-srgb
 setviewpos 128.000 -64.000 512.000 -10.000 90.000 0.000
 ```
 

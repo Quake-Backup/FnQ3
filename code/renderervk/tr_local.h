@@ -414,6 +414,18 @@ typedef enum {
 	FP_LE			// surface is translucent, but still needs a fog pass (fog surface)
 } fogPass_t;
 
+typedef enum {
+	DFT_NONE,
+	DFT_BLEND,
+	DFT_ADD,
+	DFT_MULT,
+	DFT_PMA,
+	DFT_TBD,
+	DFT_COUNT
+} depthFadeType_t;
+
+extern const byte r_depthFadeScaleAndBias[DFT_COUNT];
+
 typedef struct {
 	float		cloudHeight;
 	image_t		*outerbox[6], *innerbox[6];
@@ -465,6 +477,9 @@ typedef struct shader_s {
 	unsigned	noVLcollapse:1;			// ignore vertexlight mode
 
 	fogPass_t	fogPass;				// draw a blended pass, possibly with depth test equals
+	depthFadeType_t dfType;				// soft intersection fade for translucent surfaces
+	float		dfInvDist;
+	float		dfBias;
 
 	qboolean	needsNormal;			// not all shaders will need all data to be gathered
 	//qboolean	needsST1;
@@ -1325,6 +1340,7 @@ extern cvar_t	*r_fastsky;				// controls whether sky should be cleared or drawn
 extern cvar_t	*r_neatsky;				// nomip and nopicmip for skyboxes, cnq3 like look
 extern cvar_t	*r_drawSun;				// controls drawing of sun quad
 extern cvar_t	*r_dynamiclight;		// dynamic lights enabled/disabled
+extern cvar_t	*r_depthFade;			// soft-particle depth fade enabled/disabled
 extern cvar_t	*r_celShading;			// cel shading enabled/disabled on model entities
 extern cvar_t	*r_celShadingSteps;		// diffuse lighting bands for cel shading
 extern cvar_t	*r_celOutline;			// outline shell enabled/disabled on model entities

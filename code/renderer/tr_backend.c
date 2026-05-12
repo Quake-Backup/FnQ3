@@ -571,6 +571,9 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #ifdef USE_PMLIGHT
 	float			oldShaderSort;
 #endif
+#ifdef USE_FBO
+	qboolean		depthFadeSnapshot;
+#endif
 	double			originalTime; // -EC-
 
 	// save original time for entity shader offsets
@@ -586,6 +589,9 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #ifdef USE_PMLIGHT
 	oldShaderSort = -1;
 #endif
+#ifdef USE_FBO
+	depthFadeSnapshot = qfalse;
+#endif
 	depthRange = qfalse;
 
 	backEnd.pc.c_surfaces += numDrawSurfs;
@@ -598,6 +604,17 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		}
 
 		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+
+#ifdef USE_FBO
+		if ( !depthFadeSnapshot && shader && shader->sort > SS_OPAQUE ) {
+			if ( oldShader != NULL ) {
+				RB_EndSurface();
+				oldShader = NULL;
+			}
+			FBO_CopyDepthFade();
+			depthFadeSnapshot = qtrue;
+		}
+#endif
 
 		//
 		// change the tess parameters if needed

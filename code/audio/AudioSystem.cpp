@@ -22,9 +22,9 @@ extern "C" {
 #include "../qcommon/cm_public.h"
 }
 
-#include "../openal/include/AL/al.h"
-#include "../openal/include/AL/alc.h"
-#include "../openal/include/AL/alext.h"
+#include <AL/al.h>
+#include <AL/alc.h>
+#include <AL/alext.h>
 #include "AudioDeviceRecovery.h"
 #include "AudioOcclusion.h"
 #include "AudioZoneFormat.h"

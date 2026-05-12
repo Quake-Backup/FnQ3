@@ -3,6 +3,14 @@ uniform sampler2D u_DiffuseMap;
 uniform int       u_AlphaTest;
 uniform vec4      u_TextureScale;
 
+#if defined(USE_DEPTH_FADE)
+uniform sampler2D u_ScreenDepthMap;
+uniform vec2      u_InvTexRes;
+uniform vec4      u_DepthFadeInfo;
+uniform vec4      u_DepthFadeScale;
+uniform vec4      u_DepthFadeBias;
+#endif
+
 varying vec2      var_DiffuseTex;
 
 varying vec4      var_Color;
@@ -41,6 +49,23 @@ float QuantizeCelLighting( float intensity )
 }
 #endif
 
+#if defined(USE_DEPTH_FADE)
+float DepthFadeLinearDepth(float depth)
+{
+	return u_DepthFadeInfo.y / mix(u_DepthFadeInfo.x, 1.0, depth);
+}
+
+vec4 ApplyDepthFade(vec4 color)
+{
+	float sceneDepth = texture2D(u_ScreenDepthMap, gl_FragCoord.xy * u_InvTexRes).r;
+	float sceneLinear = DepthFadeLinearDepth(sceneDepth);
+	float fragLinear = DepthFadeLinearDepth(gl_FragCoord.z);
+	float fade = clamp((sceneLinear - fragLinear + u_DepthFadeInfo.w) * u_DepthFadeInfo.z, 0.0, 1.0);
+
+	fade = fade * fade * (3.0 - 2.0 * fade);
+	return mix(color * u_DepthFadeScale + u_DepthFadeBias, color, fade);
+}
+#endif
 
 void main()
 {
@@ -79,4 +104,8 @@ void main()
 		gl_FragColor.rgb = color.rgb * shadeColor;
 	}
 	gl_FragColor.a = alpha;
+
+#if defined(USE_DEPTH_FADE)
+	gl_FragColor = ApplyDepthFade(gl_FragColor);
+#endif
 }

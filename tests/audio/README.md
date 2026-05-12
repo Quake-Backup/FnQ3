@@ -33,13 +33,13 @@ The harness currently checks:
 - Idle loopback silence.
 - EFX low-pass, high-pass, and band-pass filter behavior when `ALC_EXT_EFX` is present.
 
-Build and run it with CMake:
+Build and run it with Meson:
 
 ```sh
-cmake --build .tmp/cmake-check --target fnq3-audiozonesc fnq3_audio_zone_tests fnq3_audio_recovery_tests fnq3_audio_loopback_tests --config Release
-ctest --test-dir .tmp/cmake-check -R "fnq3_audio_(zones|zone_authoring|zone_authoring_audit|zone_sweep_script|zone_material_map|recovery|loopback)" --output-on-failure -C Release
+meson compile -C meson/build fnq3-audiozonesc fnq3_audio_zone_tests fnq3_audio_recovery_tests fnq3_audio_loopback_tests
+meson test -C meson/build -R "fnq3_audio_(zones|zone_authoring|zone_authoring_audit|zone_sweep_script|zone_material_map|recovery|loopback)" --print-errorlogs
 python tests/audio/audio_zone_sweep_tests.py
-python tests/audio/audio_zone_material_map_tests.py .tmp/cmake-check/fnq3-audiozonesc
+python tests/audio/audio_zone_material_map_tests.py meson/build/fnq3-audiozonesc
 ```
 
 The loopback test exits with code `77` when OpenAL or `ALC_SOFT_loopback` is unavailable. CTest treats that as a skip. The zone runtime and recovery policy tests do not require OpenAL.

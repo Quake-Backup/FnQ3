@@ -115,6 +115,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifndef GL_RGB16F
 #define GL_RGB16F                            0x881B
 #endif
+#ifndef GL_RG
+#define GL_RG                                0x8227
+#endif
+#ifndef GL_RG16F
+#define GL_RG16F                             0x822F
+#endif
 #ifndef GL_HALF_FLOAT
 #define GL_HALF_FLOAT                        0x140B
 #endif
@@ -201,6 +207,7 @@ typedef char GLchar;
 	GLE( void, glColor4f, GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha ) \
 	GLE( void, glColorMask, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha ) \
 	GLE( void, glColorPointer, GLint size, GLenum type, GLsizei stride, const GLvoid *pointer ) \
+	GLE( void, glCopyTexSubImage2D, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height ) \
 	GLE( void, glCullFace, GLenum mode ) \
 	GLE( void, glDeleteTextures, GLsizei n, const GLuint *textures ) \
 	GLE( void, glDepthFunc, GLenum func ) \

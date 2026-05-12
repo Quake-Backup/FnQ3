@@ -360,55 +360,55 @@
 			Filter="cpp;c;bat"
 			>
 			<File
-				RelativePath="..\..\client\cl_avi.c"
+				RelativePath="..\..\client\cl_avi.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_cgame.c"
+				RelativePath="..\..\client\cl_cgame.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_cin.c"
+				RelativePath="..\..\client\cl_cin.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_console.c"
+				RelativePath="..\..\client\cl_console.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_curl.c"
+				RelativePath="..\..\client\cl_curl.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_input.c"
+				RelativePath="..\..\client\cl_input.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_jpeg.c"
+				RelativePath="..\..\client\cl_jpeg.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_keys.c"
+				RelativePath="..\..\client\cl_keys.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_main.c"
+				RelativePath="..\..\client\cl_main.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_net_chan.c"
+				RelativePath="..\..\client\cl_net_chan.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_parse.c"
+				RelativePath="..\..\client\cl_parse.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_scrn.c"
+				RelativePath="..\..\client\cl_scrn.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\cl_ui.c"
+				RelativePath="..\..\client\cl_ui.cpp"
 				>
 			</File>
 			<File
@@ -536,35 +536,35 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_adpcm.c"
+				RelativePath="..\..\client\snd_adpcm.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_codec.c"
+				RelativePath="..\..\client\snd_codec.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_codec_ogg.c"
+				RelativePath="..\..\client\snd_codec_ogg.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_codec_wav.c"
+				RelativePath="..\..\client\snd_codec_wav.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_dma.c"
+				RelativePath="..\..\client\snd_dma.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_main.c"
+				RelativePath="..\..\client\snd_main.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_mem.c"
+				RelativePath="..\..\client\snd_mem.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_mix.c"
+				RelativePath="..\..\client\snd_mix.cpp"
 				>
 			</File>
 			<File
@@ -592,47 +592,47 @@
 				</FileConfiguration>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_wavelet.c"
+				RelativePath="..\..\client\snd_wavelet.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_bot.c"
+				RelativePath="..\..\server\sv_bot.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_ccmds.c"
+				RelativePath="..\..\server\sv_ccmds.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_client.c"
+				RelativePath="..\..\server\sv_client.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_filter.c"
+				RelativePath="..\..\server\sv_filter.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_game.c"
+				RelativePath="..\..\server\sv_game.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_init.c"
+				RelativePath="..\..\server\sv_init.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_main.c"
+				RelativePath="..\..\server\sv_main.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_net_chan.c"
+				RelativePath="..\..\server\sv_net_chan.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_snapshot.c"
+				RelativePath="..\..\server\sv_snapshot.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_world.c"
+				RelativePath="..\..\server\sv_world.cpp"
 				>
 			</File>
 			<File
@@ -652,47 +652,47 @@
 				>
 			</File>
 			<File
-				RelativePath="..\win_gamma.c"
+				RelativePath="..\win_gamma.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_glimp.c"
+				RelativePath="..\win_glimp.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_input.c"
+				RelativePath="..\win_input.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_main.c"
+				RelativePath="..\win_main.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_minimize.c"
+				RelativePath="..\win_minimize.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_qgl.c"
+				RelativePath="..\win_qgl.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_qvk.c"
+				RelativePath="..\win_qvk.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_shared.c"
+				RelativePath="..\win_shared.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_snd.c"
+				RelativePath="..\win_snd.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_syscon.c"
+				RelativePath="..\win_syscon.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\win_wndproc.c"
+				RelativePath="..\win_wndproc.cpp"
 				>
 			</File>
 		</Filter>
@@ -826,6 +826,10 @@
 			</File>
 			<File
 				RelativePath="..\win_local.h"
+				>
+			</File>
+			<File
+				RelativePath="..\win_raii.h"
 				>
 			</File>
 		</Filter>

@@ -904,7 +904,7 @@ static const void	*RB_DrawSurfs( const void *data ) {
 		qglEnable(GL_DEPTH_CLAMP);
 	}
 
-	if (glRefConfig.framebufferObject && !(backEnd.refdef.rdflags & RDF_NOWORLDMODEL) && (r_depthPrepass->integer || isShadowView))
+	if (glRefConfig.framebufferObject && !(backEnd.refdef.rdflags & RDF_NOWORLDMODEL) && (r_depthPrepass->integer || r_depthFade->integer || isShadowView))
 	{
 		FBO_t *oldFbo = glState.currentFBO;
 		vec4_t viewInfo;

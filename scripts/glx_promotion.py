@@ -25,7 +25,6 @@ FINAL_CONTRACT_PATH = ROOT / "docs" / "fnquake3" / "GLX_FINAL_CONTRACT.md"
 PROMOTION_DOC_PATH = ROOT / "docs" / "fnquake3" / "GLX_PROMOTION.md"
 LEGACY_COUPLING_DOC_PATH = ROOT / "docs" / "fnquake3" / "GLX_LEGACY_COUPLING.md"
 ROLLBACK_PACKAGE_DOC_PATH = ROOT / "docs" / "fnquake3" / "GLX_ROLLBACK_PACKAGE.md"
-CMAKE_PATH = ROOT / "CMakeLists.txt"
 MAKEFILE_PATH = ROOT / "Makefile"
 MESON_PATH = ROOT / "meson.build"
 MESON_OPTIONS_PATH = ROOT / "meson_options.txt"
@@ -136,15 +135,10 @@ def _regex_group(path: Path, pattern: str, default: str = "") -> str:
 
 
 def check_renderer_source_policy(
-    cmake_path: Path = CMAKE_PATH,
     makefile_path: Path = MAKEFILE_PATH,
     meson_path: Path = MESON_PATH,
     meson_options_path: Path = MESON_OPTIONS_PATH,
 ) -> dict[str, object]:
-    cmake_default = _regex_group(
-        cmake_path,
-        r"SET\s*\(\s*RENDERER_DEFAULT\s+([A-Za-z0-9_]+)\s+CACHE\s+STRING",
-    )
     make_default = _regex_group(
         makefile_path,
         r"^RENDERER_DEFAULT\s*=\s*([A-Za-z0-9_]+)\s*$",
@@ -152,10 +146,6 @@ def check_renderer_source_policy(
     meson_default = _regex_group(
         meson_options_path,
         r"option\s*\(\s*'renderer-default'.*?value:\s*'([A-Za-z0-9_]+)'",
-    )
-    cmake_use_glx_default = _regex_group(
-        cmake_path,
-        r"OPTION\s*\(\s*USE_GLX\s+\"[^\"]*\"\s+(ON|OFF)\s*\)",
     )
     make_use_glx_default = _regex_group(
         makefile_path,
@@ -166,16 +156,12 @@ def check_renderer_source_policy(
         meson_options_path.read_text(encoding="utf-8"),
         re.MULTILINE | re.DOTALL,
     ) and "renderer_prefix + '_glx_'" in meson_path.read_text(encoding="utf-8") else ""
-    promoted = any(default and default != "opengl" for default in (cmake_default, make_default, meson_default))
+    promoted = any(default and default != "opengl" for default in (make_default, meson_default))
     blockers = []
-    if not cmake_default:
-        blockers.append("CMake renderer default could not be read.")
     if not make_default:
         blockers.append("Makefile renderer default could not be read.")
     if not meson_default:
         blockers.append("Meson renderer default could not be read.")
-    if cmake_use_glx_default != "ON":
-        blockers.append("CMake modular builds must include GLx by default.")
     if make_use_glx_default != "1":
         blockers.append("Make modular builds must include GLx by default.")
     if meson_use_glx_default != "glx":
@@ -184,10 +170,8 @@ def check_renderer_source_policy(
         "name": "renderer-source-policy",
         "status": "promoted" if promoted else ("passed" if not blockers else "blocked"),
         "promoted": promoted,
-        "cmakeDefault": cmake_default,
         "makeDefault": make_default,
         "mesonDefault": meson_default,
-        "cmakeUseGlxDefault": cmake_use_glx_default,
         "makeUseGlxDefault": make_use_glx_default,
         "mesonUseGlxDefault": meson_use_glx_default,
         "blockers": blockers,
@@ -199,20 +183,6 @@ def renderer_legacy_sources(root: Path = ROOT) -> list[str]:
         path.relative_to(root).as_posix()
         for path in (root / "code" / "renderer").glob("*.c")
     )
-
-
-def cmake_glx_legacy_sources(cmake_path: Path = CMAKE_PATH) -> list[str]:
-    text = cmake_path.read_text(encoding="utf-8")
-    if (
-        "AUX_SOURCE_DIRECTORY(code/renderer RENDERER_GL_SRCS)" in text
-        and re.search(
-            r"ADD_LIBRARY\s*\([^)]*_glx[^)]*\$\{RENDERER_GL_SRCS\}",
-            text,
-            re.MULTILINE | re.DOTALL,
-        )
-    ):
-        return renderer_legacy_sources()
-    return sorted(set(re.findall(r"code/renderer/[A-Za-z0-9_]+\.c", text)))
 
 
 def makefile_glx_legacy_sources(makefile_path: Path = MAKEFILE_PATH) -> list[str]:
@@ -272,24 +242,22 @@ def parse_legacy_coupling_doc(path: Path = LEGACY_COUPLING_DOC_PATH) -> list[str
 
 
 def check_legacy_coupling_inventory(
-    cmake_path: Path = CMAKE_PATH,
     makefile_path: Path = MAKEFILE_PATH,
     meson_path: Path = MESON_PATH,
     msvc_project_path: Path = MSVC_GLX_PROJECT_PATH,
     doc_path: Path = LEGACY_COUPLING_DOC_PATH,
 ) -> dict[str, object]:
     build_sources = {
-        "cmake": cmake_glx_legacy_sources(cmake_path),
         "makefile": makefile_glx_legacy_sources(makefile_path),
         "meson": meson_glx_legacy_sources(meson_path),
         "msvc": msvc_glx_legacy_sources(msvc_project_path),
     }
     documented_sources = parse_legacy_coupling_doc(doc_path)
-    reference_sources = build_sources["cmake"]
+    reference_sources = build_sources["meson"]
     blockers: list[str] = []
 
     if not reference_sources:
-        blockers.append("CMake GLx legacy renderer source inventory is empty or unreadable.")
+        blockers.append("Meson GLx legacy renderer source inventory is empty or unreadable.")
 
     for name, sources in build_sources.items():
         missing = sorted(set(reference_sources).difference(sources))
@@ -1072,8 +1040,8 @@ def print_text_report(report: dict[str, object]) -> None:
         print(
             "- renderer-source-policy: "
             f"{source.get('status')} "
-            f"(cmake={source.get('cmakeDefault')}, make={source.get('makeDefault')}, "
-            f"use_glx={source.get('cmakeUseGlxDefault')}/{source.get('makeUseGlxDefault')})"
+            f"(make={source.get('makeDefault')}, meson={source.get('mesonDefault')}, "
+            f"use_glx={source.get('makeUseGlxDefault')}/{source.get('mesonUseGlxDefault')})"
         )
 
 

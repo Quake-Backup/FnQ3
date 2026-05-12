@@ -13,6 +13,7 @@ typedef void ( APIENTRY *PFNGLXENDQUERYPROC )( GLenum target );
 typedef void ( APIENTRY *PFNGLXGETQUERYOBJECTIVPROC )( GLuint id, GLenum pname, GLint *params );
 typedef void ( APIENTRY *PFNGLXGETQUERYOBJECTUIVPROC )( GLuint id, GLenum pname, GLuint *params );
 typedef void ( APIENTRY *PFNGLXGETQUERYOBJECTUI64VPROC )( GLuint id, GLenum pname, GLXQueryResult64 *params );
+typedef void ( APIENTRY *PFNGLXQUERYCOUNTERPROC )( GLuint id, GLenum target );
 
 static constexpr int GLX_MAX_HOT_SHADERS = 8;
 static constexpr int GLX_MAX_HOT_MATERIAL_KEYS = 12;
@@ -43,6 +44,25 @@ struct MaterialKeyStats {
 	int texMods1;
 };
 
+struct GpuPassStats {
+	unsigned int samples;
+	double lastMilliseconds;
+	double totalMilliseconds;
+	char lastText[32];
+};
+
+struct GpuPassQuery {
+	GLuint startQuery;
+	GLuint endQuery;
+	qboolean pending;
+	int pass;
+};
+
+struct GpuPassScope {
+	int pass;
+	int slot;
+};
+
 struct ProfilerFns {
 	PFNGLXGENQUERIESPROC GenQueries;
 	PFNGLXDELETEQUERIESPROC DeleteQueries;
@@ -51,14 +71,21 @@ struct ProfilerFns {
 	PFNGLXGETQUERYOBJECTIVPROC GetQueryObjectiv;
 	PFNGLXGETQUERYOBJECTUIVPROC GetQueryObjectuiv;
 	PFNGLXGETQUERYOBJECTUI64VPROC GetQueryObjectui64v;
+	PFNGLXQUERYCOUNTERPROC QueryCounter;
 };
 
 struct ProfilerState {
 	cvar_t *r_glxGpuTiming;
+	cvar_t *r_glxGpuPassTiming;
 	ProfilerFns fns;
 	GLuint queries[4];
 	qboolean pending[4];
 	int writeIndex;
+	GpuPassQuery passQueries[16];
+	GpuPassScope passStack[8];
+	int passWriteIndex;
+	int passStackDepth;
+	qboolean passTimerReady;
 	qboolean initialized;
 	qboolean queryActive;
 	qboolean lastGpuValid;
@@ -66,8 +93,16 @@ struct ProfilerState {
 	char lastGpuText[32];
 	unsigned int frames;
 	unsigned int backendQueries;
+	unsigned int gpuPassQueries;
 	unsigned int queryUnavailableFrames;
 	unsigned int queryRingFullSkips;
+	unsigned int passQueryUnavailableFrames;
+	unsigned int passQueryRingFullSkips;
+	unsigned int postBlits;
+	unsigned int postBinds;
+	unsigned int postClears;
+	unsigned int postFullscreenPasses;
+	GpuPassStats gpuPassStats[GLX_GPU_PASS_COUNT];
 	unsigned int drawCalls;
 	unsigned int drawIndexes;
 	unsigned int genericDrawCalls;
@@ -131,7 +166,13 @@ void GLX_Profiler_OnOpenGLReady( ProfilerState *state, const Capabilities &caps 
 void GLX_Profiler_Shutdown( ProfilerState *state );
 void GLX_Profiler_BeginBackendTimer( ProfilerState *state );
 void GLX_Profiler_EndBackendTimer( ProfilerState *state );
+void GLX_Profiler_BeginGpuPassTimer( ProfilerState *state, int pass );
+void GLX_Profiler_EndGpuPassTimer( ProfilerState *state, int pass );
 void GLX_Profiler_FrameComplete( ProfilerState *state );
+void GLX_Profiler_RecordPostBlit( ProfilerState *state );
+void GLX_Profiler_RecordPostBind( ProfilerState *state );
+void GLX_Profiler_RecordPostClear( ProfilerState *state );
+void GLX_Profiler_RecordFullscreenPass( ProfilerState *state );
 void GLX_Profiler_RecordDraw( ProfilerState *state, int indexes, int path );
 void GLX_Profiler_RecordLegacyDelegation( ProfilerState *state, int reason, int items );
 void GLX_Profiler_RecordShaderBatch( ProfilerState *state, const char *shaderName, int sort,
@@ -142,6 +183,7 @@ void GLX_Profiler_RecordMaterialStage( ProfilerState *state, int path, int flags
 void GLX_Profiler_PrintInfo( const ProfilerState &state );
 qboolean GLX_Profiler_TimerReady( const ProfilerState &state );
 const char *GLX_Profiler_LastGpuTimeText( const ProfilerState &state );
+const char *GLX_Profiler_GpuPassName( int pass );
 
 } // namespace glx
 

@@ -756,6 +756,11 @@ $(echo_cmd) "CXX $<"
 $(Q)$(CXX) $(CXXFLAGS) -o $@ -c $<
 endef
 
+define DO_DED_CXX
+$(echo_cmd) "DED_CXX $<"
+$(Q)$(CXX) $(CXXFLAGS) -DDEDICATED -o $@ -c $<
+endef
+
 define DO_REND_CC
 $(echo_cmd) "REND_CC $<"
 $(Q)$(CC) $(CFLAGS) $(RENDCFLAGS) -o $@ -c $<
@@ -1561,7 +1566,7 @@ endif
 $(B)/$(TARGET_SERVER): $(Q3DOBJ)
 	$(echo_cmd) $(Q3DOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) -o $@ $(Q3DOBJ) $(LDFLAGS)
+	$(Q)$(CXX) -o $@ $(Q3DOBJ) $(LDFLAGS)
 
 #############################################################################
 ## CLIENT/SERVER RULES
@@ -1573,11 +1578,17 @@ $(B)/client/%.o: $(ADIR)/%.s
 $(B)/client/%.o: $(CDIR)/%.c
 	$(DO_CC)
 
+$(B)/client/%.o: $(CDIR)/%.cpp
+	$(DO_CXX)
+
 $(B)/client/%.o: $(AUDIR)/%.cpp
 	$(DO_CXX)
 
 $(B)/client/%.o: $(SDIR)/%.c
 	$(DO_CC)
+
+$(B)/client/%.o: $(SDIR)/%.cpp
+	$(DO_CXX)
 
 $(B)/client/%.o: $(CMDIR)/%.c
 	$(DO_CC)
@@ -1599,6 +1610,9 @@ $(B)/client/vorbis/%.o: $(VORBISDIR)/lib/%.c
 
 $(B)/client/%.o: $(SDLDIR)/%.c
 	$(DO_CC)
+
+$(B)/client/%.o: $(SDLDIR)/%.cpp
+	$(DO_CXX)
 
 $(B)/rend1/%.o: $(R1DIR)/%.c
 	$(DO_REND_CC)
@@ -1648,8 +1662,14 @@ $(B)/rendv/%.o: $(CMDIR)/%.c
 $(B)/client/%.o: $(UDIR)/%.c
 	$(DO_CC)
 
+$(B)/client/%.o: $(UDIR)/%.cpp
+	$(DO_CXX)
+
 $(B)/client/%.o: $(W32DIR)/%.c
 	$(DO_CC)
+
+$(B)/client/%.o: $(W32DIR)/%.cpp
+	$(DO_CXX)
 
 $(B)/client/%.o: $(W32DIR)/%.rc
 	$(DO_WINDRES)
@@ -1659,6 +1679,9 @@ $(B)/ded/%.o: $(ADIR)/%.s
 
 $(B)/ded/%.o: $(SDIR)/%.c
 	$(DO_DED_CC)
+
+$(B)/ded/%.o: $(SDIR)/%.cpp
+	$(DO_DED_CXX)
 
 $(B)/ded/%.o: $(CMDIR)/%.c
 	$(DO_DED_CC)
@@ -1672,8 +1695,14 @@ $(B)/ded/%.o: $(BLIBDIR)/%.c
 $(B)/ded/%.o: $(UDIR)/%.c
 	$(DO_DED_CC)
 
+$(B)/ded/%.o: $(UDIR)/%.cpp
+	$(DO_DED_CXX)
+
 $(B)/ded/%.o: $(W32DIR)/%.c
 	$(DO_DED_CC)
+
+$(B)/ded/%.o: $(W32DIR)/%.cpp
+	$(DO_DED_CXX)
 
 $(B)/ded/%.o: $(W32DIR)/%.rc
 	$(DO_WINDRES)

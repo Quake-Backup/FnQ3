@@ -29,6 +29,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <X11/Xlib.h>
 #include <X11/Xfuncproto.h>
 
+#ifdef __cplusplus
+#include "unix_raii.h"
+#endif
+
 typedef struct sym_s
 {
 	void **symbol;
@@ -67,6 +71,10 @@ typedef struct
 
 } glwstate_t;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern glwstate_t glw_state;
 extern Display *dpy;
 extern Window win;
@@ -95,5 +103,24 @@ qboolean RandR_SetMode( int *width, int *height, int *rate );
 void RandR_RestoreMode( void );
 void RandR_SetGamma( unsigned char red[256], unsigned char green[256], unsigned char blue[256] );
 void RandR_RestoreGamma( void );
+
+#ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+inline void *GLW_LoadLibraryFallback( const char *preferred, const char *fallback )
+{
+	return fnq3::posix::LoadLibraryFallback( preferred, fallback );
+}
+
+using GLW_ScopedLibrary = fnq3::posix::ScopedLibrary;
+
+template <std::size_t SymbolCount>
+inline qboolean GLW_LoadSymbols( void *library, sym_t ( &symbols )[ SymbolCount ], const char *libraryName )
+{
+	return fnq3::posix::LoadSymbols( library, symbols, libraryName, fnq3::posix::SymbolLoadFailure::Library );
+}
+#endif
 
 #endif

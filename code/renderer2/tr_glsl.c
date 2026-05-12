@@ -141,6 +141,9 @@ static uniformInfo_t uniformsInfo[] =
 	{ "u_ViewUp",          GLSL_VEC3 },
 
 	{ "u_InvTexRes",           GLSL_VEC2 },
+	{ "u_DepthFadeInfo",       GLSL_VEC4 },
+	{ "u_DepthFadeScale",      GLSL_VEC4 },
+	{ "u_DepthFadeBias",       GLSL_VEC4 },
 	{ "u_AutoExposureMinMax",  GLSL_VEC2 },
 	{ "u_ToneMinAvgMaxLinear", GLSL_VEC3 },
 
@@ -968,6 +971,9 @@ void GLSL_InitGPUShaders(void)
 		if (i & GENERICDEF_USE_RGBAGEN)
 			Q_strcat(extradefines, 1024, "#define USE_RGBAGEN\n");
 
+		if (i & GENERICDEF_USE_DEPTH_FADE)
+			Q_strcat(extradefines, 1024, "#define USE_DEPTH_FADE\n");
+
 		if (!GLSL_InitGPUShader(&tr.genericShader[i], "generic", attribs, qtrue, extradefines, qtrue, fallbackShader_generic_vp, fallbackShader_generic_fp))
 		{
 			ri.Error(ERR_FATAL, "Could not load generic shader!");
@@ -977,6 +983,7 @@ void GLSL_InitGPUShaders(void)
 
 		GLSL_SetUniformInt(&tr.genericShader[i], UNIFORM_DIFFUSEMAP, TB_DIFFUSEMAP);
 		GLSL_SetUniformInt(&tr.genericShader[i], UNIFORM_LIGHTMAP,   TB_LIGHTMAP);
+		GLSL_SetUniformInt(&tr.genericShader[i], UNIFORM_SCREENDEPTHMAP, TB_SHADOWMAP);
 
 		GLSL_FinishGPUShader(&tr.genericShader[i]);
 
@@ -1342,13 +1349,15 @@ void GLSL_InitGPUShaders(void)
 	numEtcShaders++;
 
 
-	for (i = 0; i < 2; i++)
+	for (i = 0; i < 3; i++)
 	{
 		attribs = ATTR_POSITION | ATTR_TEXCOORD;
 		extradefines[0] = '\0';
 
 		if (!i)
 			Q_strcat(extradefines, 1024, "#define FIRST_PASS\n");
+		else if (i == 2)
+			Q_strcat(extradefines, 1024, "#define HISTOGRAM_PERCENTILE\n");
 
 		if (!GLSL_InitGPUShader(&tr.calclevels4xShader[i], "calclevels4x", attribs, qtrue, extradefines, qtrue, fallbackShader_calclevels4x_vp, fallbackShader_calclevels4x_fp))
 		{
@@ -1505,7 +1514,7 @@ void GLSL_ShutdownGPUShaders(void)
 	GLSL_DeleteGPUShader(&tr.gammaShader);
 	GLSL_DeleteGPUShader(&tr.tonemapShader);
 
-	for ( i = 0; i < 2; i++)
+	for ( i = 0; i < 3; i++)
 		GLSL_DeleteGPUShader(&tr.calclevels4xShader[i]);
 
 	GLSL_DeleteGPUShader(&tr.shadowmaskShader);
@@ -1577,6 +1586,11 @@ shaderProgram_t *GLSL_GetGenericShaderProgram(int stage)
 	if (pStage->bundle[0].numTexMods)
 	{
 		shaderAttribs |= GENERICDEF_USE_TCGEN_AND_TCMOD;
+	}
+
+	if (r_depthFade->integer && tess.shader->dfType > DFT_NONE && tess.shader->dfType < DFT_TBD)
+	{
+		shaderAttribs |= GENERICDEF_USE_DEPTH_FADE;
 	}
 
 	return &tr.genericShader[shaderAttribs];

@@ -95,6 +95,44 @@ static void R_BindAnimatedImageToTMU( const textureBundle_t *bundle, int tmu ) {
 	GL_BindToTMU( bundle->image[ index ], tmu );
 }
 
+static qboolean RB_DepthFadeActive( void )
+{
+	return !backEnd.depthFill &&
+		r_depthFade->integer &&
+		tess.shader->dfType > DFT_NONE &&
+		tess.shader->dfType < DFT_TBD &&
+		tr.hdrDepthImage;
+}
+
+static void RB_SetDepthFadeUniforms( shaderProgram_t *sp )
+{
+	const byte scaleAndBias = r_depthFadeScaleAndBias[tess.shader->dfType];
+	vec2_t invTexRes;
+	vec4_t info;
+	vec4_t scale;
+	vec4_t bias;
+	int i;
+
+	if ( !RB_DepthFadeActive() ) {
+		return;
+	}
+
+	invTexRes[0] = 1.0f / (float)tr.hdrDepthImage->uploadWidth;
+	invTexRes[1] = 1.0f / (float)tr.hdrDepthImage->uploadHeight;
+	VectorSet4( info, backEnd.viewParms.zFar / r_znear->value, backEnd.viewParms.zFar, tess.shader->dfInvDist, tess.shader->dfBias );
+
+	for ( i = 0; i < 4; i++ ) {
+		scale[i] = ( scaleAndBias & ( 1 << i ) ) ? 1.0f : 0.0f;
+		bias[i] = ( scaleAndBias & ( 1 << ( i + 4 ) ) ) ? 1.0f : 0.0f;
+	}
+
+	GLSL_SetUniformVec2( sp, UNIFORM_INVTEXRES, invTexRes );
+	GLSL_SetUniformVec4( sp, UNIFORM_DEPTHFADEINFO, info );
+	GLSL_SetUniformVec4( sp, UNIFORM_DEPTHFADESCALE, scale );
+	GLSL_SetUniformVec4( sp, UNIFORM_DEPTHFADEBIAS, bias );
+	GL_BindToTMU( tr.hdrDepthImage, TB_SHADOWMAP );
+}
+
 
 /*
 ================
@@ -1091,6 +1129,11 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 					shaderAttribs |= GENERICDEF_USE_TCGEN_AND_TCMOD;
 				}
 
+				if (r_depthFade->integer && tess.shader->dfType > DFT_NONE && tess.shader->dfType < DFT_TBD)
+				{
+					shaderAttribs |= GENERICDEF_USE_DEPTH_FADE;
+				}
+
 				sp = &tr.genericShader[shaderAttribs];
 			}
 		}
@@ -1419,6 +1462,8 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 
 			GLSL_SetUniformVec4(sp, UNIFORM_CUBEMAPINFO, vec);
 		}
+
+		RB_SetDepthFadeUniforms( sp );
 
 		//
 		// draw

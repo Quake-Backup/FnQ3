@@ -65,8 +65,11 @@ struct PostShaderProgram {
 	GLuint vertexShader;
 	GLuint fragmentShader;
 	GLint sceneUniform;
+	GLint bloomUniform;
 	GLint lutUniform;
 	GLint postParams0Uniform;
+	GLint outputParams1Uniform;
+	GLint bloomParamsUniform;
 	GLint liftUniform;
 	GLint invGammaUniform;
 	GLint gainUniform;
@@ -75,6 +78,7 @@ struct PostShaderProgram {
 	GLint whitePoint2Uniform;
 	GLint lutParamsUniform;
 	unsigned int uses;
+	unsigned int lastUseSerial;
 	qboolean valid;
 };
 
@@ -83,9 +87,12 @@ struct PostShaderState {
 	cvar_t *r_glxPostShaderPrecache;
 	cvar_t *r_glxPostShaderDebug;
 	cvar_t *r_glxPostShaderExecute;
+	cvar_t *r_glxPostShaderTarget;
 	PostShaderFns fns;
 	PostShaderProgram programs[GLX_POST_SHADER_PROGRAM_LIMIT];
 	RenderProductTier tier;
+	int glMajor;
+	int glMinor;
 	int programCount;
 	GLuint currentProgram;
 	qboolean ready;
@@ -102,6 +109,9 @@ struct PostShaderState {
 	unsigned int linkFailures;
 	unsigned int sourceFailures;
 	unsigned int programLimitSkips;
+	unsigned int cacheEvictions;
+	unsigned int targetFallbacks;
+	unsigned int targetCapabilityFallbacks;
 	unsigned int precacheAttempts;
 	unsigned int precacheFailures;
 	unsigned int debugLabels;
@@ -118,11 +128,25 @@ struct PostShaderState {
 	unsigned int lastFeatureMask;
 	unsigned int lastSourceHash;
 	unsigned int lastProgram;
+	unsigned int lastEvictedSourceHash;
+	unsigned int lastEvictedFeatureMask;
+	unsigned int lastEvictedUses;
 	unsigned int lastDirectFinalRejectMask;
+	unsigned int useSerial;
+	PostShaderSourceTarget preferredTarget;
+	PostShaderSourceTarget activeTarget;
+	PostShaderSourceTarget lastRequestedTarget;
+	PostShaderSourceTarget lastCompileTarget;
+	PostShaderSourceTarget lastFallbackFromTarget;
+	PostShaderSourceTarget lastFallbackToTarget;
+	PostShaderSourceTarget lastEvictedTarget;
 	PostShaderSourceSummary lastSource;
 	qboolean lastPlanValid;
 	qboolean lastDirectFinalEligible;
 	qboolean lastDirectFinalBound;
+	qboolean lastTargetFallbackUsed;
+	qboolean lastTargetUnsupported;
+	qboolean modernTargetSuppressed;
 };
 
 void GLX_PostShader_RegisterCvars( PostShaderState *state );
@@ -130,7 +154,11 @@ void GLX_PostShader_OnOpenGLReady( PostShaderState *state, const Capabilities &c
 void GLX_PostShader_Shutdown( PostShaderState *state, qboolean deletePrograms );
 void GLX_PostShader_FrameComplete( PostShaderState *state );
 qboolean GLX_PostShader_Ready( const PostShaderState &state );
+qboolean GLX_PostShader_ExecutionEnabled( const PostShaderState &state );
 qboolean GLX_PostShader_RecordPlan( PostShaderState *state, const PostShaderPlan &plan );
+qboolean GLX_PostShader_TryBindFinal( PostShaderState *state,
+	const PostShaderPlan &plan, const OutputTransform &output,
+	qboolean bloomComposite, qboolean outputTransform, float bloomIntensity );
 qboolean GLX_PostShader_TryBindDirectFinal( PostShaderState *state,
 	const PostShaderPlan &plan, const OutputTransform &output, float greyscale );
 void GLX_PostShader_Unbind( PostShaderState *state );

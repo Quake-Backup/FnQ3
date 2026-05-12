@@ -365,6 +365,18 @@ typedef enum {
 	FP_LE			// surface is translucent, but still needs a fog pass (fog surface)
 } fogPass_t;
 
+typedef enum {
+	DFT_NONE,
+	DFT_BLEND,
+	DFT_ADD,
+	DFT_MULT,
+	DFT_PMA,
+	DFT_TBD,
+	DFT_COUNT
+} depthFadeType_t;
+
+extern const byte r_depthFadeScaleAndBias[DFT_COUNT];
+
 typedef struct {
 	float		cloudHeight;
 	image_t		*outerbox[6], *innerbox[6];
@@ -416,6 +428,9 @@ typedef struct shader_s {
 	unsigned	noVLcollapse:1;			// ignore vertexlight mode
 
 	fogPass_t	fogPass;				// draw a blended pass, possibly with depth test equals
+	depthFadeType_t dfType;				// soft intersection fade for translucent surfaces
+	float		dfInvDist;
+	float		dfBias;
 
 	qboolean	needsNormal;			// not all shaders will need all data to be gathered
 	//qboolean	needsST1;
@@ -1246,6 +1261,7 @@ extern cvar_t	*r_fastsky;				// controls whether sky should be cleared or drawn
 extern cvar_t	*r_neatsky;				// nomip and nopicmip for skyboxes, cnq3 like look
 extern cvar_t	*r_drawSun;				// controls drawing of sun quad
 extern cvar_t	*r_dynamiclight;		// dynamic lights enabled/disabled
+extern cvar_t	*r_depthFade;			// soft-particle depth fade enabled/disabled
 extern cvar_t	*r_celShading;			// cel shading enabled/disabled on model entities
 extern cvar_t	*r_celShadingSteps;		// diffuse lighting bands for cel shading
 extern cvar_t	*r_celOutline;			// outline shell enabled/disabled on model entities
@@ -1267,6 +1283,7 @@ extern cvar_t	*r_vbo;
 extern cvar_t	*r_fbo;
 extern cvar_t	*r_hdr;
 extern cvar_t	*r_hdrPrecision;
+extern cvar_t	*r_hdrBloomFormat;
 extern cvar_t	*r_srgbTextures;
 extern cvar_t	*r_framebufferSRGB;
 extern cvar_t	*r_tonemap;
@@ -1281,6 +1298,7 @@ extern cvar_t	*r_colorGradeLUT;
 extern cvar_t	*r_colorGradeLUTScale;
 extern cvar_t	*r_outputBackend;
 extern cvar_t	*r_outputAllowExperimentalLinuxHDR;
+extern cvar_t	*r_flareSceneLinear;
 extern cvar_t	*r_bloom;
 extern cvar_t	*r_bloom_threshold;
 extern cvar_t	*r_bloom_threshold_mode;
@@ -1659,6 +1677,8 @@ qboolean ARB_UpdatePrograms( void );
 qboolean GL_ProgramAvailable( void );
 void GL_ProgramDisable( void );
 void GL_ProgramEnable( void );
+qboolean GL_DepthFadeProgramAvailable( void );
+void GL_DepthFadeProgramEnable( const shader_t *shader );
 
 #ifdef USE_FBO
 extern qboolean		fboEnabled;
@@ -1671,6 +1691,9 @@ void FBO_BlitSS( void );
 qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalPass );
 void FBO_CopyScreen( void );
 GLuint FBO_ScreenTexture( void );
+qboolean FBO_DepthFadeAvailable( void );
+void FBO_CopyDepthFade( void );
+void FBO_BindDepthFadeTexture( int texUnit );
 #endif //  USE_FBO
 
 /*
@@ -2056,6 +2079,7 @@ typedef enum {
 	DLIGHT_LINEAR_ABS_FRAGMENT_FOG,
 #endif
 	SPRITE_FRAGMENT,
+	DEPTH_FADE_FRAGMENT,
 #ifdef USE_FBO
 	GAMMA_FRAGMENT,
 	BLOOM_EXTRACT_FRAGMENT,

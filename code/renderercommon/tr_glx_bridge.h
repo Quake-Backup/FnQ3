@@ -92,6 +92,24 @@ static ID_INLINE void GLX_CompatEndBackendTimer( void )
 #endif
 }
 
+static ID_INLINE void GLX_CompatBeginGpuPassTimer( int pass )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_BeginGpuPassTimer( pass );
+#else
+	(void)pass;
+#endif
+}
+
+static ID_INLINE void GLX_CompatEndGpuPassTimer( int pass )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_EndGpuPassTimer( pass );
+#else
+	(void)pass;
+#endif
+}
+
 static ID_INLINE void GLX_CompatFrameComplete( void )
 {
 #ifdef RENDERER_GLX
@@ -524,11 +542,53 @@ static ID_INLINE void GLX_CompatRecordPostProcessFrame( qboolean minimized,
 #endif
 }
 
+static ID_INLINE qboolean GLX_CompatAutoExposureNeedsSamples( int *width, int *height )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_AutoExposureNeedsSamples( width, height );
+#else
+	if ( width ) {
+		*width = 0;
+	}
+	if ( height ) {
+		*height = 0;
+	}
+	return qfalse;
+#endif
+}
+
+static ID_INLINE float GLX_CompatUpdateAutoExposure( float manualExposure,
+	const float *rgba, int width, int height )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_UpdateAutoExposure( manualExposure, rgba, width, height );
+#else
+	(void)rgba;
+	(void)width;
+	(void)height;
+	return manualExposure;
+#endif
+}
+
 static ID_INLINE qboolean GLX_CompatTryBindPostShaderDirectFinal( void )
 {
 #ifdef RENDERER_GLX
 	return GLX_Renderer_TryBindPostShaderDirectFinal();
 #else
+	return qfalse;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatTryBindPostShaderFinal( qboolean bloomComposite,
+	qboolean outputTransform, float bloomIntensity )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_TryBindPostShaderFinal( bloomComposite, outputTransform,
+		bloomIntensity );
+#else
+	(void)bloomComposite;
+	(void)outputTransform;
+	(void)bloomIntensity;
 	return qfalse;
 #endif
 }
@@ -561,15 +621,21 @@ static ID_INLINE void GLX_CompatRecordColorGradeLut( qboolean active, int size, 
 }
 
 static ID_INLINE void GLX_CompatRecordBloomCreate( int result, int requestedPasses,
-	int effectivePasses, int textureUnits )
+	int effectivePasses, int textureUnits, int formatMode, int internalFormat,
+	int textureFormat, int textureType )
 {
 #ifdef RENDERER_GLX
-	GLX_Renderer_RecordBloomCreate( result, requestedPasses, effectivePasses, textureUnits );
+	GLX_Renderer_RecordBloomCreate( result, requestedPasses, effectivePasses,
+		textureUnits, formatMode, internalFormat, textureFormat, textureType );
 #else
 	(void)result;
 	(void)requestedPasses;
 	(void)effectivePasses;
 	(void)textureUnits;
+	(void)formatMode;
+	(void)internalFormat;
+	(void)textureFormat;
+	(void)textureType;
 #endif
 }
 
@@ -621,6 +687,27 @@ static ID_INLINE void GLX_CompatRecordFboBlit( int kind, qboolean depthOnly,
 	(void)srcHeight;
 	(void)dstWidth;
 	(void)dstHeight;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordFboBind( void )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordFboBind();
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordPostClear( void )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordPostClear();
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordFullscreenPass( void )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordFullscreenPass();
 #endif
 }
 

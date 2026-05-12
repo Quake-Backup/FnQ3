@@ -4,46 +4,46 @@
     <ClCompile Include="..\..\audio\AudioSystem.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_avi.c">
+    <ClCompile Include="..\..\client\cl_avi.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_cgame.c">
+    <ClCompile Include="..\..\client\cl_cgame.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_hud.c">
+    <ClCompile Include="..\..\client\cl_hud.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_cin.c">
+    <ClCompile Include="..\..\client\cl_cin.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_console.c">
+    <ClCompile Include="..\..\client\cl_console.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_curl.c">
+    <ClCompile Include="..\..\client\cl_curl.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_input.c">
+    <ClCompile Include="..\..\client\cl_input.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_jpeg.c">
+    <ClCompile Include="..\..\client\cl_jpeg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_keys.c">
+    <ClCompile Include="..\..\client\cl_keys.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_main.c">
+    <ClCompile Include="..\..\client\cl_main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_net_chan.c">
+    <ClCompile Include="..\..\client\cl_net_chan.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_parse.c">
+    <ClCompile Include="..\..\client\cl_parse.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_scrn.c">
+    <ClCompile Include="..\..\client\cl_scrn.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_ui.c">
+    <ClCompile Include="..\..\client\cl_ui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\qcommon\cm_load.c">
@@ -109,61 +109,61 @@
     <ClCompile Include="..\..\qcommon\q_shared.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_adpcm.c">
+    <ClCompile Include="..\..\client\snd_adpcm.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_codec.c">
+    <ClCompile Include="..\..\client\snd_codec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_codec_wav.c">
+    <ClCompile Include="..\..\client\snd_codec_wav.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_codec_ogg.c">
+    <ClCompile Include="..\..\client\snd_codec_ogg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_dma.c">
+    <ClCompile Include="..\..\client\snd_dma.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_main.c">
+    <ClCompile Include="..\..\client\snd_main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_mem.c">
+    <ClCompile Include="..\..\client\snd_mem.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_mix.c">
+    <ClCompile Include="..\..\client\snd_mix.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_wavelet.c">
+    <ClCompile Include="..\..\client\snd_wavelet.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_bot.c">
+    <ClCompile Include="..\..\server\sv_bot.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_ccmds.c">
+    <ClCompile Include="..\..\server\sv_ccmds.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_client.c">
+    <ClCompile Include="..\..\server\sv_client.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_filter.c">
+    <ClCompile Include="..\..\server\sv_filter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_game.c">
+    <ClCompile Include="..\..\server\sv_game.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_init.c">
+    <ClCompile Include="..\..\server\sv_init.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_main.c">
+    <ClCompile Include="..\..\server\sv_main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_net_chan.c">
+    <ClCompile Include="..\..\server\sv_net_chan.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_snapshot.c">
+    <ClCompile Include="..\..\server\sv_snapshot.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\server\sv_world.c">
+    <ClCompile Include="..\..\server\sv_world.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\qcommon\unzip.c">
@@ -181,37 +181,37 @@
     <ClCompile Include="..\..\qcommon\vm_x86.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_input.c">
+    <ClCompile Include="..\win_input.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_main.c">
+    <ClCompile Include="..\win_main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_minimize.c">
+    <ClCompile Include="..\win_minimize.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_shared.c">
+    <ClCompile Include="..\win_shared.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_snd.c">
+    <ClCompile Include="..\win_snd.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_syscon.c">
+    <ClCompile Include="..\win_syscon.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_wndproc.c">
+    <ClCompile Include="..\win_wndproc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_gamma.c">
+    <ClCompile Include="..\win_gamma.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_glimp.c">
+    <ClCompile Include="..\win_glimp.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_qgl.c">
+    <ClCompile Include="..\win_qgl.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\win_qvk.c">
+    <ClCompile Include="..\win_qvk.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -316,6 +316,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\win_local.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\win_raii.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\glw_win.h">

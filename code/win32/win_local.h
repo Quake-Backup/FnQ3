@@ -41,6 +41,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //#pragma warning(disable : 4201)
 //#pragma warning( push )
 //#endif
+#ifndef CINTERFACE
+#define CINTERFACE
+#endif
 #include <windows.h>
 //#if defined (_MSC_VER) && (_MSC_VER >= 1200)
 //#pragma warning( pop )
@@ -98,6 +101,10 @@ const char *WtoA( const LPWSTR s );
 #else
 #define AtoW(S) (S)
 #define WtoA(S) (S)
+#endif
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 qboolean IN_MouseActive( void );
@@ -165,3 +172,7 @@ void WIN_Minimize( void );
 
 void GLW_HideFullscreenWindow( void );
 void GLW_RestoreGamma( void );
+
+#ifdef __cplusplus
+}
+#endif

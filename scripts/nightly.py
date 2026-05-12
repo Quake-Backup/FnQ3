@@ -440,7 +440,7 @@ def fallback_section_for_subject(subject: str) -> str:
         return "Rendering and Display"
     if any(token in lowered for token in ("audio", "sound", "openal", "wasapi", "ogg", "vorbis")):
         return "Audio"
-    if any(token in lowered for token in ("nightly", "release", "package", "artifact", "workflow", "build", "meson", "ninja", "cmake", "makefile", "msvc")):
+    if any(token in lowered for token in ("nightly", "release", "package", "artifact", "workflow", "build", "meson", "ninja", "makefile", "msvc")):
         return "Builds and Packaging"
     return "Highlights"
 

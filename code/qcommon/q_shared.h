@@ -159,6 +159,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 //endianness
 short ShortSwap( short l );
 int LongSwap( int l );
@@ -370,7 +374,7 @@ typedef enum {
 
 #ifdef HUNK_DEBUG
 #define Hunk_Alloc( size, preference )				Hunk_AllocDebug(size, preference, #size, __FILE__, __LINE__)
-void *Hunk_AllocDebug( int size, ha_pref preference, char *label, char *file, int line );
+void *Hunk_AllocDebug( int size, ha_pref preference, const char *label, const char *file, int line );
 #else
 void *Hunk_Alloc( int size, ha_pref preference );
 #endif
@@ -1470,5 +1474,9 @@ typedef enum _flag_status {
 
 #define LERP( a, b, w ) ( ( a ) * ( 1.0f - ( w ) ) + ( b ) * ( w ) )
 #define LUMA( red, green, blue ) ( 0.2126f * ( red ) + 0.7152f * ( green ) + 0.0722f * ( blue ) )
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif	// __Q_SHARED_H

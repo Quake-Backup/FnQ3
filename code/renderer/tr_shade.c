@@ -543,6 +543,27 @@ void R_BindAnimatedImage( const textureBundle_t *bundle ) {
 	GL_Bind( bundle->image[ index ] );
 }
 
+static qboolean RB_DepthFadeActive( const shaderStage_t *pStage )
+{
+	return pStage &&
+		!pStage->depthFragment &&
+		tess.shader->dfType > DFT_NONE &&
+		tess.shader->dfType < DFT_TBD &&
+		pStage->bundle[1].image[0] == NULL &&
+		GL_DepthFadeProgramAvailable();
+}
+
+static void RB_DrawDepthFadeStage( const shaderCommands_t *input )
+{
+#ifdef USE_FBO
+	FBO_BindDepthFadeTexture( 1 );
+	GL_DepthFadeProgramEnable( tess.shader );
+	R_DrawElements( input->numIndexes, input->indexes );
+	GL_ProgramDisable();
+	GL_SelectTexture( 0 );
+#endif
+}
+
 
 /*
 ================
@@ -766,10 +787,15 @@ static void DrawMultitextured( const shaderCommands_t *input, int stage ) {
 	}
 
 #ifdef RENDERER_GLX
-	glxStreamedDraw = GLX_TryStreamDrawStage( input, pStage, qtrue, glxMultitextureEnv );
+	if ( !RB_DepthFadeActive( pStage ) ) {
+		glxStreamedDraw = GLX_TryStreamDrawStage( input, pStage, qtrue, glxMultitextureEnv );
+	}
 #endif
 	if ( !glxStreamedDraw ) {
-		R_DrawElements( input->numIndexes, input->indexes );
+		if ( RB_DepthFadeActive( pStage ) )
+			RB_DrawDepthFadeStage( input );
+		else
+			R_DrawElements( input->numIndexes, input->indexes );
 		if ( pStage->depthFragment )
 		{
 			GL_State( pStage->stateBits | GLS_DEPTHMASK_TRUE );
@@ -1353,11 +1379,16 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 			// draw
 			//
 #ifdef RENDERER_GLX
-			glxStreamedDraw = GLX_TryStreamDrawStage( input, pStage, qfalse, 0 );
+			if ( !RB_DepthFadeActive( pStage ) ) {
+				glxStreamedDraw = GLX_TryStreamDrawStage( input, pStage, qfalse, 0 );
+			}
 #endif
 			if ( !glxStreamedDraw )
 			{
-				R_DrawElements( input->numIndexes, input->indexes );
+				if ( RB_DepthFadeActive( pStage ) )
+					RB_DrawDepthFadeStage( input );
+				else
+					R_DrawElements( input->numIndexes, input->indexes );
 				if ( pStage->depthFragment )
 				{
 					GL_State( pStage->stateBits | GLS_DEPTHMASK_TRUE );

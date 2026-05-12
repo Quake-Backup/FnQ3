@@ -25,6 +25,8 @@ the Free Software Foundation; either version 2 of the License, or
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <limits>
+#include <limits>
 
 namespace {
 
@@ -1192,6 +1194,8 @@ bool RenderIRProductsValidate()
 	CHECK( output.grade == glx::ColorGradeMode::None );
 	CHECK( output.outputPrimaries == glx::OutputPrimaries::SrgbBt709 );
 	CHECK( output.gamutMap == glx::GamutMapMode::None );
+	CHECK( output.exposureAlgorithm == glx::ExposureReductionAlgorithm::Manual );
+	CHECK( output.autoExposure == qfalse );
 	CHECK( output.requestedPrecisionMode == 0 );
 	CHECK( output.precisionMode == 8 );
 	CHECK( output.bloomThreshold == 0.75f );
@@ -1221,9 +1225,19 @@ bool RenderIRProductsValidate()
 	CHECK( std::strcmp( RendererOutputRequestName( ROUTPUT_REQUEST_HDR10_PQ ), "hdr10-pq" ) == 0 );
 	CHECK( std::strcmp( RendererOutputBackendName( ROUTPUT_BACKEND_MACOS_EDR ), "macos-edr" ) == 0 );
 	CHECK( std::strcmp( glx::GLX_RenderIR_SceneColorSpaceName( output.sceneColorSpace ), "display-referred-sdr" ) == 0 );
-	CHECK( std::strcmp( glx::GLX_RenderIR_ToneMapName( glx::ToneMapOperator::Aces ), "aces" ) == 0 );
+	CHECK( glx::ToneMapOperator::Reinhard == glx::ToneMapOperator::ReinhardSimple );
+	CHECK( glx::ToneMapOperator::Aces == glx::ToneMapOperator::AcesFitted );
+	CHECK( std::strcmp( glx::GLX_RenderIR_ToneMapName( glx::ToneMapOperator::ReinhardSimple ), "reinhard-simple" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_ToneMapLegacyAliasName( glx::ToneMapOperator::Reinhard ), "reinhard" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_ToneMapName( glx::ToneMapOperator::AcesFitted ), "aces-fitted" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_ToneMapLegacyAliasName( glx::ToneMapOperator::Aces ), "aces" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_ExposureReductionName( glx::ExposureReductionAlgorithm::Manual ), "manual" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_ExposureReductionName( glx::ExposureReductionAlgorithm::HistogramPercentile ), "histogram-percentile" ) == 0 );
 	CHECK( std::strcmp( glx::GLX_RenderIR_ColorGradeName( glx::ColorGradeMode::LiftGammaGainLut3D ), "lgg-lut3d" ) == 0 );
 	CHECK( std::strcmp( glx::GLX_RenderIR_OutputPrimariesName( glx::OutputPrimaries::Bt2020 ), "bt2020" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_OutputPrimariesContractName( glx::OutputPrimaries::DisplayP3 ), "display-p3-matrix" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_OutputPrimariesContractName( glx::OutputPrimaries::Native ), "native-pass-through" ) == 0 );
+	CHECK( glx::GLX_RenderIR_OutputPrimariesImplemented( glx::OutputPrimaries::Unknown ) == qfalse );
 	CHECK( std::strcmp( glx::GLX_RenderIR_GamutMapName( glx::GamutMapMode::CompressToOutput ), "compress" ) == 0 );
 
 	glx::PostNode post {};
@@ -1245,6 +1259,10 @@ bool RenderIRProductsValidate()
 	glx::OutputTransform changedOutput = output;
 	changedOutput.exposure = 1.25f;
 	CHECK( glx::GLX_RenderIR_HashOutputTransform( changedOutput ) != outputHash );
+	changedOutput = output;
+	changedOutput.exposureAlgorithm = glx::ExposureReductionAlgorithm::HistogramPercentile;
+	changedOutput.autoExposure = qtrue;
+	CHECK( glx::GLX_RenderIR_HashOutputTransform( changedOutput ) != outputHash );
 	glx::PostNode changedPost = post;
 	changedPost.sequence++;
 	CHECK( glx::GLX_RenderIR_HashPostNode( changedPost ) != postHash );
@@ -1256,6 +1274,9 @@ bool RenderIRProductsValidate()
 	draw.count = 0;
 	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qfalse );
 	output.exposure = -1.0f;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.autoExposure = qtrue;
 	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
 	output = glx::GLX_RenderIR_DefaultOutputTransform();
 	output.precisionMode = 0;
@@ -1271,10 +1292,13 @@ bool RenderIRProductsValidate()
 	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
 	output.hdrMode = 1;
 	output.precisionMode = 16;
-	output.toneMap = glx::ToneMapOperator::Aces;
+	output.toneMap = glx::ToneMapOperator::AcesFitted;
 	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qtrue );
 	output.selectedBackend = ROUTPUT_BACKEND_HDR10_PQ;
 	output.outputHardwareActive = qtrue;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	output.transfer = glx::OutputTransfer::Hdr10Pq;
+	output.outputPrimaries = glx::OutputPrimaries::Bt2020;
 	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qtrue );
 	output.grade = glx::ColorGradeMode::LiftGammaGainLut3D;
 	output.gradeGamma[0] = 1.1f;
@@ -1613,7 +1637,7 @@ bool GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements()
 	output.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
 	output.hdrMode = 1;
 	output.precisionMode = 16;
-	output.toneMap = glx::ToneMapOperator::Aces;
+	output.toneMap = glx::ToneMapOperator::AcesFitted;
 	output.bloomSoftKnee = 0.5f;
 	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL3X, output ) == qtrue );
 	CHECK( glx::GLX_RenderIR_TierSupportsOutputTransform( glx::RenderProductTier::GL2X, output ) == qfalse );
@@ -1636,7 +1660,7 @@ bool PostOutputPlansSeparatePlannedAndExecutableOwnership()
 	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
 	output.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
 	output.transfer = glx::OutputTransfer::SdrSrgb;
-	output.toneMap = glx::ToneMapOperator::Aces;
+	output.toneMap = glx::ToneMapOperator::AcesFitted;
 	output.grade = glx::ColorGradeMode::LiftGammaGain;
 	output.hdrMode = 1;
 	output.precisionMode = 16;
@@ -1651,6 +1675,7 @@ bool PostOutputPlansSeparatePlannedAndExecutableOwnership()
 	inputs.framebufferFnsReady = qtrue;
 	inputs.outputContractValid = qtrue;
 	inputs.bloomAvailable = qfalse;
+	inputs.postShaderExecutorEnabled = qtrue;
 	inputs.minimized = qfalse;
 	inputs.windowAdjusted = qfalse;
 	inputs.screenshotMask = 0;
@@ -1659,11 +1684,11 @@ bool PostOutputPlansSeparatePlannedAndExecutableOwnership()
 	inputs.flags = 0x2u;
 
 	glx::PostOutputPlan plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
-	CHECK( plan.glxOwned == qfalse );
-	CHECK( plan.executorImplemented == qfalse );
-	CHECK( plan.executableNodeCount == 0 );
-	CHECK( plan.outputTransformExecutable == qfalse );
-	CHECK( plan.fallbackReasons == glx::GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED );
+	CHECK( plan.glxOwned == qtrue );
+	CHECK( plan.executorImplemented == qtrue );
+	CHECK( plan.executableNodeCount == 3 );
+	CHECK( plan.outputTransformExecutable == qtrue );
+	CHECK( plan.fallbackReasons == glx::GLX_POST_OUTPUT_FALLBACK_NONE );
 	CHECK( plan.outputTransformPresent == qtrue );
 	CHECK( plan.predictedResult == GLX_POSTPROCESS_RESULT_GAMMA_DIRECT );
 	CHECK( plan.nodeCount == 3 );
@@ -1690,7 +1715,7 @@ bool PostOutputPlansSeparatePlannedAndExecutableOwnership()
 	plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
 	CHECK( plan.glxOwned == qfalse );
 	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_MINIMIZED ) != 0u );
-	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED ) != 0u );
+	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED ) == 0u );
 	CHECK( plan.predictedResult == GLX_POSTPROCESS_RESULT_MINIMIZED );
 
 	inputs.minimized = qfalse;
@@ -1698,23 +1723,209 @@ bool PostOutputPlansSeparatePlannedAndExecutableOwnership()
 	plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
 	CHECK( plan.glxOwned == qfalse );
 	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_OUTPUT_CONTRACT ) != 0u );
-	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED ) != 0u );
+	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED ) == 0u );
 
 	inputs.outputContractValid = qtrue;
+	inputs.postShaderExecutorEnabled = qfalse;
+	plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
+	CHECK( plan.glxOwned == qfalse );
+	CHECK( plan.executorImplemented == qtrue );
+	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_EXECUTOR_DISABLED ) != 0u );
+
+	inputs.postShaderExecutorEnabled = qtrue;
 	inputs.bloomAvailable = qtrue;
 	inputs.windowAdjusted = qtrue;
+	inputs.screenshotMask = 1;
 	output.toneMap = glx::ToneMapOperator::Legacy;
 	output.grade = glx::ColorGradeMode::None;
 	inputs.output = output;
 	plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
-	CHECK( plan.glxOwned == qfalse );
-	CHECK( plan.executorImplemented == qfalse );
-	CHECK( plan.executableNodeCount == 0 );
-	CHECK( ( plan.fallbackReasons & glx::GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED ) != 0u );
+	CHECK( plan.glxOwned == qtrue );
+	CHECK( plan.executorImplemented == qtrue );
+	CHECK( plan.executableNodeCount == 3 );
+	CHECK( plan.fallbackReasons == glx::GLX_POST_OUTPUT_FALLBACK_NONE );
 	CHECK( plan.predictedResult == GLX_POSTPROCESS_RESULT_GAMMA_BLIT );
-	CHECK( plan.nodeCount == 2 );
+	CHECK( plan.nodeCount == 3 );
 	CHECK( plan.nodes[0].kind == glx::PostNodeKind::BloomPrefinal );
 	CHECK( plan.nodes[1].kind == glx::PostNodeKind::GammaBlit );
+	CHECK( plan.nodes[2].kind == glx::PostNodeKind::Screenshot );
+
+	return true;
+}
+
+static rendererDisplayOutput_t TestDisplayOutputDefaults()
+{
+	rendererDisplayOutput_t output {};
+
+	output.valid = qtrue;
+	output.displayIndex = 1;
+	std::snprintf( output.videoDriver, sizeof( output.videoDriver ), "%s", "sdl" );
+	std::snprintf( output.displayName, sizeof( output.displayName ), "%s", "SDR Panel" );
+	output.nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	output.sdrWhiteNits = 203.0f;
+	output.hdrHeadroom = 1.0f;
+	output.maxLuminanceNits = 203.0f;
+	output.maxFullFrameLuminanceNits = 203.0f;
+	return output;
+}
+
+bool DisplayOutputStateHashTracksRuntimeHdrCapabilityChanges()
+{
+	rendererDisplayOutput_t sdr = TestDisplayOutputDefaults();
+	glx::GLX_RenderIR_SanitizeDisplayOutput( &sdr );
+	const unsigned int sdrHash = glx::GLX_RenderIR_HashDisplayOutput( sdr );
+	CHECK( sdrHash != 0u );
+	CHECK( glx::GLX_RenderIR_DisplayOutputChangeMask( sdr, sdr ) ==
+		glx::GLX_DISPLAY_OUTPUT_CHANGE_NONE );
+
+	rendererDisplayOutput_t jitter = sdr;
+	jitter.hdrHeadroom = 1.004f;
+	glx::GLX_RenderIR_SanitizeDisplayOutput( &jitter );
+	CHECK( glx::GLX_RenderIR_HashDisplayOutput( jitter ) == sdrHash );
+	CHECK( glx::GLX_RenderIR_DisplayOutputChangeMask( sdr, jitter ) ==
+		glx::GLX_DISPLAY_OUTPUT_CHANGE_NONE );
+
+	rendererDisplayOutput_t windowsHdr = sdr;
+	std::snprintf( windowsHdr.displayName, sizeof( windowsHdr.displayName ), "%s", "HDR Panel" );
+	windowsHdr.nativeBackend = ROUTPUT_BACKEND_WINDOWS_SCRGB;
+	windowsHdr.hdrEnabled = qtrue;
+	windowsHdr.hdrHeadroomValid = qtrue;
+	windowsHdr.hdrHeadroom = 4.0f;
+	windowsHdr.maxLuminanceNits = 812.0f;
+	windowsHdr.maxFullFrameLuminanceNits = 812.0f;
+	windowsHdr.iccProfileAvailable = qtrue;
+	windowsHdr.iccProfileBytes = 2048;
+	windowsHdr.windowsAdvancedColor = qtrue;
+	windowsHdr.windowsScRgbSupported = qtrue;
+	windowsHdr.windowsHdr10Supported = qtrue;
+	glx::GLX_RenderIR_SanitizeDisplayOutput( &windowsHdr );
+	const unsigned int windowsHash = glx::GLX_RenderIR_HashDisplayOutput( windowsHdr );
+	const unsigned int windowsMask = glx::GLX_RenderIR_DisplayOutputChangeMask(
+		sdr, windowsHdr );
+	CHECK( windowsHash != 0u );
+	CHECK( windowsHash != sdrHash );
+	CHECK( ( windowsMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_DISPLAY ) != 0u );
+	CHECK( ( windowsMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_BACKEND ) != 0u );
+	CHECK( ( windowsMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_HDR ) != 0u );
+	CHECK( ( windowsMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_HEADROOM ) != 0u );
+	CHECK( ( windowsMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_LUMINANCE ) != 0u );
+	CHECK( ( windowsMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_ICC ) != 0u );
+	CHECK( ( windowsMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_PLATFORM_CAPS ) != 0u );
+
+	rendererDisplayOutput_t appleEdr = sdr;
+	appleEdr.nativeBackend = ROUTPUT_BACKEND_MACOS_EDR;
+	appleEdr.hdrHeadroomValid = qtrue;
+	appleEdr.hdrHeadroom = 2.5f;
+	appleEdr.maxLuminanceNits = 507.5f;
+	appleEdr.maxFullFrameLuminanceNits = 507.5f;
+	appleEdr.macosEdrSupported = qtrue;
+	glx::GLX_RenderIR_SanitizeDisplayOutput( &appleEdr );
+	const unsigned int appleMask = glx::GLX_RenderIR_DisplayOutputChangeMask(
+		sdr, appleEdr );
+	CHECK( ( appleMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_BACKEND ) != 0u );
+	CHECK( ( appleMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_HEADROOM ) != 0u );
+	CHECK( ( appleMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_PLATFORM_CAPS ) != 0u );
+	CHECK( ( appleMask & glx::GLX_DISPLAY_OUTPUT_CHANGE_HDR ) == 0u );
+
+	rendererDisplayOutput_t bad = sdr;
+	bad.nativeBackend = ROUTPUT_BACKEND_MACOS_EDR;
+	bad.hdrHeadroomValid = qtrue;
+	bad.hdrHeadroom = std::numeric_limits<float>::quiet_NaN();
+	bad.sdrWhiteNits = -1.0f;
+	bad.maxLuminanceNits = std::numeric_limits<float>::infinity();
+	bad.iccProfileAvailable = qtrue;
+	bad.iccProfileBytes = -4;
+	glx::GLX_RenderIR_SanitizeDisplayOutput( &bad );
+	CHECK( bad.nativeBackend == ROUTPUT_BACKEND_SDR_SRGB );
+	CHECK( bad.hdrHeadroom == 1.0f );
+	CHECK( bad.hdrHeadroomValid == qfalse );
+	CHECK( bad.sdrWhiteNits == 80.0f );
+	CHECK( bad.maxLuminanceNits >= bad.sdrWhiteNits );
+	CHECK( bad.iccProfileAvailable == qfalse );
+	CHECK( bad.iccProfileBytes == 0 );
+
+	return true;
+}
+
+bool CaptureExportPoliciesStayExplicitAndSdrDefault()
+{
+	CHECK( glx::GLX_RenderIR_CaptureExportPolicyForCvar( 0 ) ==
+		glx::CaptureExportPolicy::SdrSrgb );
+	CHECK( glx::GLX_RenderIR_CaptureExportPolicyForCvar( 1 ) ==
+		glx::CaptureExportPolicy::HdrSceneLinear );
+	CHECK( glx::GLX_RenderIR_CaptureExportPolicyForCvar( 2 ) ==
+		glx::CaptureExportPolicy::HdrOutput );
+	CHECK( std::strcmp( glx::GLX_RenderIR_CaptureExportPolicyName(
+		glx::CaptureExportPolicy::SdrSrgb ), "sdr-srgb" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_CaptureExportPolicyName(
+		glx::CaptureExportPolicy::HdrSceneLinear ), "hdr-scene-linear" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_CaptureExportPolicyName(
+		glx::CaptureExportPolicy::HdrOutput ), "hdr-output" ) == 0 );
+	CHECK( glx::GLX_RenderIR_CaptureExportPolicyHdrAware(
+		glx::CaptureExportPolicy::SdrSrgb ) == qfalse );
+	CHECK( glx::GLX_RenderIR_CaptureExportPolicyHdrAware(
+		glx::CaptureExportPolicy::HdrSceneLinear ) == qtrue );
+	CHECK( glx::GLX_RenderIR_ResolveCaptureExportPolicy(
+		glx::CaptureExportPolicy::HdrSceneLinear ) ==
+		glx::CaptureExportPolicy::SdrSrgb );
+	CHECK( glx::GLX_RenderIR_ResolveCaptureExportPolicy(
+		glx::CaptureExportPolicy::HdrOutput ) ==
+		glx::CaptureExportPolicy::SdrSrgb );
+	CHECK( glx::GLX_RenderIR_CaptureExportPolicySupported(
+		glx::CaptureExportPolicy::SdrSrgb ) == qtrue );
+	CHECK( glx::GLX_RenderIR_CaptureExportPolicySupported(
+		glx::CaptureExportPolicy::HdrSceneLinear ) == qfalse );
+	CHECK( glx::GLX_RenderIR_CaptureExportPolicySupported(
+		glx::CaptureExportPolicy::HdrOutput ) == qfalse );
+
+	glx::OutputTransform display = glx::GLX_RenderIR_DefaultOutputTransform();
+	display.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
+	display.transfer = glx::OutputTransfer::Hdr10Pq;
+	display.hdrMode = 1;
+	display.precisionMode = 16;
+	display.toneMap = glx::ToneMapOperator::AcesFitted;
+	display.outputPrimaries = glx::OutputPrimaries::Bt2020;
+	display.selectedBackend = ROUTPUT_BACKEND_HDR10_PQ;
+	display.outputHardwareActive = qtrue;
+	display.maxOutputNits = 1000.0f;
+
+	glx::OutputTransform capture = glx::GLX_RenderIR_CaptureOutputTransform(
+		display, glx::CaptureExportPolicy::SdrSrgb );
+	CHECK( capture.transfer == glx::OutputTransfer::ScreenshotSrgb );
+	CHECK( capture.sceneColorSpace == glx::SceneColorSpace::DisplayReferredSdr );
+	CHECK( capture.toneMap == glx::ToneMapOperator::Legacy );
+	CHECK( capture.grade == glx::ColorGradeMode::None );
+	CHECK( capture.outputPrimaries == glx::OutputPrimaries::SrgbBt709 );
+	CHECK( capture.selectedBackend == ROUTPUT_BACKEND_SDR_SRGB );
+	CHECK( capture.outputHardwareActive == qfalse );
+	CHECK( capture.hdrMode == 0 );
+	CHECK( capture.precisionMode == 8 );
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( capture ) == qtrue );
+
+	glx::PostOutputPlanInputs inputs {};
+	inputs.tier = glx::RenderProductTier::GL46;
+	inputs.output = display;
+	inputs.captureRequest = glx::CaptureExportPolicy::HdrSceneLinear;
+	inputs.fboReady = qtrue;
+	inputs.programReady = qtrue;
+	inputs.framebufferFnsReady = qtrue;
+	inputs.outputContractValid = qtrue;
+	inputs.postShaderExecutorEnabled = qtrue;
+	inputs.screenshotMask = 1;
+	inputs.fboReadIndex = 2;
+
+	const glx::PostOutputPlan plan =
+		glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
+	CHECK( plan.captureRequest == glx::CaptureExportPolicy::HdrSceneLinear );
+	CHECK( plan.captureSelected == glx::CaptureExportPolicy::SdrSrgb );
+	CHECK( plan.captureHdrAware == qtrue );
+	CHECK( plan.captureSupported == qfalse );
+	CHECK( plan.nodeCount > 0 );
+	CHECK( plan.nodes[plan.nodeCount - 1].kind == glx::PostNodeKind::Screenshot );
+	CHECK( plan.nodes[plan.nodeCount - 1].output.transfer ==
+		glx::OutputTransfer::ScreenshotSrgb );
+	CHECK( plan.nodes[plan.nodeCount - 1].output.sceneColorSpace ==
+		glx::SceneColorSpace::DisplayReferredSdr );
 
 	return true;
 }
@@ -1728,10 +1939,23 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 	CHECK( NearlyEqual( glx::GLX_ColorMath_SrgbToLinear(
 		glx::GLX_ColorMath_LinearToSrgb( 0.18f ) ), 0.18f, 0.0005f ) );
 
-	CHECK( NearlyEqual( glx::GLX_ColorMath_ToneMapReinhard( 0.0f ), 0.0f, 0.000001f ) );
-	CHECK( NearlyEqual( glx::GLX_ColorMath_ToneMapReinhard( 1.0f ), 0.5f, 0.000001f ) );
-	CHECK( NearlyEqual( glx::GLX_ColorMath_ToneMapReinhard( 4.0f ), 0.8f, 0.000001f ) );
-	CHECK( glx::GLX_ColorMath_ToneMapReinhard( 8.0f ) > glx::GLX_ColorMath_ToneMapReinhard( 4.0f ) );
+	const float quietNaN = std::numeric_limits<float>::quiet_NaN();
+	const float positiveInf = std::numeric_limits<float>::infinity();
+	const float negativeInf = -std::numeric_limits<float>::infinity();
+	CHECK( glx::GLX_ColorMath_Clamp01( quietNaN ) == 0.0f );
+	CHECK( glx::GLX_ColorMath_Clamp01( positiveInf ) == 1.0f );
+	CHECK( glx::GLX_ColorMath_Clamp01( negativeInf ) == 0.0f );
+	CHECK( glx::GLX_ColorMath_LinearToSrgb( quietNaN ) == 0.0f );
+	CHECK( glx::GLX_ColorMath_ToneMapReinhardSimple( positiveInf ) == 1.0f );
+	CHECK( glx::GLX_ColorMath_ToneMapReinhard( positiveInf ) == 1.0f );
+	CHECK( glx::GLX_ColorMath_ToneMapAcesFitted( positiveInf ) == 1.0f );
+	CHECK( glx::GLX_ColorMath_ToneMapAcesFitted(
+		std::numeric_limits<float>::max() ) == 1.0f );
+
+	CHECK( NearlyEqual( glx::GLX_ColorMath_ToneMapReinhardSimple( 0.0f ), 0.0f, 0.000001f ) );
+	CHECK( NearlyEqual( glx::GLX_ColorMath_ToneMapReinhardSimple( 1.0f ), 0.5f, 0.000001f ) );
+	CHECK( NearlyEqual( glx::GLX_ColorMath_ToneMapReinhardSimple( 4.0f ), 0.8f, 0.000001f ) );
+	CHECK( glx::GLX_ColorMath_ToneMapReinhardSimple( 8.0f ) > glx::GLX_ColorMath_ToneMapReinhardSimple( 4.0f ) );
 
 	const float aces1 = glx::GLX_ColorMath_ToneMapAcesFitted( 1.0f );
 	const float aces2 = glx::GLX_ColorMath_ToneMapAcesFitted( 2.0f );
@@ -1751,8 +1975,19 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 
 	const glx::ColorMathVec3 red { 1.0f, 0.0f, 0.0f };
 	const glx::ColorMathVec3 green { 0.0f, 1.0f, 0.0f };
+	const glx::ColorMathVec3 blue { 0.0f, 0.0f, 1.0f };
+	const glx::ColorMathVec3 white { 1.0f, 1.0f, 1.0f };
 	const glx::ColorMathVec3 bt2020Red = glx::GLX_ColorMath_LinearSrgbToBt2020( red );
+	const glx::ColorMathVec3 p3Red = glx::GLX_ColorMath_LinearSrgbToDisplayP3( red );
+	const glx::ColorMathVec3 p3Green = glx::GLX_ColorMath_LinearSrgbToDisplayP3( green );
+	const glx::ColorMathVec3 p3Blue = glx::GLX_ColorMath_LinearSrgbToDisplayP3( blue );
+	const glx::ColorMathVec3 p3White = glx::GLX_ColorMath_LinearSrgbToDisplayP3( white );
 	CHECK( bt2020Red.r > bt2020Red.g && bt2020Red.r > bt2020Red.b );
+	CHECK( p3Red.r > p3Red.g && p3Red.r > p3Red.b );
+	CHECK( VecNearlyEqual( p3Red, { 0.8224621f, 0.0331941f, 0.0170827f }, 0.00001f ) );
+	CHECK( VecNearlyEqual( p3Green, { 0.1775380f, 0.9668059f, 0.0723974f }, 0.00001f ) );
+	CHECK( VecNearlyEqual( p3Blue, { 0.0f, 0.0f, 0.9105199f }, 0.00001f ) );
+	CHECK( VecNearlyEqual( p3White, white, 0.00001f ) );
 	CHECK( glx::GLX_ColorMath_Luma( green ) > glx::GLX_ColorMath_Luma( red ) );
 
 	const glx::ColorMathVec3 dim { 0.70f, 0.20f, 0.10f };
@@ -1763,6 +1998,42 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 	CHECK( NearlyEqual( glx::GLX_ColorMath_BloomWeight( threshold, 0, 0.75f, 1.0f, 0, 0.5f ),
 		0.5f, 0.000001f ) );
 	CHECK( glx::GLX_ColorMath_BloomMetric( green, 2 ) > glx::GLX_ColorMath_BloomMetric( red, 2 ) );
+	const glx::ColorMathVec3 flareDisplay { 0.5f, 0.25f, 0.0f };
+	const glx::ColorMathVec3 flareLegacy =
+		glx::GLX_ColorMath_FlareSceneColor( flareDisplay, true, true );
+	const glx::ColorMathVec3 flareLinear =
+		glx::GLX_ColorMath_FlareSceneColor( flareDisplay, true, false );
+	CHECK( VecNearlyEqual( flareLegacy, flareDisplay, 0.000001f ) );
+	CHECK( flareLinear.r < flareLegacy.r );
+	CHECK( flareLinear.g < flareLegacy.g );
+	CHECK( NearlyEqual( flareLinear.r, glx::GLX_ColorMath_SrgbToLinear( 0.5f ), 0.000001f ) );
+	CHECK( glx::GLX_ColorMath_SceneLinearBloomWeight(
+		{ 0.25f, 0.25f, 0.25f }, 2, 0.75f, 2.0f, 0.0f ) == 0.0f );
+	CHECK( glx::GLX_ColorMath_SceneLinearBloomWeight(
+		{ 0.50f, 0.50f, 0.50f }, 2, 0.75f, 2.0f, 0.0f ) == 1.0f );
+
+	glx::ColorMathExposureHistogram exposureHistogram {};
+	glx::GLX_ColorMath_ExposureHistogramReset( &exposureHistogram, -4.0f, 4.0f );
+	CHECK( glx::GLX_ColorMath_ExposureHistogramAddLuma( &exposureHistogram, 0.25f ) == true );
+	CHECK( glx::GLX_ColorMath_ExposureHistogramAddLuma( &exposureHistogram, 1.0f ) == true );
+	CHECK( glx::GLX_ColorMath_ExposureHistogramAddLuma( &exposureHistogram, 4.0f ) == true );
+	CHECK( exposureHistogram.sampleCount == 3u );
+	const glx::ColorMathExposureResult exposureP50 =
+		glx::GLX_ColorMath_ExposureHistogramPercentile( exposureHistogram,
+			50.0f, 0.18f, 0.125f, 8.0f );
+	const glx::ColorMathExposureResult exposureP90 =
+		glx::GLX_ColorMath_ExposureHistogramPercentile( exposureHistogram,
+			90.0f, 0.18f, 0.125f, 8.0f );
+	const glx::ColorMathExposureResult exposureAverage =
+		glx::GLX_ColorMath_ExposureSimpleAverage( exposureHistogram,
+			0.18f, 0.125f, 8.0f );
+	CHECK( exposureP50.valid == true );
+	CHECK( exposureP90.valid == true );
+	CHECK( exposureAverage.valid == true );
+	CHECK( exposureP50.measuredLuma > 0.9f && exposureP50.measuredLuma < 1.2f );
+	CHECK( exposureP90.measuredLuma > exposureP50.measuredLuma );
+	CHECK( exposureP90.exposureScale < exposureP50.exposureScale );
+	CHECK( exposureAverage.bin == -1 );
 
 	int lutSize = 0;
 	CHECK( glx::GLX_ColorMath_LutAtlasSize( 256, 16, &lutSize ) == true );
@@ -1794,11 +2065,14 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 
 	const int identitySize = 4;
 	static glx::ColorMathVec3 identityLut[identitySize * identitySize * identitySize];
+	static glx::ColorMathVec3 solidLut[identitySize * identitySize * identitySize];
 	const float identityScale = 4.0f;
 	for ( int y = 0; y < identitySize; y++ ) {
 		for ( int x = 0; x < identitySize * identitySize; x++ ) {
 			identityLut[y * identitySize * identitySize + x] =
 				glx::GLX_ColorMath_LutIdentityTexel( identitySize, x, y, identityScale );
+			solidLut[y * identitySize * identitySize + x] =
+				glx::ColorMathVec3 { 0.25f, 0.50f, 0.75f };
 		}
 	}
 	const glx::ColorMathVec3 lutSample { 1.5f, 2.5f, 0.5f };
@@ -1823,9 +2097,29 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 	output.toneMap = glx::ToneMapOperator::Legacy;
 	output.lutSize = static_cast<float>( identitySize );
 	output.lutScale = identityScale;
+	output.maxOutputNits = output.paperWhiteNits * identityScale;
+	const glx::PostOutputReferenceContract identityContract =
+		glx::GLX_PostOutputReference_BuildContract( output,
+			identitySize * identitySize, identitySize );
+	CHECK( identityContract.lutActive == true );
+	CHECK( identityContract.lutSize == identitySize );
 	CHECK( VecNearlyEqual( glx::GLX_PostOutputReference_Evaluate( lutSample, output,
 		identityLut, identitySize * identitySize, identitySize ),
 		lutSample, 0.00001f ) );
+	output.grade = glx::ColorGradeMode::Lut3D;
+	const glx::ColorMathVec3 solidSample = glx::GLX_PostOutputReference_Evaluate(
+		lutSample, output, solidLut, identitySize * identitySize, identitySize );
+	CHECK( VecNearlyEqual( solidSample, { 0.25f, 0.50f, 0.75f }, 0.00001f ) );
+	output.lutSize = static_cast<float>( identitySize + 1 );
+	const glx::PostOutputReferenceContract mismatchedContract =
+		glx::GLX_PostOutputReference_BuildContract( output,
+			identitySize * identitySize, identitySize );
+	CHECK( mismatchedContract.lutActive == false );
+	CHECK( VecNearlyEqual( glx::GLX_PostOutputReference_Evaluate( lutSample, output,
+		solidLut, identitySize * identitySize, identitySize ),
+		lutSample, 0.00001f ) );
+	output.grade = glx::ColorGradeMode::LiftGammaGainLut3D;
+	output.lutSize = static_cast<float>( identitySize );
 
 	output.grade = glx::ColorGradeMode::LiftGammaGain;
 	output.lutSize = 0.0f;
@@ -1837,7 +2131,7 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 
 	output.grade = glx::ColorGradeMode::None;
 	output.gradeLift[0] = 0.0f;
-	output.toneMap = glx::ToneMapOperator::Aces;
+	output.toneMap = glx::ToneMapOperator::AcesFitted;
 	output.transfer = glx::OutputTransfer::SdrSrgb;
 	const glx::ColorMathVec3 acesSdr = glx::GLX_PostOutputReference_Evaluate(
 		{ 1.0f, 0.5f, 0.25f }, output, nullptr, 0, 0 );
@@ -1845,7 +2139,56 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 	CHECK( acesSdr.r <= 1.0f );
 
 	output.toneMap = glx::ToneMapOperator::Legacy;
+	output.transfer = glx::OutputTransfer::LinearSrgb;
+	output.outputPrimaries = glx::OutputPrimaries::DisplayP3;
+	output.gamutMap = glx::GamutMapMode::None;
+	const glx::ColorMathVec3 p3Output = glx::GLX_PostOutputReference_Evaluate(
+		red, output, nullptr, 0, 0 );
+	CHECK( VecNearlyEqual( p3Output, glx::GLX_ColorMath_LinearSrgbToDisplayP3( red ),
+		0.00001f ) );
+	output.outputPrimaries = glx::OutputPrimaries::Bt2020;
+	const glx::ColorMathVec3 bt2020Output = glx::GLX_PostOutputReference_Evaluate(
+		red, output, nullptr, 0, 0 );
+	CHECK( VecNearlyEqual( bt2020Output, glx::GLX_ColorMath_LinearSrgbToBt2020( red ),
+		0.00001f ) );
+	output.outputPrimaries = glx::OutputPrimaries::Native;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	const glx::PostOutputReferenceContract rejectedNativeContract =
+		glx::GLX_PostOutputReference_BuildContract( output, 0, 0 );
+	CHECK( rejectedNativeContract.outputPrimaries == glx::OutputPrimaries::SrgbBt709 );
+	output.selectedBackend = ROUTPUT_BACKEND_LINUX_EXPERIMENTAL_HDR;
+	output.outputHardwareActive = qtrue;
+	output.outputExperimental = qtrue;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qtrue );
+	const glx::PostOutputReferenceContract nativeContract =
+		glx::GLX_PostOutputReference_BuildContract( output, 0, 0 );
+	CHECK( nativeContract.outputPrimaries == glx::OutputPrimaries::Native );
+	CHECK( VecNearlyEqual( glx::GLX_PostOutputReference_Evaluate( red, output,
+		nullptr, 0, 0 ), red, 0.00001f ) );
+	output.outputPrimaries = glx::OutputPrimaries::Unknown;
+	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
+	const glx::PostOutputReferenceContract unknownContract =
+		glx::GLX_PostOutputReference_BuildContract( output, 0, 0 );
+	CHECK( unknownContract.outputPrimaries == glx::OutputPrimaries::SrgbBt709 );
+	output.selectedBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	output.outputHardwareActive = qfalse;
+	output.outputExperimental = qfalse;
+	output.outputPrimaries = glx::OutputPrimaries::SrgbBt709;
+	output.gamutMap = glx::GamutMapMode::Clip;
+	CHECK( VecNearlyEqual( glx::GLX_PostOutputReference_Evaluate(
+		{ 2.0f, -0.5f, 0.25f }, output, nullptr, 0, 0 ),
+		{ 1.0f, 0.0f, 0.25f }, 0.00001f ) );
+	output.gamutMap = glx::GamutMapMode::CompressToOutput;
+	output.paperWhiteNits = 200.0f;
+	output.maxOutputNits = 1000.0f;
+	CHECK( VecNearlyEqual( glx::GLX_PostOutputReference_Evaluate(
+		{ 8.0f, 2.0f, 0.25f }, output, nullptr, 0, 0 ),
+		{ 5.0f, 2.0f, 0.25f }, 0.00001f ) );
+
+	output.toneMap = glx::ToneMapOperator::Legacy;
 	output.transfer = glx::OutputTransfer::Hdr10Pq;
+	output.outputPrimaries = glx::OutputPrimaries::Bt2020;
+	output.gamutMap = glx::GamutMapMode::CompressToOutput;
 	output.paperWhiteNits = 203.0f;
 	output.maxOutputNits = 1000.0f;
 	const glx::ColorMathVec3 hdrDim = glx::GLX_PostOutputReference_Evaluate(
@@ -1855,6 +2198,46 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 	CHECK( hdrBright.r > hdrDim.r );
 	CHECK( hdrBright.g > hdrDim.g );
 	CHECK( hdrBright.r <= 1.0f && hdrBright.g <= 1.0f && hdrBright.b <= 1.0f );
+
+	glx::OutputTransform pathological = glx::GLX_RenderIR_DefaultOutputTransform();
+	pathological.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
+	pathological.hdrMode = 1;
+	pathological.precisionMode = 16;
+	pathological.transfer = glx::OutputTransfer::LinearSrgb;
+	pathological.grade = glx::ColorGradeMode::LiftGammaGainLut3D;
+	pathological.gamutMap = glx::GamutMapMode::CompressToOutput;
+	pathological.outputPrimaries = glx::OutputPrimaries::DisplayP3;
+	pathological.exposure = quietNaN;
+	pathological.paperWhiteNits = quietNaN;
+	pathological.maxOutputNits = negativeInf;
+	pathological.displayHdrHeadroom = positiveInf;
+	pathological.gradeLift[0] = positiveInf;
+	pathological.gradeLift[1] = quietNaN;
+	pathological.gradeLift[2] = negativeInf;
+	pathological.gradeGamma[0] = 0.0f;
+	pathological.gradeGamma[1] = quietNaN;
+	pathological.gradeGamma[2] = positiveInf;
+	pathological.gradeGain[0] = positiveInf;
+	pathological.gradeGain[1] = quietNaN;
+	pathological.gradeGain[2] = -1.0f;
+	pathological.whitePointSourceKelvin = quietNaN;
+	pathological.whitePointTargetKelvin = positiveInf;
+	pathological.lutSize = quietNaN;
+	pathological.lutScale = negativeInf;
+	const glx::PostOutputReferenceContract sanitizedPathological =
+		glx::GLX_PostOutputReference_BuildContract( pathological, 0, 0 );
+	CHECK( NearlyEqual( sanitizedPathological.exposure, 1.0f, 0.00001f ) );
+	CHECK( NearlyEqual( sanitizedPathological.paperWhiteNits, 203.0f, 0.00001f ) );
+	CHECK( NearlyEqual( sanitizedPathological.maxOutputNits, 203.0f, 0.00001f ) );
+	CHECK( NearlyEqual( sanitizedPathological.displayHdrHeadroom, 1.0f, 0.00001f ) );
+	CHECK( sanitizedPathological.lutActive == false );
+	const glx::ColorMathVec3 pathologicalOut = glx::GLX_PostOutputReference_Evaluate(
+		{ quietNaN, positiveInf, negativeInf }, pathological, nullptr, 0, 0 );
+	CHECK( std::isfinite( pathologicalOut.r ) );
+	CHECK( std::isfinite( pathologicalOut.g ) );
+	CHECK( std::isfinite( pathologicalOut.b ) );
+	CHECK( pathologicalOut.r >= 0.0f && pathologicalOut.g >= 0.0f &&
+		pathologicalOut.b >= 0.0f );
 
 	return true;
 }
@@ -1867,6 +2250,7 @@ bool PostShaderPlansClassifyOutputTransformProgramShape()
 	CHECK( plan.key.sceneLinear == qfalse );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_LEGACY_GAMMA ) != 0u );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_SCENE_LINEAR ) == 0u );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM ) != 0u );
 	CHECK( plan.textureCount == 1 );
 	CHECK( plan.uniformVec4Count == 4 );
 	CHECK( plan.hash != 0u );
@@ -1875,7 +2259,7 @@ bool PostShaderPlansClassifyOutputTransformProgramShape()
 	output.hdrMode = 1;
 	output.precisionMode = 16;
 	output.transfer = glx::OutputTransfer::SdrSrgb;
-	output.toneMap = glx::ToneMapOperator::Aces;
+	output.toneMap = glx::ToneMapOperator::AcesFitted;
 	output.grade = glx::ColorGradeMode::LiftGammaGainLut3D;
 	output.whitePointTargetKelvin = 6000.0f;
 	output.lutSize = 16.0f;
@@ -1889,16 +2273,38 @@ bool PostShaderPlansClassifyOutputTransformProgramShape()
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_LIFT_GAMMA_GAIN ) != 0u );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_WHITE_POINT ) != 0u );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_LUT_3D ) != 0u );
-	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_TONEMAP_ACES ) != 0u );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_TONEMAP_ACES_FITTED ) != 0u );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_ENCODE_SRGB ) != 0u );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM ) != 0u );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_BLOOM_COMBINE ) == 0u );
 	CHECK( plan.textureCount == 2 );
 	CHECK( plan.uniformVec4Count == 12 );
 	const unsigned int acesLutHash = plan.hash;
 
+	glx::PostShaderPlan bloomPlan = glx::GLX_PostShader_BuildPlanForOutput( output, qtrue );
+	CHECK( bloomPlan.valid == qtrue );
+	CHECK( ( bloomPlan.featureMask & glx::GLX_POST_SHADER_FEATURE_BLOOM_COMBINE ) != 0u );
+	CHECK( bloomPlan.textureCount == 3 );
+	CHECK( bloomPlan.uniformVec4Count == 13 );
+	CHECK( bloomPlan.hash != acesLutHash );
+
+	glx::PostShaderPlan bloomPrefinalPlan =
+		glx::GLX_PostShader_BuildPlanForPass( output, qtrue, qfalse );
+	CHECK( bloomPrefinalPlan.valid == qtrue );
+	CHECK( ( bloomPrefinalPlan.featureMask & glx::GLX_POST_SHADER_FEATURE_BLOOM_COMBINE ) != 0u );
+	CHECK( ( bloomPrefinalPlan.featureMask & glx::GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM ) == 0u );
+	CHECK( bloomPrefinalPlan.textureCount == 2 );
+	CHECK( bloomPrefinalPlan.uniformVec4Count == 5 );
+
+	output.greyscale = 0.75f;
+	plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_GREYSCALE ) != 0u );
+	output.greyscale = 0.0f;
+
 	glx::OutputTransform exposureOnly = output;
 	exposureOnly.exposure = 1.5f;
 	CHECK( glx::GLX_PostShader_BuildPlan( exposureOnly ).hash == acesLutHash );
-	output.toneMap = glx::ToneMapOperator::Reinhard;
+	output.toneMap = glx::ToneMapOperator::ReinhardSimple;
 	CHECK( glx::GLX_PostShader_BuildPlan( output ).hash != acesLutHash );
 
 	output.toneMap = glx::ToneMapOperator::Legacy;
@@ -1912,8 +2318,34 @@ bool PostShaderPlansClassifyOutputTransformProgramShape()
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_ENCODE_HDR10_PQ ) != 0u );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_BT2020_OUTPUT ) != 0u );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_GAMUT_COMPRESS ) != 0u );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT ) == 0u );
 	CHECK( plan.textureCount == 1 );
+	CHECK( plan.uniformVec4Count == 6 );
+
+	output.transfer = glx::OutputTransfer::MacEdr;
+	output.outputPrimaries = glx::OutputPrimaries::DisplayP3;
+	output.gamutMap = glx::GamutMapMode::CompressToOutput;
+	plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( plan.valid == qtrue );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_DISPLAY_P3_OUTPUT ) != 0u );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT ) != 0u );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_GAMUT_COMPRESS ) != 0u );
 	CHECK( plan.uniformVec4Count == 5 );
+
+	output.gamutMap = glx::GamutMapMode::Clip;
+	plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( plan.valid == qtrue );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_GAMUT_CLIP ) != 0u );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_GAMUT_COMPRESS ) == 0u );
+
+	output.gamutMap = glx::GamutMapMode::CompressToOutput;
+	output.grade = glx::ColorGradeMode::Lut3D;
+	output.lutSize = 128.0f;
+	output.lutScale = 4.0f;
+	plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( plan.valid == qtrue );
+	CHECK( plan.key.lutActive == qfalse );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_LUT_3D ) == 0u );
 
 	output.precisionMode = 8;
 	CHECK( glx::GLX_PostShader_BuildPlan( output ).valid == qfalse );
@@ -1924,36 +2356,92 @@ bool PostShaderSourcesEmitDeterministicProgramShape()
 {
 	char vertex[glx::GLX_POST_SHADER_VERTEX_SOURCE_BYTES];
 	char fragment[glx::GLX_POST_SHADER_FRAGMENT_SOURCE_BYTES];
+	char modernVertex[glx::GLX_POST_SHADER_VERTEX_SOURCE_BYTES];
+	char modernFragment[glx::GLX_POST_SHADER_FRAGMENT_SOURCE_BYTES];
 	int vertexBytes = 0;
 	int fragmentBytes = 0;
+	int modernVertexBytes = 0;
+	int modernFragmentBytes = 0;
 
 	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
 	glx::PostShaderPlan plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( glx::GLX_PostShaderSource_TargetForTier(
+		glx::RenderProductTier::GL2X, 2, 1 ) == glx::PostShaderSourceTarget::Glsl120 );
+	CHECK( glx::GLX_PostShaderSource_TargetForTier(
+		glx::RenderProductTier::GL3X, 3, 0 ) == glx::PostShaderSourceTarget::Glsl130 );
+	CHECK( glx::GLX_PostShaderSource_TargetForTier(
+		glx::RenderProductTier::GL3X, 3, 2 ) == glx::PostShaderSourceTarget::Glsl150Compatibility );
+	CHECK( glx::GLX_PostShaderSource_TargetForTier(
+		glx::RenderProductTier::GL3X, 3, 3 ) == glx::PostShaderSourceTarget::Glsl330Compatibility );
+	CHECK( glx::GLX_PostShaderSource_TargetForTier(
+		glx::RenderProductTier::GL41, 4, 1 ) == glx::PostShaderSourceTarget::Glsl410Compatibility );
+	CHECK( glx::GLX_PostShaderSource_TargetForTier(
+		glx::RenderProductTier::GL46, 4, 6 ) == glx::PostShaderSourceTarget::Glsl410Compatibility );
 	CHECK( glx::GLX_PostShaderSource_WriteVertex( vertex, sizeof( vertex ), &vertexBytes ) == qtrue );
 	CHECK( glx::GLX_PostShaderSource_WriteFragment( plan, fragment, sizeof( fragment ), &fragmentBytes ) == qtrue );
 	CHECK( vertexBytes > 0 );
 	CHECK( fragmentBytes > 0 );
+	CHECK( std::strstr( vertex, "#version 120" ) != nullptr );
 	CHECK( std::strstr( vertex, "gl_MultiTexCoord0" ) != nullptr );
 	CHECK( std::strstr( vertex, "gl_ModelViewProjectionMatrix" ) != nullptr );
+	CHECK( std::strstr( fragment, "#version 120" ) != nullptr );
 	CHECK( std::strstr( fragment, "#define GLX_POST_LEGACY_GAMMA 1" ) != nullptr );
 	CHECK( std::strstr( fragment, "#define GLX_POST_SCENE_LINEAR 0" ) != nullptr );
 	CHECK( std::strstr( fragment, "#define GLX_POST_LUT_3D 0" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_OUTPUT_TRANSFORM 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_BLOOM_COMBINE 0" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_GAMUT_CLIP 0" ) != nullptr );
+	CHECK( std::strstr( fragment, "uniform vec4 u_OutputParams1" ) != nullptr );
+	CHECK( std::strstr( fragment, "glxFiniteOr" ) != nullptr );
+	CHECK( std::strstr( fragment, "glxExposure()" ) != nullptr );
+	CHECK( std::strstr( fragment, "glxApplyOutputPrimaries" ) != nullptr );
+	CHECK( std::strstr( fragment, "glxApplyGamutMap" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxEncodeTransfer" ) != nullptr );
+	CHECK( std::strstr( fragment, "uniform sampler2D u_Bloom" ) != nullptr );
 	CHECK( std::strstr( fragment, "uniform sampler2D u_ColorGradeLut" ) != nullptr );
 
 	const glx::PostShaderSourceSummary legacySummary =
 		glx::GLX_PostShaderSource_BuildSummary( plan );
 	CHECK( legacySummary.valid == qtrue );
 	CHECK( legacySummary.truncated == qfalse );
+	CHECK( legacySummary.target == glx::PostShaderSourceTarget::Glsl120 );
+	CHECK( legacySummary.targetVersion == 120 );
 	CHECK( legacySummary.sourceHash != 0u );
 	CHECK( legacySummary.vertexBytes == vertexBytes );
 	CHECK( legacySummary.fragmentBytes == fragmentBytes );
+
+	CHECK( glx::GLX_PostShaderSource_WriteVertex(
+		glx::PostShaderSourceTarget::Glsl410Compatibility, modernVertex,
+		sizeof( modernVertex ), &modernVertexBytes ) == qtrue );
+	CHECK( glx::GLX_PostShaderSource_WriteFragment( plan,
+		glx::PostShaderSourceTarget::Glsl410Compatibility, modernFragment,
+		sizeof( modernFragment ), &modernFragmentBytes ) == qtrue );
+	CHECK( modernVertexBytes > vertexBytes );
+	CHECK( modernFragmentBytes > fragmentBytes );
+	CHECK( std::strstr( modernVertex, "#version 410 compatibility" ) != nullptr );
+	CHECK( std::strstr( modernVertex, "out vec2 v_TexCoord" ) != nullptr );
+	CHECK( std::strstr( modernVertex, "gl_MultiTexCoord0" ) != nullptr );
+	CHECK( std::strstr( modernFragment, "#version 410 compatibility" ) != nullptr );
+	CHECK( std::strstr( modernFragment, "in vec2 v_TexCoord" ) != nullptr );
+	CHECK( std::strstr( modernFragment, "out vec4 glx_FragColor" ) != nullptr );
+	CHECK( std::strstr( modernFragment, "#define GLX_POST_SAMPLE2D texture" ) != nullptr );
+	CHECK( std::strstr( modernFragment, "glx_FragColor = vec4(glxFinalOutput(color), 1.0)" ) != nullptr );
+	const glx::PostShaderSourceSummary modernSummary =
+		glx::GLX_PostShaderSource_BuildSummary( plan,
+			glx::PostShaderSourceTarget::Glsl410Compatibility );
+	CHECK( modernSummary.valid == qtrue );
+	CHECK( modernSummary.truncated == qfalse );
+	CHECK( modernSummary.target == glx::PostShaderSourceTarget::Glsl410Compatibility );
+	CHECK( modernSummary.targetVersion == 410 );
+	CHECK( modernSummary.sourceHash != legacySummary.sourceHash );
+	CHECK( modernSummary.vertexBytes == modernVertexBytes );
+	CHECK( modernSummary.fragmentBytes == modernFragmentBytes );
 
 	output.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
 	output.hdrMode = 1;
 	output.precisionMode = 16;
 	output.transfer = glx::OutputTransfer::Hdr10Pq;
-	output.toneMap = glx::ToneMapOperator::Aces;
+	output.toneMap = glx::ToneMapOperator::AcesFitted;
 	output.grade = glx::ColorGradeMode::LiftGammaGainLut3D;
 	output.whitePointTargetKelvin = 6000.0f;
 	output.lutSize = 32.0f;
@@ -1966,17 +2454,21 @@ bool PostShaderSourcesEmitDeterministicProgramShape()
 	CHECK( std::strstr( fragment, "#define GLX_POST_LIFT_GAMMA_GAIN 1" ) != nullptr );
 	CHECK( std::strstr( fragment, "#define GLX_POST_WHITE_POINT 1" ) != nullptr );
 	CHECK( std::strstr( fragment, "#define GLX_POST_LUT_3D 1" ) != nullptr );
-	CHECK( std::strstr( fragment, "#define GLX_POST_TONEMAP_ACES 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_TONEMAP_ACES_FITTED 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_TONEMAP_ACES GLX_POST_TONEMAP_ACES_FITTED" ) != nullptr );
 	CHECK( std::strstr( fragment, "#define GLX_POST_ENCODE_HDR10_PQ 1" ) != nullptr );
 	CHECK( std::strstr( fragment, "#define GLX_POST_BT2020_OUTPUT 1" ) != nullptr );
 	CHECK( std::strstr( fragment, "#define GLX_POST_GAMUT_COMPRESS 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_OUTPUT_TRANSFORM 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "clamp(glxNonNegativeVec3(nits), 0.0, glxMaxOutput())" ) != nullptr );
+	CHECK( std::strstr( fragment, "glxPqEncode(color * glxPaperWhite())" ) != nullptr );
 	CHECK( std::strstr( fragment, "uniform sampler2D u_ColorGradeLut" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxApplyLiftGammaGain" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxApplyWhitePoint" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxSampleLutAtlas" ) != nullptr );
-	CHECK( std::strstr( fragment, "* u_LutParams.x" ) != nullptr );
-	CHECK( std::strstr( fragment, "vec4(clamp(color, 0.0, 1.0), 1.0)" ) != nullptr );
-	CHECK( std::strstr( fragment, "glxToneMapAces" ) != nullptr );
+	CHECK( std::strstr( fragment, "* lutScale" ) != nullptr );
+	CHECK( std::strstr( fragment, "vec4(glxFinalOutput(color), 1.0)" ) != nullptr );
+	CHECK( std::strstr( fragment, "glxToneMapAcesFitted" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxLinearSrgbToBt2020" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxPqEncode" ) != nullptr );
 
@@ -1986,6 +2478,31 @@ bool PostShaderSourcesEmitDeterministicProgramShape()
 	CHECK( hdrSummary.truncated == qfalse );
 	CHECK( hdrSummary.sourceHash != legacySummary.sourceHash );
 	CHECK( hdrSummary.fragmentBytes == fragmentBytes );
+
+	output.transfer = glx::OutputTransfer::MacEdr;
+	output.outputPrimaries = glx::OutputPrimaries::DisplayP3;
+	output.greyscale = 0.5f;
+	plan = glx::GLX_PostShader_BuildPlanForOutput( output, qtrue );
+	CHECK( glx::GLX_PostShaderSource_WriteFragment( plan, fragment, sizeof( fragment ), &fragmentBytes ) == qtrue );
+	CHECK( std::strstr( fragment, "#define GLX_POST_BLOOM_COMBINE 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_GREYSCALE 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_DISPLAY_P3_OUTPUT 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_HDR_HEADROOM_OUTPUT 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "GLX_POST_SAMPLE2D(u_Bloom" ) != nullptr );
+	CHECK( std::strstr( fragment, "glxApplyGreyscale" ) != nullptr );
+	CHECK( std::strstr( fragment, "glxLinearSrgbToDisplayP3" ) != nullptr );
+	CHECK( std::strstr( fragment, "clamp(color, 0.0, glxHeadroom())" ) != nullptr );
+
+	output.gamutMap = glx::GamutMapMode::Clip;
+	plan = glx::GLX_PostShader_BuildPlanForOutput( output, qfalse );
+	CHECK( glx::GLX_PostShaderSource_WriteFragment( plan, fragment, sizeof( fragment ), &fragmentBytes ) == qtrue );
+	CHECK( std::strstr( fragment, "#define GLX_POST_GAMUT_CLIP 1" ) != nullptr );
+	CHECK( std::strstr( fragment, "return glxSaturate(color)" ) != nullptr );
+
+	plan = glx::GLX_PostShader_BuildPlanForPass( output, qtrue, qfalse );
+	CHECK( glx::GLX_PostShaderSource_WriteFragment( plan, fragment, sizeof( fragment ), &fragmentBytes ) == qtrue );
+	CHECK( std::strstr( fragment, "#define GLX_POST_OUTPUT_TRANSFORM 0" ) != nullptr );
+	CHECK( std::strstr( fragment, "#define GLX_POST_BLOOM_COMBINE 1" ) != nullptr );
 
 	char tiny[32];
 	CHECK( glx::GLX_PostShaderSource_WriteFragment( plan, tiny, sizeof( tiny ), nullptr ) == qfalse );
@@ -2244,6 +2761,8 @@ int main()
 		{ "GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements", GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements },
 		{ "GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements", GL3XExecutorPolicyIsPerformanceAndAvoidsGL4OnlyRequirements },
 		{ "PostOutputPlansSeparatePlannedAndExecutableOwnership", PostOutputPlansSeparatePlannedAndExecutableOwnership },
+		{ "DisplayOutputStateHashTracksRuntimeHdrCapabilityChanges", DisplayOutputStateHashTracksRuntimeHdrCapabilityChanges },
+		{ "CaptureExportPoliciesStayExplicitAndSdrDefault", CaptureExportPoliciesStayExplicitAndSdrDefault },
 		{ "HdrColorMathReferencesCoverPipelineContracts", HdrColorMathReferencesCoverPipelineContracts },
 		{ "PostShaderPlansClassifyOutputTransformProgramShape", PostShaderPlansClassifyOutputTransformProgramShape },
 		{ "PostShaderSourcesEmitDeterministicProgramShape", PostShaderSourcesEmitDeterministicProgramShape },

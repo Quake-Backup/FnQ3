@@ -34,6 +34,18 @@ static	shaderStage_t	stages[MAX_SHADER_STAGES];
 static	shader_t		shader;
 static	texModInfo_t	texMods[MAX_SHADER_STAGES][TR_MAX_TEXMODS];
 
+static void ParseDepthFade( const char **text );
+static void ProcessDepthFade( void );
+
+const byte r_depthFadeScaleAndBias[DFT_COUNT] = {
+	0x00, // DFT_NONE
+	0x07, // DFT_BLEND: keep rgb, fade alpha to zero
+	0x08, // DFT_ADD: fade rgba to zero
+	0x78, // DFT_MULT: fade rgb to white, alpha to zero
+	0x00, // DFT_PMA
+	0x00  // DFT_TBD
+};
+
 #define FILE_HASH_SIZE		1024
 static	shader_t*		hashTable[FILE_HASH_SIZE];
 
@@ -2069,6 +2081,10 @@ static qboolean ParseShader( const char **text )
 				shader.clampTime = Q_atof( token );
 			}
 		}
+		else if ( !Q_stricmp( token, "q3map_depthFade" ) ) {
+			ParseDepthFade( text );
+			continue;
+		}
 		// skip stuff that only the q3map needs
 		else if ( !Q_stricmpn( token, "q3map", 5 ) ) {
 			SkipRestOfLine( text );
@@ -3202,6 +3218,176 @@ static void InitShader( const char *name, int lightmapIndex ) {
 	}
 }
 
+static void ParseDepthFade( const char **text )
+{
+	const char *token;
+	float scale, bias;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		ri.Printf( PRINT_WARNING, "WARNING: missing scale for q3map_depthFade in shader '%s'\n", shader.name );
+		SkipRestOfLine( text );
+		return;
+	}
+	scale = Q_atof( token );
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		ri.Printf( PRINT_WARNING, "WARNING: missing bias for q3map_depthFade in shader '%s'\n", shader.name );
+		SkipRestOfLine( text );
+		return;
+	}
+	bias = Q_atof( token );
+
+	SkipRestOfLine( text );
+
+	if ( scale <= 0.0f ) {
+		ri.Printf( PRINT_WARNING, "WARNING: q3map_depthFade scale must be greater than zero in shader '%s'\n", shader.name );
+		return;
+	}
+
+	shader.dfType = DFT_TBD;
+	shader.dfInvDist = 1.0f / scale;
+	shader.dfBias = bias;
+}
+
+static qboolean IsDepthFadeWritable( const shaderStage_t *stage )
+{
+	return ( stage->stateBits & GLS_DEPTHMASK_TRUE ) ? qfalse : qtrue;
+}
+
+static qboolean IsAdditiveBlendDepthFade( void )
+{
+	int i;
+
+	for ( i = 0; i < shader.numUnfoggedPasses; i++ ) {
+		const unsigned blend = stages[i].stateBits & GLS_BLEND_BITS;
+		if ( !stages[i].active || !IsDepthFadeWritable( &stages[i] ) )
+			return qfalse;
+		if ( ( blend & GLS_DSTBLEND_BITS ) != GLS_DSTBLEND_ONE )
+			return qfalse;
+		switch ( blend & GLS_SRCBLEND_BITS ) {
+		case GLS_SRCBLEND_ONE:
+		case GLS_SRCBLEND_SRC_ALPHA:
+		case GLS_SRCBLEND_ONE_MINUS_SRC_ALPHA:
+			break;
+		default:
+			return qfalse;
+		}
+	}
+
+	return qtrue;
+}
+
+static qboolean IsNormalBlendDepthFade( void )
+{
+	int i;
+
+	for ( i = 0; i < shader.numUnfoggedPasses; i++ ) {
+		const unsigned blend = stages[i].stateBits & GLS_BLEND_BITS;
+		if ( !stages[i].active || !IsDepthFadeWritable( &stages[i] ) )
+			return qfalse;
+		if ( blend != ( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA ) )
+			return qfalse;
+	}
+
+	return qtrue;
+}
+
+static qboolean IsMultiplicativeBlendDepthFade( void )
+{
+	int i;
+
+	for ( i = 0; i < shader.numUnfoggedPasses; i++ ) {
+		const unsigned blend = stages[i].stateBits & GLS_BLEND_BITS;
+		if ( !stages[i].active || !IsDepthFadeWritable( &stages[i] ) )
+			return qfalse;
+		if ( blend != ( GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO ) &&
+			 blend != ( GLS_SRCBLEND_ZERO | GLS_DSTBLEND_SRC_COLOR ) )
+			return qfalse;
+	}
+
+	return qtrue;
+}
+
+static qboolean IsPremultipliedAlphaBlendDepthFade( void )
+{
+	int i;
+
+	for ( i = 0; i < shader.numUnfoggedPasses; i++ ) {
+		const unsigned blend = stages[i].stateBits & GLS_BLEND_BITS;
+		if ( !stages[i].active || !IsDepthFadeWritable( &stages[i] ) )
+			return qfalse;
+		if ( blend != ( GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA ) )
+			return qfalse;
+	}
+
+	return qtrue;
+}
+
+static void ProcessDepthFade( void )
+{
+	static const struct {
+		const char *name;
+		float distance;
+		float bias;
+	} defaultDepthFade[] = {
+		{ "rocketExplosion", 24.0f, 0.0f },
+		{ "rocketExplosionNPM", 24.0f, 0.0f },
+		{ "grenadeExplosion", 24.0f, 0.0f },
+		{ "grenadeExplosionNPM", 24.0f, 0.0f },
+		{ "grenadeCPMA_NPM", 24.0f, 0.0f },
+		{ "grenadeCPMA", 24.0f, 0.0f },
+		{ "bloodTrail", 24.0f, 0.0f },
+		{ "sprites/particleSmoke", 24.0f, 0.0f },
+		{ "plasmaExplosion", 8.0f, 4.0f },
+		{ "plasmaExplosionNPM", 8.0f, 4.0f },
+		{ "plasmanewExplosion", 8.0f, 4.0f },
+		{ "plasmanewExplosionNPM", 8.0f, 4.0f },
+		{ "bulletExplosion", 8.0f, 4.0f },
+		{ "bulletExplosionNPM", 8.0f, 4.0f },
+		{ "railExplosion", 8.0f, 0.0f },
+		{ "railExplosionNPM", 8.0f, 0.0f },
+		{ "bfgExplosion", 8.0f, 0.0f },
+		{ "bfgExplosionNPM", 8.0f, 0.0f },
+		{ "bloodExplosion", 8.0f, 0.0f },
+		{ "bloodExplosionNPM", 8.0f, 0.0f },
+		{ "smokePuff", 8.0f, 0.0f },
+		{ "smokePuffNPM", 8.0f, 0.0f },
+		{ "shotgunSmokePuff", 8.0f, 0.0f },
+		{ "shotgunSmokePuffNPM", 8.0f, 0.0f }
+	};
+	int i;
+
+	if ( shader.dfType == DFT_NONE ) {
+		for ( i = 0; i < ARRAY_LEN( defaultDepthFade ); i++ ) {
+			if ( !Q_stricmp( shader.name, defaultDepthFade[i].name ) ) {
+				shader.dfType = DFT_TBD;
+				shader.dfInvDist = 1.0f / defaultDepthFade[i].distance;
+				shader.dfBias = defaultDepthFade[i].bias;
+				break;
+			}
+		}
+	}
+
+	if ( shader.dfType != DFT_TBD )
+		return;
+
+	shader.dfType = DFT_NONE;
+
+	if ( !r_depthFade->integer || shader.sort <= SS_OPAQUE || shader.numUnfoggedPasses <= 0 )
+		return;
+
+	if ( IsAdditiveBlendDepthFade() )
+		shader.dfType = DFT_ADD;
+	else if ( IsNormalBlendDepthFade() )
+		shader.dfType = DFT_BLEND;
+	else if ( IsMultiplicativeBlendDepthFade() )
+		shader.dfType = DFT_MULT;
+	else if ( IsPremultipliedAlphaBlendDepthFade() )
+		shader.dfType = DFT_PMA;
+}
+
 /*
 =========================
 FinishShader
@@ -3375,6 +3561,8 @@ static shader_t *FinishShader( void ) {
 	// compute number of passes
 	//
 	shader.numUnfoggedPasses = stage;
+
+	ProcessDepthFade();
 
 	FindLightingStages();
 

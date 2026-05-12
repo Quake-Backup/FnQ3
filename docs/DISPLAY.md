@@ -76,6 +76,11 @@ These settings control the render path behind the display output.
   - `-1`: Debug 4-bit storage for deliberate banding tests.
   - `8`: Force 8-bit storage.
   - `16`: Force 16-bit normalized storage for SDR/debug testing; `r_hdr 1` still uses `RGBA16F`.
+- `r_hdrBloomFormat`: Controls scene-linear HDR bloom/extract intermediate storage without changing the main scene target.
+  - `0`: Automatic. RGB bloom tries `R11G11B10F` and falls back to `RGBA16F` if the driver rejects the FBO.
+  - `1`: Force `RGBA16F` bloom intermediates for conservative parity.
+  - `2`: Prefer `R11G11B10F` for positive RGB bloom intermediates.
+  - `3`: Prefer `RG16F` for positive two-channel intermediates; current RGB bloom safely falls back.
 - `r_srgbTextures`: Allows authored color textures to use hardware sRGB decode in the scene-linear `r_hdr 1` path. Lightmaps, fog, dynamic-light masks, and data textures remain linear/data.
 - `r_framebufferSRGB`: Allows `GL_FRAMEBUFFER_SRGB` only when the draw target itself is sRGB-encoded. The current OpenGL/GLx SDR final shader keeps it disabled because the shader already writes SDR sRGB output.
 - `r_outputBackend`: Selects the final hardware output backend.
@@ -87,6 +92,7 @@ These settings control the render path behind the display output.
   - `5`: Request Linux experimental HDR telemetry/prototype output, gated by `r_outputAllowExperimentalLinuxHDR` plus explicit SDL compositor/protocol HDR checks.
 - `r_outputAllowExperimentalLinuxHDR`: Allows the Linux experimental HDR telemetry/prototype backend only when the platform reports HDR headroom and an explicit compositor/protocol path. Leave this disabled unless you are validating a known HDR-capable Wayland path.
 - On SDR output, GLx treats paper white as the max output reference for the final transform. HDR-only max-luminance headroom is used only when a hardware HDR/EDR backend is actually active.
+- Output primaries are explicit in the GLx final transform. SDR sRGB and Windows scRGB use sRGB/BT.709 primaries, HDR10/PQ uses BT.2020, and macOS EDR uses Display P3. The Linux experimental HDR path is the only native-primaries state: it performs no primaries matrix and expects the compositor/protocol path to own native colorimetry. Unknown primaries are not selectable output states.
 - `r_ext_multisample`: Geometry-edge anti-aliasing. The practical values are `0`, `2`, `4`, `6`, and `8`.
 - `r_ext_supersample`: Enables supersample anti-aliasing.
 - `r_renderWidth` and `r_renderHeight`: Internal render resolution when `r_renderScale > 0`.
@@ -121,9 +127,23 @@ These settings affect the rendered scene itself rather than the window mode.
 - `r_gamma`: Gamma correction factor. This is one of the first settings to check if the whole frame looks too dark or too washed out.
 - `r_tonemap`: Final-pass tone scale for `r_hdr 1`.
   - `0`: Legacy gamma/overbright behavior.
-  - `1`: Reinhard tone mapping.
-  - `2`: ACES fitted filmic curve.
+  - `1`: Simple Reinhard, the per-channel `x / (1 + x)` curve. Existing configs that referred to this as `Reinhard` keep the same behavior for this release cycle.
+  - `2`: ACES-fitted filmic curve. This is the common fitted approximation, not the official ACES output transform; existing configs that referred to it as `ACES` keep the same behavior for this release cycle.
 - `r_tonemapExposure`: Exposure multiplier for scene-linear tone mapping and bloom extraction.
+- `r_autoExposure`: Automatic exposure for the shared OpenGL postprocess tone-map path.
+  - `0`: Disabled.
+  - `1`: Time-constant adaptation. This is the default; it updates from elapsed render time, clamps exposure inputs, and uses the deterministic luminance reduction path.
+  - `2`: Legacy parity mode using the old frame-cadenced adaptation and GL_LINEAR reduction behavior.
+  - `3`: Modern-tier histogram percentile reduction. This is opt-in; it carries low/median/high percentile luminance through the reduction chain on floating-point targets and falls back to mode `1` on older fixed-point tiers.
+- `r_glxAutoExposure`: GLx scene-linear auto-exposure reduction.
+  - `0`: Manual exposure from `r_tonemapExposure`. This is the default.
+  - `1`: Tiered automatic mode: histogram percentile on modern post/output tiers, simple-average fallback on older tiers. The selected algorithm is reported by `glxpostprocess` and compact GLx diagnostics.
+  - `2`: Force the simple-average fallback.
+  - `3`: Force histogram percentile on modern tiers, with conservative fallback when the tier cannot support it.
+- `r_glxAutoExposurePercentile`: Percentile used by the GLx histogram path. Default `80`.
+- `r_glxAutoExposureTargetLuma`: Scene-linear luminance target for GLx auto exposure. Default `0.18`.
+- `r_glxAutoExposureMin` / `r_glxAutoExposureMax`: Clamp the resolved GLx exposure. Defaults `0.125` and `8.0`.
+- `r_glxAutoExposureAdapt`: Per-frame blend factor for GLx exposure changes. Default `0.15`; `1` applies the current reduction immediately.
 - `r_colorGrade`: Scene-linear grading stage for `r_hdr 1`.
   - `0`: Disabled. This is the conservative default and preserves the compatibility image.
   - `1`: Lift/gamma/gain plus white-point adaptation.
@@ -204,6 +224,7 @@ These settings are available in both renderers.
   - `1`: Multiply the color by itself for a more aggressive highlight push.
   - `2`: Multiply the color by its luma for a cleaner brightness-weighted result.
 - `r_bloom_intensity`: Final bloom blend strength.
+- `r_flareSceneLinear`: In the `r_hdr 1` scene-linear path, flare vertex colors are decoded to linear RGB before bloom extraction. Set this to `0` only when comparing against the legacy display-referred flare behavior.
 
 Recommended tuning order:
 
@@ -337,6 +358,7 @@ Use `vid_restart` after changes to:
 - `r_renderWidth`, `r_renderHeight`, `r_renderScale`
 - `r_ext_supersample`
 - OpenGL or GLx `r_bloom_passes`
+- OpenGL or GLx `r_hdrBloomFormat`
 - Vulkan `r_bloom`
 
 Settings that are usually safe to tune live:

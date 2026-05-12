@@ -574,6 +574,10 @@ static void record_image_layout_transition( VkCommandBuffer command_buffer, VkIm
 			src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 			barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
 			break;
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+			src_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+			barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+			break;
 		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
 			src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 			barrier.srcAccessMask = VK_ACCESS_NONE;
@@ -1506,7 +1510,7 @@ static void vk_create_render_passes( void )
 	attachments[1].samples = vkSamples;
 	attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // Need empty depth buffer before use
 	attachments[1].stencilLoadOp = glConfig.stencilBits ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	if ( r_bloom->integer ) {
+	if ( r_bloom->integer || vk_depth_fade_supported() ) {
 		attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE; // keep it for post-bloom pass
 		attachments[1].stencilStoreOp = glConfig.stencilBits ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
 	} else {
@@ -1589,6 +1593,12 @@ static void vk_create_render_passes( void )
 		VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.main ) );
 		SET_OBJECT_NAME( vk.render_pass.main, "render pass - main", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
 
+		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		attachments[1].stencilLoadOp = glConfig.stencilBits ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.main_load ) );
+		SET_OBJECT_NAME( vk.render_pass.main_load, "render pass - main load", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
+
 		return;
 	}
 
@@ -1613,6 +1623,15 @@ static void vk_create_render_passes( void )
 
 	VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.main ) );
 	SET_OBJECT_NAME( vk.render_pass.main, "render pass - main", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
+
+	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	attachments[1].stencilLoadOp = glConfig.stencilBits ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	if ( vk.msaaActive ) {
+		attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	}
+	VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.main_load ) );
+	SET_OBJECT_NAME( vk.render_pass.main_load, "render pass - main load", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
 
 	if ( r_bloom->integer ) {
 
@@ -3611,6 +3630,36 @@ void vk_update_attachment_descriptors( void ) {
 			}
 		}
 	}
+
+	if ( vk.depth_fade_image_view && vk.depth_fade_descriptor )
+	{
+		VkDescriptorImageInfo info;
+		VkWriteDescriptorSet desc;
+		Vk_Sampler_Def sd;
+
+		Com_Memset( &sd, 0, sizeof( sd ) );
+		sd.gl_mag_filter = sd.gl_min_filter = GL_NEAREST;
+		sd.address_mode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sd.max_lod_1_0 = qtrue;
+		sd.noAnisotropy = qtrue;
+
+		info.sampler = vk_find_sampler( &sd );
+		info.imageView = vk.depth_fade_image_view;
+		info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		desc.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		desc.dstSet = vk.depth_fade_descriptor;
+		desc.dstBinding = 0;
+		desc.dstArrayElement = 0;
+		desc.descriptorCount = 1;
+		desc.pNext = NULL;
+		desc.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		desc.pImageInfo = &info;
+		desc.pBufferInfo = NULL;
+		desc.pTexelBufferView = NULL;
+
+		vk_update_descriptor_sets( 1, &desc );
+	}
 }
 
 
@@ -3682,6 +3731,20 @@ void vk_init_descriptors( void )
 
 		alloc.descriptorSetCount = 1;
 		VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.screenMap.color_descriptor ) ); // screenmap
+
+		vk_update_attachment_descriptors();
+	}
+
+	if ( vk.depth_fade_image_view )
+	{
+		alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		alloc.pNext = NULL;
+		alloc.descriptorPool = vk.descriptor_pool;
+		alloc.descriptorSetCount = 1;
+		alloc.pSetLayouts = &vk.set_layout_sampler;
+
+		VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.depth_fade_descriptor ) );
+		SET_OBJECT_NAME( vk.depth_fade_descriptor, "depth fade descriptor", VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
 
 		vk_update_attachment_descriptors();
 	}
@@ -4917,8 +4980,11 @@ static void create_depth_attachment( uint32_t width, uint32_t height, VkSampleCo
 	VkImageCreateInfo create_desc;
 	VkMemoryRequirements memory_requirements;
 	VkImageAspectFlags image_aspect_flags;
+	qboolean depthFadeSource;
 
 	// create depth image
+	depthFadeSource = ( image == &vk.depth_image && vk_depth_fade_supported() );
+
 	create_desc.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	create_desc.pNext = NULL;
 	create_desc.flags = 0;
@@ -4932,7 +4998,10 @@ static void create_depth_attachment( uint32_t width, uint32_t height, VkSampleCo
 	create_desc.samples = samples;
 	create_desc.tiling = VK_IMAGE_TILING_OPTIMAL;
 	create_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-	if ( allowTransient ) {
+	if ( depthFadeSource ) {
+		create_desc.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	}
+	if ( allowTransient && !depthFadeSource ) {
 		create_desc.usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
 	}
 	create_desc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -4949,6 +5018,37 @@ static void create_depth_attachment( uint32_t width, uint32_t height, VkSampleCo
 	vk_get_image_memory_erquirements( *image, &memory_requirements );
 
 	vk_add_attachment_desc( *image, image_view, create_desc.usage, &memory_requirements, vk.depth_format, image_aspect_flags, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL );
+}
+
+
+static void create_depth_fade_attachment( uint32_t width, uint32_t height, VkImage *image, VkImageView *image_view )
+{
+	VkImageCreateInfo create_desc;
+	VkMemoryRequirements memory_requirements;
+
+	create_desc.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	create_desc.pNext = NULL;
+	create_desc.flags = 0;
+	create_desc.imageType = VK_IMAGE_TYPE_2D;
+	create_desc.format = vk.depth_format;
+	create_desc.extent.width = width;
+	create_desc.extent.height = height;
+	create_desc.extent.depth = 1;
+	create_desc.mipLevels = 1;
+	create_desc.arrayLayers = 1;
+	create_desc.samples = VK_SAMPLE_COUNT_1_BIT;
+	create_desc.tiling = VK_IMAGE_TILING_OPTIMAL;
+	create_desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+	create_desc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	create_desc.queueFamilyIndexCount = 0;
+	create_desc.pQueueFamilyIndices = NULL;
+	create_desc.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+	VK_CHECK( qvkCreateImage( vk.device, &create_desc, NULL, image ) );
+
+	vk_get_image_memory_erquirements( *image, &memory_requirements );
+
+	vk_add_attachment_desc( *image, image_view, create_desc.usage, &memory_requirements, vk.depth_format, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL );
 }
 
 
@@ -5022,6 +5122,10 @@ static void vk_create_attachments( void )
 	create_depth_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples, &vk.depth_image, &vk.depth_image_view,
 		(vk.fboActive && r_bloom->integer) ? qfalse : qtrue );
 
+	if ( vk_depth_fade_supported() ) {
+		create_depth_fade_attachment( glConfig.vidWidth, glConfig.vidHeight, &vk.depth_fade_image, &vk.depth_fade_image_view );
+	}
+
 	vk_alloc_attachments();
 
 	for ( i = 0; i < vk.image_memory_count; i++ )
@@ -5031,6 +5135,8 @@ static void vk_create_attachments( void )
 
 	SET_OBJECT_NAME( vk.depth_image, "depth attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT );
 	SET_OBJECT_NAME( vk.depth_image_view, "depth attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
+	SET_OBJECT_NAME( vk.depth_fade_image, "depth fade attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT );
+	SET_OBJECT_NAME( vk.depth_fade_image_view, "depth fade attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
 
 	SET_OBJECT_NAME( vk.color_image, "color attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT );
 	SET_OBJECT_NAME( vk.color_image_view, "color attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
@@ -5071,6 +5177,10 @@ static void vk_create_framebuffers( void )
 			VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.main[n] ) );
 
 			SET_OBJECT_NAME( vk.framebuffers.main[n], va( "framebuffer - main %i", n ), VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
+
+			desc.renderPass = vk.render_pass.main_load;
+			VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.main_load[n] ) );
+			SET_OBJECT_NAME( vk.framebuffers.main_load[n], va( "framebuffer - main load %i", n ), VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
 		}
 		else
 		{
@@ -5088,10 +5198,15 @@ static void vk_create_framebuffers( void )
 				}
 				VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.main[n] ) );
 				SET_OBJECT_NAME( vk.framebuffers.main[n], "framebuffer - main", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
+
+				desc.renderPass = vk.render_pass.main_load;
+				VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.main_load[n] ) );
+				SET_OBJECT_NAME( vk.framebuffers.main_load[n], "framebuffer - main load", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
 			}
 			else
 			{
 				vk.framebuffers.main[n] = vk.framebuffers.main[0];
+				vk.framebuffers.main_load[n] = vk.framebuffers.main_load[0];
 			}
 
 			// gamma correction
@@ -5317,6 +5432,12 @@ static void vk_destroy_framebuffers( void ) {
 				qvkDestroyFramebuffer( vk.device, vk.framebuffers.main[n], NULL );
 			}
 			vk.framebuffers.main[n] = VK_NULL_HANDLE;
+		}
+		if ( vk.framebuffers.main_load[n] != VK_NULL_HANDLE ) {
+			if ( !vk.fboActive || n == 0 ) {
+				qvkDestroyFramebuffer( vk.device, vk.framebuffers.main_load[n], NULL );
+			}
+			vk.framebuffers.main_load[n] = VK_NULL_HANDLE;
 		}
 		if ( vk.framebuffers.gamma[n] != VK_NULL_HANDLE ) {
 			qvkDestroyFramebuffer( vk.device, vk.framebuffers.gamma[n], NULL );
@@ -5714,7 +5835,7 @@ void vk_initialize( void )
 		uint32_t i, maxSets;
 
 		pool_size[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		pool_size[0].descriptorCount = MAX_DRAWIMAGES + 1 + 1 + 1 + VK_NUM_BLOOM_PASSES * 2; // color, screenmap, bloom descriptors
+		pool_size[0].descriptorCount = MAX_DRAWIMAGES + 1 + 1 + 1 + 1 + VK_NUM_BLOOM_PASSES * 2; // color, screenmap, depth fade, bloom descriptors
 
 		pool_size[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
 		pool_size[1].descriptorCount = NUM_COMMAND_BUFFERS;
@@ -5765,6 +5886,7 @@ void vk_initialize( void )
 		set_layouts[2] = vk.set_layout_sampler; // lightmap / fog-only
 		set_layouts[3] = vk.set_layout_sampler; // blend
 		set_layouts[4] = vk.set_layout_sampler; // collapsed fog texture
+		set_layouts[5] = vk.set_layout_sampler; // depth fade texture
 		desc.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		desc.pNext = NULL;
 		desc.flags = 0;
@@ -5918,6 +6040,7 @@ static void vk_destroy_attachments( void )
 	vk_destroy_image_and_view( &vk.color_image, &vk.color_image_view );
 	vk_destroy_image_and_view( &vk.msaa_image, &vk.msaa_image_view );
 	vk_destroy_image_and_view( &vk.depth_image, &vk.depth_image_view );
+	vk_destroy_image_and_view( &vk.depth_fade_image, &vk.depth_fade_image_view );
 	vk_destroy_image_and_view( &vk.screenMap.color_image, &vk.screenMap.color_image_view );
 	vk_destroy_image_and_view( &vk.screenMap.color_image_msaa, &vk.screenMap.color_image_view_msaa );
 	vk_destroy_image_and_view( &vk.screenMap.depth_image, &vk.screenMap.depth_image_view );
@@ -5938,6 +6061,11 @@ static void vk_destroy_render_passes( void )
 	if ( vk.render_pass.main != VK_NULL_HANDLE ) {
 		qvkDestroyRenderPass( vk.device, vk.render_pass.main, NULL );
 		vk.render_pass.main = VK_NULL_HANDLE;
+	}
+
+	if ( vk.render_pass.main_load != VK_NULL_HANDLE ) {
+		qvkDestroyRenderPass( vk.device, vk.render_pass.main_load, NULL );
+		vk.render_pass.main_load = VK_NULL_HANDLE;
 	}
 
 	if ( vk.render_pass.bloom_extract != VK_NULL_HANDLE ) {
@@ -7286,8 +7414,8 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	VkShaderModule *vs_module = NULL;
 	VkShaderModule *fs_module = NULL;
 	//int32_t vert_spec_data[1]; // clippping
-	floatint_t frag_spec_data[11]; // 0:alpha-test-func, 1:alpha-test-value, 2:depth-fragment, 3:alpha-to-coverage, 4:color_mode, 5:abs_light, 6:multitexture mode, 7:discard mode, 8: ident.color, 9 - ident.alpha, 10 - acff
-	VkSpecializationMapEntry spec_entries[12];
+	floatint_t frag_spec_data[12]; // 0:alpha-test-func, 1:alpha-test-value, 2:depth-fragment, 3:alpha-to-coverage, 4:color_mode, 5:abs_light, 6:multitexture mode, 7:discard mode, 8: ident.color, 9 - ident.alpha, 10 - acff, 11 - depth fade
+	VkSpecializationMapEntry spec_entries[13];
 	//VkSpecializationInfo vert_spec_info;
 	VkSpecializationInfo frag_spec_info;
 	VkPipelineVertexInputStateCreateInfo vertex_input_state;
@@ -7644,6 +7772,7 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	} else {
 		frag_spec_data[10].i = 0;
 	}
+	frag_spec_data[11].i = def->depth_fade ? 1 : 0;
 
 	//
 	// vertex module specialization data
@@ -7709,9 +7838,13 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	spec_entries[11].offset = 10 * sizeof( int32_t );
 	spec_entries[11].size = sizeof( int32_t );
 
-	frag_spec_info.mapEntryCount = 11;
+	spec_entries[12].constantID = 11; // depth fade
+	spec_entries[12].offset = 11 * sizeof( int32_t );
+	spec_entries[12].size = sizeof( int32_t );
+
+	frag_spec_info.mapEntryCount = 12;
 	frag_spec_info.pMapEntries = spec_entries + 1;
-	frag_spec_info.dataSize = sizeof( int32_t ) * 11;
+	frag_spec_info.dataSize = sizeof( int32_t ) * 12;
 	frag_spec_info.pData = &frag_spec_data[0];
 	shader_stages[1].pSpecializationInfo = &frag_spec_info;
 
@@ -8975,6 +9108,9 @@ static const char *vk_render_pass_label( VkRenderPass renderPass )
 	if ( renderPass == vk.render_pass.main ) {
 		return "main render pass";
 	}
+	if ( renderPass == vk.render_pass.main_load ) {
+		return "main load render pass";
+	}
 	if ( renderPass == vk.render_pass.screenmap ) {
 		return "screenmap render pass";
 	}
@@ -9064,6 +9200,21 @@ void vk_begin_main_render_pass( void )
 }
 
 
+void vk_begin_main_render_pass_load( void )
+{
+	VkFramebuffer frameBuffer = vk.framebuffers.main_load[ vk.cmd->swapchain_image_index ];
+
+	vk.renderPassIndex = RENDER_PASS_MAIN;
+
+	vk.renderWidth = glConfig.vidWidth;
+	vk.renderHeight = glConfig.vidHeight;
+
+	vk.renderScaleX = vk.renderScaleY = 1.0f;
+
+	vk_begin_render_pass( vk.render_pass.main_load, frameBuffer, qfalse, vk.renderWidth, vk.renderHeight );
+}
+
+
 void vk_begin_post_bloom_render_pass( void )
 {
 	VkFramebuffer frameBuffer = vk.framebuffers.main[ vk.cmd->swapchain_image_index ];
@@ -9138,6 +9289,61 @@ void vk_end_render_pass( void )
 	vk_end_debug_label( vk.cmd->command_buffer );
 
 //	vk.renderPassIndex = RENDER_PASS_MAIN;
+}
+
+
+qboolean vk_depth_fade_supported( void )
+{
+	return ( r_depthFade && r_depthFade->integer && vk.maxBoundDescriptorSets >= VK_DESC_COUNT && !vk.msaaActive ) ? qtrue : qfalse;
+}
+
+
+qboolean vk_depth_fade_available( void )
+{
+	return ( vk_depth_fade_supported() && vk.depth_fade_image != VK_NULL_HANDLE && vk.depth_fade_image_view != VK_NULL_HANDLE && vk.depth_fade_descriptor != VK_NULL_HANDLE ) ? qtrue : qfalse;
+}
+
+
+void vk_copy_depth_fade( void )
+{
+	VkImageCopy region;
+	VkCommandBuffer command_buffer;
+
+	if ( !vk_depth_fade_available() || vk.renderPassIndex != RENDER_PASS_MAIN ) {
+		return;
+	}
+
+	vk_end_render_pass();
+
+	command_buffer = vk.cmd->command_buffer;
+
+	record_image_layout_transition( command_buffer, vk.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, 0 );
+	record_image_layout_transition( command_buffer, vk.depth_fade_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, 0 );
+
+	Com_Memset( &region, 0, sizeof( region ) );
+	region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+	region.srcSubresource.baseArrayLayer = 0;
+	region.srcSubresource.layerCount = 1;
+	region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+	region.dstSubresource.baseArrayLayer = 0;
+	region.dstSubresource.layerCount = 1;
+	region.extent.width = glConfig.vidWidth;
+	region.extent.height = glConfig.vidHeight;
+	region.extent.depth = 1;
+
+	qvkCmdCopyImage( command_buffer,
+		vk.depth_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		vk.depth_fade_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		1, &region );
+
+	record_image_layout_transition( command_buffer, vk.depth_fade_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, 0 );
+	record_image_layout_transition( command_buffer, vk.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0, 0 );
+
+	vk_begin_main_render_pass_load();
 }
 
 

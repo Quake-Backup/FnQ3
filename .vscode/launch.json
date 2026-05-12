@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Meson: Launch FnQuake3 OpenGL",
+      "name": "OpenGL",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
@@ -13,11 +13,11 @@
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "console": false,
+      "console": "internalConsole",
       "preLaunchTask": "meson: build"
     },
     {
-      "name": "Meson: Launch FnQuake3 GLx",
+      "name": "GLx",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
@@ -28,11 +28,11 @@
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "console": false,
+      "console": "internalConsole",
       "preLaunchTask": "meson: build"
     },
     {
-      "name": "Meson: Launch FnQuake3 renderer2",
+      "name": "Renderer2",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
@@ -43,11 +43,11 @@
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "console": false,
+      "console": "internalConsole",
       "preLaunchTask": "meson: build"
     },
     {
-      "name": "Meson: Launch FnQuake3 Vulkan",
+      "name": "Vulkan",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
@@ -58,17 +58,17 @@
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "console": false,
+      "console": "internalConsole",
       "preLaunchTask": "meson: build"
     },
     {
-      "name": "Meson: Launch FnQuake3 Dedicated",
+      "name": "Dedicated",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\fnquake3.ded.x64.exe",
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,
-      "console": false,
+      "console": "internalConsole",
       "preLaunchTask": "meson: build"
     }
   ]

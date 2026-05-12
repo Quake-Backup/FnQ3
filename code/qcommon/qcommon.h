@@ -53,6 +53,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //#define	PRE_RELEASE_DEMO
 #define DELAY_WRITECONFIG
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 //============================================================================
 
 //
@@ -1114,9 +1118,9 @@ temp file loading
 #define Z_TagMalloc(size, tag)			Z_TagMallocDebug(size, tag, #size, __FILE__, __LINE__)
 #define Z_Malloc(size)					Z_MallocDebug(size, #size, __FILE__, __LINE__)
 #define S_Malloc(size)					S_MallocDebug(size, #size, __FILE__, __LINE__)
-void *Z_TagMallocDebug( int size, memtag_t tag, char *label, char *file, int line );	// NOT 0 filled memory
-void *Z_MallocDebug( int size, char *label, char *file, int line );			// returns 0 filled memory
-void *S_MallocDebug( int size, char *label, char *file, int line );			// returns 0 filled memory
+void *Z_TagMallocDebug( int size, memtag_t tag, const char *label, const char *file, int line );	// NOT 0 filled memory
+void *Z_MallocDebug( int size, const char *label, const char *file, int line );			// returns 0 filled memory
+void *S_MallocDebug( int size, const char *label, const char *file, int line );			// returns 0 filled memory
 #else
 void *Z_TagMalloc( int size, memtag_t tag );	// NOT 0 filled memory
 void *Z_Malloc( int size );			// returns 0 filled memory
@@ -1375,5 +1379,9 @@ int HuffmanGetSymbol( unsigned int* symbol, const byte* buffer, int bitIndex );
 
 // functional gate syscall number
 #define COM_TRAP_GETVALUE 700
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // _QCOMMON_H_

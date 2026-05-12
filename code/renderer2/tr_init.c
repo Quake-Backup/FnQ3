@@ -66,6 +66,7 @@ cvar_t  *r_teleporterFlash;
 cvar_t	*r_fastsky;
 cvar_t	*r_drawSun;
 cvar_t	*r_dynamiclight;
+cvar_t	*r_depthFade;
 cvar_t	*r_celShading;
 cvar_t	*r_celShadingSteps;
 cvar_t	*r_celOutline;
@@ -1383,7 +1384,12 @@ static void R_Register( void )
 	r_forceToneMapMax = ri.Cvar_Get( "r_forceToneMapMax", "0.0", CVAR_CHEAT );
 
 	r_autoExposure = ri.Cvar_Get( "r_autoExposure", "1", CVAR_ARCHIVE );
-	ri.Cvar_SetDescription( r_autoExposure, "Do automatic exposure based on scene brightness. Hardcoded to -2 to 2 on maps that don't specify otherwise. Requires r_hdr, r_postProcess, and r_toneMap." );
+	ri.Cvar_SetDescription( r_autoExposure,
+		"Automatic exposure for the HDR tone-map path. Requires r_hdr, r_postProcess, and r_toneMap.\n"
+		" 0: disabled\n"
+		" 1: default elapsed-time adaptation with deterministic luminance reduction\n"
+		" 2: legacy frame-cadenced parity mode\n"
+		" 3: modern-tier histogram percentile reduction; falls back to mode 1 when float targets are unavailable." );
 	r_forceAutoExposure = ri.Cvar_Get( "r_forceAutoExposure", "0", CVAR_CHEAT );
 	r_forceAutoExposureMin = ri.Cvar_Get( "r_forceAutoExposureMin", "-2.0", CVAR_CHEAT );
 	r_forceAutoExposureMax = ri.Cvar_Get( "r_forceAutoExposureMax", "2.0", CVAR_CHEAT );
@@ -1490,6 +1496,9 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_drawSun, "Draw sun shader in skies." );
 	r_dynamiclight = ri.Cvar_Get( "r_dynamiclight", "1", CVAR_ARCHIVE );
 	ri.Cvar_SetDescription( r_dynamiclight, "Enables dynamic lighting." );
+	r_depthFade = ri.Cvar_Get( "r_depthFade", "1", CVAR_ARCHIVE | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_depthFade, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_depthFade, "Softens intersections between translucent particles and world geometry." );
 	r_celShading = ri.Cvar_Get( "r_celShading", "0", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celShading, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_celShading, "Enable cel shading on model entities, including world models, player models, and the first-person weapon." );

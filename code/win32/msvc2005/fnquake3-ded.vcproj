@@ -476,43 +476,43 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_bot.c"
+				RelativePath="..\..\server\sv_bot.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_ccmds.c"
+				RelativePath="..\..\server\sv_ccmds.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_client.c"
+				RelativePath="..\..\server\sv_client.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_filter.c"
+				RelativePath="..\..\server\sv_filter.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_game.c"
+				RelativePath="..\..\server\sv_game.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_init.c"
+				RelativePath="..\..\server\sv_init.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_main.c"
+				RelativePath="..\..\server\sv_main.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_net_chan.c"
+				RelativePath="..\..\server\sv_net_chan.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_snapshot.c"
+				RelativePath="..\..\server\sv_snapshot.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\server\sv_world.c"
+				RelativePath="..\..\server\sv_world.cpp"
 				>
 			</File>
 			<File
@@ -532,15 +532,15 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\win32\win_main.c"
+				RelativePath="..\..\win32\win_main.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\win32\win_shared.c"
+				RelativePath="..\..\win32\win_shared.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\win32\win_syscon.c"
+				RelativePath="..\..\win32\win_syscon.cpp"
 				>
 			</File>
 		</Filter>
@@ -630,6 +630,10 @@
 			</File>
 			<File
 				RelativePath="..\..\win32\win_local.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\win32\win_raii.h"
 				>
 			</File>
 		</Filter>

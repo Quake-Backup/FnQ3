@@ -9,8 +9,11 @@ output/
 !.vscode/settings.json
 !.vscode/tasks.json
 *.user
-cmake-*
 .idea
 __pycache__/
 *.pyc
 .tmp/
+subprojects/*
+!subprojects/*.wrap
+!subprojects/packagefiles/
+!subprojects/packagefiles/**

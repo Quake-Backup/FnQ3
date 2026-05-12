@@ -10,7 +10,6 @@ on:
   pull_request:
     paths:
       - '.github/workflows/glx-verification.yml'
-      - 'CMakeLists.txt'
       - 'meson.build'
       - 'meson_options.txt'
       - 'code/renderer/**'
@@ -26,7 +25,6 @@ on:
       - main
     paths:
       - '.github/workflows/glx-verification.yml'
-      - 'CMakeLists.txt'
       - 'meson.build'
       - 'meson_options.txt'
       - 'code/renderer/**'

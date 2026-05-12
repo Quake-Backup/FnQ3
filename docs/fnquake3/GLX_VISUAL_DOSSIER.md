@@ -7,11 +7,11 @@ path under `visualDossier`.
 
 The dossier does not replace machine gates. It gives maintainers a compact way
 to review the visual evidence that the gates already require: screenshot
-captures, histogram sidecars, luma false-color sidecars, baseline comparisons,
-renderer-switch lifecycle state, output backend state, color-contract metadata,
-world/static/lightmap/fog proof state, material proof state, dynamic-scene proof
-state, postprocess greyscale/render-scale proof state, and product-tier
-evidence.
+captures, histogram sidecars, luma false-color sidecars, exposure false-color
+sidecars, baseline comparisons, renderer-switch lifecycle state, output backend
+state, color-contract metadata, world/static/lightmap/fog proof state, material
+proof state, dynamic-scene proof state, postprocess greyscale/render-scale proof
+state, and product-tier evidence.
 
 ## Sections
 
@@ -42,9 +42,10 @@ Each dossier contains:
   target-format, final-encode, and contract validity;
 - a driver-tier matrix for `GL12`, `GL2X`, `GL3X`, `GL41`, and `GL46` showing
   observed tier evidence and modern post/output ownership signals;
-- histogram and luma false-color evidence for every screenshot;
-- a parity diff sheet with baseline, candidate, diff, RMS, and changed-pixel
-  fields when baseline comparisons are active;
+- histogram, luma false-color, and exposure false-color evidence for every
+  screenshot;
+- a parity diff sheet with baseline, candidate, diff, RMS, PSNR, SSIM, and
+  changed-pixel fields when baseline comparisons are active;
 - an SDR/HDR color-sweep review table when the run includes the P0 color matrix;
 - a short review checklist for visual sign-off.
 
@@ -82,11 +83,13 @@ Each dossier contains:
   screenshot.
 - Use luma false-color sidecars to inspect crushed shadows, clipped highlights,
   and unexpectedly flat tone mapping.
+- Use exposure false-color sidecars to inspect stop-scale drift across exposure,
+  tone-map, and HDR-output rows.
 - Use parity diffs to distinguish acceptable threshold noise from structured
   image changes.
 - Treat modern-tier promotion evidence as incomplete unless the tier matrix
   shows executable GLx-owned post/output products and no modern-tier fallback
-  mask. Planned-only products with the implementation-not-ready fallback are
+  mask. Disabled, unbound, or implementation-not-ready post/output products are
   useful review evidence, not promotion evidence.
 
 ## Packaging

@@ -25,6 +25,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_fbo.h"
 
+typedef enum
+{
+	AUTO_EXPOSURE_MODE_OFF = 0,
+	AUTO_EXPOSURE_MODE_TIME_CONSTANT = 1,
+	AUTO_EXPOSURE_MODE_LEGACY = 2,
+	AUTO_EXPOSURE_MODE_HISTOGRAM_PERCENTILE = 3
+} autoExposureMode_t;
+
 void RB_ToneMap(FBO_t *hdrFbo, ivec4_t hdrBox, FBO_t *ldrFbo, ivec4_t ldrBox, int autoExposure);
 void RB_GammaCorrect(FBO_t *srcFbo, ivec4_t srcBox, FBO_t *dstFbo, ivec4_t dstBox, float brightness);
 void RB_BokehBlur(FBO_t *src, ivec4_t srcBox, FBO_t *dst, ivec4_t dstBox, float blur);

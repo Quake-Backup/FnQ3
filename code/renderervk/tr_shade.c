@@ -1031,6 +1031,43 @@ void R_ComputeTexCoords( const int b, const textureBundle_t *bundle ) {
 ** RB_IterateStagesGeneric
 */
 #ifdef USE_VULKAN
+static qboolean RB_DepthFadeActive( void )
+{
+	return ( r_depthFade->integer &&
+		tess.shader->dfType > DFT_NONE &&
+		tess.shader->dfType < DFT_TBD &&
+		vk_depth_fade_available() ) ? qtrue : qfalse;
+}
+
+
+static void RB_SetDepthFade( vk_material_t *material, qboolean *pushUniform )
+{
+	const byte scaleAndBias = r_depthFadeScaleAndBias[tess.shader->dfType];
+	float zFar;
+	int i;
+
+	if ( !RB_DepthFadeActive() ) {
+		return;
+	}
+
+	zFar = backEnd.viewParms.zFar;
+	uniform.depthFadeInfo[0] = zFar / r_znear->value;
+	uniform.depthFadeInfo[1] = zFar;
+	uniform.depthFadeInfo[2] = tess.shader->dfInvDist;
+	uniform.depthFadeInfo[3] = tess.shader->dfBias;
+
+	for ( i = 0; i < 4; i++ ) {
+		uniform.depthFadeScale[i] = ( scaleAndBias & ( 1 << i ) ) ? 1.0f : 0.0f;
+		uniform.depthFadeBias[i] = ( scaleAndBias & ( 1 << ( i + 4 ) ) ) ? 1.0f : 0.0f;
+	}
+
+	vk_material_set_descriptor( material, VK_DESC_DEPTH_FADE, vk.depth_fade_descriptor );
+	*pushUniform = qtrue;
+}
+#endif
+
+
+#ifdef USE_VULKAN
 static void RB_IterateStagesGeneric( const shaderCommands_t *input, qboolean fogCollapse )
 #else
 static void RB_IterateStagesGeneric( const shaderCommands_t *input )
@@ -1110,6 +1147,7 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 			}
 
 			VK_SetTextureFactors( &uniform, pStage, 0 );
+			RB_SetDepthFade( &material, &pushUniform );
 			pushUniform = qtrue;
 
 			if ( pushUniform ) {

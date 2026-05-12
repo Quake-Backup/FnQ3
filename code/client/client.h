@@ -35,6 +35,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "cl_curl.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // file full of random crap that gets used to create cl_guid
 #define QKEY_FILE "qkey"
 #define QKEY_SIZE 2048
@@ -42,7 +46,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define	RETRANSMIT_TIMEOUT	3000	// time between connection packet retransmits
 
 // snapshots are a view of the server at a given time
-typedef struct {
+struct clSnapshot_t {
 	qboolean		valid;			// cleared if delta parsing was invalid
 	int				snapFlags;		// rate delayed and dropped commands
 
@@ -63,7 +67,10 @@ typedef struct {
 
 	int				serverCommandNum;		// execute all commands up to this before
 											// making the snapshot current
-} clSnapshot_t;
+};
+#ifndef __cplusplus
+#define clSnapshot_t struct clSnapshot_t
+#endif
 
 
 
@@ -76,11 +83,14 @@ new gamestate_t, potentially several times during an established connection
 =============================================================================
 */
 
-typedef struct {
+struct outPacket_t {
 	int		p_cmdNumber;		// cl.cmdNumber when packet was sent
 	int		p_serverTime;		// usercmd->serverTime when packet was sent
 	int		p_realtime;			// cls.realtime when packet was sent
-} outPacket_t;
+};
+#ifndef __cplusplus
+#define outPacket_t struct outPacket_t
+#endif
 
 // the parseEntities array must be large enough to hold PACKET_BACKUP frames of
 // entities, so that when a delta compressed message arives from the server
@@ -89,7 +99,7 @@ typedef struct {
 
 extern int g_console_field_width;
 
-typedef struct {
+struct clientActive_t {
 	int			timeoutcount;		// it requres several frames in a timeout condition
 									// to disconnect, preventing debugging breaks from
 									// causing immediate disconnects on continue
@@ -142,7 +152,10 @@ typedef struct {
 	entityState_t	parseEntities[MAX_PARSE_ENTITIES];
 
 	byte			baselineUsed[MAX_GENTITIES];
-} clientActive_t;
+};
+#ifndef __cplusplus
+#define clientActive_t struct clientActive_t
+#endif
 
 extern	clientActive_t		cl;
 
@@ -162,7 +175,7 @@ demo through a file.
 =============================================================================
 */
 
-typedef struct {
+struct clientConnection_t {
 
 	int			clientNum;
 	int			lastPacketSentTime;			// for retransmits during connection
@@ -254,7 +267,10 @@ typedef struct {
 	int		demoDeltaNum;
 	int		demoMessageSequence;
 
-} clientConnection_t;
+};
+#ifndef __cplusplus
+#define clientConnection_t struct clientConnection_t
+#endif
 
 extern	clientConnection_t clc;
 
@@ -267,14 +283,17 @@ no client connection is active at all
 ==================================================================
 */
 
-typedef struct {
+struct ping_t {
 	netadr_t	adr;
 	int			start;
 	int			time;
 	char		info[MAX_INFO_STRING];
-} ping_t;
+};
+#ifndef __cplusplus
+#define ping_t struct ping_t
+#endif
 
-typedef struct {
+struct serverInfo_t {
 	netadr_t	adr;
 	char	  	hostName[MAX_NAME_LENGTH];
 	char	  	mapName[MAX_NAME_LENGTH];
@@ -290,9 +309,12 @@ typedef struct {
 	int			punkbuster;
 	int			g_humanplayers;
 	int			g_needpass;
-} serverInfo_t;
+};
+#ifndef __cplusplus
+#define serverInfo_t struct serverInfo_t
+#endif
 
-typedef struct {
+struct clientStatic_t {
 	connstate_t	state;				// connection status
 	qboolean	gameSwitch;
 
@@ -357,7 +379,10 @@ typedef struct {
 	float		biasX;
 	float		biasY;
 
-} clientStatic_t;
+};
+#ifndef __cplusplus
+#define clientStatic_t struct clientStatic_t
+#endif
 
 extern int bigchar_width;
 extern int bigchar_height;
@@ -487,7 +512,7 @@ qboolean CL_GetModeInfo( int *width, int *height, float *windowAspect, int mode,
 
 
 //
-// cl_input
+// cl_input.cpp
 //
 void CL_InitInput( void );
 void CL_ClearInput( void );
@@ -495,7 +520,7 @@ void CL_SendCmd( void );
 void CL_WritePacket( int repeat );
 
 //
-// cl_keys.c
+// cl_keys.cpp
 //
 extern  field_t     chatField;
 extern  field_t     g_consoleField;
@@ -504,7 +529,7 @@ void Field_Draw( field_t *edit, int x, int y, int width, qboolean showCursor, qb
 void Field_BigDraw( field_t *edit, int x, int y, int width, qboolean showCursor, qboolean noColorEscape );
 
 //
-// cl_parse.c
+// cl_parse.cpp
 //
 extern int cl_connectedToPureServer;
 extern int cl_connectedToCheatServer;
@@ -546,7 +571,7 @@ void CL_LoadConsoleHistory( void );
 void CL_SaveConsoleHistory( void );
 
 //
-// cl_scrn.c
+// cl_scrn.cpp
 //
 void	SCR_Init( void );
 void	SCR_Done( void );
@@ -570,7 +595,7 @@ void	SCR_DrawSmallChar( int x, int y, int ch );
 void	SCR_DrawSmallString( int x, int y, const char *s, int len );
 
 //
-// cl_cin.c
+// cl_cin.cpp
 //
 
 void CL_PlayCinematic_f( void );
@@ -587,7 +612,7 @@ void CIN_UploadCinematic(int handle);
 void CIN_CloseAllVideos(void);
 
 //
-// cl_cgame.c
+// cl_cgame.cpp
 //
 void CL_InitCGame( void );
 void CL_ShutdownCGame( void );
@@ -596,7 +621,7 @@ void CL_CGameRendering( stereoFrame_t stereo );
 void CL_SetCGameTime( void );
 
 //
-// cl_hud.c
+// cl_hud.cpp
 //
 void CL_HudInit( void );
 void CL_HudShutdown( void );
@@ -608,7 +633,7 @@ void CL_HudAdjustRefdef( refdef_t *refdef );
 void CL_HudDrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t shader );
 
 //
-// cl_ui.c
+// cl_ui.cpp
 //
 void CL_InitUI( void );
 void CL_ShutdownUI( void );
@@ -617,14 +642,14 @@ void Key_SetCatcher( int catcher );
 
 
 //
-// cl_net_chan.c
+// cl_net_chan.cpp
 //
 void CL_Netchan_Transmit( netchan_t *chan, msg_t *msg );
 void CL_Netchan_Enqueue( netchan_t *chan, msg_t *msg, int times );
 qboolean CL_Netchan_Process( netchan_t *chan, msg_t *msg );
 
 //
-// cl_avi.c
+// cl_avi.cpp
 //
 qboolean CL_OpenAVIForWriting( const char *filename, qboolean pipe, qboolean reopen );
 void CL_TakeVideoFrame( void );
@@ -634,7 +659,7 @@ qboolean CL_CloseAVI( qboolean reopen );
 qboolean CL_VideoRecording( void );
 
 //
-// cl_jpeg.c
+// cl_jpeg.cpp
 //
 size_t	CL_SaveJPGToBuffer( byte *buffer, size_t bufSize, int quality, int image_width, int image_height, byte *image_buffer, int padding );
 void	CL_SaveJPG( const char *filename, int quality, int image_width, int image_height, byte *image_buffer, int padding );
@@ -663,4 +688,8 @@ void	VKimp_Init( glconfig_t *config );
 void	VKimp_Shutdown( qboolean unloadDLL );
 void	*VK_GetInstanceProcAddr( VkInstance instance, const char *name );
 qboolean VK_CreateSurface( VkInstance instance, VkSurfaceKHR* pSurface );
+#endif
+
+#ifdef __cplusplus
+}
 #endif

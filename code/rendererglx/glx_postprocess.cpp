@@ -1,5 +1,7 @@
 #include "glx_postprocess.h"
+#include "glx_color_math.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -21,8 +23,23 @@ static void GLX_PostProcess_SetReason( PostProcessState *state, const char *reas
 	state->reason[sizeof( state->reason ) - 1] = '\0';
 }
 
-static float GLX_PostProcess_ClampFloat( float value, float minValue, float maxValue )
+static float GLX_PostProcess_ClampFloat( float value, float minValue, float maxValue,
+	float fallback )
 {
+	if ( !std::isfinite( minValue ) ) {
+		minValue = 0.0f;
+	}
+	if ( !std::isfinite( maxValue ) ) {
+		maxValue = minValue;
+	}
+	if ( maxValue < minValue ) {
+		const float tmp = minValue;
+		minValue = maxValue;
+		maxValue = tmp;
+	}
+	if ( !std::isfinite( value ) ) {
+		value = std::isfinite( fallback ) ? fallback : minValue;
+	}
 	if ( value < minValue ) {
 		return minValue;
 	}
@@ -30,6 +47,11 @@ static float GLX_PostProcess_ClampFloat( float value, float minValue, float maxV
 		return maxValue;
 	}
 	return value;
+}
+
+static float GLX_PostProcess_ClampFloat( float value, float minValue, float maxValue )
+{
+	return GLX_PostProcess_ClampFloat( value, minValue, maxValue, minValue );
 }
 
 static int GLX_PostProcess_CvarModificationCount( const cvar_t *cvar )
@@ -88,13 +110,75 @@ static void GLX_PostProcess_InitDisplayOutput( rendererDisplayOutput_t *output )
 
 static void GLX_PostProcess_QueryDisplayOutput( PostProcessState *state )
 {
+	rendererDisplayOutput_t previous {};
+	unsigned int previousHash;
+	unsigned int currentHash;
+	unsigned int changeMask;
+
 	if ( !state ) {
 		return;
 	}
 
+	previous = state->displayOutput;
+	previousHash = state->lastDisplayOutputHash;
 	GLX_PostProcess_InitDisplayOutput( &state->displayOutput );
 	if ( RI().GLimp_QueryDisplayOutput ) {
 		RI().GLimp_QueryDisplayOutput( &state->displayOutput );
+	}
+	GLX_RenderIR_SanitizeDisplayOutput( &state->displayOutput );
+	currentHash = GLX_RenderIR_HashDisplayOutput( state->displayOutput );
+	state->displayOutputQueries++;
+	state->previousDisplayOutputHash = previousHash;
+	if ( previousHash == 0u ) {
+		state->previousDisplayOutput = state->displayOutput;
+		state->lastDisplayOutputHash = currentHash;
+		state->lastDisplayOutputChangeMask = GLX_DISPLAY_OUTPUT_CHANGE_NONE;
+	} else if ( currentHash != previousHash ) {
+		changeMask = GLX_RenderIR_DisplayOutputChangeMask( previous,
+			state->displayOutput );
+		if ( changeMask == GLX_DISPLAY_OUTPUT_CHANGE_NONE ) {
+			changeMask = GLX_DISPLAY_OUTPUT_CHANGE_DISPLAY;
+		}
+		state->previousDisplayOutput = previous;
+		state->previousDisplayOutputHash = previousHash;
+		state->lastDisplayOutputHash = currentHash;
+		state->lastDisplayOutputChangeMask = changeMask;
+		state->lastDisplayOutputChangeFrame = state->frames;
+		state->displayOutputStateChanges++;
+		if ( changeMask & ( GLX_DISPLAY_OUTPUT_CHANGE_VALID |
+			GLX_DISPLAY_OUTPUT_CHANGE_DISPLAY |
+			GLX_DISPLAY_OUTPUT_CHANGE_PLATFORM_CAPS ) ) {
+			state->displayOutputCapabilityChanges++;
+		}
+		if ( changeMask & GLX_DISPLAY_OUTPUT_CHANGE_BACKEND ) {
+			state->displayOutputBackendChanges++;
+		}
+		if ( changeMask & GLX_DISPLAY_OUTPUT_CHANGE_HDR ) {
+			state->displayOutputHdrChanges++;
+		}
+		if ( changeMask & GLX_DISPLAY_OUTPUT_CHANGE_HEADROOM ) {
+			state->displayOutputHeadroomChanges++;
+		}
+		if ( changeMask & GLX_DISPLAY_OUTPUT_CHANGE_LUMINANCE ) {
+			state->displayOutputLuminanceChanges++;
+		}
+		if ( changeMask & GLX_DISPLAY_OUTPUT_CHANGE_ICC ) {
+			state->displayOutputIccChanges++;
+		}
+		if ( state->r_glxPostProcessDebug && state->r_glxPostProcessDebug->integer ) {
+			RI().Printf( PRINT_ALL,
+				"GLx display-output change: frame %u flags 0x%08x hash 0x%08x -> 0x%08x backend %s -> %s hdr %s -> %s headroom %.2f -> %.2f reason: %s\n",
+				state->frames, changeMask, previousHash, currentHash,
+				RendererOutputBackendName( previous.nativeBackend ),
+				RendererOutputBackendName( state->displayOutput.nativeBackend ),
+				BoolName( previous.hdrEnabled ),
+				BoolName( state->displayOutput.hdrEnabled ),
+				previous.hdrHeadroom,
+				state->displayOutput.hdrHeadroom,
+				state->displayOutput.reason[0] ? state->displayOutput.reason : "none" );
+		}
+	} else {
+		state->lastDisplayOutputHash = currentHash;
 	}
 	state->lastDisplayOutputQueryFrame = state->frames;
 	GLX_PostProcess_RecordDisplayOutputCvarCounts( state );
@@ -201,7 +285,7 @@ static OutputPrimaries GLX_PostProcess_OutputPrimariesForBackend( rendererOutput
 	case ROUTPUT_BACKEND_MACOS_EDR:
 		return OutputPrimaries::DisplayP3;
 	case ROUTPUT_BACKEND_LINUX_EXPERIMENTAL_HDR:
-		return OutputPrimaries::Unknown;
+		return OutputPrimaries::Native;
 	case ROUTPUT_BACKEND_WINDOWS_SCRGB:
 	case ROUTPUT_BACKEND_SDR_SRGB:
 	default:
@@ -294,9 +378,9 @@ static ToneMapOperator GLX_PostProcess_ToneMapOperatorForMode( int mode )
 {
 	switch ( mode ) {
 	case 1:
-		return ToneMapOperator::Reinhard;
+		return ToneMapOperator::ReinhardSimple;
 	case 2:
-		return ToneMapOperator::Aces;
+		return ToneMapOperator::AcesFitted;
 	default:
 		return ToneMapOperator::Legacy;
 	}
@@ -316,6 +400,93 @@ static ColorGradeMode GLX_PostProcess_ColorGradeForMode( int mode )
 	}
 }
 
+static int GLX_PostProcess_AutoExposureMode( const PostProcessState *state )
+{
+	const int mode = ( state && state->r_glxAutoExposure ) ?
+		state->r_glxAutoExposure->integer : GLX_AUTO_EXPOSURE_OFF;
+
+	if ( mode >= GLX_AUTO_EXPOSURE_OFF && mode <= GLX_AUTO_EXPOSURE_HISTOGRAM ) {
+		return mode;
+	}
+	return GLX_AUTO_EXPOSURE_OFF;
+}
+
+static qboolean GLX_PostProcess_ModernExposureTier( RenderProductTier tier )
+{
+	return GLX_RenderIR_ModernPostOutputTier( tier );
+}
+
+static ExposureReductionAlgorithm GLX_PostProcess_SelectExposureAlgorithm(
+	const PostProcessState *state, qboolean *fallback )
+{
+	const int mode = GLX_PostProcess_AutoExposureMode( state );
+	const qboolean modernTier = state ?
+		GLX_PostProcess_ModernExposureTier( state->tier ) : qfalse;
+
+	if ( fallback ) {
+		*fallback = qfalse;
+	}
+
+	switch ( mode ) {
+	case GLX_AUTO_EXPOSURE_TIERED:
+		if ( modernTier ) {
+			return ExposureReductionAlgorithm::HistogramPercentile;
+		}
+		if ( fallback ) {
+			*fallback = qtrue;
+		}
+		return ExposureReductionAlgorithm::SimpleAverage;
+	case GLX_AUTO_EXPOSURE_SIMPLE:
+		return ExposureReductionAlgorithm::SimpleAverage;
+	case GLX_AUTO_EXPOSURE_HISTOGRAM:
+		if ( modernTier ) {
+			return ExposureReductionAlgorithm::HistogramPercentile;
+		}
+		if ( fallback ) {
+			*fallback = qtrue;
+		}
+		return ExposureReductionAlgorithm::SimpleAverage;
+	case GLX_AUTO_EXPOSURE_OFF:
+	default:
+		return ExposureReductionAlgorithm::Manual;
+	}
+}
+
+static float GLX_PostProcess_AutoExposureCvarFloat( const cvar_t *cvar,
+	float minValue, float maxValue, float fallback )
+{
+	return cvar ? GLX_PostProcess_ClampFloat( cvar->value, minValue, maxValue,
+		fallback ) : fallback;
+}
+
+static void GLX_PostProcess_ResetAutoExposureState( PostProcessState *state,
+	float manualExposure )
+{
+	if ( !state ) {
+		return;
+	}
+
+	manualExposure = GLX_PostProcess_ClampFloat( manualExposure, 0.0f, 64.0f, 1.0f );
+	state->lastAutoExposureEnabled = qfalse;
+	state->lastAutoExposureFallback = qfalse;
+	state->lastAutoExposureSamplesValid = qfalse;
+	state->lastExposureAlgorithm = ExposureReductionAlgorithm::Manual;
+	state->lastAutoExposureMode = GLX_AUTO_EXPOSURE_OFF;
+	state->lastAutoExposureSampleWidth = 0;
+	state->lastAutoExposureSampleHeight = 0;
+	state->lastAutoExposureSampleCount = 0;
+	state->lastAutoExposureHistogramBin = -1;
+	state->lastManualExposure = manualExposure;
+	state->lastAutoExposureScale = 1.0f;
+	state->lastAutoExposureTargetExposure = manualExposure;
+	state->lastAutoExposureLogLuma = 0.0f;
+	state->lastAutoExposureLuma = 1.0f;
+	state->lastAutoExposurePercentile = 0.0f;
+	state->lastAutoExposureTargetLuma = 0.18f;
+	state->autoExposureInitialized = qfalse;
+	state->autoExposureSmoothedExposure = manualExposure;
+}
+
 static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *state,
 	int hdrMode, int renderScaleMode, float greyscale )
 {
@@ -325,7 +496,7 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 		state->r_tonemap->integer : 0;
 	int gradeMode = ( sceneLinear && state && state->r_colorGrade ) ?
 		state->r_colorGrade->integer : 0;
-	const float exposure = ( sceneLinear && state && state->r_tonemapExposure ) ?
+	float exposure = ( sceneLinear && state && state->r_tonemapExposure ) ?
 		GLX_PostProcess_ClampFloat( state->r_tonemapExposure->value, 0.1f, 8.0f ) : 1.0f;
 	const float bloomThreshold = ( state && state->r_bloom_threshold ) ?
 		GLX_PostProcess_ClampFloat( state->r_bloom_threshold->value, 0.0f, 64.0f ) :
@@ -372,6 +543,12 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 		GLX_PostProcess_OutputPrimariesForBackend( selectedBackend ) : OutputPrimaries::SrgbBt709;
 	output.gamutMap = outputHardwareActive ?
 		GLX_PostProcess_GamutMapForBackend( selectedBackend ) : GamutMapMode::None;
+	if ( sceneLinear && state && state->lastAutoExposureEnabled ) {
+		exposure = GLX_PostProcess_ClampFloat( state->autoExposureSmoothedExposure,
+			0.0f, 64.0f, exposure );
+		output.exposureAlgorithm = state->lastExposureAlgorithm;
+		output.autoExposure = qtrue;
+	}
 	output.requestedBackend = outputRequest;
 	output.selectedBackend = selectedBackend;
 	output.nativeBackend = state ? state->displayOutput.nativeBackend : ROUTPUT_BACKEND_SDR_SRGB;
@@ -429,10 +606,153 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 	return output;
 }
 
+qboolean GLX_PostProcess_AutoExposureNeedsSamples( const PostProcessState *state,
+	int *width, int *height )
+{
+	if ( width ) {
+		*width = 0;
+	}
+	if ( height ) {
+		*height = 0;
+	}
+	if ( !state || !state->glReady || !state->fboReady ||
+		GLX_PostProcess_AutoExposureMode( state ) == GLX_AUTO_EXPOSURE_OFF ) {
+		return qfalse;
+	}
+	if ( width ) {
+		*width = 32;
+	}
+	if ( height ) {
+		*height = 32;
+	}
+	return qtrue;
+}
+
+float GLX_PostProcess_UpdateAutoExposure( PostProcessState *state, float manualExposure,
+	const float *rgba, int width, int height )
+{
+	ColorMathExposureHistogram histogram {};
+	ColorMathExposureResult result {};
+	qboolean forcedFallback = qfalse;
+	const int mode = GLX_PostProcess_AutoExposureMode( state );
+	const ExposureReductionAlgorithm algorithm =
+		GLX_PostProcess_SelectExposureAlgorithm( state, &forcedFallback );
+	const float percentile = GLX_PostProcess_AutoExposureCvarFloat(
+		state ? state->r_glxAutoExposurePercentile : nullptr, 1.0f, 99.0f, 80.0f );
+	const float targetLuma = GLX_PostProcess_AutoExposureCvarFloat(
+		state ? state->r_glxAutoExposureTargetLuma : nullptr, 0.01f, 4.0f, 0.18f );
+	float minExposure = GLX_PostProcess_AutoExposureCvarFloat(
+		state ? state->r_glxAutoExposureMin : nullptr, 0.01f, 64.0f, 0.125f );
+	float maxExposure = GLX_PostProcess_AutoExposureCvarFloat(
+		state ? state->r_glxAutoExposureMax : nullptr, 0.01f, 64.0f, 8.0f );
+	const float adapt = GLX_PostProcess_AutoExposureCvarFloat(
+		state ? state->r_glxAutoExposureAdapt : nullptr, 0.0f, 1.0f, 0.15f );
+	ExposureReductionAlgorithm previousAlgorithm = ExposureReductionAlgorithm::Manual;
+	float targetExposure;
+	float resolvedExposure;
+	int pixels;
+
+	if ( !state ) {
+		return GLX_PostProcess_ClampFloat( manualExposure, 0.0f, 64.0f, 1.0f );
+	}
+
+	manualExposure = GLX_PostProcess_ClampFloat( manualExposure, 0.0f, 64.0f, 1.0f );
+	if ( maxExposure < minExposure ) {
+		const float tmp = maxExposure;
+		maxExposure = minExposure;
+		minExposure = tmp;
+	}
+
+	if ( mode == GLX_AUTO_EXPOSURE_OFF || algorithm == ExposureReductionAlgorithm::Manual ) {
+		GLX_PostProcess_ResetAutoExposureState( state, manualExposure );
+		return manualExposure;
+	}
+
+	previousAlgorithm = state->lastExposureAlgorithm;
+	state->lastAutoExposureMode = mode;
+	state->lastExposureAlgorithm = algorithm;
+	state->lastAutoExposureEnabled = qtrue;
+	state->lastAutoExposureFallback = forcedFallback;
+	state->lastAutoExposurePercentile = percentile;
+	state->lastAutoExposureTargetLuma = targetLuma;
+	state->lastManualExposure = manualExposure;
+	state->lastAutoExposureSampleWidth = width > 0 ? width : 0;
+	state->lastAutoExposureSampleHeight = height > 0 ? height : 0;
+	state->lastAutoExposureSampleCount = 0;
+	state->lastAutoExposureHistogramBin = -1;
+	state->lastAutoExposureSamplesValid = qfalse;
+
+	if ( !rgba || width <= 0 || height <= 0 || width > 128 || height > 128 ) {
+		state->autoExposureSampleFailures++;
+		state->lastAutoExposureFallback = qtrue;
+		state->autoExposureSmoothedExposure = manualExposure;
+		state->autoExposureInitialized = qfalse;
+		return manualExposure;
+	}
+
+	GLX_ColorMath_ExposureHistogramReset( &histogram, -12.0f, 12.0f );
+	pixels = width * height;
+	for ( int i = 0; i < pixels; i++ ) {
+		ColorMathVec3 color {};
+		color.r = rgba[i * 4 + 0];
+		color.g = rgba[i * 4 + 1];
+		color.b = rgba[i * 4 + 2];
+		GLX_ColorMath_ExposureHistogramAddColor( &histogram, color );
+	}
+	state->lastAutoExposureSampleCount = static_cast<int>( histogram.sampleCount );
+
+	if ( algorithm == ExposureReductionAlgorithm::HistogramPercentile ) {
+		result = GLX_ColorMath_ExposureHistogramPercentile( histogram, percentile,
+			targetLuma, minExposure, maxExposure );
+	} else {
+		result = GLX_ColorMath_ExposureSimpleAverage( histogram, targetLuma,
+			minExposure, maxExposure );
+	}
+
+	if ( !result.valid ) {
+		state->autoExposureSampleFailures++;
+		state->lastAutoExposureFallback = qtrue;
+		state->autoExposureSmoothedExposure = manualExposure;
+		state->autoExposureInitialized = qfalse;
+		return manualExposure;
+	}
+
+	targetExposure = GLX_PostProcess_ClampFloat( manualExposure * result.exposureScale,
+		minExposure, maxExposure, manualExposure );
+	if ( !state->autoExposureInitialized || previousAlgorithm != algorithm ) {
+		resolvedExposure = targetExposure;
+		state->autoExposureInitialized = qtrue;
+	} else {
+		resolvedExposure = state->autoExposureSmoothedExposure +
+			( targetExposure - state->autoExposureSmoothedExposure ) * adapt;
+		resolvedExposure = GLX_PostProcess_ClampFloat( resolvedExposure,
+			minExposure, maxExposure, targetExposure );
+	}
+
+	state->autoExposureSmoothedExposure = resolvedExposure;
+	state->lastAutoExposureSamplesValid = qtrue;
+	state->lastAutoExposureScale = result.exposureScale;
+	state->lastAutoExposureTargetExposure = targetExposure;
+	state->lastAutoExposureLogLuma = result.measuredLog2Luma;
+	state->lastAutoExposureLuma = result.measuredLuma;
+	state->lastAutoExposureHistogramBin = result.bin;
+	state->autoExposureFrames++;
+	if ( algorithm == ExposureReductionAlgorithm::HistogramPercentile ) {
+		state->autoExposureHistogramFrames++;
+	} else {
+		state->autoExposureSimpleFrames++;
+	}
+	if ( state->lastAutoExposureFallback ) {
+		state->autoExposureFallbackFrames++;
+	}
+
+	return resolvedExposure;
+}
+
 static qboolean GLX_PostProcess_InternalFormatIsFloat( int internalFormat )
 {
 	return ( internalFormat == GL_RGBA16F || internalFormat == GL_RGB16F ||
-		internalFormat == GL_R11F_G11F_B10F ) ? qtrue : qfalse;
+		internalFormat == GL_R11F_G11F_B10F || internalFormat == GL_RG16F ) ? qtrue : qfalse;
 }
 
 static qboolean GLX_PostProcess_TextureSrgbDecodeDesired( const PostProcessState *state )
@@ -583,6 +903,8 @@ static void GLX_PostProcess_CopyOutputDetails( PostProcessState *state )
 	}
 
 	state->lastExposure = state->lastOutput.exposure;
+	state->lastExposureAlgorithm = state->lastOutput.exposureAlgorithm;
+	state->lastAutoExposureEnabled = state->lastOutput.autoExposure;
 	state->lastBloomThreshold = state->lastOutput.bloomThreshold;
 	state->lastBloomSoftKnee = state->lastOutput.bloomSoftKnee;
 	state->lastPaperWhiteNits = state->lastOutput.paperWhiteNits;
@@ -676,9 +998,40 @@ const char *GLX_PostProcess_BloomResultName( int result )
 	}
 }
 
+const char *GLX_PostProcess_BloomFormatModeName( int mode )
+{
+	switch ( mode ) {
+	case GLX_HDR_BLOOM_FORMAT_RGBA16F:
+		return "rgba16f";
+	case GLX_HDR_BLOOM_FORMAT_R11G11B10F:
+		return "r11g11b10f";
+	case GLX_HDR_BLOOM_FORMAT_RG16F:
+		return "rg16f";
+	case GLX_HDR_BLOOM_FORMAT_AUTO:
+	default:
+		return "auto";
+	}
+}
+
 const char *GLX_PostProcess_PostOutputModeName( qboolean glxOwned )
 {
 	return glxOwned ? "glx-owned" : "legacy-fallback";
+}
+
+static void GLX_PostProcess_UpdateCapturePolicy( PostProcessState *state )
+{
+	CaptureExportPolicy requested;
+
+	if ( !state ) {
+		return;
+	}
+
+	requested = GLX_RenderIR_CaptureExportPolicyForCvar(
+		state->r_screenshotCaptureMode ? state->r_screenshotCaptureMode->integer : 0 );
+	state->lastCaptureRequest = requested;
+	state->lastCaptureSelected = GLX_RenderIR_ResolveCaptureExportPolicy( requested );
+	state->lastCaptureHdrAware = GLX_RenderIR_CaptureExportPolicyHdrAware( requested );
+	state->lastCaptureSupported = GLX_RenderIR_CaptureExportPolicySupported( requested );
 }
 
 void GLX_PostProcess_RegisterCvars( PostProcessState *state )
@@ -704,6 +1057,11 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 	RI().Cvar_CheckRange( state->r_hdrPrecision, "-1", "16", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_hdrPrecision,
 		"Internal FBO color precision for SDR/debug paths: 0 automatic, -1 debug 4-bit, 8 force 8-bit, 16 force 16-bit. r_hdr 1 always uses RGBA16F. Applies after the current frame." );
+	state->r_hdrBloomFormat = RI().Cvar_Get( "r_hdrBloomFormat", "0", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_hdrBloomFormat );
+	RI().Cvar_CheckRange( state->r_hdrBloomFormat, "0", "3", CV_INTEGER );
+	RI().Cvar_SetDescription( state->r_hdrBloomFormat,
+		"HDR bloom/extract intermediate storage: 0 automatic, 1 RGBA16F, 2 R11G11B10F for RGB bloom, 3 RG16F for positive two-channel roles with RGB bloom fallback. Applies when bloom FBOs are recreated." );
 	state->r_srgbTextures = RI().Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	RI().Cvar_CheckRange( state->r_srgbTextures, "0", "1", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_srgbTextures,
@@ -713,10 +1071,40 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 		"Allow GL_FRAMEBUFFER_SRGB when the draw target is an sRGB framebuffer." );
 	state->r_tonemap = RI().Cvar_Get( "r_tonemap", "0", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_tonemap,
-		"Final-pass tone mapper for the scene-linear HDR pipeline: 0 legacy, 1 Reinhard, 2 ACES." );
+		"Final-pass tone mapper for the scene-linear HDR pipeline: 0 legacy, 1 simple Reinhard (legacy alias Reinhard), 2 ACES-fitted (legacy alias ACES)." );
 	state->r_tonemapExposure = RI().Cvar_Get( "r_tonemapExposure", "1.0", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_tonemapExposure,
 		"Exposure multiplier used by scene-linear tone mapping and bloom extraction." );
+	state->r_glxAutoExposure = RI().Cvar_Get( "r_glxAutoExposure", "0", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_glxAutoExposure );
+	RI().Cvar_CheckRange( state->r_glxAutoExposure, "0", "3", CV_INTEGER );
+	RI().Cvar_SetDescription( state->r_glxAutoExposure,
+		"GLx scene-linear exposure reduction: 0 manual, 1 tiered auto, 2 force simple average fallback, 3 force histogram percentile on modern tiers with safe fallback." );
+	state->r_glxAutoExposurePercentile = RI().Cvar_Get( "r_glxAutoExposurePercentile", "80", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_glxAutoExposurePercentile );
+	RI().Cvar_CheckRange( state->r_glxAutoExposurePercentile, "1", "99", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_glxAutoExposurePercentile,
+		"Luminance percentile used by GLx histogram auto exposure on modern tiers." );
+	state->r_glxAutoExposureTargetLuma = RI().Cvar_Get( "r_glxAutoExposureTargetLuma", "0.18", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_glxAutoExposureTargetLuma );
+	RI().Cvar_CheckRange( state->r_glxAutoExposureTargetLuma, "0.01", "4.0", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_glxAutoExposureTargetLuma,
+		"Scene-linear luma target for GLx auto exposure reduction." );
+	state->r_glxAutoExposureMin = RI().Cvar_Get( "r_glxAutoExposureMin", "0.125", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_glxAutoExposureMin );
+	RI().Cvar_CheckRange( state->r_glxAutoExposureMin, "0.01", "64", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_glxAutoExposureMin,
+		"Minimum resolved GLx auto-exposure multiplier." );
+	state->r_glxAutoExposureMax = RI().Cvar_Get( "r_glxAutoExposureMax", "8.0", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_glxAutoExposureMax );
+	RI().Cvar_CheckRange( state->r_glxAutoExposureMax, "0.01", "64", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_glxAutoExposureMax,
+		"Maximum resolved GLx auto-exposure multiplier." );
+	state->r_glxAutoExposureAdapt = RI().Cvar_Get( "r_glxAutoExposureAdapt", "0.15", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_glxAutoExposureAdapt );
+	RI().Cvar_CheckRange( state->r_glxAutoExposureAdapt, "0", "1", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_glxAutoExposureAdapt,
+		"Per-frame blend factor for GLx auto exposure changes; 1 applies the current reduction immediately." );
 	state->r_colorGrade = RI().Cvar_Get( "r_colorGrade", "0", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_colorGrade,
 		"Scene-linear color grading for r_hdr 1: 0 none, 1 lift/gamma/gain, 2 3D LUT, 3 both." );
@@ -757,14 +1145,21 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 	RI().Cvar_CheckRange( state->r_outputAllowExperimentalLinuxHDR, "0", "1", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_outputAllowExperimentalLinuxHDR,
 		"Allow Linux HDR telemetry/prototype output only when SDL reports HDR headroom and an explicit compositor/protocol path. Applies immediately." );
+	state->r_screenshotCaptureMode = RI().Cvar_Get( "r_screenshotCaptureMode", "0", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_screenshotCaptureMode );
+	RI().Cvar_CheckRange( state->r_screenshotCaptureMode, "0", "2", CV_INTEGER );
+	RI().Cvar_SetDescription( state->r_screenshotCaptureMode,
+		"Screenshot/video capture export policy: 0 SDR sRGB after final output transform, 1 reserved scene-linear HDR request, 2 reserved HDR-output request. HDR modes currently resolve to SDR sRGB byte output." );
 	state->r_bloom_threshold = RI().Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
 	state->r_bloom_threshold_mode = RI().Cvar_Get( "r_bloom_threshold_mode", "0", CVAR_ARCHIVE_ND );
 	state->r_bloom_soft_knee = RI().Cvar_Get( "r_bloom_soft_knee", "0.0", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_bloom_soft_knee,
 		"Softens scene-linear bloom extraction around r_bloom_threshold." );
 	state->lastOutput = GLX_RenderIR_DefaultOutputTransform();
+	GLX_PostProcess_ResetAutoExposureState( state, state->lastOutput.exposure );
 	GLX_PostProcess_QueryDisplayOutput( state );
 	state->hdrPrecisionMode = state->lastOutput.precisionMode;
+	GLX_PostProcess_UpdateCapturePolicy( state );
 	GLX_PostProcess_CopyOutputDetails( state );
 }
 
@@ -775,6 +1170,7 @@ void GLX_PostProcess_OnOpenGLReady( PostProcessState *state, const Capabilities 
 	}
 
 	state->glReady = qtrue;
+	state->tier = caps.tier;
 	if ( caps.config ) {
 		state->vidWidth = caps.config->vidWidth;
 		state->vidHeight = caps.config->vidHeight;
@@ -784,6 +1180,7 @@ void GLX_PostProcess_OnOpenGLReady( PostProcessState *state, const Capabilities 
 		state->hdrMode, state->renderScaleMode, state->lastGreyscale );
 	state->hdrPrecisionMode = state->lastOutput.precisionMode;
 	state->toneMapMode = static_cast<int>( state->lastOutput.toneMap );
+	GLX_PostProcess_UpdateCapturePolicy( state );
 	GLX_PostProcess_CopyOutputDetails( state );
 	GLX_PostProcess_SetReason( state,
 		state->fboReady ? "FBO ready" : "waiting for FBO initialization" );
@@ -799,6 +1196,8 @@ void GLX_PostProcess_Shutdown( PostProcessState *state )
 	state->fboReady = qfalse;
 	state->programReady = qfalse;
 	state->framebufferFnsReady = qfalse;
+	GLX_PostProcess_ResetAutoExposureState( state, state->lastExposure > 0.0f ?
+		state->lastExposure : 1.0f );
 	GLX_PostProcess_UpdateOutputContract( state );
 	GLX_PostProcess_SetReason( state, "renderer shutdown" );
 }
@@ -845,6 +1244,7 @@ void GLX_PostProcess_RecordFboInit( PostProcessState *state, qboolean requested,
 	state->hdrPrecisionMode = state->lastOutput.precisionMode;
 	state->toneMapMode = static_cast<int>( state->lastOutput.toneMap );
 	state->bloomThresholdMode = state->r_bloom_threshold_mode ? state->r_bloom_threshold_mode->integer : 0;
+	GLX_PostProcess_UpdateCapturePolicy( state );
 	GLX_PostProcess_CopyOutputDetails( state );
 
 	if ( !requested ) {
@@ -903,6 +1303,11 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	state->hdrMode = hdrMode;
 	state->renderScaleMode = renderScaleMode;
 	state->lastGreyscale = greyscale;
+	if ( hdrMode <= 0 ) {
+		const float manualExposure = state->r_tonemapExposure ?
+			GLX_PostProcess_ClampFloat( state->r_tonemapExposure->value, 0.1f, 8.0f ) : 1.0f;
+		GLX_PostProcess_ResetAutoExposureState( state, manualExposure );
+	}
 	if ( GLX_PostProcess_ShouldRefreshDisplayOutput( state ) ) {
 		GLX_PostProcess_QueryDisplayOutput( state );
 	}
@@ -911,6 +1316,7 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	state->hdrPrecisionMode = state->lastOutput.precisionMode;
 	state->toneMapMode = static_cast<int>( state->lastOutput.toneMap );
 	state->bloomThresholdMode = state->r_bloom_threshold_mode ? state->r_bloom_threshold_mode->integer : 0;
+	GLX_PostProcess_UpdateCapturePolicy( state );
 	GLX_PostProcess_CopyOutputDetails( state );
 
 	if ( minimized ) {
@@ -921,6 +1327,15 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	}
 	if ( screenshotMask ) {
 		state->screenshotFrames++;
+		if ( state->lastCaptureSelected == CaptureExportPolicy::SdrSrgb ) {
+			state->captureSdrFrames++;
+		}
+		if ( state->lastCaptureHdrAware ) {
+			state->captureHdrRequestFrames++;
+		}
+		if ( !state->lastCaptureSupported ) {
+			state->captureUnsupportedRequestFrames++;
+		}
 	}
 	if ( windowAdjusted ) {
 		state->windowAdjustedFrames++;
@@ -985,6 +1400,24 @@ void GLX_PostProcess_RecordPostOutputPlan( PostProcessState *state, const PostOu
 	} else {
 		state->postOutputFallbackFrames++;
 	}
+}
+
+void GLX_PostProcess_RecordPostOutputExecutionFallback( PostProcessState *state,
+	unsigned int fallbackReason )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->lastPostOutputFallbackReasons |= fallbackReason;
+	state->postOutputExecutorRejects++;
+	if ( state->lastPostOutputGlxOwned ) {
+		if ( state->postOutputOwnedFrames > 0u ) {
+			state->postOutputOwnedFrames--;
+		}
+		state->postOutputFallbackFrames++;
+	}
+	state->lastPostOutputGlxOwned = qfalse;
 }
 
 void GLX_PostProcess_RecordPostShaderPlan( PostProcessState *state, const PostShaderPlan &plan )
@@ -1069,7 +1502,8 @@ void GLX_PostProcess_RecordColorGradeLut( PostProcessState *state, qboolean acti
 }
 
 void GLX_PostProcess_RecordBloomCreate( PostProcessState *state, int result,
-	int requestedPasses, int effectivePasses, int textureUnits )
+	int requestedPasses, int effectivePasses, int textureUnits, int formatMode,
+	int internalFormat, int textureFormat, int textureType )
 {
 	if ( !state ) {
 		return;
@@ -1080,6 +1514,10 @@ void GLX_PostProcess_RecordBloomCreate( PostProcessState *state, int result,
 	state->lastBloomRequestedPasses = requestedPasses;
 	state->lastBloomEffectivePasses = effectivePasses;
 	state->lastBloomTextureUnits = textureUnits;
+	state->lastBloomFormatMode = formatMode;
+	state->lastBloomInternalFormat = internalFormat;
+	state->lastBloomTextureFormat = textureFormat;
+	state->lastBloomTextureType = textureType;
 
 	switch ( result ) {
 	case GLX_BLOOM_CREATE_SUCCESS:
@@ -1099,8 +1537,12 @@ void GLX_PostProcess_RecordBloomCreate( PostProcessState *state, int result,
 	}
 
 	if ( state->r_glxPostProcessDebug && state->r_glxPostProcessDebug->integer ) {
-		RI().Printf( PRINT_ALL, "GLx bloom create: %s, requested/effective passes %i/%i, texture units %i\n",
-			GLX_PostProcess_BloomCreateResultName( result ), requestedPasses, effectivePasses, textureUnits );
+		RI().Printf( PRINT_ALL,
+			"GLx bloom create: %s, requested/effective passes %i/%i, texture units %i, policy %s, format 0x%04x (0x%04x:0x%04x)\n",
+			GLX_PostProcess_BloomCreateResultName( result ), requestedPasses,
+			effectivePasses, textureUnits,
+			GLX_PostProcess_BloomFormatModeName( formatMode ), internalFormat,
+			textureFormat, textureType );
 	}
 }
 
@@ -1210,7 +1652,9 @@ void GLX_PostProcess_RecordBlit( PostProcessState *state, int kind, qboolean dep
 
 	if ( state->r_glxPostProcessDebug && state->r_glxPostProcessDebug->integer > 1 ) {
 		RI().Printf( PRINT_ALL, "GLx postprocess blit: %s %ix%i -> %ix%i%s\n",
-			kind == GLX_FBO_BLIT_SS ? "ssaa" : "msaa",
+			kind == GLX_FBO_BLIT_SS ? "ssaa" :
+				( kind == GLX_FBO_BLIT_BACKBUFFER ? "backbuffer" :
+				( kind == GLX_FBO_BLIT_COPY_SCREEN ? "copy-screen" : "msaa" ) ),
 			srcWidth, srcHeight, dstWidth, dstHeight, depthOnly ? " depth" : "" );
 	}
 }
@@ -1276,6 +1720,26 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		state.lastOutput.paperWhiteNits,
 		state.lastOutput.maxOutputNits );
 	RI().Printf( PRINT_ALL,
+		"  exposure reduction: mode %i, algorithm %s, enabled %s, fallback %s, samples %i/%ix%i, percentile %.1f, target-luma %.3f, measured-log2 %.3f, measured-luma %.4f, manual %.2f, scale %.3f, target %.2f, frames %u histogram/%u simple/%u failures/%u\n",
+		state.lastAutoExposureMode,
+		GLX_RenderIR_ExposureReductionName( state.lastExposureAlgorithm ),
+		BoolName( state.lastAutoExposureEnabled ),
+		BoolName( state.lastAutoExposureFallback ),
+		state.lastAutoExposureSampleCount,
+		state.lastAutoExposureSampleWidth,
+		state.lastAutoExposureSampleHeight,
+		state.lastAutoExposurePercentile,
+		state.lastAutoExposureTargetLuma,
+		state.lastAutoExposureLogLuma,
+		state.lastAutoExposureLuma,
+		state.lastManualExposure,
+		state.lastAutoExposureScale,
+		state.lastAutoExposureTargetExposure,
+		state.autoExposureFrames,
+		state.autoExposureHistogramFrames,
+		state.autoExposureSimpleFrames,
+		state.autoExposureSampleFailures );
+	RI().Printf( PRINT_ALL,
 		"  output colorimetry: primaries %s, gamut-map %s, precision requested %i resolved %i\n",
 		GLX_RenderIR_OutputPrimariesName( state.lastOutput.outputPrimaries ),
 		GLX_RenderIR_GamutMapName( state.lastOutput.gamutMap ),
@@ -1298,6 +1762,20 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		state.displayOutput.displayName[0] ? state.displayOutput.displayName : "unknown",
 		state.displayOutput.reason[0] ? state.displayOutput.reason : "none" );
 	RI().Printf( PRINT_ALL,
+		"  display state: queries %u, changes %u, capability %u, backend %u, hdr %u, headroom %u, luminance %u, icc %u, last-frame %u, flags 0x%08x, hash 0x%08x, previous 0x%08x\n",
+		state.displayOutputQueries,
+		state.displayOutputStateChanges,
+		state.displayOutputCapabilityChanges,
+		state.displayOutputBackendChanges,
+		state.displayOutputHdrChanges,
+		state.displayOutputHeadroomChanges,
+		state.displayOutputLuminanceChanges,
+		state.displayOutputIccChanges,
+		state.lastDisplayOutputChangeFrame,
+		state.lastDisplayOutputChangeMask,
+		state.lastDisplayOutputHash,
+		state.previousDisplayOutputHash );
+	RI().Printf( PRINT_ALL,
 		"  color grade stage: mode %s, lift %.2f/%.2f/%.2f, gamma %.2f/%.2f/%.2f, gain %.2f/%.2f/%.2f, white-point %.0f->%.0f K, lut-size %.0f, lut-scale %.2f\n",
 		GLX_RenderIR_ColorGradeName( state.lastOutput.grade ),
 		state.lastGradeLift[0], state.lastGradeLift[1], state.lastGradeLift[2],
@@ -1306,18 +1784,31 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		state.lastWhitePointSourceKelvin, state.lastWhitePointTargetKelvin,
 		state.lastColorGradeLutSize, state.lastColorGradeLutScale );
 	RI().Printf( PRINT_ALL,
-		"  color audit: srgb-decode %s requested %s available %s, framebuffer-srgb %s requested %s available %s, capture sdr-srgb, target-float %s, final-encode %s, contract %s, texture-consistent %s, stale-srgb-decode %u\n",
+		"  color audit: srgb-decode %s requested %s available %s, framebuffer-srgb %s requested %s available %s, capture %s, capture-request %s, capture-hdr-aware %s, capture-supported %s, target-float %s, final-encode %s, contract %s, texture-consistent %s, stale-srgb-decode %u\n",
 		BoolName( state.textureSrgbDecode ),
 		BoolName( state.r_srgbTextures && state.r_srgbTextures->integer ? qtrue : qfalse ),
 		BoolName( state.textureSrgbAvailable ),
 		BoolName( state.framebufferSrgbEnabled ),
 		BoolName( state.r_framebufferSRGB && state.r_framebufferSRGB->integer ? qtrue : qfalse ),
 		BoolName( state.framebufferSrgbAvailable ),
+		GLX_RenderIR_CaptureExportPolicyName( state.lastCaptureSelected ),
+		GLX_RenderIR_CaptureExportPolicyName( state.lastCaptureRequest ),
+		BoolName( state.lastCaptureHdrAware ),
+		BoolName( state.lastCaptureSupported ),
 		BoolName( state.sceneTargetFloat ),
 		state.finalShaderSrgbEncode ? "shader-srgb" : "none",
 		BoolName( state.outputContractValid ),
 		BoolName( state.textureSrgbDecodeConsistent ),
 		state.textureSrgbStaleDecode );
+	RI().Printf( PRINT_ALL,
+		"  capture policy: request %s, selected %s, hdr-aware %s, supported %s, SDR frames %u, HDR requests %u, unsupported requests %u\n",
+		GLX_RenderIR_CaptureExportPolicyName( state.lastCaptureRequest ),
+		GLX_RenderIR_CaptureExportPolicyName( state.lastCaptureSelected ),
+		BoolName( state.lastCaptureHdrAware ),
+		BoolName( state.lastCaptureSupported ),
+		state.captureSdrFrames,
+		state.captureHdrRequestFrames,
+		state.captureUnsupportedRequestFrames );
 	GLX_PostProcess_PrintTextureAuditLine( state, "  " );
 	RI().Printf( PRINT_ALL,
 		"  FBO lifecycle: %u init attempts, %u ready, %u failed, %u disabled, %u shutdowns\n",
@@ -1361,6 +1852,11 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		GLX_PostProcess_BloomCreateResultName( state.lastBloomCreateResult ),
 		state.bloomCreateSuccesses, state.bloomCreateAttempts,
 		state.bloomCreateTextureUnitFailures, state.bloomCreateFboFailures );
+	RI().Printf( PRINT_ALL,
+		"  bloom storage: policy %s, format 0x%04x (0x%04x:0x%04x)\n",
+		GLX_PostProcess_BloomFormatModeName( state.lastBloomFormatMode ),
+		state.lastBloomInternalFormat, state.lastBloomTextureFormat,
+		state.lastBloomTextureType );
 	RI().Printf( PRINT_ALL,
 		"  bloom passes: calls %u, rendered %u, final %u, pre-final %u, skipped %u, failures %u, mode1 %u, mode2 %u, reflections %u\n",
 		state.bloomCalls, state.bloomRendered, state.bloomFinalPasses,

@@ -536,35 +536,35 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_adpcm.cpp"
+				RelativePath="..\..\client\audio\legacy\snd_adpcm.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_codec.cpp"
+				RelativePath="..\..\client\audio\codecs\snd_codec.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_codec_ogg.cpp"
+				RelativePath="..\..\client\audio\codecs\snd_codec_ogg.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_codec_wav.cpp"
+				RelativePath="..\..\client\audio\codecs\snd_codec_wav.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_dma.cpp"
+				RelativePath="..\..\client\audio\legacy\snd_dma.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_main.cpp"
+				RelativePath="..\..\client\audio\snd_main.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_mem.cpp"
+				RelativePath="..\..\client\audio\legacy\snd_mem.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_mix.cpp"
+				RelativePath="..\..\client\audio\legacy\snd_mix.cpp"
 				>
 			</File>
 			<File
@@ -592,7 +592,7 @@
 				</FileConfiguration>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_wavelet.cpp"
+				RelativePath="..\..\client\audio\legacy\snd_wavelet.cpp"
 				>
 			</File>
 			<File
@@ -785,11 +785,11 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_local.h"
+				RelativePath="..\..\client\audio\snd_local.h"
 				>
 			</File>
 			<File
-				RelativePath="..\..\client\snd_public.h"
+				RelativePath="..\..\client\audio\snd_public.h"
 				>
 			</File>
 			<File

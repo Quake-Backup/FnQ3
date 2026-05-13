@@ -518,4 +518,5 @@ Use this if you want the original mixer path:
 ## Related Guides
 
 - [Console Guide](CONSOLE.md) for command entry, completion, and console-side workflow.
+- [Modern Audio Engine Notes](fnquake3/AUDIO_ENGINE.md) for architecture, source layout, compatibility boundaries, and validation expectations.
 - [Technical Notes](fnquake3/TECHNICAL.md) for repository and release documentation rather than player settings.

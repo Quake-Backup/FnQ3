@@ -11,8 +11,8 @@ the Free Software Foundation; either version 2 of the License, or
 ===========================================================================
 */
 
-#include "../../audio/AudioZoneFormat.h"
-#include "../../audio/AudioZoneRuntime.h"
+#include "../../client/audio/shared/AudioZoneFormat.h"
+#include "../../client/audio/shared/AudioZoneRuntime.h"
 #include "../../qcommon/surfaceflags.h"
 
 #include <algorithm>

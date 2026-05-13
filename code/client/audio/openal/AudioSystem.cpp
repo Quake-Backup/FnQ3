@@ -16,19 +16,19 @@ the Free Software Foundation; either version 2 of the License, or
 #endif
 
 extern "C" {
-#include "../client/snd_local.h"
-#include "../client/client.h"
-#include "../client/snd_codec.h"
-#include "../qcommon/cm_public.h"
+#include "../snd_local.h"
+#include "../../client.h"
+#include "../codecs/snd_codec.h"
+#include "../../../qcommon/cm_public.h"
 }
 
 #include <AL/al.h>
 #include <AL/alc.h>
 #include <AL/alext.h>
-#include "AudioDeviceRecovery.h"
-#include "AudioOcclusion.h"
-#include "AudioZoneFormat.h"
-#include "AudioZoneRuntime.h"
+#include "../shared/AudioDeviceRecovery.h"
+#include "../shared/AudioOcclusion.h"
+#include "../shared/AudioZoneFormat.h"
+#include "../shared/AudioZoneRuntime.h"
 
 #include <algorithm>
 #include <array>

@@ -23,7 +23,7 @@ Fappin' and Fraggin'
 - An expanded **screenshot system** with pattern-based naming, optional view metadata sidecars, watermark compositing, and OpenGL-lineage cube-map capture. See the [Screenshot guide](docs/SCREENSHOTS.md).
 - CPMA/CNQ3-style **rainbow text color escapes**, with live preview right in the console input line.
 - **SDL3** support for video, audio, and input on modern platforms.
-- OpenAL is the default audio backend, with HRTF-aware positional audio, device/HRTF/output selection, **spatial reverb, occlusion**, tone shaping, latency diagnostics, and an easy fallback to the original mixer. See the [Audio guide](docs/AUDIO.md).
+- A new **OpenAL audio engine** is the default sound path, with HRTF-aware positional audio, direct handling for authored stereo/surround content, spatial reverb, geometry occlusion, optional audio-zone sidecars, latency diagnostics, device recovery, and a deterministic fallback to the original mixer. See the [Audio guide](docs/AUDIO.md) and [Modern Audio Engine Notes](docs/fnquake3/AUDIO_ENGINE.md).
 - Compatibility support for Quake III Arena 1.17 **`.dm3` demo playback** alongside standard retail `.dm_XX` demo formats.
 - Compatibility support for older **Quake 3 IHV / q3test `IBSP v43` maps** alongside standard retail Quake III Arena BSP content.
 - Quick-and-simple compatibility support for **Quake Live `IBSP v47` BSPs**, including ignored advert data and `advertisement` entity fallback to `func_static`.
@@ -31,6 +31,14 @@ Fappin' and Fraggin'
 - Support for **Quake Live BETA encrypted `.pk3` archives** alongside normal ZIP-based Quake 3 content packages.
 - Compatibility support for **Quake II `.pak` archives**, including archive discovery, reading, seeking, and pure/download path handling alongside standard Quake 3 packages.
 - Compatibility support for **Quake II `.wal` textures**, with automatic palette loading from `pics/colormap.pcx` during decode.
+
+## Modern Audio Engine
+
+FnQuake3 keeps Quake III's classic sound commands, assets, music flow, demos, and mod-facing behavior intact, then renders the client mix through a modern OpenAL path by default. Mono world sounds can use true positional sources and HRTF-capable output, while UI sounds, music, raw samples, and authored stereo or surround assets stay on a stable direct path.
+
+The environmental layer adds spatial reverb, wall-aware occlusion, tone shaping, optional `maps/<map>.azb` audio-zone sidecars, and debug tools that show what the backend actually started. If OpenAL, a requested device, or a requested capability is unavailable, startup reports the mismatch and falls back through safer OpenAL settings or the original mixer rather than changing content compatibility.
+
+Player-facing controls are in the [Audio guide](docs/AUDIO.md). Maintainer details, including the source layout and compatibility boundary, are in the [Modern Audio Engine Notes](docs/fnquake3/AUDIO_ENGINE.md).
 
 ## Credits
 
@@ -61,6 +69,7 @@ Fappin' and Fraggin'
 - [Visuals Guide](docs/VISUALS.md) for player highlighting and the current visual presentation controls.
 - [Aspect Correction Guide](docs/ASPECT_CORRECTION.md) for HUD, menu, and cinematic presentation options.
 - [Audio Guide](docs/AUDIO.md) for backend defaults, device/HRTF selection, volume, music, spatial audio, fallback behavior, and troubleshooting tools.
+- [Modern Audio Engine Notes](docs/fnquake3/AUDIO_ENGINE.md) for the OpenAL architecture, source layout, compatibility boundaries, and validation expectations.
 - [Console Guide](docs/CONSOLE.md) for console scaling, interaction, completion, and appearance.
 - [Screenshot Guide](docs/SCREENSHOTS.md) for capture commands, naming patterns, view metadata sidecars, watermarks, and cube-map export.
 - [Changelog](docs/fnquake3/CHANGELOG.md) for release-facing change history.

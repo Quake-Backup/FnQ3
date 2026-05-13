@@ -32,7 +32,7 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 
 extern "C" {
-#include "snd_local.h"
+#include "../snd_local.h"
 }
 
 #include <algorithm>

@@ -122,8 +122,10 @@ Dry-run renderer gate artifacts are planning evidence only. Blocking release evi
 
 ## Audio Backend Notes
 
+- [`AUDIO_ENGINE.md`](./AUDIO_ENGINE.md) is the detailed architecture and source-layout reference for the modern audio engine.
 - The default client audio path is the OpenAL backend selected by `s_backend openal`.
 - `s_backend legacy` keeps the original Quake III mixer/device backend available as a fallback path.
+- Client audio now lives under [`code/client/audio`](../../code/client/audio): the stable `S_*` facade is at the module root, the original mixer is in `legacy/`, codecs are in `codecs/`, the OpenAL backend is in `openal/`, and reusable policy/sidecar headers used by tools and tests are in `shared/`.
 - OpenAL headers are provided through the Meson `openal-soft` subproject fallback or a system OpenAL development package. The client still loads the OpenAL runtime dynamically so startup can fall back to the legacy mixer when the runtime is unavailable.
 - The runtime reporting cvar is `s_backendActive`. Device selection for the OpenAL backend uses `s_alDevice`.
 - The OpenAL backend also exposes `s_alReverb`, `s_alOcclusion`, `s_alReverbGain`, and `s_alOcclusionStrength` for the environmental spatial layer. Reverb enablement is latched because the EFX reverb slot is created at backend init. Listener environment changes blend EFX preset parameters and per-source wet/tone values over a short transition, with the active-to-target environment visible in the spatial debug overlay and `s_alDebugDump`. Occlusion traces feed a smoothed per-voice target; direct-path attenuation is kept separate from tone-filter sweeps so wall transitions do not zipper. The per-voice EFX filters are intentionally limited to low-pass, high-pass, and band-pass presets chosen by source class and occlusion/environment state.

@@ -122,7 +122,17 @@ ENDIF()
 
 # client + cURL
 AUX_SOURCE_DIRECTORY(code/client CLIENT_SRCS)
-list(APPEND CLIENT_SRCS code/audio/AudioSystem.cpp)
+list(APPEND CLIENT_SRCS
+	code/client/audio/snd_main.cpp
+	code/client/audio/legacy/snd_adpcm.cpp
+	code/client/audio/legacy/snd_dma.cpp
+	code/client/audio/legacy/snd_mem.cpp
+	code/client/audio/legacy/snd_mix.cpp
+	code/client/audio/legacy/snd_wavelet.cpp
+	code/client/audio/codecs/snd_codec.cpp
+	code/client/audio/codecs/snd_codec_ogg.cpp
+	code/client/audio/codecs/snd_codec_wav.cpp
+	code/client/audio/openal/AudioSystem.cpp)
 IF(NOT USE_CURL)
 	list(REMOVE_ITEM CLIENT_SRCS code/client/cl_curl.cpp)
 ENDIF()
@@ -143,11 +153,25 @@ ELSE()
 ENDIF()
 
 target_compile_features(client PRIVATE cxx_std_17)
-target_include_directories(client PRIVATE code/openal/include)
+
+set(FNQ3_OPENAL_INCLUDE_DIRS)
+set(FNQ3_OPENAL_INCLUDE_CANDIDATES
+	"${CMAKE_CURRENT_SOURCE_DIR}/code/openal/include")
+file(GLOB FNQ3_OPENAL_SOFT_INCLUDE_CANDIDATES CONFIGURE_DEPENDS
+	"${CMAKE_CURRENT_SOURCE_DIR}/subprojects/openal-soft-*/include")
+list(APPEND FNQ3_OPENAL_INCLUDE_CANDIDATES ${FNQ3_OPENAL_SOFT_INCLUDE_CANDIDATES})
+foreach(FNQ3_OPENAL_INCLUDE_CANDIDATE IN LISTS FNQ3_OPENAL_INCLUDE_CANDIDATES)
+	if(EXISTS "${FNQ3_OPENAL_INCLUDE_CANDIDATE}/AL/al.h")
+		list(APPEND FNQ3_OPENAL_INCLUDE_DIRS "${FNQ3_OPENAL_INCLUDE_CANDIDATE}")
+	endif()
+endforeach()
+if(FNQ3_OPENAL_INCLUDE_DIRS)
+	target_include_directories(client PRIVATE ${FNQ3_OPENAL_INCLUDE_DIRS})
+endif()
 
 ADD_EXECUTABLE(fnq3-audiozonesc code/tools/audiozones/audiozonesc.cpp)
 target_compile_features(fnq3-audiozonesc PRIVATE cxx_std_17)
-target_include_directories(fnq3-audiozonesc PRIVATE code/audio)
+target_include_directories(fnq3-audiozonesc PRIVATE code/client/audio/shared)
 IF(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
 	TARGET_LINK_LIBRARIES(fnq3-audiozonesc PRIVATE stdc++fs)
 ENDIF()
@@ -156,7 +180,7 @@ IF(FNQ3_AUDIO_LOOPBACK_TESTS)
 	enable_testing()
 	ADD_EXECUTABLE(fnq3_audio_zone_tests tests/audio/audiozone_runtime_tests.cpp)
 	target_compile_features(fnq3_audio_zone_tests PRIVATE cxx_std_17)
-	target_include_directories(fnq3_audio_zone_tests PRIVATE code/audio)
+	target_include_directories(fnq3_audio_zone_tests PRIVATE code/client/audio/shared)
 	add_test(NAME fnq3_audio_zones COMMAND fnq3_audio_zone_tests)
 	add_test(NAME fnq3_audio_zone_authoring
 		COMMAND $<TARGET_FILE:fnq3-audiozonesc> -o "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/audiozone_authoring_test.azb" "${CMAKE_CURRENT_SOURCE_DIR}/tests/audio/authoring_metadata.audiozones")
@@ -169,17 +193,19 @@ IF(FNQ3_AUDIO_LOOPBACK_TESTS)
 
 	ADD_EXECUTABLE(fnq3_audio_recovery_tests tests/audio/recovery_policy_tests.cpp)
 	target_compile_features(fnq3_audio_recovery_tests PRIVATE cxx_std_17)
-	target_include_directories(fnq3_audio_recovery_tests PRIVATE code/audio)
+	target_include_directories(fnq3_audio_recovery_tests PRIVATE code/client/audio/shared)
 	add_test(NAME fnq3_audio_recovery COMMAND fnq3_audio_recovery_tests)
 
 	ADD_EXECUTABLE(fnq3_audio_occlusion_tests tests/audio/occlusion_policy_tests.cpp)
 	target_compile_features(fnq3_audio_occlusion_tests PRIVATE cxx_std_17)
-	target_include_directories(fnq3_audio_occlusion_tests PRIVATE code/audio)
+	target_include_directories(fnq3_audio_occlusion_tests PRIVATE code/client/audio/shared)
 	add_test(NAME fnq3_audio_occlusion COMMAND fnq3_audio_occlusion_tests)
 
 	ADD_EXECUTABLE(fnq3_audio_loopback_tests tests/audio/openal_loopback_tests.cpp)
 	target_compile_features(fnq3_audio_loopback_tests PRIVATE cxx_std_17)
-	target_include_directories(fnq3_audio_loopback_tests PRIVATE code/openal/include)
+	if(FNQ3_OPENAL_INCLUDE_DIRS)
+		target_include_directories(fnq3_audio_loopback_tests PRIVATE ${FNQ3_OPENAL_INCLUDE_DIRS})
+	endif()
 	IF(UNIX)
 		TARGET_LINK_LIBRARIES(fnq3_audio_loopback_tests PRIVATE m ${CMAKE_DL_LIBS})
 	ENDIF()

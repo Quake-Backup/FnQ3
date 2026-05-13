@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="..\..\audio\AudioSystem.cpp">
+    <ClCompile Include="..\..\client\audio\openal\AudioSystem.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\client\cl_avi.cpp">
@@ -109,31 +109,31 @@
     <ClCompile Include="..\..\qcommon\q_shared.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_adpcm.cpp">
+    <ClCompile Include="..\..\client\audio\legacy\snd_adpcm.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_codec.cpp">
+    <ClCompile Include="..\..\client\audio\codecs\snd_codec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_codec_wav.cpp">
+    <ClCompile Include="..\..\client\audio\codecs\snd_codec_wav.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_codec_ogg.cpp">
+    <ClCompile Include="..\..\client\audio\codecs\snd_codec_ogg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_dma.cpp">
+    <ClCompile Include="..\..\client\audio\legacy\snd_dma.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_main.cpp">
+    <ClCompile Include="..\..\client\audio\snd_main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_mem.cpp">
+    <ClCompile Include="..\..\client\audio\legacy\snd_mem.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_mix.cpp">
+    <ClCompile Include="..\..\client\audio\legacy\snd_mix.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\snd_wavelet.cpp">
+    <ClCompile Include="..\..\client\audio\legacy\snd_wavelet.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\server\sv_bot.cpp">
@@ -216,23 +216,32 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\audio\AudioSystemBackend.inl">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\audio\AudioSystemOpenAL.inl">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\audio\AudioSystemShared.inl">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\audio\AudioSystemStreams.inl">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\audio\AudioSystemWorld.inl">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\audio\AudioZoneFormat.h">
+    <ClInclude Include="..\..\client\audio\shared\AudioDeviceRecovery.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\client\audio\shared\AudioOcclusion.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\client\audio\shared\AudioZoneFormat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\client\audio\shared\AudioZoneRuntime.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemBackend.inl">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemOpenAL.inl">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemShared.inl">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemStreams.inl">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemWorld.inl">
+      <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\game\bg_public.h">
       <Filter>Header Files</Filter>
@@ -267,6 +276,9 @@
     <ClInclude Include="..\..\client\keys.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\client\audio\codecs\snd_codec.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\qcommon\puff.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -291,10 +303,10 @@
     <ClInclude Include="..\..\server\server.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\client\snd_local.h">
+    <ClInclude Include="..\..\client\audio\snd_local.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\client\snd_public.h">
+    <ClInclude Include="..\..\client\audio\snd_public.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\qcommon\surfaceflags.h">

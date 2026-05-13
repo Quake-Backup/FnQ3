@@ -10,7 +10,7 @@
 #include <pthread.h>
 #include <cstddef>
 
-#include "../client/snd_local.h"
+#include "../client/audio/snd_local.h"
 #include "../qcommon/q_shared.h"
 #include "unix_raii.h"
 
@@ -1100,7 +1100,7 @@ static void async_proc( snd_async_handler_t *ahandler )
 #endif
 #include <stdio.h>
 
-#include "../client/snd_local.h"
+#include "../client/audio/snd_local.h"
 #include "../qcommon/q_shared.h"
 #include "unix_raii.h"
 

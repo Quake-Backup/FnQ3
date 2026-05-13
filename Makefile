@@ -244,7 +244,10 @@ BLIBDIR=$(MOUNT_DIR)/botlib
 JPDIR=$(MOUNT_DIR)/libjpeg
 OGGDIR=$(MOUNT_DIR)/libogg
 VORBISDIR=$(MOUNT_DIR)/libvorbis
-AUDIR=$(MOUNT_DIR)/audio
+CLIENTAUDIODIR=$(CDIR)/audio
+CLIENTAUDIOCODECSDIR=$(CLIENTAUDIODIR)/codecs
+CLIENTAUDIOLEGACYDIR=$(CLIENTAUDIODIR)/legacy
+CLIENTAUDIOOPENALDIR=$(CLIENTAUDIODIR)/openal
 
 bin_path=$(shell which $(1) 2> /dev/null)
 
@@ -1581,7 +1584,16 @@ $(B)/client/%.o: $(CDIR)/%.c
 $(B)/client/%.o: $(CDIR)/%.cpp
 	$(DO_CXX)
 
-$(B)/client/%.o: $(AUDIR)/%.cpp
+$(B)/client/%.o: $(CLIENTAUDIODIR)/%.cpp
+	$(DO_CXX)
+
+$(B)/client/%.o: $(CLIENTAUDIOCODECSDIR)/%.cpp
+	$(DO_CXX)
+
+$(B)/client/%.o: $(CLIENTAUDIOLEGACYDIR)/%.cpp
+	$(DO_CXX)
+
+$(B)/client/%.o: $(CLIENTAUDIOOPENALDIR)/%.cpp
 	$(DO_CXX)
 
 $(B)/client/%.o: $(SDIR)/%.c

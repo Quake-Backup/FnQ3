@@ -234,15 +234,15 @@ client_src = [
   'code/client/cl_parse.cpp',
   'code/client/cl_scrn.cpp',
   'code/client/cl_ui.cpp',
-  'code/client/snd_adpcm.cpp',
-  'code/client/snd_codec_wav.cpp',
-  'code/client/snd_codec.cpp',
-  'code/client/snd_dma.cpp',
-  'code/client/snd_main.cpp',
-  'code/client/snd_mem.cpp',
-  'code/client/snd_mix.cpp',
-  'code/client/snd_wavelet.cpp',
-  'code/audio/AudioSystem.cpp',
+  'code/client/audio/snd_main.cpp',
+  'code/client/audio/legacy/snd_adpcm.cpp',
+  'code/client/audio/legacy/snd_dma.cpp',
+  'code/client/audio/legacy/snd_mem.cpp',
+  'code/client/audio/legacy/snd_mix.cpp',
+  'code/client/audio/legacy/snd_wavelet.cpp',
+  'code/client/audio/codecs/snd_codec_wav.cpp',
+  'code/client/audio/codecs/snd_codec.cpp',
+  'code/client/audio/openal/AudioSystem.cpp',
 ]
 
 botlib_src = [
@@ -566,7 +566,7 @@ if get_option('ogg-vorbis')
   if not vorbisfile_dep.found()
     error('Ogg Vorbis support was enabled but vorbisfile was not found')
   endif
-  client_src += 'code/client/snd_codec_ogg.cpp'
+  client_src += 'code/client/audio/codecs/snd_codec_ogg.cpp'
   client_deps += vorbisfile_dep
   common_c_args += ['-DUSE_OGG_VORBIS']
   common_cpp_args += ['-DUSE_OGG_VORBIS']
@@ -819,7 +819,7 @@ endif
 
 audiozonesc = executable('fnq3-audiozonesc',
   'code/tools/audiozones/audiozonesc.cpp',
-  include_directories: include_directories('code/audio'),
+  include_directories: include_directories('code/client/audio/shared'),
   cpp_args: common_cpp_args,
   install: true,
   install_dir: '.',
@@ -828,7 +828,7 @@ audiozonesc = executable('fnq3-audiozonesc',
 if get_option('audio-tests')
   audio_zone_tests = executable('fnq3_audio_zone_tests',
     'tests/audio/audiozone_runtime_tests.cpp',
-    include_directories: include_directories('code/audio'),
+    include_directories: include_directories('code/client/audio/shared'),
     cpp_args: common_cpp_args,
   )
   test('fnq3_audio_zones', audio_zone_tests)
@@ -845,14 +845,14 @@ if get_option('audio-tests')
 
   audio_recovery_tests = executable('fnq3_audio_recovery_tests',
     'tests/audio/recovery_policy_tests.cpp',
-    include_directories: include_directories('code/audio'),
+    include_directories: include_directories('code/client/audio/shared'),
     cpp_args: common_cpp_args,
   )
   test('fnq3_audio_recovery', audio_recovery_tests)
 
   audio_occlusion_tests = executable('fnq3_audio_occlusion_tests',
     'tests/audio/occlusion_policy_tests.cpp',
-    include_directories: include_directories('code/audio'),
+    include_directories: include_directories('code/client/audio/shared'),
     cpp_args: common_cpp_args,
   )
   test('fnq3_audio_occlusion', audio_occlusion_tests)

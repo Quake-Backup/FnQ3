@@ -273,7 +273,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\audio\AudioSystem.cpp" />
+    <ClCompile Include="..\..\client\audio\openal\AudioSystem.cpp" />
     <ClCompile Include="..\..\client\cl_avi.cpp" />
     <ClCompile Include="..\..\client\cl_cgame.cpp" />
     <ClCompile Include="..\..\client\cl_hud.cpp" />
@@ -288,15 +288,15 @@
     <ClCompile Include="..\..\client\cl_parse.cpp" />
     <ClCompile Include="..\..\client\cl_scrn.cpp" />
     <ClCompile Include="..\..\client\cl_ui.cpp" />
-    <ClCompile Include="..\..\client\snd_adpcm.cpp" />
-    <ClCompile Include="..\..\client\snd_codec.cpp" />
-    <ClCompile Include="..\..\client\snd_codec_ogg.cpp" />
-    <ClCompile Include="..\..\client\snd_codec_wav.cpp" />
-    <ClCompile Include="..\..\client\snd_dma.cpp" />
-    <ClCompile Include="..\..\client\snd_main.cpp" />
-    <ClCompile Include="..\..\client\snd_mem.cpp" />
-    <ClCompile Include="..\..\client\snd_mix.cpp" />
-    <ClCompile Include="..\..\client\snd_wavelet.cpp" />
+    <ClCompile Include="..\..\client\audio\legacy\snd_adpcm.cpp" />
+    <ClCompile Include="..\..\client\audio\codecs\snd_codec.cpp" />
+    <ClCompile Include="..\..\client\audio\codecs\snd_codec_ogg.cpp" />
+    <ClCompile Include="..\..\client\audio\codecs\snd_codec_wav.cpp" />
+    <ClCompile Include="..\..\client\audio\legacy\snd_dma.cpp" />
+    <ClCompile Include="..\..\client\audio\snd_main.cpp" />
+    <ClCompile Include="..\..\client\audio\legacy\snd_mem.cpp" />
+    <ClCompile Include="..\..\client\audio\legacy\snd_mix.cpp" />
+    <ClCompile Include="..\..\client\audio\legacy\snd_wavelet.cpp" />
     <ClCompile Include="..\..\qcommon\cmd.c" />
     <ClCompile Include="..\..\qcommon\cm_load.c" />
     <ClCompile Include="..\..\qcommon\cm_patch.c" />
@@ -370,19 +370,23 @@
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\audio\AudioSystemBackend.inl" />
-    <ClInclude Include="..\..\audio\AudioSystemOpenAL.inl" />
-    <ClInclude Include="..\..\audio\AudioSystemShared.inl" />
-    <ClInclude Include="..\..\audio\AudioSystemStreams.inl" />
-    <ClInclude Include="..\..\audio\AudioSystemWorld.inl" />
-    <ClInclude Include="..\..\audio\AudioZoneFormat.h" />
+    <ClInclude Include="..\..\client\audio\shared\AudioDeviceRecovery.h" />
+    <ClInclude Include="..\..\client\audio\shared\AudioOcclusion.h" />
+    <ClInclude Include="..\..\client\audio\shared\AudioZoneFormat.h" />
+    <ClInclude Include="..\..\client\audio\shared\AudioZoneRuntime.h" />
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemBackend.inl" />
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemOpenAL.inl" />
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemShared.inl" />
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemStreams.inl" />
+    <ClInclude Include="..\..\client\audio\openal\AudioSystemWorld.inl" />
     <ClInclude Include="..\..\cgame\cg_public.h" />
     <ClInclude Include="..\..\client\client.h" />
     <ClInclude Include="..\..\client\cl_curl.h" />
     <ClInclude Include="..\..\client\keycodes.h" />
     <ClInclude Include="..\..\client\keys.h" />
-    <ClInclude Include="..\..\client\snd_local.h" />
-    <ClInclude Include="..\..\client\snd_public.h" />
+    <ClInclude Include="..\..\client\audio\codecs\snd_codec.h" />
+    <ClInclude Include="..\..\client\audio\snd_local.h" />
+    <ClInclude Include="..\..\client\audio\snd_public.h" />
     <ClInclude Include="..\..\game\bg_public.h" />
     <ClInclude Include="..\..\game\g_public.h" />
     <ClInclude Include="..\..\qcommon\cm_local.h" />

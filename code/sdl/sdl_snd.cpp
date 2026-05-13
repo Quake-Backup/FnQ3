@@ -27,7 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <SDL3/SDL.h>
 
 #include "../qcommon/q_shared.h"
-#include "../client/snd_local.h"
+#include "../client/audio/snd_local.h"
 #include "../client/client.h"
 #include "sdl_raii.h"
 

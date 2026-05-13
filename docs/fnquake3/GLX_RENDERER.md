@@ -215,7 +215,7 @@ Those samples are now gateable evidence rather than passive telemetry. Named gat
 
 ```sh
 meson compile -C meson/build fnq3_glx_logic_tests
-meson test -C meson/build -R "fnq3_glx_(logic|header_boundary)" --print-errorlogs
+meson test -C meson/build fnq3_glx_logic fnq3_glx_header_boundary --print-errorlogs
 ```
 
 `r_glxStreamDrawKeyMode` controls the stream material gate used after the hard eligibility checks and `MaterialIR` compiler validation:

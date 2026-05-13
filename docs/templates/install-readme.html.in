@@ -7,19 +7,24 @@
   <style>
     :root {
       --bg: #0b1020;
-      --bg-alt: #11182e;
-      --panel: rgba(10, 16, 32, 0.86);
+      --panel: rgba(10, 16, 32, 0.88);
+      --panel-alt: rgba(15, 23, 42, 0.78);
       --line: rgba(148, 163, 184, 0.22);
       --text: #e5edf7;
       --muted: #9db0ca;
       --accent: #4ade80;
       --accent-2: #38bdf8;
-      --accent-3: #f59e0b;
+      --accent-3: #a78bfa;
+      --accent-4: #f59e0b;
       --shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
     }
 
     * {
       box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
     }
 
     body {
@@ -34,7 +39,7 @@
     }
 
     main {
-      width: min(960px, calc(100% - 32px));
+      width: min(1040px, calc(100% - 32px));
       margin: 0 auto;
       padding: 40px 0 56px;
     }
@@ -81,25 +86,32 @@
 
     h1 {
       margin: 18px 0 8px;
-      font-size: clamp(2.2rem, 5vw, 4rem);
+      font-size: clamp(2.4rem, 5vw, 4.2rem);
       line-height: 0.95;
     }
 
     .tagline {
-      margin: 0 0 12px;
+      margin: 0 0 14px;
       color: #f8fafc;
       font-size: 1.05rem;
       font-weight: 700;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }
 
-    .subtitle {
-      max-width: 760px;
-      margin: 0;
+    .subtitle,
+    .lead,
+    li,
+    .card p,
+    .footer {
       color: var(--muted);
+      line-height: 1.72;
+    }
+
+    .subtitle {
+      max-width: 780px;
+      margin: 0;
       font-size: 1.06rem;
-      line-height: 1.7;
     }
 
     .buttons {
@@ -113,7 +125,7 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-width: 160px;
+      min-width: 170px;
       padding: 12px 18px;
       border-radius: 999px;
       text-decoration: none;
@@ -134,36 +146,20 @@
 
     .button-secondary {
       color: var(--text);
-      background: rgba(15, 23, 42, 0.7);
+      background: rgba(15, 23, 42, 0.72);
       border: 1px solid rgba(148, 163, 184, 0.24);
     }
 
-    .grid {
+    .stats,
+    .feature-grid,
+    .doc-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 16px;
+    }
+
+    .stats {
       margin-top: 22px;
-    }
-
-    .card {
-      padding: 18px 18px 16px;
-      border-radius: 18px;
-      background: rgba(15, 23, 42, 0.72);
-      border: 1px solid rgba(148, 163, 184, 0.16);
-    }
-
-    .card strong {
-      display: block;
-      margin-bottom: 8px;
-      color: #f8fafc;
-      font-size: 1rem;
-    }
-
-    .card p,
-    li,
-    .footer {
-      color: var(--muted);
-      line-height: 1.7;
     }
 
     .section {
@@ -171,18 +167,61 @@
       padding: 28px 30px;
     }
 
+    .section-header {
+      margin-bottom: 16px;
+    }
+
     h2 {
-      margin-top: 0;
+      margin: 0;
       font-size: 1.2rem;
       letter-spacing: 0.04em;
       text-transform: uppercase;
-      color: var(--accent-3);
+      color: var(--accent-4);
     }
 
-    ul,
-    ol {
+    h3 {
+      margin: 0 0 10px;
+      color: #f8fafc;
+      font-size: 1.02rem;
+    }
+
+    .lead {
+      margin: 10px 0 0;
+      max-width: 820px;
+    }
+
+    .card,
+    .feature-group,
+    .doc-column {
+      padding: 18px;
+      border-radius: 18px;
+      background: var(--panel-alt);
+      border: 1px solid rgba(148, 163, 184, 0.16);
+    }
+
+    .card strong,
+    .feature-group strong,
+    .doc-column strong {
+      display: block;
+      margin-bottom: 8px;
+      color: #f8fafc;
+      font-size: 1rem;
+    }
+
+    ol,
+    ul {
       margin: 14px 0 0;
       padding-left: 22px;
+    }
+
+    .feature-grid,
+    .doc-grid {
+      margin-top: 18px;
+    }
+
+    .doc-column ul,
+    .feature-group ul {
+      margin-top: 10px;
     }
 
     a {
@@ -204,7 +243,7 @@
 
     @media (max-width: 640px) {
       main {
-        width: min(100% - 20px, 960px);
+        width: min(100% - 20px, 1040px);
         padding-top: 18px;
       }
 
@@ -227,26 +266,26 @@
       <h1>${project_name_short}</h1>
       <p class="tagline">Fappin' and Fraggin'</p>
       <p class="subtitle">
-        <strong>${project_name_short}</strong> is a modern source-port for <em>Quake III Arena</em> built around a
-        simple goal: enhance the modern Quake 3 experience whilst leaving the game code untouched.
+        <strong>${project_name_short}</strong> keeps retail <em>Quake III Arena</em> at the center while making the engine feel more at home on modern systems.
       </p>
       <div class="buttons">
-        <a class="button button-primary" href="../README.md">Project README</a>
-        <a class="button button-secondary" href="../BUILD.md">Build Guide</a>
-        <a class="button button-secondary" href="../docs/fnquake3/TECHNICAL.md">Technical Notes</a>
+        <a class="button button-primary" href="https://github.com/themuffinator/FnQ3/releases/latest">Latest release</a>
+        <a class="button button-secondary" href="#getting-started">Getting started</a>
+        <a class="button button-secondary" href="#documentation">Documentation</a>
+        <a class="button button-secondary" href="#credits">Credits</a>
       </div>
-      <div class="grid">
+      <div class="stats">
+        <article class="card">
+          <strong>Compatibility target</strong>
+          <p>${compatibility_target}</p>
+        </article>
         <article class="card">
           <strong>Base version</strong>
           <p>${base_version}</p>
         </article>
         <article class="card">
-          <strong>Build version</strong>
+          <strong>Current build</strong>
           <p>${version}</p>
-        </article>
-        <article class="card">
-          <strong>Compatibility target</strong>
-          <p>${compatibility_target}</p>
         </article>
         <article class="card">
           <strong>Tagged release format</strong>
@@ -255,84 +294,107 @@
       </div>
     </section>
 
-    <section class="section">
-      <h2>Features</h2>
-      <ul>
-        <li>A flexible display pipeline with renderer selection, fullscreen and windowed mode controls, internal render scaling, <strong>HDR</strong>, anti-aliasing, and detailed <strong>bloom</strong> tuning. See the <a href="../docs/DISPLAY.md">Display Guide</a>.</li>
-        <li>Configurable <strong>cel shading</strong> for model entities, including map world models, player models, and the first-person weapon, with banded lighting and optional silhouette outlines. See the <a href="../docs/DISPLAY.md">Display Guide</a>.</li>
-        <li>Optional player highlighting with <strong>rimlight</strong> and <strong>stencil border effects</strong>, per-mode team or free colors, and teammate/enemy override colors. See the <a href="../docs/VISUALS.md">Visuals Guide</a>.</li>
-        <li>Flexible 4:3-aware <strong>aspect correction</strong> for HUDs, menus, UI model widgets, and cinematics, with sensible widescreen options when you want them. See the <a href="../docs/ASPECT_CORRECTION.md">Aspect Correction Guide</a>.</li>
-        <li><strong>Enhanced console</strong> functionality, including configurable scaling, smoother scrolling, mouse interaction, text selection, drag and drop, and an optional live tab-completion popup. See the <a href="../docs/CONSOLE.md">Console Guide</a>.</li>
-        <li>An expanded <strong>screenshot system</strong> with pattern-based naming, optional view metadata sidecars, watermark compositing, and OpenGL-lineage cube-map capture. See the <a href="../docs/SCREENSHOTS.md">Screenshot Guide</a>.</li>
-        <li>CPMA/CNQ3-style <strong>rainbow text color escapes</strong>, with live preview right in the console input line.</li>
-        <li><strong>SDL3</strong> support for video, audio, and input on modern platforms.</li>
-        <li>OpenAL is the default audio backend, with HRTF-aware positional audio, device/HRTF/output selection, <strong>spatial reverb, occlusion</strong>, tone shaping, latency diagnostics, and an easy fallback to the original mixer. See the <a href="../docs/AUDIO.md">Audio Guide</a>.</li>
-        <li>Compatibility support for Quake III Arena 1.17 <code>.dm3</code> demo playback alongside standard retail <code>.dm_XX</code> demo formats.</li>
-        <li>Compatibility support for older <strong>Quake 3 IHV / q3test <code>IBSP v43</code> maps</strong> alongside standard retail Quake III Arena BSP content.</li>
-        <li>Quick-and-simple compatibility support for <strong>Quake Live <code>IBSP v47</code> BSPs</strong>, including ignored advert data and <code>advertisement</code> entity fallback to <code>func_static</code>.</li>
-        <li>Support for the <strong><code>novlcollapse</code></strong> shader keyword used by Quake Live materials.</li>
-        <li>Support for <strong>Quake Live BETA encrypted <code>.pk3</code> archives</strong> alongside normal ZIP-based Quake 3 content packages.</li>
-        <li>Compatibility support for <strong>Quake II <code>.pak</code> archives</strong>, including archive discovery, reading, seeking, and pure/download path handling alongside standard Quake 3 packages.</li>
-        <li>Compatibility support for <strong>Quake II <code>.wal</code> textures</strong>, with automatic palette loading from <code>pics/colormap.pcx</code> during decode.</li>
-      </ul>
+    <section class="section" id="introduction">
+      <div class="section-header">
+        <h2>1. Introduction</h2>
+        <p class="lead"><strong>${project_name_short}</strong> is a modernized Quake III Arena source port for players who want the original game to stay recognizably Quake III while gaining cleaner presentation, smoother usability, and better support for current platforms.</p>
+      </div>
+      <p class="lead">What sets FnQuake3 apart is restraint: it aims to keep retail compatibility, demos, classic assets, and mod expectations intact first, then layers modern audio, presentation, and quality-of-life improvements on top without changing the identity of the game.</p>
     </section>
 
-    <section class="section">
-      <h2>Credits</h2>
-      <ul>
-        <li>CPMA/CNQ3-style rainbow text color escape support is adapted from the CPMADevs CNQ3 project.</li>
-        <li>IBSP v43 / Quake 3 IHV map loading support is adapted from Spearmint's <code>bsp_q3ihv.c</code> implementation.</li>
-        <li>Legacy <code>.dm3</code> demo compatibility work was cross-checked against <a href="https://github.com/brugal/wolfcamql">WolfcamQL</a>.</li>
-        <li>Quake Live BETA encrypted PK3 support uses the XOR table published by Luigi Auriemma's <strong>qldec</strong> (<code>quakelivedec.c</code>).</li>
-        <li>Quake II <code>.pak</code> / <code>.wal</code> compatibility work was cross-checked against the DarkMatter-Q2 project.</li>
-        <li>Upstream <a href="https://github.com/ec-/Quake3e">Quake3e</a> upon which this is based.</li>
-      </ul>
+    <section class="section" id="features">
+      <div class="section-header">
+        <h2>2. Features</h2>
+        <p class="lead">The headline features are grouped around the same idea: preserve the original game, but make living with it on a modern machine much nicer.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-group">
+          <h3>Play the original game with a cleaner modern fit</h3>
+          <ul>
+            <li>Retail Quake III Arena compatibility stays the priority, including classic data, demo playback, and mod expectations.</li>
+            <li>SDL3-based video, audio, and input support keeps the engine comfortable on current platforms.</li>
+            <li>OpenAL is the default audio path, with improved spatial sound and a safe fallback to the classic mixer.</li>
+          </ul>
+        </article>
+        <article class="feature-group">
+          <h3>Sharper presentation without losing Quake III's look</h3>
+          <ul>
+            <li>Flexible display controls for renderer choice, fullscreen and windowed play, render scaling, HDR, anti-aliasing, and bloom.</li>
+            <li>Optional extras such as cel shading, player rim lighting, and stencil-style highlights.</li>
+            <li>Better widescreen handling for HUDs, menus, UI previews, and cinematics.</li>
+          </ul>
+        </article>
+        <article class="feature-group">
+          <h3>Better day-to-day usability</h3>
+          <ul>
+            <li>An upgraded console with smoother scrolling, scaling options, mouse support, text selection, drag and drop, and live completion help.</li>
+            <li>Expanded screenshot tools with cleaner naming, optional metadata sidecars, watermark support, and cube-map capture.</li>
+            <li>Player-facing quality-of-life touches such as live rainbow text preview and more flexible configuration.</li>
+          </ul>
+        </article>
+        <article class="feature-group">
+          <h3>Wider content compatibility</h3>
+          <ul>
+            <li>Support for older Quake 3 IHV / q3test maps and legacy <code>.dm3</code> demos alongside standard retail content.</li>
+            <li>Practical compatibility for selected Quake Live assets such as <code>IBSP v47</code> maps and encrypted beta <code>.pk3</code> archives.</li>
+            <li>Support for Quake II <code>.pak</code> archives and <code>.wal</code> textures for broader content experimentation.</li>
+          </ul>
+        </article>
+      </div>
     </section>
 
-    <section class="section">
-      <h2>Quick Start</h2>
+    <section class="section" id="getting-started">
+      <div class="section-header">
+        <h2>3. Getting Started</h2>
+        <p class="lead">FnQuake3 is meant to be straightforward for players: keep your original game data, drop in a new executable, and start playing.</p>
+      </div>
       <ol>
-        <li>Build the engine for your platform, or grab a packaged build if you already have one.</li>
-        <li>Put the executable next to your Quake III Arena installation and data files.</li>
-        <li>Leave your original retail game assets alone.</li>
-        <li>Use <a href="../BUILD.md">BUILD.md</a> if you need the platform-specific build steps.</li>
+        <li>Install <em>Quake III Arena</em> and make sure your original <code>baseq3</code> data is present.</li>
+        <li>Download the current build from the <a href="https://github.com/themuffinator/FnQ3/releases/latest">latest release page</a>.</li>
+        <li>Extract the release archive into your Quake III Arena folder so the FnQuake3 executables sit next to your existing game files.</li>
+        <li>Launch the FnQuake3 executable for your platform.</li>
+        <li>Use the guides below if you want to tune visuals, audio, screenshots, or console behavior.</li>
       </ol>
+      <p class="footer">If you want to build FnQuake3 yourself, use the <a href="https://github.com/themuffinator/FnQ3/blob/main/BUILD.md">Build Guide</a>.</p>
     </section>
 
-    <section class="section">
-      <h2>Releases</h2>
-      <ul>
-        <li>Tagged releases use semantic version tags such as <code>${release_tag_example}</code>.</li>
-        <li>Manual release runs produce immutable version/date/commit tags such as <code>0.1.0.42-20260513-abc12345</code>.</li>
-        <li>Packages use the same version/date/commit identity in archive names, for example <code>fnquake3-0.1.0.42-20260513-abc12345-linux-x86_64.zip</code>.</li>
-      </ul>
+    <section class="section" id="documentation">
+      <div class="section-header">
+        <h2>4. Documentation</h2>
+        <p class="lead">The main guides are split between player-facing setup and usage documents, and the deeper build or maintainer references.</p>
+      </div>
+      <div class="doc-grid">
+        <article class="doc-column">
+          <h3>Player guides</h3>
+          <ul>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/DISPLAY.md">Display Guide</a> for renderer choice, video modes, render scaling, HDR, anti-aliasing, and bloom.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/VISUALS.md">Visuals Guide</a> for player highlighting and other presentation controls.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/ASPECT_CORRECTION.md">Aspect Correction Guide</a> for HUD, menu, and cinematic layout options.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/AUDIO.md">Audio Guide</a> for backend selection, devices, HRTF, fallback behavior, and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/CONSOLE.md">Console Guide</a> for console layout, scaling, completion, and interaction.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/SCREENSHOTS.md">Screenshot Guide</a> for capture commands, naming, metadata sidecars, watermarks, and cube-map export.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/fnquake3/CHANGELOG.md">Changelog</a> for release-facing change history.</li>
+          </ul>
+        </article>
+        <article class="doc-column">
+          <h3>Technical and build docs</h3>
+          <ul>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/BUILD.md">Build Guide</a> for compiling FnQuake3 locally.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/GLX.md">GLx Renderer Guide</a> for the canonical OpenGL-lineage renderer, migration notes, and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/fnquake3/AUDIO_ENGINE.md">Modern Audio Engine Notes</a> for engine architecture and compatibility boundaries.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/fnquake3/TECHNICAL.md">Technical Notes</a> for repository structure, release flow, and maintainer conventions.</li>
+          </ul>
+        </article>
+      </div>
     </section>
 
-    <section class="section">
-      <h2>Documentation</h2>
-      <ul>
-        <li><a href="../BUILD.md">Build Guide</a> if you want to compile FnQuake3 yourself.</li>
-        <li><a href="../docs/DISPLAY.md">Display Guide</a> for renderer choice, video modes, render scaling, HDR, anti-aliasing, and bloom tuning.</li>
-        <li><a href="../docs/GLX.md">GLx Renderer Guide</a> for the canonical OpenGL-lineage renderer, migration notes, diagnostics, and troubleshooting.</li>
-        <li><a href="../docs/VISUALS.md">Visuals Guide</a> for player highlighting and the current visual presentation controls.</li>
-        <li><a href="../docs/ASPECT_CORRECTION.md">Aspect Correction Guide</a> for HUD, menu, and cinematic presentation options.</li>
-        <li><a href="../docs/AUDIO.md">Audio Guide</a> for backend defaults, device/HRTF selection, volume, music, spatial audio, fallback behavior, and troubleshooting tools.</li>
-        <li><a href="../docs/CONSOLE.md">Console Guide</a> for console scaling, interaction, completion, and appearance.</li>
-        <li><a href="../docs/SCREENSHOTS.md">Screenshot Guide</a> for capture commands, naming patterns, view metadata sidecars, watermarks, and cube-map export.</li>
-        <li><a href="../docs/fnquake3/TECHNICAL.md">Technical Notes</a> for maintainers, release flow, and repo conventions.</li>
-        <li><a href="../LICENSE">LICENSE</a> and <a href="../COPYING.txt">COPYING.txt</a> ship with the package.</li>
-      </ul>
-    </section>
-
-    <section class="section">
-      <h2>Project Priorities</h2>
-      <ol>
-        <li>Full compatibility with retail Quake III Arena and its demos.</li>
-        <li>Speed and efficiency.</li>
-        <li>Enhanced modern platform support.</li>
-        <li>Cross-platform support, with other platforms considered.</li>
-      </ol>
-      <p class="footer">This page is generated from the same repository templates as <a href="../README.md">README.md</a> so the packaged docs stay aligned with the current build metadata.</p>
+    <section class="section" id="credits">
+      <div class="section-header">
+        <h2>5. Credits</h2>
+        <p class="lead">FnQuake3 follows a clear upstream lineage from the Quake III Arena SDK, through ioquake3, to Quake3e, and then onward through the project-specific work in this repository.</p>
+      </div>
+      <p class="lead">Additional compatibility and feature work draws from projects and references such as <a href="https://bitbucket.org/CPMADevs/cnq3">CNQ3</a>, <a href="https://github.com/zturtleman/spearmint">Spearmint</a>, <a href="https://github.com/brugal/wolfcamql">WolfcamQL</a>, Luigi Auriemma's <a href="https://aluigi.altervista.org/papers.htm#qldec">qldec</a>, and <a href="https://github.com/Paril/DarkMatter-Q2">DarkMatter-Q2</a>.</p>
+      <p class="footer">See the full upstream chain and acknowledgements in <a href="https://github.com/themuffinator/FnQ3/blob/main/CREDITS.md">CREDITS.md</a>.</p>
     </section>
   </main>
 </body>

@@ -1,88 +1,84 @@
 <div align="center">
 
 # ${project_name_short}
-Fappin' and Fraggin'
+### Fappin' and Fraggin'
 
 <p>
-  <a href="BUILD.md"><img alt="Build Guide" src="https://img.shields.io/badge/Build-Guide-1f2937?style=for-the-badge"></a>
-  <a href="docs/fnquake3/TECHNICAL.md"><img alt="Technical Notes" src="https://img.shields.io/badge/Technical-Notes-0f766e?style=for-the-badge"></a>
+  <a href="https://github.com/themuffinator/FnQ3/releases/latest"><img alt="Latest Release" src="https://img.shields.io/badge/Latest-Release-2563eb?style=for-the-badge"></a>
+  <a href="#3-getting-started"><img alt="Getting Started" src="https://img.shields.io/badge/Getting-Started-16a34a?style=for-the-badge"></a>
+  <a href="#4-documentation"><img alt="Documentation" src="https://img.shields.io/badge/Documentation-7c3aed?style=for-the-badge"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-GPL--2.0-c2410c?style=for-the-badge"></a>
 </p>
 
+*Compatibility target: ${compatibility_target} · Base version: `${base_version}` · Current build: `${version}`*
+
 </div>
 
-**${project_name_short}** is a modern source-port for *Quake III Arena* built around a simple goal: enhance the modern Quake 3 experience whilst leaving the game code untouched.
+## 1. Introduction
 
-## Features
+**${project_name_short}** is a modernized *Quake III Arena* source port for players who want the original game to feel at home on current hardware without losing what made it special in the first place.
 
-- A flexible display pipeline with renderer selection, fullscreen and windowed mode controls, internal render scaling, **HDR**, anti-aliasing, and detailed **bloom** tuning. See the [Display Guide](docs/DISPLAY.md).
-- Configurable **cel shading** for model entities, including map world models, player models, and the first-person weapon, with banded lighting and optional silhouette outlines. See the [Display Guide](docs/DISPLAY.md).
-- Optional player highlighting with **rimlight** and **stencil border effects**, per-mode team or free colors, and teammate/enemy override colors. See the [Visuals guide](docs/VISUALS.md).
-- Flexible 4:3-aware **aspect correction** for HUDs, menus, UI model widgets, and cinematics, with sensible widescreen options when you want them. See the [Aspect Correction guide](docs/ASPECT_CORRECTION.md).
-- **Enhanced console** functionality, including configurable scaling, smoother scrolling, mouse interaction, text selection, drag and drop, and an optional live tab-completion popup. See the [Console guide](docs/CONSOLE.md).
-- An expanded **screenshot system** with pattern-based naming, optional view metadata sidecars, watermark compositing, and OpenGL-lineage cube-map capture. See the [Screenshot guide](docs/SCREENSHOTS.md).
-- CPMA/CNQ3-style **rainbow text color escapes**, with live preview right in the console input line.
-- **SDL3** support for video, audio, and input on modern platforms.
-- A new **OpenAL audio engine** is the default sound path, with HRTF-aware positional audio, direct handling for authored stereo/surround content, spatial reverb, geometry occlusion, optional audio-zone sidecars, latency diagnostics, device recovery, and a deterministic fallback to the original mixer. See the [Audio guide](docs/AUDIO.md) and [Modern Audio Engine Notes](docs/fnquake3/AUDIO_ENGINE.md).
-- Compatibility support for Quake III Arena 1.17 **`.dm3` demo playback** alongside standard retail `.dm_XX` demo formats.
-- Compatibility support for older **Quake 3 IHV / q3test `IBSP v43` maps** alongside standard retail Quake III Arena BSP content.
-- Quick-and-simple compatibility support for **Quake Live `IBSP v47` BSPs**, including ignored advert data and `advertisement` entity fallback to `func_static`.
-- Support for the **`novlcollapse`** shader keyword used by Quake Live materials.
-- Support for **Quake Live BETA encrypted `.pk3` archives** alongside normal ZIP-based Quake 3 content packages.
-- Compatibility support for **Quake II `.pak` archives**, including archive discovery, reading, seeking, and pure/download path handling alongside standard Quake 3 packages.
-- Compatibility support for **Quake II `.wal` textures**, with automatic palette loading from `pics/colormap.pcx` during decode.
+What sets it apart is the balance: FnQuake3 keeps retail compatibility, demos, and classic content behavior front and center, while adding cleaner presentation, better platform support, a stronger day-to-day user experience, and carefully chosen modern features that still respect the base game.
 
-## Modern Audio Engine
+## 2. Features
 
-FnQuake3 keeps Quake III's classic sound commands, assets, music flow, demos, and mod-facing behavior intact, then renders the client mix through a modern OpenAL path by default. Mono world sounds can use true positional sources and HRTF-capable output, while UI sounds, music, raw samples, and authored stereo or surround assets stay on a stable direct path.
+### Play the original game with a cleaner modern fit
 
-The environmental layer adds spatial reverb, wall-aware occlusion, tone shaping, optional `maps/<map>.azb` audio-zone sidecars, and debug tools that show what the backend actually started. If OpenAL, a requested device, or a requested capability is unavailable, startup reports the mismatch and falls back through safer OpenAL settings or the original mixer rather than changing content compatibility.
+- Keeps retail *Quake III Arena* compatibility as the priority, including classic game data, demo playback, and mod expectations.
+- Ships with modern platform support built around **SDL3** for video, audio, and input.
+- Uses a modern **OpenAL**-based audio path by default, with spatial sound improvements and a safe fallback to the classic mixer when needed.
 
-Player-facing controls are in the [Audio guide](docs/AUDIO.md). Maintainer details, including the source layout and compatibility boundary, are in the [Modern Audio Engine Notes](docs/fnquake3/AUDIO_ENGINE.md).
+### Sharper presentation without changing the identity of Quake III
 
-## Credits
+- Flexible display options with renderer choice, fullscreen and windowed play, render scaling, HDR, anti-aliasing, and bloom tuning. See the [Display Guide](docs/DISPLAY.md).
+- Optional visual polish such as cel shading, player rim lighting, and stencil-style highlights. See the [Visuals Guide](docs/VISUALS.md).
+- Better widescreen handling for HUDs, menus, UI previews, and cinematics. See the [Aspect Correction Guide](docs/ASPECT_CORRECTION.md).
 
-- CPMA/CNQ3-style rainbow text color escape support is adapted from the CPMADevs CNQ3 project.
-- IBSP v43 / Quake 3 IHV map loading support is adapted from Spearmint's `bsp_q3ihv.c` implementation.
-- Legacy `.dm3` demo compatibility work was cross-checked against [WolfcamQL](https://github.com/brugal/wolfcamql).
-- Quake Live BETA encrypted PK3 support uses the XOR table published by Luigi Auriemma's **qldec** (`quakelivedec.c`).
-- Quake II `.pak` / `.wal` compatibility work was cross-checked against the DarkMatter-Q2 project.
-- Upstream [Quake3e](https://github.com/ec-/Quake3e) upon which this is based.
+### Better everyday usability
 
-## Quick Start
+- An upgraded console with smoother scrolling, scaling options, mouse support, text selection, drag and drop, and live completion help. See the [Console Guide](docs/CONSOLE.md).
+- Expanded screenshot tools with cleaner naming, optional metadata sidecars, watermark support, and cube-map capture. See the [Screenshot Guide](docs/SCREENSHOTS.md).
+- Quality-of-life touches like live rainbow text preview and more flexible player-facing configuration.
 
-1. Build the engine for your platform, or grab a packaged build if you already have one.
-2. Put the executable next to your Quake III Arena installation and data files.
-3. Leave your original retail game assets alone.
-4. Use [BUILD.md](BUILD.md) if you need the platform-specific build steps.
+### Wider content compatibility
 
-## Releases
+- Supports older **Quake 3 IHV / q3test** maps and legacy **`.dm3`** demos alongside standard retail content.
+- Includes practical compatibility for selected **Quake Live** assets such as `IBSP v47` maps, encrypted beta `.pk3` archives, and related material behavior.
+- Reads **Quake II** `.pak` archives and `.wal` textures for broader content experimentation.
 
-- Tagged releases use semantic version tags such as `${release_tag_example}`.
-- Manual release runs produce immutable version/date/commit tags such as `0.1.0.42-20260513-abc12345`.
-- Packages use the same version/date/commit identity in archive names, for example `fnquake3-0.1.0.42-20260513-abc12345-linux-x86_64.zip`.
+## 3. Getting Started
 
-## Documentation
+1. Install *Quake III Arena* and make sure your original `baseq3` game data is present.
+2. Download the latest FnQuake3 build from the [latest release page](https://github.com/themuffinator/FnQ3/releases/latest).
+3. Extract the release archive into your Quake III Arena folder so the FnQuake3 executables sit next to your existing game files.
+4. Start the FnQuake3 executable for your platform.
+5. If you want to tune visuals, audio, screenshots, or the console, use the guides in the [Documentation](#4-documentation) section below.
 
-- [Build Guide](BUILD.md) if you want to compile FnQuake3 yourself.
-- [Display Guide](docs/DISPLAY.md) for renderer choice, video modes, render scaling, HDR, anti-aliasing, and bloom tuning.
-- [GLx Renderer Guide](docs/GLX.md) for the canonical OpenGL-lineage renderer, migration notes, diagnostics, and troubleshooting.
-- [Visuals Guide](docs/VISUALS.md) for player highlighting and the current visual presentation controls.
-- [Aspect Correction Guide](docs/ASPECT_CORRECTION.md) for HUD, menu, and cinematic presentation options.
-- [Audio Guide](docs/AUDIO.md) for backend defaults, device/HRTF selection, volume, music, spatial audio, fallback behavior, and troubleshooting tools.
-- [Modern Audio Engine Notes](docs/fnquake3/AUDIO_ENGINE.md) for the OpenAL architecture, source layout, compatibility boundaries, and validation expectations.
-- [Console Guide](docs/CONSOLE.md) for console scaling, interaction, completion, and appearance.
-- [Screenshot Guide](docs/SCREENSHOTS.md) for capture commands, naming patterns, view metadata sidecars, watermarks, and cube-map export.
+If you want to compile FnQuake3 yourself instead, start with the [Build Guide](BUILD.md).
+
+## 4. Documentation
+
+### Player guides
+
+- [Display Guide](docs/DISPLAY.md) for renderer choice, video modes, render scaling, HDR, anti-aliasing, and bloom.
+- [Visuals Guide](docs/VISUALS.md) for player highlighting and other presentation controls.
+- [Aspect Correction Guide](docs/ASPECT_CORRECTION.md) for HUD, menu, and cinematic layout options.
+- [Audio Guide](docs/AUDIO.md) for backend selection, devices, HRTF, fallback behavior, and troubleshooting.
+- [Console Guide](docs/CONSOLE.md) for console layout, scaling, completion, and interaction.
+- [Screenshot Guide](docs/SCREENSHOTS.md) for capture commands, naming, metadata sidecars, watermarks, and cube-map export.
 - [Changelog](docs/fnquake3/CHANGELOG.md) for release-facing change history.
-- [Technical Notes](docs/fnquake3/TECHNICAL.md) for maintainers, release flow, and repo conventions.
-- [Agent Guide](AGENTS.md) for automation rules and local repository references.
 
-## Project Priorities
+### Technical and build docs
 
-1. Full compatibility with retail Quake III Arena and its demos.
-2. Speed and efficiency.
-3. Enhanced modern platform support.
-4. Cross-platform support, with other platforms considered.
+- [Build Guide](BUILD.md) for compiling FnQuake3 locally.
+- [GLx Renderer Guide](docs/GLX.md) for the canonical OpenGL-lineage renderer, migration notes, and troubleshooting.
+- [Modern Audio Engine Notes](docs/fnquake3/AUDIO_ENGINE.md) for engine architecture and compatibility boundaries.
+- [Technical Notes](docs/fnquake3/TECHNICAL.md) for repository structure, release flow, and maintainer conventions.
 
-Current tracked base version: `${base_version}`
-Current build version: `${version}`
+## 5. Credits
+
+FnQuake3 follows a clear upstream lineage from the [Quake III Arena SDK](https://github.com/id-Software/Quake-III-Arena), through [ioquake3](https://github.com/ioquake/ioq3), to [Quake3e](https://github.com/ec-/Quake3e), and then onward through the project-specific work in this repository.
+
+Additional compatibility and feature work draws from projects and references such as [CNQ3](https://bitbucket.org/CPMADevs/cnq3), [Spearmint](https://github.com/zturtleman/spearmint), [WolfcamQL](https://github.com/brugal/wolfcamql), Luigi Auriemma's [qldec](https://aluigi.altervista.org/papers.htm#qldec), and [DarkMatter-Q2](https://github.com/Paril/DarkMatter-Q2).
+
+See [CREDITS.md](CREDITS.md) for the fuller credits list and project acknowledgements.

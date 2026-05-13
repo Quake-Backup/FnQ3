@@ -201,7 +201,7 @@ endif
 platform_asm_src = []
 client_asm_src = []
 if win32 and cc.get_id() == 'msvc' and cpu_family == 'x86_64'
-  warning('Meson MSVC x64 builds currently use the portable C fallbacks instead of MASM helpers')
+  warning('Meson MSVC x64 builds currently use portable C fallbacks instead of MASM helpers; behavior stays the same, but hot-path setjmp/audio mixing optimizations are disabled for this build path')
 elif cpu_family == 'x86_64'
   client_asm_src += 'code/asm/snd_mix_x86_64_preprocessed.S'
 endif

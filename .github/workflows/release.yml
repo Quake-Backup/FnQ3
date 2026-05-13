@@ -144,17 +144,7 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=${{ matrix.vs_arch }} -host_arch=x64 || exit /b
           if /I "${{ matrix.arch }}"=="arm64" (
-            > meson\windows-arm64-cross.ini echo [binaries]
-            >> meson\windows-arm64-cross.ini echo c = 'cl'
-            >> meson\windows-arm64-cross.ini echo cpp = 'cl'
-            >> meson\windows-arm64-cross.ini echo ar = 'lib'
-            >> meson\windows-arm64-cross.ini echo windres = 'rc'
-            >> meson\windows-arm64-cross.ini echo [host_machine]
-            >> meson\windows-arm64-cross.ini echo system = 'windows'
-            >> meson\windows-arm64-cross.ini echo cpu_family = 'aarch64'
-            >> meson\windows-arm64-cross.ini echo cpu = 'arm64'
-            >> meson\windows-arm64-cross.ini echo endian = 'little'
-            meson setup meson\build-${{ matrix.arch }} --cross-file meson\windows-arm64-cross.ini --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=opengl,glx,vulkan -Drenderer-default=opengl -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+            meson setup meson\build-${{ matrix.arch }} --cross-file scripts\windows-arm64-cross.ini --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=opengl,glx,vulkan -Drenderer-default=opengl -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           ) else (
             meson setup meson\build-${{ matrix.arch }} --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=opengl,glx,vulkan -Drenderer-default=opengl -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           )

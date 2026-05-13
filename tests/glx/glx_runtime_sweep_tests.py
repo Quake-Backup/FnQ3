@@ -1695,6 +1695,8 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         sdl_glimp_path = ROOT / "code" / "sdl" / "sdl_glimp.cpp"
         if not sdl_glimp_path.exists():
             sdl_glimp_path = ROOT / "code" / "sdl" / "sdl_glimp.c"
+        if not sdl_glimp_path.exists():
+            self.fail("Expected SDL GL implementation source at code/sdl/sdl_glimp.cpp or code/sdl/sdl_glimp.c")
         sdl_glimp = sdl_glimp_path.read_text(encoding="utf-8")
         glx_postprocess = (ROOT / "code" / "rendererglx" / "glx_postprocess.cpp").read_text(encoding="utf-8")
         glx_ir = (ROOT / "code" / "rendererglx" / "glx_render_ir.h").read_text(encoding="utf-8")

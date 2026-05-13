@@ -18,7 +18,7 @@
 
 **${project_name_short}** is a modernized *Quake III Arena* source port for players who want the original game to feel at home on current hardware without losing what made it special in the first place.
 
-What sets it apart is the balance: FnQuake3 keeps retail compatibility, demos, and classic content behavior front and center, while adding cleaner presentation, better platform support, a stronger day-to-day user experience, and carefully chosen modern features that still respect the base game.
+What sets it apart is the balance: ${project_name_short} keeps retail compatibility, demos, and classic content behavior front and center, while adding cleaner presentation, better platform support, a stronger day-to-day user experience, and carefully chosen modern features that still respect the base game.
 
 ## 2. Features
 

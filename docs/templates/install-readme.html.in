@@ -299,7 +299,7 @@
         <h2>1. Introduction</h2>
         <p class="lead"><strong>${project_name_short}</strong> is a modernized Quake III Arena source port for players who want the original game to stay recognizably Quake III while gaining cleaner presentation, smoother usability, and better support for current platforms.</p>
       </div>
-      <p class="lead">What sets FnQuake3 apart is restraint: it aims to keep retail compatibility, demos, classic assets, and mod expectations intact first, then layers modern audio, presentation, and quality-of-life improvements on top without changing the identity of the game.</p>
+      <p class="lead">What sets ${project_name_short} apart is restraint: it aims to keep retail compatibility, demos, classic assets, and mod expectations intact first, then layers modern audio, presentation, and quality-of-life improvements on top without changing the identity of the game.</p>
     </section>
 
     <section class="section" id="features">
@@ -346,7 +346,7 @@
     <section class="section" id="getting-started">
       <div class="section-header">
         <h2>3. Getting Started</h2>
-        <p class="lead">FnQuake3 is meant to be straightforward for players: keep your original game data, drop in a new executable, and start playing.</p>
+        <p class="lead">${project_name_short} is meant to be straightforward for players: keep your original game data, drop in a new executable, and start playing.</p>
       </div>
       <ol>
         <li>Install <em>Quake III Arena</em> and make sure your original <code>baseq3</code> data is present.</li>

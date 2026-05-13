@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import shutil
 
 
 BSP_HEADER_LUMPS = 17
@@ -79,6 +80,14 @@ class AudioZoneMaterialMapTests(unittest.TestCase):
         if len(sys.argv) < 2:
             self.fail("missing fnq3-audiozonesc path")
         tool = Path(sys.argv[1])
+        if tool.parent == Path("."):
+            local_tool = Path.cwd() / tool.name
+            if local_tool.exists():
+                tool = local_tool
+            else:
+                found = shutil.which(tool.name)
+                if found:
+                    tool = Path(found)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

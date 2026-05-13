@@ -301,8 +301,17 @@ jobs:
 
       - name: Build
         run: |
-          OPENAL_PREFIX="$(brew --prefix openal-soft)"
-          OPENAL_CFLAGS="-I${OPENAL_PREFIX}/include" \
+          BREW_PREFIX="$(brew --prefix)"
+          export PKG_CONFIG_PATH="${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+          OPENAL_CFLAGS="$(pkg-config --cflags openal)" \
+          SDL_INCLUDE="$(pkg-config --cflags-only-I sdl3)" \
+          SDL_LIBS="$(pkg-config --libs sdl3)" \
+          JPEG_CFLAGS="$(pkg-config --cflags libjpeg)" \
+          JPEG_LIBS="$(pkg-config --libs libjpeg)" \
+          OGG_CFLAGS="$(pkg-config --cflags ogg)" \
+          OGG_LIBS="$(pkg-config --libs ogg)" \
+          VORBIS_CFLAGS="$(pkg-config --cflags vorbisfile)" \
+          VORBIS_LIBS="$(pkg-config --libs vorbisfile)" \
             gmake install -j$(sysctl -n hw.logicalcpu) ARCH=${{ matrix.arch }} CC=clang DESTDIR=bin INSTALL=ginstall USE_LOCAL_HEADERS=0 USE_SYSTEM_JPEG=1 USE_SYSTEM_OGG=1 USE_SYSTEM_VORBIS=1 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1 STRIP=echo
 
       - uses: actions/upload-artifact@v7

@@ -16,6 +16,8 @@ the Free Software Foundation; either version 2 of the License, or
 #include <AL/alext.h>
 #include <AL/efx.h>
 
+#include "../../code/client/audio/openal/OpenALCompat.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>

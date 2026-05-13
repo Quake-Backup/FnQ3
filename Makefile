@@ -1021,8 +1021,10 @@ Q3RENDXOBJ = \
   $(B)/rendx/tr_world.o \
   $(B)/rendx/glx_caps.o \
   $(B)/rendx/glx_debug.o \
+  $(B)/rendx/glx_executor.o \
   $(B)/rendx/glx_material.o \
   $(B)/rendx/glx_module.o \
+  $(B)/rendx/glx_post_shader.o \
   $(B)/rendx/glx_postprocess.o \
   $(B)/rendx/glx_profiler.o \
   $(B)/rendx/glx_static_world.o \

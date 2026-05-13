@@ -106,6 +106,7 @@ Expected behavior:
 - `main` pushes validate the main branch without publishing a nightly release
 - scheduled nightly runs produce a new unique-tagged release per build when `main` has advanced since the last nightly
 - published GitHub releases upload stable archives built from the tagged version
+- Linux release artifacts build inside an Ubuntu 20.04 userspace and run `scripts/check_elf_glibc.py --max-glibc 2.31` before upload so hosted runner image changes do not raise the packaged glibc requirement unexpectedly.
 
 Renderer-focused verification lives beside the nightly packaging flow:
 

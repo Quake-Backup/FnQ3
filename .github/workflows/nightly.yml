@@ -5,6 +5,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FNQ3_LINUX_GLIBC_MAX: "2.31"
 
 on:
   push:
@@ -223,6 +224,10 @@ jobs:
     needs: [prepare]
     name: Build Ubuntu ${{ matrix.arch }}
     runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:20.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
     strategy:
       fail-fast: false
       matrix:
@@ -238,13 +243,13 @@ jobs:
     steps:
       - name: Install tools
         run: |
-          if [ ${{ matrix.arch }} == "x86" ]; then
-            sudo dpkg --add-architecture i386
-            sudo apt-get -qq update
-            sudo apt-get -y install gcc-multilib g++-multilib libcurl4-openssl-dev:i386 mesa-common-dev:i386 libxxf86dga-dev:i386 libxrandr-dev:i386 libxxf86vm-dev:i386 libasound2-dev:i386 libopenal-dev:i386
+          if [ "${{ matrix.arch }}" = "x86" ]; then
+            dpkg --add-architecture i386
+            apt-get -qq update
+            apt-get -y install git make python3 binutils gcc-multilib g++-multilib libcurl4-openssl-dev:i386 mesa-common-dev:i386 libxxf86dga-dev:i386 libxrandr-dev:i386 libxxf86vm-dev:i386 libasound2-dev:i386 libopenal-dev:i386
           else
-            sudo apt-get -qq update
-            sudo apt-get -y install g++ libcurl4-openssl-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+            apt-get -qq update
+            apt-get -y install git make python3 binutils gcc g++ libcurl4-openssl-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
           fi
 
       - uses: actions/checkout@v6
@@ -252,11 +257,14 @@ jobs:
           submodules: recursive
 
       - name: Stamp nightly build version
-        run: python scripts/nightly.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+        run: python3 scripts/nightly.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
 
       - name: Build
         run: |
           make ${{ matrix.rule }} -j$(nproc) ARCH=${{ matrix.arch }} COMPILE_ARCH=${{ matrix.arch }} CC=gcc DESTDIR=bin ${{ matrix.use_sdl }} USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1
+
+      - name: Check glibc baseline
+        run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
 
       - uses: actions/upload-artifact@v7
         with:
@@ -270,23 +278,30 @@ jobs:
     needs: [prepare]
     name: Build Ubuntu arm64
     runs-on: ubuntu-22.04-arm
+    container:
+      image: ubuntu:20.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Install tools
         run: |
-          sudo apt-get -qq update
-          sudo apt-get install -y make gcc g++
-          sudo apt-get -y install libcurl4-openssl-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+          apt-get -qq update
+          apt-get install -y git make python3 binutils gcc g++
+          apt-get -y install libcurl4-openssl-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
 
       - uses: actions/checkout@v6
         with:
           submodules: recursive
 
       - name: Stamp nightly build version
-        run: python scripts/nightly.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+        run: python3 scripts/nightly.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
 
       - name: Build
         run: |
           make install -j$(nproc) ARCH=aarch64 COMPILE_ARCH=aarch64 CC=gcc DESTDIR=bin USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1
+
+      - name: Check glibc baseline
+        run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
 
       - uses: actions/upload-artifact@v7
         with:

@@ -92,7 +92,7 @@ Build with either `make ARCH=x86` or `make ARCH=x86_64` depending on your target
 On a fresh Ubuntu-style install, you will likely need packages like these first:
 
 * sudo apt install make gcc libcurl4-openssl-dev mesa-common-dev
-* sudo apt install libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound-dev
+* sudo apt install libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev
 * sudo apt install libsdl3-dev
 
 Then build with: `make`

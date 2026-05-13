@@ -33,5 +33,5 @@ Build and run it with Meson:
 
 ```sh
 meson compile -C meson/build fnq3_glx_logic_tests
-meson test -C meson/build -R "fnq3_glx_(logic|header_boundary)" --print-errorlogs
+meson test -C meson/build fnq3_glx_logic fnq3_glx_header_boundary --print-errorlogs
 ```

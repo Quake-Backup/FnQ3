@@ -149,7 +149,7 @@ jobs:
         run: meson compile -C .tmp/meson-glx-verification fnq3_glx_logic_tests
 
       - name: Run GLx logic and boundary tests
-        run: meson test -C .tmp/meson-glx-verification -R "fnq3_glx_(logic|header_boundary)" --print-errorlogs
+        run: meson test -C .tmp/meson-glx-verification fnq3_glx_logic fnq3_glx_header_boundary --print-errorlogs
 
   glx-gate-plans:
     name: GLx RC gate plans

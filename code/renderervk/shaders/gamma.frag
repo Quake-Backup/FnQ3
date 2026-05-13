@@ -42,6 +42,16 @@ layout(constant_id = 35) const float whitePoint21 = 0.0;
 layout(constant_id = 36) const float whitePoint22 = 1.0;
 layout(constant_id = 37) const int colorGradeLutSize = 0;
 layout(constant_id = 38) const float colorGradeLutScale = 4.0;
+layout(constant_id = 39) const int crtMode = 0;
+layout(constant_id = 40) const float crtAmount = 1.0;
+layout(constant_id = 41) const float crtScanlineStrength = 0.55;
+layout(constant_id = 42) const float crtMaskStrength = 0.35;
+layout(constant_id = 43) const float crtCurvature = 0.01;
+layout(constant_id = 44) const float crtChromatic = 1.35;
+
+layout(push_constant) uniform PostPushConstants {
+	vec4 crtRuntime; // time seconds, inv source width, inv source height, unused
+} pc;
 
 const vec3 sRGB = { 0.2126, 0.7152, 0.0722 };
 
@@ -172,8 +182,8 @@ vec3 applyColorGrade(vec3 color) {
 	return color;
 }
 
-void main() {
-	vec3 base = texture(texture0, frag_tex_coord).rgb;
+vec3 resolvePostColor(vec2 uv) {
+	vec3 base = texture(texture0, uv).rgb;
 	vec3 color;
 
 	if ( greyscale == 1 )
@@ -203,7 +213,105 @@ void main() {
 
 	if ( outputColorSpace == 1 ) {
 		color = encodeHdr10(color);
-	} else if ( ditherMode == 1 ) {
+	}
+
+	return color;
+}
+
+vec2 crtInvTexSize() {
+	return vec2(max(pc.crtRuntime.y, 0.000001), max(pc.crtRuntime.z, 0.000001));
+}
+
+vec2 crtWarpUV(vec2 uv) {
+	vec2 centered = uv * 2.0 - 1.0;
+	vec2 squared = centered * centered;
+	float curve = clamp(crtCurvature, 0.0, 0.25);
+	centered *= 1.0 + squared.yx * (curve * 1.6);
+	centered.x *= 1.0 + squared.y * (curve * 0.25);
+	centered.y *= 1.0 + squared.x * (curve * 0.20);
+	return centered * 0.5 + 0.5;
+}
+
+float crtScreenMask(vec2 uv) {
+	vec2 edge = min(uv, 1.0 - uv);
+	float maskX = smoothstep(0.0, 0.018, edge.x);
+	float maskY = smoothstep(0.0, 0.018, edge.y);
+	return maskX * maskY;
+}
+
+vec3 crtSampleHorizontalBeam(vec2 uv) {
+	vec2 texel = vec2(crtInvTexSize().x, 0.0);
+	return resolvePostColor(clamp(uv - texel * 2.0, 0.0, 1.0)) * 0.08 +
+		resolvePostColor(clamp(uv - texel, 0.0, 1.0)) * 0.22 +
+		resolvePostColor(clamp(uv, 0.0, 1.0)) * 0.40 +
+		resolvePostColor(clamp(uv + texel, 0.0, 1.0)) * 0.22 +
+		resolvePostColor(clamp(uv + texel * 2.0, 0.0, 1.0)) * 0.08;
+}
+
+vec3 crtSampleColor(vec2 uv) {
+	vec3 beam = crtSampleHorizontalBeam(uv);
+	vec2 radial = uv - 0.5;
+	float spread = 1.0 + length(radial) * 2.25;
+	float chroma = clamp(crtChromatic, 0.0, 8.0);
+	vec2 offset = vec2(chroma * crtInvTexSize().x * spread,
+		chroma * crtInvTexSize().y * 0.35 * spread);
+	vec3 color = beam;
+	color.r = resolvePostColor(clamp(uv + offset, 0.0, 1.0)).r;
+	color.b = resolvePostColor(clamp(uv - offset, 0.0, 1.0)).b;
+	return mix(beam, color, clamp(0.35 + chroma * 0.12, 0.0, 1.0));
+}
+
+float crtScanlineFactor(vec3 color) {
+	float luma = clamp(dot(color, sRGB), 0.0, 1.0);
+	float phase = gl_FragCoord.y * 3.14159265 + sin(pc.crtRuntime.x * 7.0) * 0.35;
+	float wave = 0.5 + 0.5 * cos(phase);
+	wave *= wave;
+	float darkFloor = 0.22 + luma * 0.35;
+	float lineValue = mix(darkFloor, 1.0, wave);
+	return mix(1.0, lineValue, clamp(crtScanlineStrength, 0.0, 1.0));
+}
+
+vec3 crtPhosphorMask() {
+	float maskStrength = clamp(crtMaskStrength, 0.0, 1.0);
+	float column = mod(floor(gl_FragCoord.x), 3.0);
+	vec3 triad;
+	if ( column < 0.5 ) {
+		triad = vec3(1.18, 0.80, 0.80);
+	} else if ( column < 1.5 ) {
+		triad = vec3(0.80, 1.18, 0.80);
+	} else {
+		triad = vec3(0.80, 0.80, 1.18);
+	}
+	float slot = ( mod(floor(gl_FragCoord.y), 2.0) < 0.5 ) ? 1.0 : 0.94;
+	return mix(vec3(1.0), triad * slot, maskStrength);
+}
+
+vec3 applyCRT(vec2 uv, vec3 originalColor) {
+	float amount = clamp(crtAmount, 0.0, 1.0);
+	vec2 warped = crtWarpUV(uv);
+	float screen = crtScreenMask(warped);
+	vec3 crtColor = crtSampleColor(warped);
+	crtColor *= crtScanlineFactor(crtColor);
+	crtColor *= crtPhosphorMask();
+	float edge = dot(warped * 2.0 - 1.0, warped * 2.0 - 1.0);
+	float vignette = clamp(1.0 - edge * 0.22, 0.0, 1.0);
+	float shimmer = 0.985 + 0.015 * sin(gl_FragCoord.y * 0.35 + pc.crtRuntime.x * 11.0);
+	crtColor *= mix(1.0, vignette * shimmer, 0.85);
+	crtColor *= screen;
+	vec3 color = max(mix(originalColor, crtColor, amount), vec3(0.0));
+	if ( outputColorSpace == 1 ) {
+		return clamp(color, vec3(0.0), vec3(1.0));
+	}
+	return color;
+}
+
+void main() {
+	vec3 color = resolvePostColor(frag_tex_coord);
+
+	if ( crtMode != 0 ) {
+		color = applyCRT(frag_tex_coord, color);
+	}
+	if ( outputColorSpace != 1 && ditherMode == 1 ) {
 		color = dither(color);
 	}
 

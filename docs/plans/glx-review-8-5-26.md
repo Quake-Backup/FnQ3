@@ -8,7 +8,7 @@ The plan file’s strategic goals are still sound: keep the renderer ABI stable,
 
 My headline recommendation is straightforward: **do not retire `opengl` or `opengl2` yet**. Instead, move in two phases. First, push GLx to a release-candidate state by hardening parity, expanding coverage, automating sweeps, and defining a stable default GLx profile. Second, perform deprecation in this order: put `opengl2` behind a legacy build flag first, make `opengl` a migration alias to GLx only after parity metrics and manual QA pass, and only then remove old renderer code after the shared compatibility baseline has been split cleanly enough that GLx no longer requires the legacy renderer sources as its substrate. fileciteturn26file0 fileciteturn25file0
 
-The plan does **not** specify the production target platform set, performance targets, or calendar release schedule. I have treated those as open questions and kept the roadmap relative rather than date-committed. The repo currently builds GLx in nightly artifacts across Windows, Linux, and macOS, but that is not the same thing as having a declared GLx support policy or runtime parity guarantee for those platforms. fileciteturn26file0 fileciteturn32file1
+The plan does **not** specify the production target platform set, performance targets, or calendar release schedule. I have treated those as open questions and kept the roadmap relative rather than date-committed. The repo currently builds GLx in release artifacts across Windows, Linux, and macOS, but that is not the same thing as having a declared GLx support policy or runtime parity guarantee for those platforms. fileciteturn26file0 fileciteturn32file1
 
 ## Scope and approach
 
@@ -47,7 +47,7 @@ That structure matters more than any single feature, because it explains both th
 
 | Area | Primary files/modules | What they currently own |
 |---|---|---|
-| Build and packaging | `CMakeLists.txt`, `Makefile`, `code/win32/msvc2017/rendererglx.vcxproj`, `.github/workflows/nightly.yml` | Optional `USE_GLX` build, modular `fnquake3_glx_*` artifact generation, nightly packaging |
+| Build and packaging | `CMakeLists.txt`, `Makefile`, `code/win32/msvc2017/rendererglx.vcxproj`, `.github/workflows/release.yml` | Optional `USE_GLX` build, modular `fnquake3_glx_*` artifact generation, manual release packaging |
 | ABI bridge | `code/rendererglx/glx_module.*` | C ABI bridge, command registration, subsystem bring-up/shutdown, bridge functions used by legacy renderer hooks |
 | Capability model | `code/rendererglx/glx_caps.*`, `glx_local.h` | Init-time version/extension detection, tier selection, feature flags |
 | Debug plumbing | `code/rendererglx/glx_debug.*` | Debug-output callback setup, labels, debug groups, filtering |
@@ -151,7 +151,7 @@ Two synthetic conclusions follow from that table. First, the **scaffolding and t
 
 The highest-risk deviation from the plan’s long-term intent is architectural: GLx still depends on the legacy renderer sources as its rendering baseline. The plan’s end state is consolidation of the OpenGL lineage; the implementation’s current state is **cohabitation**. This is visible in build integration and in the docs’ own description of GLx as preserving the OpenGL display/bloom surface “while GLx-owned capability, streaming, static-world, material, and profiling paths are brought up behind compatibility fallbacks.” That is a smart transition strategy, but it means source-level retirement of `opengl` is **not** yet a safe next step. **Severity: Critical. Suggested fix:** split the current substrate into an explicit shared compatibility layer (`renderergl_compat` or equivalent), move pass-order-sensitive legacy functionality there, and make GLx the primary owner of new draw submission/material logic before attempting old-renderer removal. fileciteturn32file2 fileciteturn32file0 fileciteturn25file0
 
-The second major gap is automated proof. The plan rightly says GLx should be promoted only after screenshot and demo regression sweeps, but the current evidence shows a good sweep tool and nightly GLx builds, not a hard automated quality gate that runs parity/stress sweeps and rejects regressions. That means release-quality confidence still depends too heavily on ad hoc local validation. **Severity: Critical. Suggested fix:** add GPU-backed CI jobs or scheduled self-hosted runner jobs that execute `glx_runtime_sweep.py` against stock assets, save screenshots/manifests, compare against approved baselines within per-scene thresholds, and fail on drift or missing captures. fileciteturn26file0 fileciteturn32file1
+The second major gap is automated proof. The plan rightly says GLx should be promoted only after screenshot and demo regression sweeps, but the current evidence shows a good sweep tool and manual GLx release builds, not a hard automated quality gate that runs parity/stress sweeps and rejects regressions. That means release-quality confidence still depends too heavily on ad hoc local validation. **Severity: Critical. Suggested fix:** add GPU-backed CI jobs or scheduled self-hosted runner jobs that execute `glx_runtime_sweep.py` against stock assets, save screenshots/manifests, compare against approved baselines within per-scene thresholds, and fail on drift or missing captures. fileciteturn26file0 fileciteturn32file1
 
 The third major gap is material coverage. The plan calls for a controlled GLSL permutation system for id Tech 3 shader stages. The current implementation is intentionally much narrower: a small set of compatibility shaders for single-texture, a few multitexture combine modes, and fog-only stream passes. That is good early engineering, but it is still a long way from broad shader-stage ownership, especially for texmods, environment/video/screen-map cases, and the more exotic stage combinations that create real parity bugs in Quake III lineage renderers. **Severity: High. Suggested fix:** formalize a material-key inventory from existing telemetry, rank unsupported stage shapes by real-world frequency, and expand the allowlist in descending order of gameplay importance rather than API neatness. fileciteturn25file0 fileciteturn26file0
 
@@ -258,11 +258,11 @@ The repo already has build coverage and some non-renderer tests, but the GLx gap
 
 Recommended CI changes:
 
-- Add a **separate GLx verification workflow** rather than overloading the nightly packaging pipeline immediately.  
+- Add a **separate GLx verification workflow** rather than overloading the manual release packaging pipeline immediately.  
 - Run `glx_runtime_sweep.py` in at least `baseline` and `glx-parity` modes; keep `glx-stress` as a scheduled or non-blocking job until it stabilizes.  
 - Invoke `ctest` where possible and add a renderer-focused test target for pure C++ GLx logic.  
 - Archive manifests, logs, screenshots, and perf summaries as first-class artifacts.  
-- Add a compact diff summary to PRs or nightly notes: passed scenes, failed scenes, screenshot count, fallback count deltas, and major perf delta flags.  
+- Add a compact diff summary to PRs or release notes: passed scenes, failed scenes, screenshot count, fallback count deltas, and major perf delta flags.  
 - Add sanitizers or a debug-symbol Linux job for GLx-specific failures if infrastructure allows.  
 
 The repo already proves that GLx can be built broadly, and it already contains the seeds of a good automation story. The next step is not inventing a new tool; it is promoting the existing tool into a gate. fileciteturn32file1 fileciteturn26file0

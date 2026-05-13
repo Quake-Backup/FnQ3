@@ -32,15 +32,19 @@ FIELD_SEPARATOR = "\x1f"
 RECORD_SEPARATOR = "\x1e"
 
 
+def write_text_lf(path: Path, content: str) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="FnQuake3 nightly build helper")
+    parser = argparse.ArgumentParser(description="FnQuake3 manual release build helper")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     for command in ("summary", "github-output"):
         subparser = subparsers.add_parser(command)
         subparser.add_argument("--build-date")
         subparser.add_argument("--head-commit")
-        subparser.add_argument("--force", action="store_true")
 
     stamp = subparsers.add_parser("stamp-version")
     stamp.add_argument("--build-number", required=True, type=int)
@@ -69,6 +73,8 @@ def git(*args: str, check: bool = True) -> str:
         ["git", *args],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )
@@ -83,6 +89,8 @@ def resolve_tag_commit(tag_name: str) -> str:
         ["git", "rev-parse", f"refs/tags/{tag_name}^{{commit}}"],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )
@@ -104,24 +112,26 @@ def latest_stable_tag(tag_prefix: str) -> str:
     return tags[0] if tags else ""
 
 
+def manual_release_tag_pattern(base_version: str) -> str:
+    return f"{base_version}.*-????????-*"
+
+
 def commit_count_since(stable_tag: str, head_commit: str) -> int:
     range_spec = head_commit if not stable_tag else f"{stable_tag}..{head_commit}"
     count = int(git("rev-list", "--count", range_spec) or "0")
     return max(1, count)
 
 
-def nightly_context(
+def manual_release_context(
     *,
     build_date: str | None = None,
     head_commit: str | None = None,
-    force: bool = False,
 ) -> dict[str, object]:
     meta = base_metadata()
     head_sha = (head_commit or git("rev-parse", "HEAD")).strip()
     iso_date, _ = normalize_date(build_date)
-    nightly_tag_prefix = str(meta["nightly_tag"])
-    latest_nightly = latest_tag(f"{nightly_tag_prefix}-*")
-    previous_nightly_commit = resolve_tag_commit(latest_nightly) if latest_nightly else ""
+    latest_release = latest_tag(manual_release_tag_pattern(str(meta["base_version"])))
+    previous_release_commit = resolve_tag_commit(latest_release) if latest_release else ""
     stable_tag = latest_stable_tag(str(meta["tag_prefix"]))
     build_number = commit_count_since(stable_tag, head_sha)
     version_string = compose_version_string(
@@ -139,11 +149,9 @@ def nightly_context(
         "build_date": iso_date,
         "head_commit": head_sha,
         "head_commit_short": normalize_commit(head_sha),
-        "nightly_tag": str(meta["nightly_tag"]),
-        "latest_nightly_tag": latest_nightly,
+        "latest_release_tag": latest_release,
         "stable_tag": stable_tag,
-        "previous_nightly_commit": previous_nightly_commit,
-        "should_build": force or not previous_nightly_commit or previous_nightly_commit != head_sha,
+        "previous_release_commit": previous_release_commit,
     }
 
 
@@ -195,7 +203,7 @@ def stamp_version(header: Path, build_number: int) -> dict[str, object]:
     if missing:
         raise KeyError(f"Missing version defines in {header}: {', '.join(missing)}")
 
-    header.write_text("\n".join(rewritten) + "\n", encoding="utf-8", newline="\n")
+    write_text_lf(header, "\n".join(rewritten) + "\n")
     return {
         "version_string": version_string,
         "build_number": build_number,
@@ -233,6 +241,8 @@ def commit_entries(from_commit: str | None, to_commit: str) -> list[dict[str, st
         ["git", "log", "--reverse", "--date=short", f"--pretty=format:{pretty}", range_spec],
         cwd=ROOT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )
@@ -321,11 +331,11 @@ def release_note_generation_context(
 
     lines = [
         f"Project: FnQuake3, a modernized Quake III Arena engine branch.",
-        f"Nightly version: {version_string}",
+        f"Release version: {version_string}",
         f"Build number: {build_number}",
         f"Build date: {build_date}",
         f"Target commit: {target_commit}",
-        f"Previous nightly/release commit: {from_commit or 'none'}",
+        f"Previous release commit: {from_commit or 'none'}",
         "",
         "Project priorities:",
         "- Preserve retail Quake III Arena and demo compatibility.",
@@ -362,7 +372,7 @@ def sanitize_generated_notes(text: str) -> str:
     sanitized: list[str] = []
     for line in stripped.splitlines():
         clean = line.rstrip()
-        if re.match(r"^#{1,2}\s+(fnquake3|nightly|release notes|changelog highlights|what'?s changed)\b", clean, flags=re.IGNORECASE):
+        if re.match(r"^#{1,2}\s+(fnquake3|release notes|changelog highlights|what'?s changed)\b", clean, flags=re.IGNORECASE):
             continue
         if clean.startswith("::"):
             clean = "\\" + clean
@@ -378,7 +388,7 @@ def github_models_highlights(context: str, *, model: str, timeout: int) -> str:
 
     system_prompt = textwrap.dedent(
         """
-        You write user-facing nightly release notes for FnQuake3.
+        You write user-facing release notes for FnQuake3.
         Audience: players, server operators, mod users, and testers.
         Produce concise Markdown with only useful highlights. Avoid duplicated ideas,
         merge noise, raw commit lists, tiny refactor details, and maintainer-only trivia.
@@ -440,7 +450,7 @@ def fallback_section_for_subject(subject: str) -> str:
         return "Rendering and Display"
     if any(token in lowered for token in ("audio", "sound", "openal", "wasapi", "ogg", "vorbis")):
         return "Audio"
-    if any(token in lowered for token in ("nightly", "release", "package", "artifact", "workflow", "build", "meson", "ninja", "makefile", "msvc")):
+    if any(token in lowered for token in ("release", "package", "artifact", "workflow", "build", "meson", "ninja", "makefile", "msvc")):
         return "Builds and Packaging"
     return "Highlights"
 
@@ -478,7 +488,7 @@ def fallback_highlights(commits: list[dict[str, str]], changelog: Path) -> str:
         sections.setdefault(section, []).append(f"- {humanize_subject(subject)}")
 
     if not sections:
-        return "### Highlights\n- No user-facing changes were detected in this nightly range."
+        return "### Highlights\n- No user-facing changes were detected in this release range."
 
     preferred_order = ["Highlights", "Rendering and Display", "Audio", "Builds and Packaging", "Fixes"]
     rendered: list[str] = []
@@ -558,16 +568,16 @@ def render_release_notes(
 
     previous_line: str
     if from_commit:
-        previous_line = f"- Previous nightly commit: {normalize_commit(from_commit)} ({from_commit})"
+        previous_line = f"- Previous release commit: {normalize_commit(from_commit)} ({from_commit})"
     else:
         stable_tag = latest_stable_tag(str(meta["tag_prefix"]))
         if stable_tag:
             previous_line = f"- Previous stable tag: {stable_tag}"
         else:
-            previous_line = "- Previous nightly commit: none"
+            previous_line = "- Previous release commit: none"
 
     lines = [
-        f"# {meta['project_name']} Nightly",
+        f"# {meta['project_name']} Release",
         "",
         "## Changelog highlights",
         "",
@@ -575,7 +585,7 @@ def render_release_notes(
         "",
         "## Build details",
         "",
-        "- Channel: nightly",
+        "- Channel: manual",
         f"- Base version line: {meta['base_version']}",
         f"- Build version: {version_string}",
         f"- Build date: {iso_date}",
@@ -598,10 +608,9 @@ def main() -> int:
     args = parse_args()
 
     if args.command in {"summary", "github-output"}:
-        info = nightly_context(
+        info = manual_release_context(
             build_date=args.build_date,
             head_commit=args.head_commit,
-            force=args.force,
         )
         print_mapping(info)
         return 0
@@ -623,7 +632,7 @@ def main() -> int:
     )
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(notes, encoding="utf-8", newline="\n")
+        write_text_lf(args.output, notes)
     else:
         sys.stdout.write(notes)
     return 0

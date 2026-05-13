@@ -1,5 +1,5 @@
 project('openal-soft', 'c',
-  version: '1.24.3',
+  version: '1.25.2',
   license: 'LGPL-2.0-or-later',
 )
 

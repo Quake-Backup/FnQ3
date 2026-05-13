@@ -1915,6 +1915,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.SetColorMappings = R_SetColorMappings;
 
 	re.ThrottleBackend = RE_ThrottleBackend;
+	re.DrawMenuDepthOfField = RE_DrawMenuDepthOfField;
 	re.CanMinimize = RE_CanMinimize;
 	re.GetConfig = RE_GetConfig;
 	re.VertexLighting = RE_VertexLighting;

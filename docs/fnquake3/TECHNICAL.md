@@ -40,12 +40,12 @@ That header feeds:
 - Windows resource metadata via [`code/win32/win_resource.rc`](../../code/win32/win_resource.rc)
 - Meson and Make version reporting
 - documentation rendering
-- nightly and tagged release archive naming
+- manual and tagged release archive naming
 
 Current policy:
 
 - Tagged releases use semantic version tags in the form `vX.Y.Z`.
-- Nightly builds produce a unique tag per build (e.g. `nightly-0.1.0.42-20240403-abc12345`), combining the build version, date, and commit for a persistent per-build release.
+- Manual release runs produce unique version/date/commit tags (e.g. `0.1.0.42-20240403-abc12345`) and matching package prefixes without a channel word.
 - The base version in `fnq3_version.h` should always represent the next intended stable release line.
 - Release-facing change history lives in [`docs/fnquake3/CHANGELOG.md`](./CHANGELOG.md). Keep the `Unreleased` section current as work lands.
 - Use [`scripts/changelog.py`](../../scripts/changelog.py) to extract a section or promote `Unreleased` into a dated release section during tagging.
@@ -78,13 +78,13 @@ That command rewrites:
 ## Release Packaging
 
 The packaging entry point is [`scripts/release.py`](../../scripts/release.py).
-Nightly CI orchestration lives in [`scripts/nightly.py`](../../scripts/nightly.py).
+Manual release CI orchestration lives in [`scripts/manual_release.py`](../../scripts/manual_release.py).
 
 Typical local usage:
 
 ```powershell
-python scripts/nightly.py summary
-python scripts/release.py --channel nightly --artifact-root <downloaded-artifacts-dir>
+python scripts/manual_release.py summary
+python scripts/release.py --channel manual --artifact-root <downloaded-artifacts-dir>
 python scripts/release.py --channel release --artifact-root <downloaded-artifacts-dir> --ref-name v0.1.0 --glx-proof-root <reviewed-glx-proof-root>
 ```
 
@@ -98,17 +98,17 @@ The script:
 
 ## CI Notes
 
-[`.github/workflows/nightly.yml`](../../.github/workflows/nightly.yml) owns scheduled and manual nightly publishing.
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml) owns main-branch build validation and manual release publishing.
 
 Expected behavior:
 
 - pull requests build only
-- `main` pushes validate the main branch without publishing a nightly release
-- scheduled nightly runs produce a new unique-tagged release per build when `main` has advanced since the last nightly
-- published GitHub releases upload stable archives built from the tagged version
+- `main` pushes validate the main branch without publishing a release
+- manual `workflow_dispatch` runs publish a new version/date/commit release for the selected ref
+- published GitHub releases upload archives whose names match the release tag identity
 - Linux release artifacts build inside an Ubuntu 20.04 userspace and run `scripts/check_elf_glibc.py --max-glibc 2.31` before upload so hosted runner image changes do not raise the packaged glibc requirement unexpectedly.
 
-Renderer-focused verification lives beside the nightly packaging flow:
+Renderer-focused verification lives beside the release packaging flow:
 
 - [`docs/fnquake3/GLX_FINAL_CONTRACT.md`](./GLX_FINAL_CONTRACT.md) is the accepted target ADR for the final GLx replacement renderer: stable C ABI, GLx-owned draw behavior, five product tiers, deterministic pass order, and a scene-linear color pipeline.
 - [`docs/fnquake3/GLX_COLORSPACE_AUDIT.md`](./GLX_COLORSPACE_AUDIT.md) records the audited sRGB/linear texture classes, framebuffer-sRGB policy, blending expectations, and screenshot capture color space for GLx color-pipeline work.

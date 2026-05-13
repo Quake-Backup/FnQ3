@@ -77,6 +77,7 @@ static qboolean depthFadeCopied;
 
 static frameBuffer_t frameBufferMS;
 static frameBuffer_t frameBuffers[ FBO_COUNT ];
+static frameBuffer_t menuDofBuffers[ 2 ];
 
 static qboolean frameBufferMultiSampling = qfalse;
 
@@ -2914,6 +2915,94 @@ static void FBO_Blur2( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  cons
 }
 
 
+static qboolean FBO_EnsureMenuDepthOfFieldBuffers( void )
+{
+	const int width = MAX( 1, glConfig.vidWidth / 2 );
+	const int height = MAX( 1, glConfig.vidHeight / 2 );
+
+	if ( menuDofBuffers[0].fbo && menuDofBuffers[1].fbo &&
+		menuDofBuffers[0].width == width && menuDofBuffers[0].height == height &&
+		menuDofBuffers[1].width == width && menuDofBuffers[1].height == height ) {
+		return qtrue;
+	}
+
+	FBO_Clean( &menuDofBuffers[0] );
+	FBO_Clean( &menuDofBuffers[1] );
+
+	if ( !FBO_Create( &menuDofBuffers[0], width, height, qfalse, NULL, NULL ) ||
+		!FBO_Create( &menuDofBuffers[1], width, height, qfalse, NULL, NULL ) ) {
+		FBO_Clean( &menuDofBuffers[0] );
+		FBO_Clean( &menuDofBuffers[1] );
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+
+void FBO_MenuDepthOfField( float amount )
+{
+	frameBuffer_t *source;
+	int sourceIndex;
+	int pass;
+
+	amount = Com_Clamp( 0.0f, 1.0f, amount );
+	if ( amount <= 0.0f || !fboEnabled || !programCompiled || !backEnd.doneSurfaces ||
+		backEnd.framePostProcessed || ri.CL_IsMinimized() ) {
+		return;
+	}
+
+	if ( blitMSfbo ) {
+		FBO_BlitMS( qfalse );
+		blitMSfbo = qfalse;
+	}
+
+	sourceIndex = fboReadIndex;
+	if ( sourceIndex < 0 || sourceIndex >= FBO_COUNT ) {
+		return;
+	}
+
+	source = &frameBuffers[ sourceIndex ];
+	if ( !source->fbo || source->multiSampled || !source->color ) {
+		return;
+	}
+	if ( !FBO_EnsureMenuDepthOfFieldBuffers() ) {
+		return;
+	}
+
+	if ( !backEnd.projection2D ) {
+		RB_SetGL2D();
+	}
+
+	FBO_Bind( GL_READ_FRAMEBUFFER, source->fbo );
+	FBO_Bind( GL_DRAW_FRAMEBUFFER, menuDofBuffers[0].fbo );
+	qglBlitFramebuffer( 0, 0, source->width, source->height,
+		0, 0, menuDofBuffers[0].width, menuDofBuffers[0].height,
+		GL_COLOR_BUFFER_BIT, GL_LINEAR );
+
+	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
+	for ( pass = 0; pass < 2; ++pass ) {
+		FBO_Blur2( &menuDofBuffers[0], &menuDofBuffers[1], &menuDofBuffers[0] );
+	}
+
+	ARB_ProgramDisable();
+	FBO_Bind( GL_FRAMEBUFFER, source->fbo );
+	GL_BindTexture( 0, menuDofBuffers[0].color );
+	GL_TexEnv( GL_MODULATE );
+	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_SRC_ALPHA |
+		GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
+	qglViewport( 0, 0, source->width, source->height );
+	qglScissor( 0, 0, source->width, source->height );
+	qglColor4f( 1.0f, 1.0f, 1.0f, amount );
+	RenderQuad( source->width, source->height );
+	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+
+	fboReadIndex = sourceIndex;
+	RB_SetGL2D();
+}
+
+
 void FBO_CopyScreen( void )
 {
 	const frameBuffer_t *dst;
@@ -3340,7 +3429,7 @@ void R_BloomScreen( void )
 {
 	if ( r_bloom->integer == 1 && fboEnabled && qglActiveTextureARB )
 	{
-		if ( !backEnd.doneBloom && backEnd.doneSurfaces )
+		if ( !backEnd.framePostProcessed && !backEnd.doneBloom && backEnd.doneSurfaces )
 		{
 			if ( !backEnd.projection2D )
 				RB_SetGL2D();
@@ -3390,7 +3479,8 @@ void FBO_PostProcess( void )
 	GLX_CompatRecordPostProcessFrame( minimized,
 		( r_bloom->integer && programCompiled && qglActiveTextureARB ) ? qtrue : qfalse,
 		programCompiled ? qtrue : qfalse, backEnd.screenshotMask, windowAdjusted,
-		fboReadIndex, FBO_HdrSceneLinearMode(), r_renderScale->integer, r_greyscale->value );
+		fboReadIndex, FBO_HdrSceneLinearMode(), r_renderScale->integer, r_greyscale->value,
+		gamma, FBO_OutputOverbrightScale( obScale ) );
 	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_POSTPROCESS );
 #endif
 
@@ -3595,6 +3685,8 @@ void QGL_DoneFBO( void )
 		FBO_Clean(&frameBuffers[2]);
 		FBO_Clean(&frameBuffers[3]);
 		FBO_Clean(&frameBuffers[4]);
+		FBO_Clean(&menuDofBuffers[0]);
+		FBO_Clean(&menuDofBuffers[1]);
 		FBO_CleanBloom();
 		FBO_CleanDepth();
 		fboEnabled = qfalse;

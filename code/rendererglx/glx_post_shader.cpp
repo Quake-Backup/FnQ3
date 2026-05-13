@@ -620,7 +620,10 @@ static PostShaderProgram *GLX_PostShader_CreateProgram( PostShaderState *state,
 	program->lutUniform = -1;
 	program->postParams0Uniform = -1;
 	program->outputParams1Uniform = -1;
+	program->legacyParamsUniform = -1;
 	program->bloomParamsUniform = -1;
+	program->crtParams0Uniform = -1;
+	program->crtParams1Uniform = -1;
 	program->liftUniform = -1;
 	program->invGammaUniform = -1;
 	program->gainUniform = -1;
@@ -671,7 +674,10 @@ static PostShaderProgram *GLX_PostShader_CreateProgram( PostShaderState *state,
 	program->lutUniform = state->fns.GetUniformLocation( program->program, "u_ColorGradeLut" );
 	program->postParams0Uniform = state->fns.GetUniformLocation( program->program, "u_PostParams0" );
 	program->outputParams1Uniform = state->fns.GetUniformLocation( program->program, "u_OutputParams1" );
+	program->legacyParamsUniform = state->fns.GetUniformLocation( program->program, "u_LegacyParams" );
 	program->bloomParamsUniform = state->fns.GetUniformLocation( program->program, "u_BloomParams" );
+	program->crtParams0Uniform = state->fns.GetUniformLocation( program->program, "u_CrtParams0" );
+	program->crtParams1Uniform = state->fns.GetUniformLocation( program->program, "u_CrtParams1" );
 	program->liftUniform = state->fns.GetUniformLocation( program->program, "u_Lift" );
 	program->invGammaUniform = state->fns.GetUniformLocation( program->program, "u_InvGamma" );
 	program->gainUniform = state->fns.GetUniformLocation( program->program, "u_Gain" );
@@ -806,7 +812,7 @@ static unsigned int GLX_PostShader_FinalCompatibilityRejectMask(
 		plan.key.outputTransform != outputTransform ) {
 		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_INVALID_PLAN;
 	}
-	if ( outputTransform && ( !plan.key.sceneLinear ||
+	if ( outputTransform && !plan.key.crt && ( !plan.key.sceneLinear ||
 		output.sceneColorSpace != SceneColorSpace::SceneLinear ||
 		output.hdrMode <= 0 ) ) {
 		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_NOT_SCENE_LINEAR;
@@ -941,8 +947,27 @@ static qboolean GLX_PostShader_SetFinalUniforms( PostShaderState *state,
 		maxOutput, displaySdrWhite, 10000.0f );
 	const float greyscale = GLX_PostShader_SanitizeFloat( output.greyscale, 0.0f,
 		0.0f, 1.0f );
+	const float legacyGamma = GLX_PostShader_SanitizeFloat( output.legacyGamma,
+		1.0f, 0.01f, 16.0f );
+	const float legacyOverbright = GLX_PostShader_SanitizeFloat( output.legacyOverbright,
+		1.0f, 0.0f, 64.0f );
 	const float bloom = GLX_PostShader_SanitizeFloat( bloomIntensity, 0.0f,
 		0.0f, 64.0f );
+	const float crtAmount = GLX_PostShader_SanitizeFloat( output.crtAmount, 0.0f,
+		0.0f, 1.0f );
+	const float crtScanline = GLX_PostShader_SanitizeFloat( output.crtScanlineStrength,
+		0.55f, 0.0f, 1.0f );
+	const float crtMask = GLX_PostShader_SanitizeFloat( output.crtMaskStrength,
+		0.35f, 0.0f, 1.0f );
+	const float crtCurvature = GLX_PostShader_SanitizeFloat( output.crtCurvature,
+		0.01f, 0.0f, 0.25f );
+	const float crtChromatic = GLX_PostShader_SanitizeFloat( output.crtChromatic,
+		1.35f, 0.0f, 8.0f );
+	const float crtInvWidth = GLX_PostShader_SanitizeFloat( output.crtInvWidth,
+		1.0f, 0.000001f, 1.0f );
+	const float crtInvHeight = GLX_PostShader_SanitizeFloat( output.crtInvHeight,
+		1.0f, 0.000001f, 1.0f );
+	const float crtTime = state ? static_cast<float>( state->frames ) * ( 1.0f / 60.0f ) : 0.0f;
 	const float sourceKelvin = GLX_PostShader_SanitizeKelvin(
 		output.whitePointSourceKelvin );
 	const float targetKelvin = GLX_PostShader_SanitizeKelvin(
@@ -988,6 +1013,21 @@ static qboolean GLX_PostShader_SetFinalUniforms( PostShaderState *state,
 		bloom, 0.0f, 0.0f, 0.0f,
 		GLX_POST_SHADER_FEATURE_BLOOM_COMBINE ) ) {
 		GLX_PostShader_SetLastError( state, "post shader final missing bloom uniform" );
+		return qfalse;
+	}
+	if ( !GLX_PostShader_SetOptionalVec4( state, program, program->legacyParamsUniform,
+		legacyGamma, legacyOverbright, 0.0f, 0.0f,
+		GLX_POST_SHADER_FEATURE_LEGACY_GAMMA ) ) {
+		GLX_PostShader_SetLastError( state, "post shader final missing legacy gamma uniform" );
+		return qfalse;
+	}
+	if ( !GLX_PostShader_SetOptionalVec4( state, program, program->crtParams0Uniform,
+		crtAmount, crtScanline, crtMask, crtCurvature,
+		GLX_POST_SHADER_FEATURE_CRT ) ||
+		!GLX_PostShader_SetOptionalVec4( state, program, program->crtParams1Uniform,
+		crtChromatic, crtTime, crtInvWidth, crtInvHeight,
+		GLX_POST_SHADER_FEATURE_CRT ) ) {
+		GLX_PostShader_SetLastError( state, "post shader final missing CRT uniform" );
 		return qfalse;
 	}
 	if ( lgg && sourceKelvin != targetKelvin ) {
@@ -1065,7 +1105,7 @@ static qboolean GLX_PostShader_PrecachePrograms( PostShaderState *state )
 	output.precisionMode = 16;
 	output.transfer = OutputTransfer::SdrSrgb;
 	output.toneMap = ToneMapOperator::Aces;
-	output.grade = ColorGradeMode::None;
+	output.grade = ColorGradeMode::NoColorGrade;
 	plan = GLX_PostShader_BuildPlan( output );
 	ok = ( GLX_PostShader_CacheProgram( state, plan ) && ok ) ? qtrue : qfalse;
 	plan = GLX_PostShader_BuildPlanForOutput( output, qtrue );
@@ -1219,6 +1259,7 @@ qboolean GLX_PostShader_TryBindFinal( PostShaderState *state,
 	PostShaderSourceSummary source;
 	PostShaderProgram *program;
 	unsigned int rejectMask;
+	qboolean forceForCrt;
 
 	if ( !state ) {
 		return qfalse;
@@ -1228,7 +1269,8 @@ qboolean GLX_PostShader_TryBindFinal( PostShaderState *state,
 	state->lastDirectFinalBound = qfalse;
 	rejectMask = GLX_PostShader_FinalCompatibilityRejectMask( plan, output,
 		bloomComposite, outputTransform );
-	if ( !GLX_PostShader_Ready( *state ) ) {
+	forceForCrt = ( plan.key.crt && outputTransform ) ? qtrue : qfalse;
+	if ( !( forceForCrt ? state->ready : GLX_PostShader_Ready( *state ) ) ) {
 		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_NOT_READY;
 	}
 
@@ -1238,7 +1280,8 @@ qboolean GLX_PostShader_TryBindFinal( PostShaderState *state,
 		state->directFinalEligibleFrames++;
 	}
 
-	if ( !state->r_glxPostShaderExecute || !state->r_glxPostShaderExecute->integer ) {
+	if ( !forceForCrt && ( !state->r_glxPostShaderExecute ||
+		!state->r_glxPostShaderExecute->integer ) ) {
 		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_DISABLED;
 	}
 	if ( rejectMask != GLX_POST_SHADER_DIRECT_REJECT_NONE ) {

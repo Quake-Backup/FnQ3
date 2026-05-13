@@ -66,7 +66,6 @@ def base_metadata(path: Path = VERSION_HEADER) -> dict[str, object]:
         "version_tweak": tweak,
         "tag_prefix": str(defines["FNQ3_TAG_PREFIX"]),
         "artifact_prefix": str(defines["FNQ3_ARTIFACT_PREFIX"]),
-        "nightly_tag": str(defines["FNQ3_NIGHTLY_TAG"]),
     }
 
 
@@ -95,7 +94,7 @@ def channel_metadata(
     iso_date, date_slug = normalize_date(build_date)
     short_commit = normalize_commit(commit)
 
-    if channel not in {"release", "nightly"}:
+    if channel not in {"release", "manual"}:
         raise ValueError(f"Unsupported channel: {channel}")
 
     version_value = str(meta["version"])
@@ -114,10 +113,10 @@ def channel_metadata(
             int(meta["version_patch"]),
             tweak,
         )
-        release_tag = f"{meta['nightly_tag']}-{version_value}-{date_slug}-{short_commit}"
-        archive_prefix = f"{meta['artifact_prefix']}-nightly-{version_value}-{date_slug}-{short_commit}"
-        version_label = f"{version_value}-nightly.{date_slug}+{short_commit}"
-        release_title = f"{meta['project_name']} Nightly {iso_date} ({version_value})"
+        release_tag = f"{version_value}-{date_slug}-{short_commit}"
+        archive_prefix = f"{meta['artifact_prefix']}-{version_value}-{date_slug}-{short_commit}"
+        version_label = f"{version_value}+{date_slug}.{short_commit}"
+        release_title = f"{meta['project_name']} {iso_date} ({version_value})"
 
     meta.update(
         {
@@ -130,7 +129,7 @@ def channel_metadata(
             "version": version_value,
             "version_label": version_label,
             "release_title": release_title,
-            "release_tag_example": f"{meta['tag_prefix']}{version_value}",
+            "release_tag_example": f"{meta['tag_prefix']}{meta['base_version']}",
         }
     )
     return meta

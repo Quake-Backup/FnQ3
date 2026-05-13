@@ -160,7 +160,7 @@ void GL_Cull( cullType_t cullType ) {
 		qglEnable( GL_CULL_FACE );
 
 		cullFront = (cullType == CT_FRONT_SIDED);
-		if ( backEnd.viewParms.portalView == PV_MIRROR )
+		if ( R_ViewPassIsMirror( &backEnd.viewParms ) )
 		{
 			cullFront = !cullFront;
 		}
@@ -515,26 +515,18 @@ static void RB_BeginDrawingView( void ) {
 	//
 	SetViewportAndScissor();
 
-	// ensures that depth writes are enabled for the depth clear
-	GL_State( GLS_DEFAULT );
-
-	// clear relevant buffers
-	clearBits = GL_DEPTH_BUFFER_BIT;
-
-	if ( r_shadows->integer == 2 )
-	{
+	if ( R_ViewPassClearsDepth( &backEnd.viewParms ) ) {
+		clearBits |= GL_DEPTH_BUFFER_BIT;
+	}
+	if ( R_ViewPassClearsStencil( &backEnd.viewParms ) ) {
 		clearBits |= GL_STENCIL_BUFFER_BIT;
 	}
-	if ( 0 && r_fastsky->integer && !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) )
-	{
-		clearBits |= GL_COLOR_BUFFER_BIT;	// FIXME: only if sky shaders have been used
-#ifdef _DEBUG
-		qglClearColor( 0.8f, 0.7f, 0.4f, 1.0f );	// FIXME: get color of sky
-#else
-		qglClearColor( 0.0f, 0.0f, 0.0f, 1.0f );	// FIXME: get color of sky
-#endif
+
+	if ( clearBits ) {
+		// ensures that depth writes are enabled for the depth clear
+		GL_State( GLS_DEFAULT );
+		qglClear( clearBits );
 	}
-	qglClear( clearBits );
 
 	if ( backEnd.refdef.rdflags & RDF_HYPERSPACE ) {
 		RB_Hyperspace();
@@ -1263,13 +1255,38 @@ static void RB_DebugGraphics( void ) {
 RB_DrawSurfs
 =============
 */
+#ifdef USE_FBO
+static void RB_FinalizePostProcessForHud3D( const trRefdef_t *refdef ) {
+	if ( !fboEnabled || backEnd.framePostProcessed || !backEnd.doneSurfaces ) {
+		return;
+	}
+	if ( !r_hudExcludePostProcess->integer ) {
+		return;
+	}
+	// Keep scaled and capture frames on the FBO path; HUD viewports are in render-size coordinates.
+	if ( windowAdjusted || backEnd.screenshotMask || ri.CL_IsMinimized() ) {
+		return;
+	}
+	if ( !( refdef->rdflags & RDF_NOWORLDMODEL ) ) {
+		return;
+	}
+
+	FBO_PostProcess();
+	backEnd.framePostProcessed = qtrue;
+}
+#endif
+
 static const void *RB_DrawSurfs( const void *data ) {
 	const drawSurfsCommand_t *cmd;
+
+	cmd = (const drawSurfsCommand_t *)data;
 
 	// finish any 2D drawing if needed
 	RB_EndSurface();
 
-	cmd = (const drawSurfsCommand_t *)data;
+#ifdef USE_FBO
+	RB_FinalizePostProcessForHud3D( &cmd->refdef );
+#endif
 
 	backEnd.refdef = cmd->refdef;
 	backEnd.viewParms = cmd->viewParms;
@@ -1533,6 +1550,22 @@ static const void *RB_FinishBloom( const void *data )
 #endif // USE_FBO
 
 
+#ifdef USE_FBO
+static const void *RB_MenuDepthOfField( const void *data )
+{
+	const menuDepthOfFieldCommand_t *cmd = data;
+
+	RB_EndSurface();
+
+	if ( fboEnabled ) {
+		FBO_MenuDepthOfField( cmd->amount );
+	}
+
+	return (const void *)(cmd + 1);
+}
+#endif // USE_FBO
+
+
 static const void *RB_SwapBuffers( const void *data ) {
 
 	const swapBuffersCommand_t	*cmd;
@@ -1557,7 +1590,10 @@ static const void *RB_SwapBuffers( const void *data ) {
 
 #ifdef USE_FBO
 	if ( fboEnabled ) {
-		FBO_PostProcess();
+		if ( !backEnd.framePostProcessed ) {
+			FBO_PostProcess();
+			backEnd.framePostProcessed = qtrue;
+		}
 	}
 #endif
 
@@ -1653,6 +1689,7 @@ static const void *RB_SwapBuffers( const void *data ) {
 	backEnd.projection2D = qfalse;
 	backEnd.doneBloom = qfalse;
 	backEnd.doneSurfaces = qfalse;
+	backEnd.framePostProcessed = qfalse;
 	backEnd.drawConsole = qfalse;
 
 	r_anaglyphMode->modified = qfalse;
@@ -1724,6 +1761,9 @@ void RB_ExecuteRenderCommands( const void *data ) {
 #ifdef USE_FBO
 		case RC_FINISHBLOOM:
 			data = RB_FinishBloom(data);
+			break;
+		case RC_MENU_DEPTH_OF_FIELD:
+			data = RB_MenuDepthOfField(data);
 			break;
 #endif
 		case RC_COLORMASK:

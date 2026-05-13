@@ -197,7 +197,7 @@ void RB_AddFlare( void *surface, int fogNum, vec3_t point, vec3_t color, vec3_t 
 
 	f->eyeZ = eye[2];
 
-	if ( backEnd.viewParms.portalView )
+	if ( R_ViewPassIsPortal( &backEnd.viewParms ) )
 		f->drawZ = (clip[2] + clip[3] - 1.5 ) / ( 2 * clip[3] );
 	else
 		f->drawZ = (clip[2] + clip[3] - 0.5 ) / ( 2 * clip[3] );
@@ -511,7 +511,7 @@ void RB_RenderFlares (void) {
 		return;		// none visible
 	}
 
-	if ( backEnd.viewParms.portalView != PV_NONE ) {
+	if ( R_ViewPassIsPortal( &backEnd.viewParms ) ) {
 		qglDisable( GL_CLIP_PLANE0 );
 	}
 

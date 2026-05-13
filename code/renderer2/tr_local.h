@@ -2462,6 +2462,11 @@ typedef struct {
 } postProcessCommand_t;
 
 typedef struct {
+	int		commandId;
+	float	amount;
+} menuDepthOfFieldCommand_t;
+
+typedef struct {
 	int commandId;
 } exportCubemapsCommand_t;
 
@@ -2478,6 +2483,7 @@ typedef enum {
 	RC_CLEARDEPTH,
 	RC_CAPSHADOWMAP,
 	RC_POSTPROCESS,
+	RC_MENU_DEPTH_OF_FIELD,
 	RC_EXPORT_CUBEMAPS
 } renderCommand_t;
 
@@ -2524,6 +2530,7 @@ void RE_TakeVideoFrame( int width, int height,
 		byte *captureBuffer, byte *encodeBuffer, qboolean motionJpeg );
 
 void RE_FinishBloom( void );
+void RE_DrawMenuDepthOfField( float amount );
 void RE_ThrottleBackend( void );
 qboolean RE_CanMinimize( void );
 const glconfig_t *RE_GetConfig( void );

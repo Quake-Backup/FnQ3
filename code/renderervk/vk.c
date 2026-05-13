@@ -4629,6 +4629,22 @@ static void vk_bind_gamma_descriptor_sets( void )
 		vk.pipeline_layout_post_process, 0, ARRAY_LEN( post_sets ), post_sets, 0, NULL );
 }
 
+static void vk_push_post_process_constants( void )
+{
+	float constants[4];
+	float invWidth = glConfig.vidWidth > 0 ? 1.0f / (float)glConfig.vidWidth : 1.0f;
+	float invHeight = glConfig.vidHeight > 0 ? 1.0f / (float)glConfig.vidHeight : 1.0f;
+
+	constants[0] = tr.refdef.floatTime > 0.0 ? (float)tr.refdef.floatTime :
+		(float)tr.frameCount * ( 1.0f / 60.0f );
+	constants[1] = invWidth;
+	constants[2] = invHeight;
+	constants[3] = 0.0f;
+
+	qvkCmdPushConstants( vk.cmd->command_buffer, vk.pipeline_layout_post_process,
+		VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof( constants ), constants );
+}
+
 void vk_update_post_process_pipelines( void )
 {
 	vk_set_hdr_metadata();
@@ -5875,10 +5891,14 @@ void vk_initialize( void )
 		VkDescriptorSetLayout set_layouts[6];
 		VkPipelineLayoutCreateInfo desc;
 		VkPushConstantRange push_range;
+		VkPushConstantRange post_push_range;
 
 		push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 		push_range.offset = 0;
 		push_range.size = 64; // 16 floats
+		post_push_range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		post_push_range.offset = 0;
+		post_push_range.size = 16; // time and source texel size
 
 		// standard pipelines
 		set_layouts[0] = vk.set_layout_uniform; // fog/dlight parameters
@@ -5921,12 +5941,14 @@ void vk_initialize( void )
 		desc.flags = 0;
 		desc.setLayoutCount = 2;
 		desc.pSetLayouts = set_layouts;
-		desc.pushConstantRangeCount = 0;
-		desc.pPushConstantRanges = NULL;
+		desc.pushConstantRangeCount = 1;
+		desc.pPushConstantRanges = &post_push_range;
 
 		VK_CHECK( qvkCreatePipelineLayout( vk.device, &desc, NULL, &vk.pipeline_layout_post_process ) );
 
 		desc.setLayoutCount = VK_NUM_BLOOM_PASSES;
+		desc.pushConstantRangeCount = 0;
+		desc.pPushConstantRanges = NULL;
 
 		VK_CHECK( qvkCreatePipelineLayout( vk.device, &desc, NULL, &vk.pipeline_layout_blend ) );
 
@@ -6768,7 +6790,7 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	VkGraphicsPipelineCreateInfo create_info;
 	VkViewport viewport;
 	VkRect2D scissor;
-	VkSpecializationMapEntry spec_entries[39];
+	VkSpecializationMapEntry spec_entries[45];
 	VkSpecializationInfo frag_spec_info;
 	VkPipeline *pipeline;
 	VkShaderModule fsmodule;
@@ -6804,6 +6826,12 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 		float white_point[9];
 		int color_grade_lut_size;
 		float color_grade_lut_scale;
+		int crt_mode;
+		float crt_amount;
+		float crt_scanline_strength;
+		float crt_mask_strength;
+		float crt_curvature;
+		float crt_chromatic;
 	} frag_spec_data;
 
 	switch ( program_index ) {
@@ -6919,6 +6947,17 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 		}
 		frag_spec_data.color_grade_lut_size = use_lut ? lutSize : 0;
 	}
+	frag_spec_data.crt_amount = r_crtAmount ? Com_Clamp( 0.0f, 1.0f, r_crtAmount->value ) : 1.0f;
+	frag_spec_data.crt_scanline_strength = r_crtScanlineStrength ?
+		Com_Clamp( 0.0f, 1.0f, r_crtScanlineStrength->value ) : 0.55f;
+	frag_spec_data.crt_mask_strength = r_crtMaskStrength ?
+		Com_Clamp( 0.0f, 1.0f, r_crtMaskStrength->value ) : 0.35f;
+	frag_spec_data.crt_curvature = r_crtCurvature ?
+		Com_Clamp( 0.0f, 0.25f, r_crtCurvature->value ) : 0.01f;
+	frag_spec_data.crt_chromatic = r_crtChromatic ?
+		Com_Clamp( 0.0f, 8.0f, r_crtChromatic->value ) : 1.35f;
+	frag_spec_data.crt_mode = ( r_crt && r_crt->integer && frag_spec_data.crt_amount > 0.001f &&
+		( program_index == 0 || program_index == 3 ) ) ? 1 : 0;
 
 	if ( !vk_surface_format_color_depth( vk.present_format.format, &frag_spec_data.depth_r, &frag_spec_data.depth_g, &frag_spec_data.depth_b ) )
 		ri.Printf( PRINT_ALL, "Format %s not recognized, dither to assume 8bpc\n", vk_format_string( vk.base_format.format ) );
@@ -7078,6 +7117,30 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	spec_entries[38].constantID = 38;
 	spec_entries[38].offset = offsetof( struct FragSpecData, color_grade_lut_scale );
 	spec_entries[38].size = sizeof( frag_spec_data.color_grade_lut_scale );
+
+	spec_entries[39].constantID = 39;
+	spec_entries[39].offset = offsetof( struct FragSpecData, crt_mode );
+	spec_entries[39].size = sizeof( frag_spec_data.crt_mode );
+
+	spec_entries[40].constantID = 40;
+	spec_entries[40].offset = offsetof( struct FragSpecData, crt_amount );
+	spec_entries[40].size = sizeof( frag_spec_data.crt_amount );
+
+	spec_entries[41].constantID = 41;
+	spec_entries[41].offset = offsetof( struct FragSpecData, crt_scanline_strength );
+	spec_entries[41].size = sizeof( frag_spec_data.crt_scanline_strength );
+
+	spec_entries[42].constantID = 42;
+	spec_entries[42].offset = offsetof( struct FragSpecData, crt_mask_strength );
+	spec_entries[42].size = sizeof( frag_spec_data.crt_mask_strength );
+
+	spec_entries[43].constantID = 43;
+	spec_entries[43].offset = offsetof( struct FragSpecData, crt_curvature );
+	spec_entries[43].size = sizeof( frag_spec_data.crt_curvature );
+
+	spec_entries[44].constantID = 44;
+	spec_entries[44].offset = offsetof( struct FragSpecData, crt_chromatic );
+	spec_entries[44].size = sizeof( frag_spec_data.crt_chromatic );
 
 	frag_spec_info.mapEntryCount = ARRAY_LEN( spec_entries );
 	frag_spec_info.pMapEntries = spec_entries;
@@ -8541,7 +8604,7 @@ static void get_viewport(VkViewport *viewport, Vk_Depth_Range depth_range) {
 
 static void get_scissor_rect(VkRect2D *r) {
 
-	if ( backEnd.viewParms.portalView != PV_NONE )
+	if ( !backEnd.projection2D && R_ViewPassUsesScissor( &backEnd.viewParms ) )
 	{
 		r->offset.x = backEnd.viewParms.scissorX;
 		r->offset.y = glConfig.vidHeight - backEnd.viewParms.scissorY - backEnd.viewParms.scissorHeight;
@@ -9566,6 +9629,7 @@ void vk_end_frame( void )
 			// render to capture FBO
 			vk_begin_render_pass( vk.render_pass.capture, vk.framebuffers.capture, qfalse, gls.captureWidth, gls.captureHeight );
 			qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.capture_pipeline );
+			vk_push_post_process_constants();
 			vk_bind_gamma_descriptor_sets();
 
 			qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
@@ -9583,6 +9647,7 @@ void vk_end_frame( void )
 
 			vk_begin_render_pass( vk.render_pass.gamma, vk.framebuffers.gamma[ vk.cmd->swapchain_image_index ], qfalse, vk.renderWidth, vk.renderHeight );
 			qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.gamma_pipeline );
+			vk_push_post_process_constants();
 			vk_bind_gamma_descriptor_sets();
 
 			qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );

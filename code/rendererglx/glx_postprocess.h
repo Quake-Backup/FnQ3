@@ -40,6 +40,12 @@ struct PostProcessState {
 	cvar_t *r_bloom_threshold;
 	cvar_t *r_bloom_threshold_mode;
 	cvar_t *r_bloom_soft_knee;
+	cvar_t *r_crt;
+	cvar_t *r_crtAmount;
+	cvar_t *r_crtScanlineStrength;
+	cvar_t *r_crtMaskStrength;
+	cvar_t *r_crtCurvature;
+	cvar_t *r_crtChromatic;
 	qboolean glReady;
 	RenderProductTier tier;
 	qboolean fboRequested;
@@ -108,6 +114,13 @@ struct PostProcessState {
 	float lastAutoExposurePercentile;
 	float lastAutoExposureTargetLuma;
 	float lastBloomSoftKnee;
+	float lastLegacyGamma;
+	float lastLegacyOverbright;
+	float lastCrtAmount;
+	float lastCrtScanlineStrength;
+	float lastCrtMaskStrength;
+	float lastCrtCurvature;
+	float lastCrtChromatic;
 	float lastPaperWhiteNits;
 	float lastMaxOutputNits;
 	float lastGradeLift[3];
@@ -263,7 +276,7 @@ void GLX_PostProcess_RecordFboInit( PostProcessState *state, qboolean requested,
 void GLX_PostProcess_RecordFboShutdown( PostProcessState *state );
 void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, qboolean bloomAvailable,
 	qboolean programReady, int screenshotMask, qboolean windowAdjusted, int fboReadIndex,
-	int hdrMode, int renderScaleMode, float greyscale );
+	int hdrMode, int renderScaleMode, float greyscale, float legacyGamma, float legacyOverbright );
 qboolean GLX_PostProcess_AutoExposureNeedsSamples( const PostProcessState *state,
 	int *width, int *height );
 float GLX_PostProcess_UpdateAutoExposure( PostProcessState *state, float manualExposure,

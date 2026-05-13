@@ -581,11 +581,20 @@ typedef enum {
 	PV_COUNT
 } portalView_t;
 
+typedef enum {
+	VPF_PORTAL = 0x01,
+	VPF_MIRROR = 0x02,
+	VPF_SCISSOR = 0x04,
+	VPF_CLEAR_DEPTH = 0x08,
+	VPF_CLEAR_STENCIL = 0x10
+} viewPassFlags_t;
+
 typedef struct {
 	orientationr_t	or;
 	orientationr_t	world;
 	vec3_t		pvsOrigin;			// may be different than or.origin for portals
 	portalView_t portalView;
+	unsigned int passFlags;		// VPF_* backend behavior for this view pass
 	int			frameSceneNum;		// copied from tr.frameSceneNum
 	int			frameCount;			// copied from tr.frameCount
 	cplane_t	portalPlane;		// clip anything behind this if mirroring
@@ -603,6 +612,39 @@ typedef struct {
 	struct dlight_s	*dlights;
 #endif
 } viewParms_t;
+
+static ID_INLINE void R_FinalizeViewPassFlags( viewParms_t *viewParms ) {
+	viewParms->passFlags |= VPF_CLEAR_DEPTH;
+	if ( viewParms->portalView != PV_NONE ) {
+		viewParms->passFlags |= VPF_PORTAL | VPF_SCISSOR;
+	}
+	if ( viewParms->portalView == PV_MIRROR ) {
+		viewParms->passFlags |= VPF_MIRROR;
+	}
+	if ( viewParms->passFlags & VPF_MIRROR ) {
+		viewParms->passFlags |= VPF_PORTAL | VPF_SCISSOR;
+	}
+}
+
+static ID_INLINE qboolean R_ViewPassIsPortal( const viewParms_t *viewParms ) {
+	return ( viewParms->passFlags & VPF_PORTAL ) ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean R_ViewPassIsMirror( const viewParms_t *viewParms ) {
+	return ( viewParms->passFlags & VPF_MIRROR ) ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean R_ViewPassUsesScissor( const viewParms_t *viewParms ) {
+	return ( viewParms->passFlags & VPF_SCISSOR ) ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean R_ViewPassClearsDepth( const viewParms_t *viewParms ) {
+	return ( viewParms->passFlags & VPF_CLEAR_DEPTH ) ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean R_ViewPassClearsStencil( const viewParms_t *viewParms ) {
+	return ( viewParms->passFlags & VPF_CLEAR_STENCIL ) ? qtrue : qfalse;
+}
 
 /*
 ==============================================================================
@@ -1079,6 +1121,7 @@ typedef struct {
 	color4ub_t	color2D;
 	qboolean	doneBloom;		// done bloom this frame
 	qboolean	doneSurfaces;   // done any 3d surfaces already
+	qboolean	framePostProcessed; // final scene postprocess has been resolved
 	trRefEntity_t	entity2D;	// currentEntity will point at this when doing 2D rendering
 
 	int		screenshotMask;		// png | tga | jpg | bmp
@@ -1288,6 +1331,7 @@ extern cvar_t	*r_srgbTextures;
 extern cvar_t	*r_framebufferSRGB;
 extern cvar_t	*r_tonemap;
 extern cvar_t	*r_tonemapExposure;
+extern cvar_t	*r_hudExcludePostProcess;
 extern cvar_t	*r_colorGrade;
 extern cvar_t	*r_colorGradeLift;
 extern cvar_t	*r_colorGradeGamma;
@@ -1366,6 +1410,12 @@ extern	cvar_t	*r_skipBackEnd;
 extern	cvar_t	*r_anaglyphMode;
 
 extern	cvar_t	*r_greyscale;
+extern	cvar_t	*r_crt;
+extern	cvar_t	*r_crtAmount;
+extern	cvar_t	*r_crtScanlineStrength;
+extern	cvar_t	*r_crtMaskStrength;
+extern	cvar_t	*r_crtCurvature;
+extern	cvar_t	*r_crtChromatic;
 
 extern	cvar_t	*r_ignoreGLErrors;
 
@@ -1690,6 +1740,7 @@ void FBO_BlitMS( qboolean depthOnly );
 void FBO_BlitSS( void );
 qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalPass );
 void FBO_CopyScreen( void );
+void FBO_MenuDepthOfField( float amount );
 GLuint FBO_ScreenTexture( void );
 qboolean FBO_DepthFadeAvailable( void );
 qboolean FBO_DepthFadeReady( void );
@@ -1933,6 +1984,14 @@ typedef struct
 	int commandId;
 } clearDepthCommand_t;
 
+#ifdef USE_FBO
+typedef struct
+{
+	int commandId;
+	float amount;
+} menuDepthOfFieldCommand_t;
+#endif
+
 typedef struct
 {
 	int commandId;
@@ -1951,6 +2010,7 @@ typedef enum {
 	RC_SWAP_BUFFERS,
 #ifdef USE_FBO
 	RC_FINISHBLOOM,
+	RC_MENU_DEPTH_OF_FIELD,
 #endif
 	RC_COLORMASK,
 	RC_CLEARDEPTH,
@@ -2008,6 +2068,7 @@ void RE_TakeVideoFrame( int width, int height,
 		byte *captureBuffer, byte *encodeBuffer, qboolean motionJpeg );
 
 void RE_FinishBloom( void );
+void RE_DrawMenuDepthOfField( float amount );
 void RE_ThrottleBackend( void );
 qboolean RE_CanMinimize( void );
 const glconfig_t *RE_GetConfig( void );

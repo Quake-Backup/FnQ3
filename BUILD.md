@@ -54,11 +54,15 @@ Legacy Make and MSVC project files remain available while CI and packaging finis
 
 ### windows/msvc
 
-Install Visual Studio Community Edition 2017 or later, then open and build the `fnquake3` solution:
+Install Visual Studio Community Edition 2017 or later, then build through Meson from a Visual Studio developer prompt:
 
-`code/win32/msvc2017/fnquake3.sln`
+`meson setup meson/build-msvc --buildtype=release`
 
-The resulting executable and renderer modules are written to `code/win32/msvc2017/output`. Build renderer projects as external modules next to the one `fnquake3` client executable; do not create renderer-named client executables for normal testing.
+`meson compile -C meson/build-msvc`
+
+`meson install -C meson/build-msvc --destdir dist`
+
+The older `code/win32/msvc2017/fnquake3.sln` project files are kept for legacy reference while packaging finishes migrating. Prefer Meson for dependency resolution; it uses the wrap files under `subprojects/` instead of deleted in-tree third-party source directories.
 
 ---
 
@@ -183,7 +187,11 @@ Choosing `RENDERER_DEFAULT=glx` also enables `USE_GLX=1` so the selected rendere
 
 Release builds must not promote GLx as the default or alias `opengl` to GLx until `python scripts/glx_promotion.py --proof-root <reviewed-glx-proof-root> --require-ready` passes. Local `RENDERER_DEFAULT=glx` builds remain useful for explicit developer testing, but the repository default stays `opengl` until the promotion gate is green.
 
-`USE_SYSTEM_JPEG=0` - use current system JPEG library, disabled by default
+`USE_SYSTEM_JPEG=1` - use the current system JPEG library for Makefile builds, enabled by default
+
+`USE_SYSTEM_OGG=1` and `USE_SYSTEM_VORBIS=1` - use the current system Ogg/Vorbis libraries for Makefile builds, enabled by default
+
+`USE_CURL=1` - use the current system cURL library for Makefile builds, enabled by default. Meson builds use the `subprojects/curl.wrap` fallback when a system libcurl is not available.
 
 Example:
 

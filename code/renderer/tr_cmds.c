@@ -328,6 +328,7 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 	tr.frameSceneNum = 0;
 
 	backEnd.doneBloom = qfalse;
+	backEnd.framePostProcessed = qfalse;
 
 	backEnd.color2D.u32 = ~0U;
 
@@ -547,6 +548,28 @@ void RE_FinishBloom( void )
 	}
 
 	cmd->commandId = RC_FINISHBLOOM;
+#endif // USE_FBO
+}
+
+
+void RE_DrawMenuDepthOfField( float amount )
+{
+#ifdef USE_FBO
+	menuDepthOfFieldCommand_t *cmd;
+
+	if ( !tr.registered || amount <= 0.0f ) {
+		return;
+	}
+
+	cmd = R_GetCommandBuffer( sizeof( *cmd ) );
+	if ( !cmd ) {
+		return;
+	}
+
+	cmd->commandId = RC_MENU_DEPTH_OF_FIELD;
+	cmd->amount = Com_Clamp( 0.0f, 1.0f, amount );
+#else
+	(void)amount;
 #endif // USE_FBO
 }
 

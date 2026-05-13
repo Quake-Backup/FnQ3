@@ -166,6 +166,7 @@ Draws triangle outlines for debugging
 static void DrawTris( const shaderCommands_t *input ) {
 #ifdef USE_VULKAN
 	uint32_t pipeline;
+	qboolean mirror;
 
 	if ( r_showtris->integer == 1 && backEnd.drawConsole )
 		return;
@@ -176,23 +177,25 @@ static void DrawTris( const shaderCommands_t *input ) {
 	if ( r_fastsky->integer && input->shader->isSky )
 		return;
 
+	mirror = R_ViewPassIsMirror( &backEnd.viewParms );
+
 #ifdef USE_VBO
 	if ( tess.vboIndex ) {
 #ifdef USE_PMLIGHT
 		if ( tess.dlightPass )
-			pipeline = backEnd.viewParms.portalView == PV_MIRROR ? vk.tris_mirror_debug_red_pipeline : vk.tris_debug_red_pipeline;
+			pipeline = mirror ? vk.tris_mirror_debug_red_pipeline : vk.tris_debug_red_pipeline;
 		else
 #endif
-			pipeline = backEnd.viewParms.portalView == PV_MIRROR ? vk.tris_mirror_debug_green_pipeline : vk.tris_debug_green_pipeline;
+			pipeline = mirror ? vk.tris_mirror_debug_green_pipeline : vk.tris_debug_green_pipeline;
 	} else
 #endif
 	{
 #ifdef USE_PMLIGHT
 		if ( tess.dlightPass )
-			pipeline = backEnd.viewParms.portalView == PV_MIRROR ? vk.tris_mirror_debug_red_pipeline : vk.tris_debug_red_pipeline;
+			pipeline = mirror ? vk.tris_mirror_debug_red_pipeline : vk.tris_debug_red_pipeline;
 		else
 #endif
-			pipeline = backEnd.viewParms.portalView == PV_MIRROR ? vk.tris_mirror_debug_pipeline : vk.tris_debug_pipeline;
+			pipeline = mirror ? vk.tris_mirror_debug_pipeline : vk.tris_debug_pipeline;
 	}
 
 	vk_bind_pipeline( pipeline );
@@ -1177,7 +1180,7 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 
 			vk_bind_material( &material );
 
-			if ( backEnd.viewParms.portalView == PV_MIRROR ) {
+			if ( R_ViewPassIsMirror( &backEnd.viewParms ) ) {
 				pipeline = pStage->vk_mirror_pipeline[fog_stage];
 			} else {
 				pipeline = pStage->vk_pipeline[fog_stage];
@@ -1188,7 +1191,7 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 			vk_draw_geometry( tess.depthRange, qtrue );
 
 			if ( pStage->depthFragment ) {
-				if ( backEnd.viewParms.portalView == PV_MIRROR )
+				if ( R_ViewPassIsMirror( &backEnd.viewParms ) )
 					pipeline = pStage->vk_mirror_pipeline_df;
 				else
 					pipeline = pStage->vk_pipeline_df;
@@ -1354,7 +1357,7 @@ void VK_LightingPass( void )
 		return; // no space left...
 
 	cull = tess.shader->cullType;
-	if ( backEnd.viewParms.portalView == PV_MIRROR ) {
+	if ( R_ViewPassIsMirror( &backEnd.viewParms ) ) {
 		switch ( cull ) {
 			case CT_FRONT_SIDED: cull = CT_BACK_SIDED; break;
 			case CT_BACK_SIDED: cull = CT_FRONT_SIDED; break;

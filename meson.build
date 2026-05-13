@@ -199,12 +199,18 @@ elif cpu_family in ['ppc64le', 'ppc64']
 endif
 
 platform_asm_src = []
+client_asm_src = []
 if win32 and cc.get_id() == 'msvc' and cpu_family == 'x86_64'
   if add_languages('masm', required: false)
     platform_asm_src += 'code/asm/common_x64.asm'
+    client_asm_src += 'code/asm/snd_mix_x64.asm'
+    common_c_args += ['-DUSE_WIN32_ASM']
+    common_cpp_args += ['-DUSE_WIN32_ASM']
   else
     warning('MSVC x64 build did not find MASM; Q_setjmp_c/Q_longjmp_c will be unresolved')
   endif
+elif cpu_family == 'x86_64'
+  client_asm_src += 'code/asm/snd_mix_x86_64_preprocessed.S'
 endif
 
 server_src = [
@@ -787,14 +793,20 @@ if not renderer_dlopen
   endif
 endif
 
+client_c_args = common_c_args
+client_cpp_args = common_cpp_args
+if client_asm_src.length() > 0 and cc.get_id() != 'msvc'
+  client_c_args += ['-DELF']
+endif
+
 if get_option('build-client')
   executable(client_binary_name,
-    q3_platform_src + q3_ui_src + qcommon_src + server_src + client_src + platform_asm_src,
+    q3_platform_src + q3_ui_src + qcommon_src + server_src + client_src + platform_asm_src + client_asm_src,
     include_directories: include_dirs,
     dependencies: client_deps,
     objects: botlib_objects + static_renderer_objects,
-    c_args: common_c_args,
-    cpp_args: common_cpp_args,
+    c_args: client_c_args,
+    cpp_args: client_cpp_args,
     link_args: link_args,
     win_subsystem: win32 ? 'windows' : 'console',
     install: true,

@@ -2252,7 +2252,7 @@ bool PostShaderPlansClassifyOutputTransformProgramShape()
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_SCENE_LINEAR ) == 0u );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM ) != 0u );
 	CHECK( plan.textureCount == 1 );
-	CHECK( plan.uniformVec4Count == 4 );
+	CHECK( plan.uniformVec4Count == 5 );
 	CHECK( plan.hash != 0u );
 
 	output.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
@@ -2425,7 +2425,7 @@ bool PostShaderSourcesEmitDeterministicProgramShape()
 	CHECK( std::strstr( modernFragment, "in vec2 v_TexCoord" ) != nullptr );
 	CHECK( std::strstr( modernFragment, "out vec4 glx_FragColor" ) != nullptr );
 	CHECK( std::strstr( modernFragment, "#define GLX_POST_SAMPLE2D texture" ) != nullptr );
-	CHECK( std::strstr( modernFragment, "glx_FragColor = vec4(glxFinalOutput(color), 1.0)" ) != nullptr );
+	CHECK( std::strstr( modernFragment, "glx_FragColor = vec4(color, 1.0)" ) != nullptr );
 	const glx::PostShaderSourceSummary modernSummary =
 		glx::GLX_PostShaderSource_BuildSummary( plan,
 			glx::PostShaderSourceTarget::Glsl410Compatibility );
@@ -2467,7 +2467,7 @@ bool PostShaderSourcesEmitDeterministicProgramShape()
 	CHECK( std::strstr( fragment, "glxApplyWhitePoint" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxSampleLutAtlas" ) != nullptr );
 	CHECK( std::strstr( fragment, "* lutScale" ) != nullptr );
-	CHECK( std::strstr( fragment, "vec4(glxFinalOutput(color), 1.0)" ) != nullptr );
+	CHECK( std::strstr( fragment, "vec4(color, 1.0)" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxToneMapAcesFitted" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxLinearSrgbToBt2020" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxPqEncode" ) != nullptr );

@@ -520,7 +520,7 @@ public:
 	void RecordFboShutdown();
 	void RecordPostProcessFrame( qboolean minimized, qboolean bloomAvailable, qboolean programReady,
 		int screenshotMask, qboolean windowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
-		float greyscale );
+		float greyscale, float legacyGamma, float legacyOverbright );
 	qboolean AutoExposureNeedsSamples( int *width, int *height ) const;
 	float UpdateAutoExposure( float manualExposure, const float *rgba, int width,
 		int height );
@@ -1995,10 +1995,11 @@ void RendererModule::RecordFboShutdown()
 
 void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomAvailable, qboolean programReady,
 	int screenshotMask, qboolean windowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
-	float greyscale )
+	float greyscale, float legacyGamma, float legacyOverbright )
 {
 	GLX_PostProcess_RecordFrame( &postprocess_, minimized, bloomAvailable, programReady,
-		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
+		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale,
+		legacyGamma, legacyOverbright );
 	OutputTransform output = GLX_Module_OutputTransformIR( postprocess_ );
 	PostOutputPlanInputs inputs {};
 	inputs.tier = caps_.tier;
@@ -2009,7 +2010,8 @@ void RendererModule::RecordPostProcessFrame( qboolean minimized, qboolean bloomA
 	inputs.framebufferFnsReady = postprocess_.framebufferFnsReady;
 	inputs.outputContractValid = postprocess_.outputContractValid;
 	inputs.bloomAvailable = bloomAvailable;
-	inputs.postShaderExecutorEnabled = GLX_PostShader_ExecutionEnabled( postShader_ );
+	inputs.postShaderExecutorEnabled = ( GLX_PostShader_ExecutionEnabled( postShader_ ) ||
+		( output.crtAmount > 0.001f && postShader_.ready ) ) ? qtrue : qfalse;
 	inputs.minimized = minimized;
 	inputs.windowAdjusted = windowAdjusted;
 	inputs.screenshotMask = screenshotMask;
@@ -2610,10 +2612,12 @@ extern "C" void GLX_Renderer_RecordFboShutdown( void )
 
 extern "C" void GLX_Renderer_RecordPostProcessFrame( qboolean minimized, qboolean bloomAvailable,
 	qboolean programReady, int screenshotMask, qboolean windowAdjusted, int fboReadIndex,
-	int hdrMode, int renderScaleMode, float greyscale )
+	int hdrMode, int renderScaleMode, float greyscale, float legacyGamma,
+	float legacyOverbright )
 {
 	glx::g_module.RecordPostProcessFrame( minimized, bloomAvailable, programReady,
-		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
+		screenshotMask, windowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale,
+		legacyGamma, legacyOverbright );
 }
 
 extern "C" qboolean GLX_Renderer_AutoExposureNeedsSamples( int *width, int *height )

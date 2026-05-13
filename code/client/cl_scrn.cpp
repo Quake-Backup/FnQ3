@@ -37,6 +37,48 @@ static int RoundToInt( float value )
 	return static_cast<int>( value + 0.5f );
 }
 
+static float SCR_UpdateMenuDepthOfFieldAmount( bool targetActive )
+{
+	static int previousTime;
+	static float amount;
+	float target = 0.0f;
+	int delta;
+	int transitionTime;
+
+	if ( targetActive && cl_menuDepthOfField ) {
+		target = Com_Clamp( 0.0f, 1.0f, cl_menuDepthOfField->value );
+	}
+
+	delta = previousTime ? cls.realtime - previousTime : 0;
+	previousTime = cls.realtime;
+	if ( delta < 0 || delta > 1000 ) {
+		delta = 0;
+	}
+
+	transitionTime = cl_menuDepthOfFieldTime ? cl_menuDepthOfFieldTime->integer : 160;
+	if ( transitionTime <= 0 || delta <= 0 ) {
+		amount = target;
+	} else {
+		const float step = static_cast<float>( delta ) / static_cast<float>( transitionTime );
+		if ( amount < target ) {
+			amount += step;
+			if ( amount > target ) {
+				amount = target;
+			}
+		} else if ( amount > target ) {
+			amount -= step;
+			if ( amount < target ) {
+				amount = target;
+			}
+		}
+	}
+
+	if ( amount < 0.001f ) {
+		amount = 0.0f;
+	}
+	return amount;
+}
+
 class ScopedRenderColor {
 public:
 	explicit ScopedRenderColor( const float *color ) {
@@ -663,10 +705,13 @@ This will be called twice if rendering in stereo mode
 */
 static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	bool uiFullscreen;
+	bool uiVisible;
+	float menuDepthOfFieldAmount;
 
 	re.BeginFrame( stereoFrame );
 
 	uiFullscreen = uivm && VM_Call( uivm, 0, UI_IS_FULLSCREEN );
+	uiVisible = ( Key_GetCatcher() & KEYCATCH_UI ) && uivm;
 
 	// wide aspect ratio screens need to have the sides cleared
 	// unless they are displaying game renderings
@@ -722,8 +767,14 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 		}
 	}
 
+	menuDepthOfFieldAmount = SCR_UpdateMenuDepthOfFieldAmount(
+		uiVisible && !uiFullscreen && cls.state == CA_ACTIVE );
+	if ( menuDepthOfFieldAmount > 0.0f && re.DrawMenuDepthOfField ) {
+		re.DrawMenuDepthOfField( menuDepthOfFieldAmount );
+	}
+
 	// the menu draws next
-	if ( Key_GetCatcher( ) & KEYCATCH_UI && uivm ) {
+	if ( uiVisible ) {
 		VM_Call( uivm, 1, UI_REFRESH, cls.realtime );
 	}
 

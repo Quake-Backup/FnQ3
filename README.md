@@ -56,10 +56,11 @@ Player-facing controls are in the [Audio guide](docs/AUDIO.md). Maintainer detai
 3. Leave your original retail game assets alone.
 4. Use [BUILD.md](BUILD.md) if you need the platform-specific build steps.
 
-## Release Channels
+## Releases
 
 - Tagged releases use semantic version tags such as `v0.1.0`.
-- Nightly packages follow current mainline work and include the incremented build version, build date, and commit in the archive name.
+- Manual release runs produce immutable version/date/commit tags such as `0.1.0.42-20260513-abc12345`.
+- Packages use the same version/date/commit identity in archive names, for example `fnquake3-0.1.0.42-20260513-abc12345-linux-x86_64.zip`.
 
 ## Documentation
 

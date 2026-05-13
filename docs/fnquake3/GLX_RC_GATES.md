@@ -27,7 +27,7 @@ Every blocking RC run must expose at least the `GL2X` product tier: OpenGL 2.x w
 
 `GL46` runs must report the `GL46 high-end executor` contract. That line proves persistent uploads, buffer-storage upload policy, sync-heavy streaming, DSA, MDI, aggressive static-world submission, detailed GPU counters, hardware HDR output, screenshots, and demos are all part of the high-end tier. The compact `glx: GL46 high-end ...` line records persistent-upload, DSA-product, MDI-product, aggressive-static, backend GPU query, and static-world MDI counters so the tier can be compared against lower paths.
 
-Nightly packaging should continue to build GLx wherever the repository already enables `USE_GLX`, including Windows x86, macOS, Linux aarch64, and other packaged targets. Those platforms need at least manual smoke coverage before GLx becomes the default or `opengl` becomes an alias, but they are not blockers for the first conservative RC unless maintainers add stable GPU runners for them.
+Manual release packaging should continue to build GLx wherever the repository already enables `USE_GLX`, including Windows x86, macOS, Linux aarch64, and other packaged targets. Those platforms need at least manual smoke coverage before GLx becomes the default or `opengl` becomes an alias, but they are not blockers for the first conservative RC unless maintainers add stable GPU runners for them.
 
 ## Canonical Gate Presets
 
@@ -306,7 +306,7 @@ target, the same release command must also pass
 archives so the rollback package named by the promotion plan is actually present
 in `.install/packages/`.
 
-Nightly packaging records the proof-corpus metadata but does not require a proof root because it is not a GLx promotion event.
+Manual release packaging records the proof-corpus metadata but does not require a proof root because it is not a GLx promotion event.
 
 ## Promotion Boundary
 

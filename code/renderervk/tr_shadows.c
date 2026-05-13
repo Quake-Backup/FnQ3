@@ -133,7 +133,7 @@ static uint32_t R_EnemyHighlightPipeline( unsigned int stateBits, cullType_t cul
 	def.shader_type = shaderType;
 	def.state_bits = stateBits;
 	def.face_culling = cull;
-	def.mirror = ( backEnd.viewParms.portalView == PV_MIRROR );
+	def.mirror = R_ViewPassIsMirror( &backEnd.viewParms );
 	def.shadow_phase = shadowPhase;
 
 	return vk_find_pipeline_ext( 0, &def, qfalse );
@@ -563,7 +563,7 @@ void RB_ShadowTessEnd( void ) {
 	GL_Bind( tr.whiteImage );
 
 	// mirrors have the culling order reversed
-	if ( backEnd.viewParms.portalView == PV_MIRROR ) {
+	if ( R_ViewPassIsMirror( &backEnd.viewParms ) ) {
 		pipeline[0] = vk.shadow_volume_pipelines[0][1];
 		pipeline[1] = vk.shadow_volume_pipelines[1][1];
 	} else {

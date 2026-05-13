@@ -14,7 +14,6 @@
 
 #define FNQ3_TAG_PREFIX "v"
 #define FNQ3_ARTIFACT_PREFIX "fnquake3"
-#define FNQ3_NIGHTLY_TAG "nightly"
 
 #define FNQ3_WINDOWS_FILE_VERSION 0,1,0,0
 #define FNQ3_WINDOWS_PRODUCT_VERSION 0,1,0,0

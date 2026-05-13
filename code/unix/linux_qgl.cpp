@@ -50,7 +50,7 @@ QGL_Swp_PROCS;
 **
 ** Unloads the specified DLL then nulls out all the proc pointers.
 */
-void QGL_Shutdown( qboolean unloadDLL )
+extern "C" void QGL_Shutdown( qboolean unloadDLL )
 {
 	Com_Printf( "...shutting down QGL\n" );
 
@@ -92,7 +92,7 @@ void QGL_Shutdown( qboolean unloadDLL )
 
 static int glErrorCount = 0;
 
-void *GL_GetProcAddress( const char *symbol )
+extern "C" void *GL_GetProcAddress( const char *symbol )
 {
 	void *sym;
 
@@ -118,7 +118,7 @@ void *GL_GetProcAddress( const char *symbol )
 ** might be.
 **
 */
-qboolean QGL_Init( const char *dllname )
+extern "C" qboolean QGL_Init( const char *dllname )
 {
 	Com_Printf( "...initializing QGL\n" );
 

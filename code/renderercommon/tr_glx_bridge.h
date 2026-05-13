@@ -524,11 +524,12 @@ static ID_INLINE void GLX_CompatRecordFboShutdown( void )
 static ID_INLINE void GLX_CompatRecordPostProcessFrame( qboolean minimized,
 	qboolean bloomAvailable, qboolean programReady, int screenshotMask,
 	qboolean postWindowAdjusted, int fboReadIndex, int hdrMode, int renderScaleMode,
-	float greyscale )
+	float greyscale, float legacyGamma, float legacyOverbright )
 {
 #ifdef RENDERER_GLX
 	GLX_Renderer_RecordPostProcessFrame( minimized, bloomAvailable, programReady,
-		screenshotMask, postWindowAdjusted, fboReadIndex, hdrMode, renderScaleMode, greyscale );
+		screenshotMask, postWindowAdjusted, fboReadIndex, hdrMode, renderScaleMode,
+		greyscale, legacyGamma, legacyOverbright );
 #else
 	(void)minimized;
 	(void)bloomAvailable;
@@ -539,6 +540,8 @@ static ID_INLINE void GLX_CompatRecordPostProcessFrame( qboolean minimized,
 	(void)hdrMode;
 	(void)renderScaleMode;
 	(void)greyscale;
+	(void)legacyGamma;
+	(void)legacyOverbright;
 #endif
 }
 

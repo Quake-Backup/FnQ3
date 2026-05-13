@@ -28,12 +28,14 @@ static constexpr unsigned int GLX_POST_SHADER_FEATURE_GREYSCALE = 0x00004000u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_DISPLAY_P3_OUTPUT = 0x00008000u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT = 0x00010000u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_GAMUT_CLIP = 0x00020000u;
+static constexpr unsigned int GLX_POST_SHADER_FEATURE_CRT = 0x00040000u;
 
 struct PostShaderKey {
 	qboolean sceneLinear;
 	qboolean outputTransform;
 	qboolean bloomComposite;
 	qboolean greyscale;
+	qboolean crt;
 	ColorGradeMode grade;
 	ToneMapOperator toneMap;
 	OutputTransfer transfer;
@@ -108,6 +110,9 @@ static ID_INLINE unsigned int GLX_PostShader_FeaturesForKey( const PostShaderKey
 	if ( key.greyscale ) {
 		features |= GLX_POST_SHADER_FEATURE_GREYSCALE;
 	}
+	if ( key.crt ) {
+		features |= GLX_POST_SHADER_FEATURE_CRT;
+	}
 	if ( key.sceneLinear ) {
 		features |= GLX_POST_SHADER_FEATURE_SCENE_LINEAR;
 	} else if ( key.outputTransform ) {
@@ -179,6 +184,7 @@ static ID_INLINE unsigned int GLX_PostShader_HashKey( const PostShaderKey &key,
 	hash = GLX_RenderIR_HashValue( hash, key.outputTransform ? 1u : 0u );
 	hash = GLX_RenderIR_HashValue( hash, key.bloomComposite ? 1u : 0u );
 	hash = GLX_RenderIR_HashValue( hash, key.greyscale ? 1u : 0u );
+	hash = GLX_RenderIR_HashValue( hash, key.crt ? 1u : 0u );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( key.grade ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( key.toneMap ) );
 	hash = GLX_RenderIR_HashValue( hash, static_cast<unsigned int>( key.transfer ) );
@@ -202,8 +208,9 @@ static ID_INLINE PostShaderPlan GLX_PostShader_BuildPlanForPass(
 	plan.key.outputTransform = outputTransform;
 	plan.key.bloomComposite = bloomComposite;
 	plan.key.greyscale = ( outputTransform && transform.greyscale != 0.0f ) ? qtrue : qfalse;
+	plan.key.crt = ( outputTransform && transform.crtAmount > 0.001f ) ? qtrue : qfalse;
 	plan.key.grade = ( outputTransform && plan.key.sceneLinear ) ? transform.grade :
-		ColorGradeMode::None;
+		ColorGradeMode::NoColorGrade;
 	plan.key.toneMap = ( outputTransform && plan.key.sceneLinear ) ? transform.toneMap :
 		ToneMapOperator::Legacy;
 	plan.key.transfer = transform.transfer;
@@ -237,6 +244,12 @@ static ID_INLINE PostShaderPlan GLX_PostShader_BuildPlanForPass(
 	if ( ( plan.featureMask &
 		( GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT |
 		GLX_POST_SHADER_FEATURE_GAMUT_COMPRESS ) ) != 0u ) {
+		plan.uniformVec4Count += 1;
+	}
+	if ( plan.key.crt ) {
+		plan.uniformVec4Count += 2;
+	}
+	if ( ( plan.featureMask & GLX_POST_SHADER_FEATURE_LEGACY_GAMMA ) != 0u ) {
 		plan.uniformVec4Count += 1;
 	}
 	plan.hash = GLX_PostShader_HashKey( plan.key, plan.featureMask );

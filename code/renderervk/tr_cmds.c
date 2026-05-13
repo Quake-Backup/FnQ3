@@ -472,6 +472,12 @@ void RE_FinishBloom( void )
 }
 
 
+void RE_DrawMenuDepthOfField( float amount )
+{
+	(void)amount;
+}
+
+
 qboolean RE_CanMinimize( void )
 {
 #ifdef USE_VULKAN

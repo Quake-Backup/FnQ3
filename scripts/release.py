@@ -52,8 +52,8 @@ DEFAULT_DOCS = [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Package FnQuake3 nightly/release artifacts")
-    parser.add_argument("--channel", choices=("nightly", "release"), required=True)
+    parser = argparse.ArgumentParser(description="Package FnQuake3 manual or tagged release artifacts")
+    parser.add_argument("--channel", choices=("manual", "release"), required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=ROOT / ".install")
     parser.add_argument("--temp-dir", type=Path, default=ROOT / ".tmp" / "release")
@@ -115,7 +115,7 @@ def resolve_glx_runtime_proof(args: argparse.Namespace) -> dict[str, object]:
         return {
             "required": False,
             "status": "not-required",
-            "reason": "nightly packaging records the corpus but does not promote GLx.",
+            "reason": "manual release packaging records the corpus but does not promote GLx.",
         }
 
     proof = validate_release_proof_root(args.glx_proof_root)

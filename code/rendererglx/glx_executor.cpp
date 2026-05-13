@@ -397,7 +397,7 @@ static void GLX_Executor_RecordGL46HighEndProduct( ExecutorState *state,
 	if ( plan.kind == UploadPlanKind::TransientStream || plan.kind == UploadPlanKind::PostProcess ) {
 		state->highEndDynamicBufferProducts++;
 	}
-	if ( plan.kind != UploadPlanKind::None && plan.kind != UploadPlanKind::ClientMemory ) {
+	if ( plan.kind != UploadPlanKind::NoUpload && plan.kind != UploadPlanKind::ClientMemory ) {
 		state->highEndDsaProducts++;
 	}
 }
@@ -640,7 +640,7 @@ qboolean GLX_Executor_ExecuteDynamicDraw( ExecutorState *state, const DynamicDra
 	state->dynamicDraws++;
 	if ( state->tier == RenderProductTier::GL12 ) {
 		state->fixedFunctionDraws++;
-		if ( draw.upload.kind == UploadPlanKind::None || draw.upload.kind == UploadPlanKind::ClientMemory ) {
+		if ( draw.upload.kind == UploadPlanKind::NoUpload || draw.upload.kind == UploadPlanKind::ClientMemory ) {
 			state->clientMemoryDraws++;
 		}
 	}

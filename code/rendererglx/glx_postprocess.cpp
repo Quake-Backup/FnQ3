@@ -300,11 +300,11 @@ static GamutMapMode GLX_PostProcess_GamutMapForBackend( rendererOutputBackend_t 
 	case ROUTPUT_BACKEND_MACOS_EDR:
 		return GamutMapMode::CompressToOutput;
 	case ROUTPUT_BACKEND_LINUX_EXPERIMENTAL_HDR:
-		return GamutMapMode::None;
+		return GamutMapMode::NoGamutMap;
 	case ROUTPUT_BACKEND_WINDOWS_SCRGB:
 	case ROUTPUT_BACKEND_SDR_SRGB:
 	default:
-		return GamutMapMode::None;
+		return GamutMapMode::NoGamutMap;
 	}
 }
 
@@ -396,7 +396,7 @@ static ColorGradeMode GLX_PostProcess_ColorGradeForMode( int mode )
 	case 3:
 		return ColorGradeMode::LiftGammaGainLut3D;
 	default:
-		return ColorGradeMode::None;
+		return ColorGradeMode::NoColorGrade;
 	}
 }
 
@@ -488,7 +488,8 @@ static void GLX_PostProcess_ResetAutoExposureState( PostProcessState *state,
 }
 
 static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *state,
-	int hdrMode, int renderScaleMode, float greyscale )
+	int hdrMode, int renderScaleMode, float greyscale, float legacyGamma,
+	float legacyOverbright )
 {
 	OutputTransform output = GLX_RenderIR_DefaultOutputTransform();
 	const qboolean sceneLinear = hdrMode > 0 ? qtrue : qfalse;
@@ -503,6 +504,9 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 		( state && state->lastBloomThreshold > 0.0f ? state->lastBloomThreshold : 0.75f );
 	const float bloomSoftKnee = ( state && state->r_bloom_soft_knee ) ?
 		GLX_PostProcess_ClampFloat( state->r_bloom_soft_knee->value, 0.0f, 1.0f ) : 0.0f;
+	const float crtAmount = ( state && state->r_crt && state->r_crt->integer &&
+		state->r_crtAmount ) ? GLX_PostProcess_ClampFloat( state->r_crtAmount->value,
+		0.0f, 1.0f ) : 0.0f;
 	const float paperWhite = ( state && state->r_hdrDisplayPaperWhite ) ?
 		GLX_PostProcess_ClampFloat( state->r_hdrDisplayPaperWhite->value, 80.0f, 500.0f ) : 203.0f;
 	float maxOutput = ( state && state->r_hdrDisplayMaxLuminance ) ?
@@ -542,7 +546,7 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 	output.outputPrimaries = outputHardwareActive ?
 		GLX_PostProcess_OutputPrimariesForBackend( selectedBackend ) : OutputPrimaries::SrgbBt709;
 	output.gamutMap = outputHardwareActive ?
-		GLX_PostProcess_GamutMapForBackend( selectedBackend ) : GamutMapMode::None;
+		GLX_PostProcess_GamutMapForBackend( selectedBackend ) : GamutMapMode::NoGamutMap;
 	if ( sceneLinear && state && state->lastAutoExposureEnabled ) {
 		exposure = GLX_PostProcess_ClampFloat( state->autoExposureSmoothedExposure,
 			0.0f, 64.0f, exposure );
@@ -571,6 +575,25 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 	output.displaySdrWhiteNits = state ? state->displayOutput.sdrWhiteNits : 203.0f;
 	output.displayMaxNits = state ? state->displayOutput.maxLuminanceNits : 203.0f;
 	output.greyscale = greyscale;
+	output.legacyGamma = GLX_PostProcess_ClampFloat( legacyGamma, 0.01f, 16.0f, 1.0f );
+	output.legacyOverbright = GLX_PostProcess_ClampFloat( legacyOverbright, 0.0f, 64.0f, 1.0f );
+	output.crtAmount = crtAmount;
+	output.crtScanlineStrength = ( state && state->r_crtScanlineStrength ) ?
+		GLX_PostProcess_ClampFloat( state->r_crtScanlineStrength->value, 0.0f, 1.0f,
+		0.55f ) : 0.55f;
+	output.crtMaskStrength = ( state && state->r_crtMaskStrength ) ?
+		GLX_PostProcess_ClampFloat( state->r_crtMaskStrength->value, 0.0f, 1.0f,
+		0.35f ) : 0.35f;
+	output.crtCurvature = ( state && state->r_crtCurvature ) ?
+		GLX_PostProcess_ClampFloat( state->r_crtCurvature->value, 0.0f, 0.25f,
+		0.01f ) : 0.01f;
+	output.crtChromatic = ( state && state->r_crtChromatic ) ?
+		GLX_PostProcess_ClampFloat( state->r_crtChromatic->value, 0.0f, 8.0f,
+		1.35f ) : 1.35f;
+	output.crtInvWidth = ( state && state->vidWidth > 0 ) ?
+		1.0f / static_cast<float>( state->vidWidth ) : 1.0f;
+	output.crtInvHeight = ( state && state->vidHeight > 0 ) ?
+		1.0f / static_cast<float>( state->vidHeight ) : 1.0f;
 	GLX_PostProcess_ParseVec3Cvar( state ? state->r_colorGradeLift : nullptr,
 		0.0f, 0.0f, 0.0f, -1.0f, 1.0f, output.gradeLift );
 	GLX_PostProcess_ParseVec3Cvar( state ? state->r_colorGradeGamma : nullptr,
@@ -596,7 +619,7 @@ static OutputTransform GLX_PostProcess_MakeOutputTransform( PostProcessState *st
 	} else {
 		output.lutSize = 0.0f;
 	}
-	if ( output.grade == ColorGradeMode::None || output.grade == ColorGradeMode::Lut3D ) {
+	if ( output.grade == ColorGradeMode::NoColorGrade || output.grade == ColorGradeMode::Lut3D ) {
 		output.gradeLift[0] = output.gradeLift[1] = output.gradeLift[2] = 0.0f;
 		output.gradeGamma[0] = output.gradeGamma[1] = output.gradeGamma[2] = 1.0f;
 		output.gradeGain[0] = output.gradeGain[1] = output.gradeGain[2] = 1.0f;
@@ -907,6 +930,13 @@ static void GLX_PostProcess_CopyOutputDetails( PostProcessState *state )
 	state->lastAutoExposureEnabled = state->lastOutput.autoExposure;
 	state->lastBloomThreshold = state->lastOutput.bloomThreshold;
 	state->lastBloomSoftKnee = state->lastOutput.bloomSoftKnee;
+	state->lastLegacyGamma = state->lastOutput.legacyGamma;
+	state->lastLegacyOverbright = state->lastOutput.legacyOverbright;
+	state->lastCrtAmount = state->lastOutput.crtAmount;
+	state->lastCrtScanlineStrength = state->lastOutput.crtScanlineStrength;
+	state->lastCrtMaskStrength = state->lastOutput.crtMaskStrength;
+	state->lastCrtCurvature = state->lastOutput.crtCurvature;
+	state->lastCrtChromatic = state->lastOutput.crtChromatic;
 	state->lastPaperWhiteNits = state->lastOutput.paperWhiteNits;
 	state->lastMaxOutputNits = state->lastOutput.maxOutputNits;
 	for ( int i = 0; i < 3; i++ ) {
@@ -1150,11 +1180,44 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 	RI().Cvar_CheckRange( state->r_screenshotCaptureMode, "0", "2", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_screenshotCaptureMode,
 		"Screenshot/video capture export policy: 0 SDR sRGB after final output transform, 1 reserved scene-linear HDR request, 2 reserved HDR-output request. HDR modes currently resolve to SDR sRGB byte output." );
+	state->r_crt = RI().Cvar_Get( "r_crt", "0", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_crt );
+	RI().Cvar_CheckRange( state->r_crt, "0", "1", CV_INTEGER );
+	RI().Cvar_SetDescription( state->r_crt,
+		"Enable final-pass CRT emulation after gamma, tone mapping, bloom, and color grading. Requires r_fbo 1." );
+	state->r_crtAmount = RI().Cvar_Get( "r_crtAmount", "1.0", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_crtAmount );
+	RI().Cvar_CheckRange( state->r_crtAmount, "0.0", "1.0", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_crtAmount,
+		"Blend amount for r_crt final-pass CRT emulation." );
+	state->r_crtScanlineStrength = RI().Cvar_Get( "r_crtScanlineStrength", "0.55",
+		CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_crtScanlineStrength );
+	RI().Cvar_CheckRange( state->r_crtScanlineStrength, "0.0", "1.0", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_crtScanlineStrength,
+		"Scanline darkening strength for r_crt." );
+	state->r_crtMaskStrength = RI().Cvar_Get( "r_crtMaskStrength", "0.35", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_crtMaskStrength );
+	RI().Cvar_CheckRange( state->r_crtMaskStrength, "0.0", "1.0", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_crtMaskStrength,
+		"RGB phosphor mask strength for r_crt." );
+	state->r_crtCurvature = RI().Cvar_Get( "r_crtCurvature", "0.01", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_crtCurvature );
+	RI().Cvar_CheckRange( state->r_crtCurvature, "0.0", "0.25", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_crtCurvature,
+		"Screen curvature amount for r_crt." );
+	state->r_crtChromatic = RI().Cvar_Get( "r_crtChromatic", "1.35", CVAR_ARCHIVE_ND );
+	MakeCvarInstant( state->r_crtChromatic );
+	RI().Cvar_CheckRange( state->r_crtChromatic, "0.0", "8.0", CV_FLOAT );
+	RI().Cvar_SetDescription( state->r_crtChromatic,
+		"Chromatic edge separation in source texels for r_crt." );
 	state->r_bloom_threshold = RI().Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
 	state->r_bloom_threshold_mode = RI().Cvar_Get( "r_bloom_threshold_mode", "0", CVAR_ARCHIVE_ND );
 	state->r_bloom_soft_knee = RI().Cvar_Get( "r_bloom_soft_knee", "0.0", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_bloom_soft_knee,
 		"Softens scene-linear bloom extraction around r_bloom_threshold." );
+	state->lastLegacyGamma = 1.0f;
+	state->lastLegacyOverbright = 1.0f;
 	state->lastOutput = GLX_RenderIR_DefaultOutputTransform();
 	GLX_PostProcess_ResetAutoExposureState( state, state->lastOutput.exposure );
 	GLX_PostProcess_QueryDisplayOutput( state );
@@ -1177,7 +1240,8 @@ void GLX_PostProcess_OnOpenGLReady( PostProcessState *state, const Capabilities 
 	}
 	GLX_PostProcess_QueryDisplayOutput( state );
 	state->lastOutput = GLX_PostProcess_MakeOutputTransform( state,
-		state->hdrMode, state->renderScaleMode, state->lastGreyscale );
+		state->hdrMode, state->renderScaleMode, state->lastGreyscale,
+		state->lastLegacyGamma, state->lastLegacyOverbright );
 	state->hdrPrecisionMode = state->lastOutput.precisionMode;
 	state->toneMapMode = static_cast<int>( state->lastOutput.toneMap );
 	GLX_PostProcess_UpdateCapturePolicy( state );
@@ -1240,7 +1304,8 @@ void GLX_PostProcess_RecordFboInit( PostProcessState *state, qboolean requested,
 	state->framebufferSrgbEnabled = framebufferSrgbEnabled;
 	GLX_PostProcess_QueryDisplayOutput( state );
 	state->lastOutput = GLX_PostProcess_MakeOutputTransform( state,
-		hdrMode, renderScaleMode, state->lastGreyscale );
+		hdrMode, renderScaleMode, state->lastGreyscale,
+		state->lastLegacyGamma, state->lastLegacyOverbright );
 	state->hdrPrecisionMode = state->lastOutput.precisionMode;
 	state->toneMapMode = static_cast<int>( state->lastOutput.toneMap );
 	state->bloomThresholdMode = state->r_bloom_threshold_mode ? state->r_bloom_threshold_mode->integer : 0;
@@ -1288,7 +1353,8 @@ void GLX_PostProcess_RecordFboShutdown( PostProcessState *state )
 
 void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, qboolean bloomAvailable,
 	qboolean programReady, int screenshotMask, qboolean windowAdjusted, int fboReadIndex,
-	int hdrMode, int renderScaleMode, float greyscale )
+	int hdrMode, int renderScaleMode, float greyscale, float legacyGamma,
+	float legacyOverbright )
 {
 	if ( !state ) {
 		return;
@@ -1303,6 +1369,10 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	state->hdrMode = hdrMode;
 	state->renderScaleMode = renderScaleMode;
 	state->lastGreyscale = greyscale;
+	state->lastLegacyGamma = GLX_PostProcess_ClampFloat( legacyGamma, 0.01f,
+		16.0f, 1.0f );
+	state->lastLegacyOverbright = GLX_PostProcess_ClampFloat( legacyOverbright,
+		0.0f, 64.0f, 1.0f );
 	if ( hdrMode <= 0 ) {
 		const float manualExposure = state->r_tonemapExposure ?
 			GLX_PostProcess_ClampFloat( state->r_tonemapExposure->value, 0.1f, 8.0f ) : 1.0f;
@@ -1312,7 +1382,7 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 		GLX_PostProcess_QueryDisplayOutput( state );
 	}
 	state->lastOutput = GLX_PostProcess_MakeOutputTransform( state,
-		hdrMode, renderScaleMode, greyscale );
+		hdrMode, renderScaleMode, greyscale, legacyGamma, legacyOverbright );
 	state->hdrPrecisionMode = state->lastOutput.precisionMode;
 	state->toneMapMode = static_cast<int>( state->lastOutput.toneMap );
 	state->bloomThresholdMode = state->r_bloom_threshold_mode ? state->r_bloom_threshold_mode->integer : 0;
@@ -1347,7 +1417,7 @@ void GLX_PostProcess_RecordFrame( PostProcessState *state, qboolean minimized, q
 	if ( state->lastOutput.toneMap != ToneMapOperator::Legacy ) {
 		state->toneMappedFrames++;
 	}
-	if ( state->lastOutput.grade != ColorGradeMode::None ) {
+	if ( state->lastOutput.grade != ColorGradeMode::NoColorGrade ) {
 		state->gradedFrames++;
 	}
 	if ( renderScaleMode ) {
@@ -1719,6 +1789,11 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 		GLX_RenderIR_ColorGradeName( state.lastOutput.grade ),
 		state.lastOutput.paperWhiteNits,
 		state.lastOutput.maxOutputNits );
+	RI().Printf( PRINT_ALL,
+		"  CRT: amount %.2f, scanlines %.2f, mask %.2f, curvature %.3f, chromatic %.2f texels, legacy gamma %.3f, overbright %.2f\n",
+		state.lastCrtAmount, state.lastCrtScanlineStrength, state.lastCrtMaskStrength,
+		state.lastCrtCurvature, state.lastCrtChromatic, state.lastLegacyGamma,
+		state.lastLegacyOverbright );
 	RI().Printf( PRINT_ALL,
 		"  exposure reduction: mode %i, algorithm %s, enabled %s, fallback %s, samples %i/%ix%i, percentile %.1f, target-luma %.3f, measured-log2 %.3f, measured-luma %.4f, manual %.2f, scale %.3f, target %.2f, frames %u histogram/%u simple/%u failures/%u\n",
 		state.lastAutoExposureMode,

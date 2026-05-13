@@ -5,9 +5,9 @@
 
 namespace glx {
 
-static constexpr int GLX_POST_SHADER_SOURCE_VERSION = 6;
+static constexpr int GLX_POST_SHADER_SOURCE_VERSION = 7;
 static constexpr int GLX_POST_SHADER_VERTEX_SOURCE_BYTES = 1024;
-static constexpr int GLX_POST_SHADER_FRAGMENT_SOURCE_BYTES = 20000;
+static constexpr int GLX_POST_SHADER_FRAGMENT_SOURCE_BYTES = 30000;
 
 enum class PostShaderSourceTarget {
 	Glsl120,
@@ -308,6 +308,9 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFeatureDefines(
 	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
 		"GLX_POST_HDR_HEADROOM_OUTPUT",
 		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT ) ) && ok ) ? qtrue : qfalse;
+	ok = ( GLX_PostShaderSource_AppendFeatureDefine( out, outSize, used,
+		"GLX_POST_CRT",
+		GLX_PostShaderSource_FeatureEnabled( plan, GLX_POST_SHADER_FEATURE_CRT ) ) && ok ) ? qtrue : qfalse;
 
 	return ok;
 }
@@ -332,7 +335,7 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 	ok = ( GLX_PostShaderSource_WriteVersion( target, out, outSize, &used ) && ok ) ?
 		qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
-		"// GLx generated post/output shader source v6.\n" ) && ok ) ? qtrue : qfalse;
+		"// GLx generated post/output shader source v7.\n" ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_WriteFeatureDefines( plan, out, outSize, &used ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
 		GLX_PostShaderSource_ModernTarget( target ) ?
@@ -354,7 +357,10 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
 		"uniform vec4 u_PostParams0; // exposure, paper white, max output, greyscale\n"
 		"uniform vec4 u_OutputParams1; // headroom, display SDR white, display max, unused\n"
+		"uniform vec4 u_LegacyParams; // gamma, overbright, unused, unused\n"
 		"uniform vec4 u_BloomParams; // intensity, unused, unused, unused\n"
+		"uniform vec4 u_CrtParams0; // amount, scanline strength, mask strength, curvature\n"
+		"uniform vec4 u_CrtParams1; // chromatic, time seconds, inv width, inv height\n"
 		"uniform vec4 u_Lift;\n"
 		"uniform vec4 u_InvGamma;\n"
 		"uniform vec4 u_Gain;\n"
@@ -387,6 +393,8 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 		"	return max(glxClampFinite(u_OutputParams1.x, fallback, 1.0, 64.0), 1.0);\n"
 		"}\n"
 		"float glxGreyscaleAmount() { return glxClampFinite(u_PostParams0.w, 0.0, 0.0, 1.0); }\n"
+		"float glxLegacyGamma() { return glxClampFinite(u_LegacyParams.x, 1.0, 0.01, 16.0); }\n"
+		"float glxLegacyOverbright() { return glxClampFinite(u_LegacyParams.y, 1.0, 0.0, 64.0); }\n"
 		"float glxBloomIntensity() { return glxClampFinite(u_BloomParams.x, 0.0, 0.0, 64.0); }\n"
 		"vec3 glxLinearToSrgb(vec3 color) {\n"
 		"	color = glxNonNegativeVec3(color);\n"
@@ -500,10 +508,18 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 		"	return clamp(color, 0.0, 1.0);\n"
 		"#endif\n"
 		"}\n"
-		"void main() {\n"
-		"	vec3 color = glxFiniteVec3(GLX_POST_SAMPLE2D(u_Scene, v_TexCoord).rgb, vec3(0.0));\n"
+		"vec3 glxOutputDomainClamp(vec3 color) {\n"
+		"	color = glxNonNegativeVec3(color);\n"
+		"#if GLX_POST_HDR_HEADROOM_OUTPUT\n"
+		"	return clamp(color, 0.0, glxHeadroom());\n"
+		"#else\n"
+		"	return clamp(color, 0.0, 1.0);\n"
+		"#endif\n"
+		"}\n"
+		"vec3 glxResolvePostColor(vec2 uv) {\n"
+		"	vec3 color = glxFiniteVec3(GLX_POST_SAMPLE2D(u_Scene, uv).rgb, vec3(0.0));\n"
 		"#if GLX_POST_BLOOM_COMBINE\n"
-		"	color += glxFiniteVec3(GLX_POST_SAMPLE2D(u_Bloom, v_TexCoord).rgb, vec3(0.0)) * glxBloomIntensity();\n"
+		"	color += glxFiniteVec3(GLX_POST_SAMPLE2D(u_Bloom, uv).rgb, vec3(0.0)) * glxBloomIntensity();\n"
 		"#endif\n"
 		"#if GLX_POST_OUTPUT_TRANSFORM && GLX_POST_SCENE_LINEAR\n"
 		"	color = glxNonNegativeVec3(color * glxExposure());\n"
@@ -524,12 +540,92 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 		"	color = glxApplyOutputPrimaries(color);\n"
 		"	color = glxApplyGamutMap(color);\n"
 		"	color = glxEncodeTransfer(color);\n"
-		"#elif GLX_POST_OUTPUT_TRANSFORM && GLX_POST_ENCODE_SRGB\n"
-		"	color = glxLinearToSrgb(color);\n"
+		"#elif GLX_POST_OUTPUT_TRANSFORM && GLX_POST_LEGACY_GAMMA\n"
+		"	color = pow(glxNonNegativeVec3(color), vec3(glxLegacyGamma())) * glxLegacyOverbright();\n"
 		"#else\n"
 		"	color = glxNonNegativeVec3(color);\n"
 		"#endif\n"
-		"	glx_FragColor = vec4(glxFinalOutput(color), 1.0);\n"
+		"	return glxFinalOutput(color);\n"
+		"}\n"
+		"float glxCrtAmount() { return glxClampFinite(u_CrtParams0.x, 0.0, 0.0, 1.0); }\n"
+		"float glxCrtScanlineStrength() { return glxClampFinite(u_CrtParams0.y, 0.55, 0.0, 1.0); }\n"
+		"float glxCrtMaskStrength() { return glxClampFinite(u_CrtParams0.z, 0.35, 0.0, 1.0); }\n"
+		"float glxCrtCurvature() { return glxClampFinite(u_CrtParams0.w, 0.01, 0.0, 0.25); }\n"
+		"float glxCrtChromatic() { return glxClampFinite(u_CrtParams1.x, 1.35, 0.0, 8.0); }\n"
+		"float glxCrtTime() { return glxClampFinite(u_CrtParams1.y, 0.0, 0.0, 86400.0); }\n"
+		"vec2 glxCrtInvTexSize() { return vec2(glxClampFinite(u_CrtParams1.z, 1.0, 0.000001, 1.0), glxClampFinite(u_CrtParams1.w, 1.0, 0.000001, 1.0)); }\n"
+		"vec2 glxCrtWarpUV(vec2 uv) {\n"
+		"	vec2 centered = uv * 2.0 - 1.0;\n"
+		"	vec2 squared = centered * centered;\n"
+		"	centered *= 1.0 + squared.yx * (glxCrtCurvature() * 1.6);\n"
+		"	centered.x *= 1.0 + squared.y * (glxCrtCurvature() * 0.25);\n"
+		"	centered.y *= 1.0 + squared.x * (glxCrtCurvature() * 0.20);\n"
+		"	return centered * 0.5 + 0.5;\n"
+		"}\n"
+		"float glxCrtScreenMask(vec2 uv) {\n"
+		"	vec2 edge = min(uv, 1.0 - uv);\n"
+		"	float maskX = smoothstep(0.0, 0.018, edge.x);\n"
+		"	float maskY = smoothstep(0.0, 0.018, edge.y);\n"
+		"	return maskX * maskY;\n"
+		"}\n"
+		"vec3 glxCrtSampleHorizontalBeam(vec2 uv) {\n"
+		"	vec2 texel = vec2(glxCrtInvTexSize().x, 0.0);\n"
+		"	return glxResolvePostColor(clamp(uv - texel * 2.0, 0.0, 1.0)) * 0.08 +\n"
+		"		glxResolvePostColor(clamp(uv - texel, 0.0, 1.0)) * 0.22 +\n"
+		"		glxResolvePostColor(clamp(uv, 0.0, 1.0)) * 0.40 +\n"
+		"		glxResolvePostColor(clamp(uv + texel, 0.0, 1.0)) * 0.22 +\n"
+		"		glxResolvePostColor(clamp(uv + texel * 2.0, 0.0, 1.0)) * 0.08;\n"
+		"}\n"
+		"vec3 glxCrtSampleColor(vec2 uv) {\n"
+		"	vec3 beam = glxCrtSampleHorizontalBeam(uv);\n"
+		"	vec2 radial = uv - 0.5;\n"
+		"	float spread = 1.0 + length(radial) * 2.25;\n"
+		"	vec2 offset = vec2(glxCrtChromatic() * glxCrtInvTexSize().x * spread,\n"
+		"		glxCrtChromatic() * glxCrtInvTexSize().y * 0.35 * spread);\n"
+		"	vec3 chroma = beam;\n"
+		"	chroma.r = glxResolvePostColor(clamp(uv + offset, 0.0, 1.0)).r;\n"
+		"	chroma.b = glxResolvePostColor(clamp(uv - offset, 0.0, 1.0)).b;\n"
+		"	return mix(beam, chroma, clamp(0.35 + glxCrtChromatic() * 0.12, 0.0, 1.0));\n"
+		"}\n"
+		"float glxCrtScanlineFactor(vec3 color) {\n"
+		"	float luma = clamp(dot(color, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);\n"
+		"	float phase = gl_FragCoord.y * 3.14159265 + sin(glxCrtTime() * 7.0) * 0.35;\n"
+		"	float wave = 0.5 + 0.5 * cos(phase);\n"
+		"	wave *= wave;\n"
+		"	float darkFloor = 0.22 + luma * 0.35;\n"
+		"	float lineValue = mix(darkFloor, 1.0, wave);\n"
+		"	return mix(1.0, lineValue, glxCrtScanlineStrength());\n"
+		"}\n"
+		"vec3 glxCrtPhosphorMask() {\n"
+		"	float strength = glxCrtMaskStrength();\n"
+		"	float column = mod(floor(gl_FragCoord.x), 3.0);\n"
+		"	vec3 triad;\n"
+		"	if (column < 0.5) { triad = vec3(1.18, 0.80, 0.80); }\n"
+		"	else if (column < 1.5) { triad = vec3(0.80, 1.18, 0.80); }\n"
+		"	else { triad = vec3(0.80, 0.80, 1.18); }\n"
+		"	float slot = (mod(floor(gl_FragCoord.y), 2.0) < 0.5) ? 1.0 : 0.94;\n"
+		"	return mix(vec3(1.0), triad * slot, strength);\n"
+		"}\n"
+		"vec3 glxApplyCRT(vec2 uv, vec3 originalColor) {\n"
+		"	float amount = glxCrtAmount();\n"
+		"	vec2 warped = glxCrtWarpUV(uv);\n"
+		"	float screen = glxCrtScreenMask(warped);\n"
+		"	vec3 crtColor = glxCrtSampleColor(warped);\n"
+		"	crtColor *= glxCrtScanlineFactor(crtColor);\n"
+		"	crtColor *= glxCrtPhosphorMask();\n"
+		"	float edge = dot(warped * 2.0 - 1.0, warped * 2.0 - 1.0);\n"
+		"	float vignette = clamp(1.0 - edge * 0.22, 0.0, 1.0);\n"
+		"	float shimmer = 0.985 + 0.015 * sin(gl_FragCoord.y * 0.35 + glxCrtTime() * 11.0);\n"
+		"	crtColor *= mix(1.0, vignette * shimmer, 0.85);\n"
+		"	crtColor *= screen;\n"
+		"	return glxOutputDomainClamp(mix(originalColor, crtColor, amount));\n"
+		"}\n"
+		"void main() {\n"
+		"	vec3 color = glxResolvePostColor(v_TexCoord);\n"
+		"#if GLX_POST_CRT\n"
+		"	color = glxApplyCRT(v_TexCoord, color);\n"
+		"#endif\n"
+		"	glx_FragColor = vec4(color, 1.0);\n"
 		"}\n" ) && ok ) ? qtrue : qfalse;
 
 	if ( bytes ) {

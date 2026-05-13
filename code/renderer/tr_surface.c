@@ -241,7 +241,7 @@ static void RB_SurfaceSprite( void ) {
 		VectorMA( up, s * radius, backEnd.viewParms.or.axis[1], up );
 	}
 
-	if ( backEnd.viewParms.portalView == PV_MIRROR ) {
+	if ( R_ViewPassIsMirror( &backEnd.viewParms ) ) {
 		VectorSubtract( vec3_origin, left, left );
 	}
 

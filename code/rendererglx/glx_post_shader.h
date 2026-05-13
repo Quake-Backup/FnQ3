@@ -69,7 +69,10 @@ struct PostShaderProgram {
 	GLint lutUniform;
 	GLint postParams0Uniform;
 	GLint outputParams1Uniform;
+	GLint legacyParamsUniform;
 	GLint bloomParamsUniform;
+	GLint crtParams0Uniform;
+	GLint crtParams1Uniform;
 	GLint liftUniform;
 	GLint invGammaUniform;
 	GLint gainUniform;

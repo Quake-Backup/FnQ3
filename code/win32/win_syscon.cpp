@@ -30,7 +30,9 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+#ifndef DEDICATED
 #include "../client/client.h"
+#endif
 #include "win_raii.h"
 
 #ifdef __cplusplus

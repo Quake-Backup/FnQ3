@@ -73,6 +73,8 @@ cvar_t	*cl_shownet;
 cvar_t	*cl_autoRecordDemo;
 cvar_t	*cl_drawRecording;
 cvar_t	*cl_menuAspect;
+cvar_t	*cl_menuDepthOfField;
+cvar_t	*cl_menuDepthOfFieldTime;
 cvar_t	*cl_cinematicAspect;
 cvar_t	*cl_hudAspect;
 cvar_t	*cl_hudDump;
@@ -4176,6 +4178,14 @@ void CL_Init( void ) {
 		"Menu aspect correction:\n"
 		" 0 - stretch menu widgets to the framebuffer\n"
 		" 1 - keep menu widgets, including 3D model viewports, in centered 4:3 space" );
+	cl_menuDepthOfField = Cvar_Get( "cl_menuDepthOfField", "0", CVAR_ARCHIVE );
+	Cvar_CheckRange( cl_menuDepthOfField, "0", "1", CV_FLOAT );
+	Cvar_SetDescription( cl_menuDepthOfField,
+		"Depth-of-field strength for the live game view behind the in-game menu. 0 disables the effect; requires renderer support." );
+	cl_menuDepthOfFieldTime = Cvar_Get( "cl_menuDepthOfFieldTime", "160", CVAR_ARCHIVE );
+	Cvar_CheckRange( cl_menuDepthOfFieldTime, "0", "1000", CV_INTEGER );
+	Cvar_SetDescription( cl_menuDepthOfFieldTime,
+		"Milliseconds used to fade the in-game menu depth-of-field effect in and out." );
 	cl_cinematicAspect = Cvar_Get( "cl_cinematicAspect", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_cinematicAspect, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( cl_cinematicAspect,

@@ -1709,6 +1709,49 @@ static const void *RB_PostProcess(const void *data)
 	return (const void *)(cmd + 1);
 }
 
+
+static const void *RB_MenuDepthOfField(const void *data)
+{
+	const menuDepthOfFieldCommand_t *cmd = data;
+	FBO_t *srcFbo = NULL;
+	FBO_t *dstFbo = NULL;
+	float amount;
+
+	if ( tess.numIndexes ) {
+		RB_EndSurface();
+	}
+
+	amount = Com_Clamp( 0.0f, 1.0f, cmd->amount );
+	if ( amount <= 0.0f || !glRefConfig.framebufferObject ||
+		!tr.quarterFbo[0] || !tr.quarterFbo[1] || !tr.textureScratchFbo[0] ||
+		!tr.textureScratchFbo[1] ) {
+		return (const void *)(cmd + 1);
+	}
+
+	if ( !backEnd.framePostProcessed ) {
+		if ( tr.msaaResolveFbo ) {
+			FBO_FastBlit( tr.renderFbo, NULL, tr.msaaResolveFbo, NULL,
+				GL_COLOR_BUFFER_BIT, GL_NEAREST );
+			srcFbo = tr.msaaResolveFbo;
+			dstFbo = tr.renderFbo;
+		} else {
+			srcFbo = tr.renderFbo;
+			dstFbo = tr.renderFbo;
+		}
+	} else if ( !glRefConfig.framebufferBlit ) {
+		return (const void *)(cmd + 1);
+	}
+
+	RB_BokehBlur( srcFbo, NULL, dstFbo, NULL, amount * 0.25f );
+
+	FBO_Bind( backEnd.framePostProcessed ? NULL : tr.renderFbo );
+	backEnd.projection2D = qfalse;
+	RB_SetGL2D();
+
+	return (const void *)(cmd + 1);
+}
+
+
 // FIXME: put this function declaration elsewhere
 void R_SaveDDS(const char *filename, byte *pic, int width, int height, int depth);
 
@@ -1824,6 +1867,9 @@ void RB_ExecuteRenderCommands( const void *data ) {
 			break;
 		case RC_POSTPROCESS:
 			data = RB_PostProcess(data);
+			break;
+		case RC_MENU_DEPTH_OF_FIELD:
+			data = RB_MenuDepthOfField(data);
 			break;
 		case RC_EXPORT_CUBEMAPS:
 			data = RB_ExportCubemaps(data);

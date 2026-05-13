@@ -162,7 +162,7 @@ void GL_Cull( cullType_t cullType ) {
 		qglEnable( GL_CULL_FACE );
 
 		cullFront = (cullType == CT_FRONT_SIDED);
-		if ( backEnd.viewParms.portalView == PV_MIRROR )
+		if ( R_ViewPassIsMirror( &backEnd.viewParms ) )
 		{
 			cullFront = !cullFront;
 		}
@@ -538,28 +538,22 @@ static void RB_BeginDrawingView( void ) {
 	SetViewportAndScissor();
 
 #ifdef USE_VULKAN
-	vk_clear_depth( qtrue );
+	if ( R_ViewPassClearsDepth( &backEnd.viewParms ) ) {
+		vk_clear_depth( R_ViewPassClearsStencil( &backEnd.viewParms ) );
+	}
 #else
-	// ensures that depth writes are enabled for the depth clear
-	GL_State( GLS_DEFAULT );
-
-	// clear relevant buffers
-	clearBits = GL_DEPTH_BUFFER_BIT;
-
-	if ( r_shadows->integer == 2 )
-	{
+	if ( R_ViewPassClearsDepth( &backEnd.viewParms ) ) {
+		clearBits |= GL_DEPTH_BUFFER_BIT;
+	}
+	if ( R_ViewPassClearsStencil( &backEnd.viewParms ) ) {
 		clearBits |= GL_STENCIL_BUFFER_BIT;
 	}
-	if ( 0 && r_fastsky->integer && !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) )
-	{
-		clearBits |= GL_COLOR_BUFFER_BIT;	// FIXME: only if sky shaders have been used
-#ifdef _DEBUG
-		qglClearColor( 0.8f, 0.7f, 0.4f, 1.0f );	// FIXME: get color of sky
-#else
-		qglClearColor( 0.0f, 0.0f, 0.0f, 1.0f );	// FIXME: get color of sky
-#endif
+
+	if ( clearBits ) {
+		// ensures that depth writes are enabled for the depth clear
+		GL_State( GLS_DEFAULT );
+		qglClear( clearBits );
 	}
-	qglClear( clearBits );
 #endif
 
 	if ( backEnd.refdef.rdflags & RDF_HYPERSPACE ) {
@@ -1384,13 +1378,33 @@ static void RB_DebugGraphics( void ) {
 RB_DrawSurfs
 =============
 */
+#ifdef USE_VULKAN
+static void RB_FinishBloomForHud3D( const trRefdef_t *refdef ) {
+	if ( !r_bloom->integer || backEnd.doneBloom || !backEnd.doneSurfaces ) {
+		return;
+	}
+	if ( !r_hudExcludePostProcess->integer ) {
+		return;
+	}
+	if ( !( refdef->rdflags & RDF_NOWORLDMODEL ) ) {
+		return;
+	}
+
+	vk_bloom();
+}
+#endif
+
 static const void *RB_DrawSurfs( const void *data ) {
 	const drawSurfsCommand_t *cmd;
+
+	cmd = (const drawSurfsCommand_t *)data;
 
 	// finish any 2D drawing if needed
 	RB_EndSurface();
 
-	cmd = (const drawSurfsCommand_t *)data;
+#ifdef USE_VULKAN
+	RB_FinishBloomForHud3D( &cmd->refdef );
+#endif
 
 	backEnd.refdef = cmd->refdef;
 	backEnd.viewParms = cmd->viewParms;

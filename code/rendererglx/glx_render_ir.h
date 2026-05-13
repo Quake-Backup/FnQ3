@@ -45,7 +45,7 @@ struct FramePass {
 };
 
 enum class UploadPlanKind {
-	None,
+	NoUpload,
 	ClientMemory,
 	TransientStream,
 	StaticWorld,
@@ -54,7 +54,7 @@ enum class UploadPlanKind {
 };
 
 enum class UploadSyncPolicy {
-	None,
+	NoSync,
 	Orphan,
 	FrameFence,
 	PersistentFence
@@ -204,10 +204,12 @@ enum class ExposureReductionAlgorithm {
 };
 
 enum class ColorGradeMode {
-	None,
+	NoColorGrade,
 	LiftGammaGain,
 	Lut3D,
-	LiftGammaGainLut3D
+	LiftGammaGainLut3D,
+	// Compatibility alias for older tests and call sites.
+	None = NoColorGrade
 };
 
 enum class OutputPrimaries {
@@ -220,9 +222,11 @@ enum class OutputPrimaries {
 };
 
 enum class GamutMapMode {
-	None,
+	NoGamutMap,
 	Clip,
-	CompressToOutput
+	CompressToOutput,
+	// Compatibility alias for older tests and call sites.
+	None = NoGamutMap
 };
 
 struct OutputTransform {
@@ -256,6 +260,15 @@ struct OutputTransform {
 	float displaySdrWhiteNits;
 	float displayMaxNits;
 	float greyscale;
+	float legacyGamma;
+	float legacyOverbright;
+	float crtAmount;
+	float crtScanlineStrength;
+	float crtMaskStrength;
+	float crtCurvature;
+	float crtChromatic;
+	float crtInvWidth;
+	float crtInvHeight;
 	float gradeLift[3];
 	float gradeGamma[3];
 	float gradeGain[3];
@@ -278,7 +291,7 @@ enum DisplayOutputChangeFlags : unsigned int {
 };
 
 enum class PostNodeKind {
-	None,
+	NoPostNode,
 	CopyScene,
 	BloomPrefinal,
 	BloomFinal,
@@ -769,7 +782,7 @@ static ID_INLINE qboolean GLX_RenderIR_ExposureReductionImplemented(
 static ID_INLINE const char *GLX_RenderIR_ColorGradeName( ColorGradeMode grade )
 {
 	switch ( grade ) {
-	case ColorGradeMode::None:
+	case ColorGradeMode::NoColorGrade:
 		return "none";
 	case ColorGradeMode::LiftGammaGain:
 		return "lift-gamma-gain";
@@ -785,7 +798,7 @@ static ID_INLINE const char *GLX_RenderIR_ColorGradeName( ColorGradeMode grade )
 static ID_INLINE qboolean GLX_RenderIR_ColorGradeModeImplemented( ColorGradeMode grade )
 {
 	switch ( grade ) {
-	case ColorGradeMode::None:
+	case ColorGradeMode::NoColorGrade:
 	case ColorGradeMode::LiftGammaGain:
 	case ColorGradeMode::Lut3D:
 	case ColorGradeMode::LiftGammaGainLut3D:
@@ -859,7 +872,7 @@ static ID_INLINE qboolean GLX_RenderIR_OutputPrimariesNativePassthroughAllowed(
 static ID_INLINE const char *GLX_RenderIR_GamutMapName( GamutMapMode mode )
 {
 	switch ( mode ) {
-	case GamutMapMode::None:
+	case GamutMapMode::NoGamutMap:
 		return "none";
 	case GamutMapMode::Clip:
 		return "clip";
@@ -873,7 +886,7 @@ static ID_INLINE const char *GLX_RenderIR_GamutMapName( GamutMapMode mode )
 static ID_INLINE qboolean GLX_RenderIR_GamutMapModeImplemented( GamutMapMode mode )
 {
 	switch ( mode ) {
-	case GamutMapMode::None:
+	case GamutMapMode::NoGamutMap:
 	case GamutMapMode::Clip:
 	case GamutMapMode::CompressToOutput:
 		return qtrue;
@@ -1260,7 +1273,7 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateUploadPlan( const UploadPlan &pla
 	if ( plan.alignment < 0 ) {
 		return qfalse;
 	}
-	if ( plan.kind == UploadPlanKind::None || plan.kind == UploadPlanKind::ClientMemory ) {
+	if ( plan.kind == UploadPlanKind::NoUpload || plan.kind == UploadPlanKind::ClientMemory ) {
 		return qtrue;
 	}
 	if ( plan.bytes == 0 ) {
@@ -1400,6 +1413,15 @@ static ID_INLINE unsigned int GLX_RenderIR_HashOutputTransform(
 	hash = GLX_RenderIR_HashFloatValue( hash, transform.displaySdrWhiteNits );
 	hash = GLX_RenderIR_HashFloatValue( hash, transform.displayMaxNits );
 	hash = GLX_RenderIR_HashFloatValue( hash, transform.greyscale );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.legacyGamma );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.legacyOverbright );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.crtAmount );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.crtScanlineStrength );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.crtMaskStrength );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.crtCurvature );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.crtChromatic );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.crtInvWidth );
+	hash = GLX_RenderIR_HashFloatValue( hash, transform.crtInvHeight );
 	for ( int i = 0; i < 3; i++ ) {
 		hash = GLX_RenderIR_HashFloatValue( hash, transform.gradeLift[i] );
 		hash = GLX_RenderIR_HashFloatValue( hash, transform.gradeGamma[i] );
@@ -1476,6 +1498,10 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateOutputTransform( const OutputTran
 		transform.exposure, transform.bloomThreshold, transform.bloomSoftKnee,
 		transform.paperWhiteNits, transform.maxOutputNits, transform.displayHdrHeadroom,
 		transform.displaySdrWhiteNits, transform.displayMaxNits, transform.greyscale,
+		transform.legacyGamma, transform.legacyOverbright, transform.crtAmount,
+		transform.crtScanlineStrength, transform.crtMaskStrength,
+		transform.crtCurvature, transform.crtChromatic,
+		transform.crtInvWidth, transform.crtInvHeight,
 		transform.whitePointSourceKelvin, transform.whitePointTargetKelvin,
 		transform.lutSize, transform.lutScale
 	};
@@ -1497,6 +1523,13 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateOutputTransform( const OutputTran
 		transform.paperWhiteNits < 0.0f || transform.maxOutputNits < 0.0f ||
 		transform.displayHdrHeadroom < 0.0f || transform.displaySdrWhiteNits < 0.0f ||
 		transform.displayMaxNits < 0.0f || transform.displayIccProfileBytes < 0 ||
+		transform.legacyGamma <= 0.0f || transform.legacyOverbright < 0.0f ||
+		transform.crtAmount < 0.0f || transform.crtAmount > 1.0f ||
+		transform.crtScanlineStrength < 0.0f || transform.crtScanlineStrength > 1.0f ||
+		transform.crtMaskStrength < 0.0f || transform.crtMaskStrength > 1.0f ||
+		transform.crtCurvature < 0.0f || transform.crtCurvature > 0.25f ||
+		transform.crtChromatic < 0.0f || transform.crtChromatic > 8.0f ||
+		transform.crtInvWidth <= 0.0f || transform.crtInvHeight <= 0.0f ||
 		transform.whitePointSourceKelvin < 1000.0f || transform.whitePointTargetKelvin < 1000.0f ||
 		transform.whitePointSourceKelvin > 40000.0f || transform.whitePointTargetKelvin > 40000.0f ||
 		transform.lutSize < 0.0f || transform.lutScale < 0.0f ) {
@@ -1611,7 +1644,7 @@ static ID_INLINE qboolean GLX_RenderIR_TierSupportsUploadPlan( RenderProductTier
 	}
 
 	switch ( plan.kind ) {
-	case UploadPlanKind::None:
+	case UploadPlanKind::NoUpload:
 	case UploadPlanKind::ClientMemory:
 	case UploadPlanKind::StaticWorld:
 	case UploadPlanKind::Readback:
@@ -1702,7 +1735,7 @@ static ID_INLINE qboolean GLX_RenderIR_TierSupportsPostNode( RenderProductTier t
 			return qfalse;
 		}
 		switch ( node.kind ) {
-		case PostNodeKind::None:
+		case PostNodeKind::NoPostNode:
 		case PostNodeKind::CopyScene:
 		case PostNodeKind::BloomPrefinal:
 		case PostNodeKind::BloomFinal:
@@ -1725,7 +1758,7 @@ static ID_INLINE qboolean GLX_RenderIR_TierSupportsPostNode( RenderProductTier t
 	}
 
 	switch ( node.kind ) {
-	case PostNodeKind::None:
+	case PostNodeKind::NoPostNode:
 	case PostNodeKind::CopyScene:
 	case PostNodeKind::GammaDirect:
 	case PostNodeKind::GammaBlit:
@@ -1767,7 +1800,7 @@ static ID_INLINE qboolean GLX_RenderIR_PostNodeExecutorImplemented( RenderProduc
 	case PostNodeKind::Grade:
 	case PostNodeKind::Screenshot:
 		return qtrue;
-	case PostNodeKind::None:
+	case PostNodeKind::NoPostNode:
 	default:
 		return qfalse;
 	}
@@ -1806,9 +1839,9 @@ static ID_INLINE OutputTransform GLX_RenderIR_CaptureOutputTransform(
 		capture.transfer = OutputTransfer::ScreenshotSrgb;
 		capture.sceneColorSpace = SceneColorSpace::DisplayReferredSdr;
 		capture.toneMap = ToneMapOperator::Legacy;
-		capture.grade = ColorGradeMode::None;
+		capture.grade = ColorGradeMode::NoColorGrade;
 		capture.outputPrimaries = OutputPrimaries::SrgbBt709;
-		capture.gamutMap = GamutMapMode::None;
+		capture.gamutMap = GamutMapMode::NoGamutMap;
 		capture.selectedBackend = ROUTPUT_BACKEND_SDR_SRGB;
 		capture.outputHardwareActive = qfalse;
 		capture.outputExperimental = qfalse;
@@ -1926,7 +1959,7 @@ static ID_INLINE PostOutputPlan GLX_RenderIR_BuildPostOutputPlan(
 			inputs.fboReadIndex, directBackBuffer ? 0 : 1, inputs.flags, inputs.output );
 	}
 
-	if ( plan.outputValid && inputs.output.grade != ColorGradeMode::None ) {
+	if ( plan.outputValid && inputs.output.grade != ColorGradeMode::NoColorGrade ) {
 		GLX_RenderIR_AddPostOutputNode( &plan, PostNodeKind::Grade, sequence++,
 			inputs.bloomAvailable ? 1 : inputs.fboReadIndex, 1, inputs.flags, inputs.output );
 	}
@@ -1977,7 +2010,7 @@ static ID_INLINE UploadPlan GLX_RenderIR_MakeUploadPlan( UploadPlanKind kind,
 	plan.vertexBytes = vertexBytes;
 	plan.indexBytes = indexBytes;
 	plan.alignment = 0;
-	plan.sync = UploadSyncPolicy::None;
+	plan.sync = UploadSyncPolicy::NoSync;
 	return plan;
 }
 
@@ -2003,9 +2036,9 @@ static ID_INLINE OutputTransform GLX_RenderIR_DefaultOutputTransform()
 	transform.transfer = OutputTransfer::SdrSrgb;
 	transform.sceneColorSpace = SceneColorSpace::DisplayReferredSdr;
 	transform.toneMap = ToneMapOperator::Legacy;
-	transform.grade = ColorGradeMode::None;
+	transform.grade = ColorGradeMode::NoColorGrade;
 	transform.outputPrimaries = OutputPrimaries::SrgbBt709;
-	transform.gamutMap = GamutMapMode::None;
+	transform.gamutMap = GamutMapMode::NoGamutMap;
 	transform.exposureAlgorithm = ExposureReductionAlgorithm::Manual;
 	transform.requestedBackend = ROUTPUT_REQUEST_AUTO;
 	transform.selectedBackend = ROUTPUT_BACKEND_SDR_SRGB;
@@ -2022,6 +2055,15 @@ static ID_INLINE OutputTransform GLX_RenderIR_DefaultOutputTransform()
 	transform.displayHdrHeadroom = 1.0f;
 	transform.displaySdrWhiteNits = 203.0f;
 	transform.displayMaxNits = 203.0f;
+	transform.legacyGamma = 1.0f;
+	transform.legacyOverbright = 1.0f;
+	transform.crtAmount = 0.0f;
+	transform.crtScanlineStrength = 0.55f;
+	transform.crtMaskStrength = 0.35f;
+	transform.crtCurvature = 0.01f;
+	transform.crtChromatic = 1.35f;
+	transform.crtInvWidth = 1.0f;
+	transform.crtInvHeight = 1.0f;
 	transform.gradeLift[0] = 0.0f;
 	transform.gradeLift[1] = 0.0f;
 	transform.gradeLift[2] = 0.0f;

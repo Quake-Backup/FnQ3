@@ -171,13 +171,13 @@ static inline ColorGradeMode GLX_PostOutputReference_SanitizeGrade(
 	ColorGradeMode grade )
 {
 	switch ( grade ) {
-	case ColorGradeMode::None:
+	case ColorGradeMode::NoColorGrade:
 	case ColorGradeMode::LiftGammaGain:
 	case ColorGradeMode::Lut3D:
 	case ColorGradeMode::LiftGammaGainLut3D:
 		return grade;
 	default:
-		return ColorGradeMode::None;
+		return ColorGradeMode::NoColorGrade;
 	}
 }
 
@@ -202,12 +202,12 @@ static inline GamutMapMode GLX_PostOutputReference_SanitizeGamutMap(
 	GamutMapMode gamutMap )
 {
 	switch ( gamutMap ) {
-	case GamutMapMode::None:
+	case GamutMapMode::NoGamutMap:
 	case GamutMapMode::Clip:
 	case GamutMapMode::CompressToOutput:
 		return gamutMap;
 	default:
-		return GamutMapMode::None;
+		return GamutMapMode::NoGamutMap;
 	}
 }
 
@@ -381,7 +381,7 @@ static inline ColorMathVec3 GLX_PostOutputReference_ApplyGamutMap(
 		return GLX_ColorMath_ClampVec3( color, 0.0f, 1.0f );
 	case GamutMapMode::CompressToOutput:
 		return GLX_ColorMath_ClampVec3( color, 0.0f, contract.outputHeadroom );
-	case GamutMapMode::None:
+	case GamutMapMode::NoGamutMap:
 	default:
 		return GLX_PostOutputReference_Max0( color );
 	}

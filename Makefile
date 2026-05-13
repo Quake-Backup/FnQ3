@@ -36,11 +36,11 @@ BUILD_SERVER     = 1
 USE_SDL          = 1
 USE_CURL         = 1
 USE_LOCAL_HEADERS= 0
-USE_SYSTEM_JPEG  = 0
+USE_SYSTEM_JPEG  = 1
 
 USE_OGG_VORBIS    = 1
-USE_SYSTEM_OGG    = 0
-USE_SYSTEM_VORBIS = 0
+USE_SYSTEM_OGG    = 1
+USE_SYSTEM_VORBIS = 1
 
 USE_VULKAN       = 1
 USE_GLX          = 1
@@ -272,6 +272,15 @@ ifneq ($(call bin_path, $(PKG_CONFIG)),)
     VORBIS_CFLAGS ?= $(shell $(PKG_CONFIG) --silence-errors --cflags vorbisfile || true)
     VORBIS_LIBS ?= $(shell $(PKG_CONFIG) --silence-errors --libs vorbisfile || echo -lvorbisfile)
   endif
+  OPENAL_CFLAGS ?= $(shell $(PKG_CONFIG) --silence-errors --cflags openal || true)
+  ifeq ($(USE_CURL),1)
+    CURL_CFLAGS ?= $(shell $(PKG_CONFIG) --silence-errors --cflags libcurl || true)
+    CURL_LIBS ?= $(shell $(PKG_CONFIG) --silence-errors --libs libcurl || echo -lcurl)
+  endif
+  ifeq ($(USE_SYSTEM_JPEG),1)
+    JPEG_CFLAGS ?= $(shell $(PKG_CONFIG) --silence-errors --cflags libjpeg || true)
+    JPEG_LIBS ?= $(shell $(PKG_CONFIG) --silence-errors --libs libjpeg || echo -ljpeg)
+  endif
 endif
 
 # supply some reasonable defaults for SDL/X11
@@ -284,22 +293,35 @@ endif
 ifeq ($(SDL_LIBS),)
   SDL_LIBS = -lSDL3
 endif
+ifeq ($(CURL_LIBS),)
+  CURL_LIBS = -lcurl
+endif
+ifeq ($(JPEG_LIBS),)
+  JPEG_LIBS = -ljpeg
+endif
 
-# supply some reasonable defaults for ogg/vorbis
-ifeq ($(OGG_FLAGS),)
-  OGG_FLAGS = -I$(OGGDIR)/include
-endif
-ifeq ($(VORBIS_FLAGS),)
-  VORBIS_FLAGS = -I$(VORBISDIR)/include -I$(VORBISDIR)/lib
-endif
 ifeq ($(USE_SYSTEM_OGG),1)
+  ifeq ($(OGG_FLAGS),)
+    OGG_FLAGS = $(OGG_CFLAGS)
+  endif
   ifeq ($(OGG_LIBS),)
     OGG_LIBS = -logg
   endif
+else
+  ifeq ($(OGG_FLAGS),)
+    OGG_FLAGS = -I$(OGGDIR)/include
+  endif
 endif
 ifeq ($(USE_SYSTEM_VORBIS),1)
+  ifeq ($(VORBIS_FLAGS),)
+    VORBIS_FLAGS = $(VORBIS_CFLAGS)
+  endif
   ifeq ($(VORBIS_LIBS),)
     VORBIS_LIBS = -lvorbisfile
+  endif
+else
+  ifeq ($(VORBIS_FLAGS),)
+    VORBIS_FLAGS = -I$(VORBISDIR)/include -I$(VORBISDIR)/lib
   endif
 endif
 
@@ -333,7 +355,7 @@ endif
 BASE_CFLAGS =
 
 ifeq ($(USE_SYSTEM_JPEG),1)
-  BASE_CFLAGS += -DUSE_SYSTEM_JPEG
+  BASE_CFLAGS += -DUSE_SYSTEM_JPEG $(JPEG_CFLAGS)
 endif
 
 ifneq ($(HAVE_VM_COMPILED),true)
@@ -354,7 +376,10 @@ ifeq ($(USE_LOCAL_HEADERS),1)
   BASE_CFLAGS += -DUSE_LOCAL_HEADERS=1
 endif
 
-BASE_CFLAGS += -I$(MOUNT_DIR)/openal/include
+ifneq ($(wildcard $(MOUNT_DIR)/openal/include/AL/al.h),)
+  BASE_CFLAGS += -I$(MOUNT_DIR)/openal/include
+endif
+BASE_CFLAGS += $(OPENAL_CFLAGS)
 
 ifeq ($(USE_SDL),1)
   BASE_CFLAGS += -DSDL_FUNCTION_POINTER_IS_VOID_POINTER=1
@@ -362,12 +387,22 @@ ifeq ($(USE_SDL),1)
 endif
 
 ifeq ($(USE_CURL),1)
-  BASE_CFLAGS += -DUSE_CURL
+  BASE_CFLAGS += -DUSE_CURL $(CURL_CFLAGS)
   ifeq ($(USE_CURL_DLOPEN),1)
     BASE_CFLAGS += -DUSE_CURL_DLOPEN
-  else
-    ifeq ($(MINGW),1)
-      BASE_CFLAGS += -DCURL_STATICLIB
+  endif
+endif
+
+ifeq ($(BUILD_CLIENT),1)
+  ifneq ($(USE_SYSTEM_JPEG),1)
+    $(error USE_SYSTEM_JPEG=0 requires the removed in-tree libjpeg sources; use Meson for the libjpeg-turbo subproject fallback or install system libjpeg)
+  endif
+  ifeq ($(USE_OGG_VORBIS),1)
+    ifneq ($(USE_SYSTEM_OGG),1)
+      $(error USE_SYSTEM_OGG=0 requires the removed in-tree libogg sources; use Meson for the Ogg subproject fallback or install system libogg)
+    endif
+    ifneq ($(USE_SYSTEM_VORBIS),1)
+      $(error USE_SYSTEM_VORBIS=0 requires the removed in-tree libvorbis sources; use Meson for the Vorbis subproject fallback or install system libvorbis)
     endif
   endif
 endif
@@ -507,19 +542,17 @@ ifdef MINGW
   endif
 
   ifeq ($(ARCH),x86)
-    CLIENT_EXTRA_FILES += $(MOUNT_DIR)/openal/windows/x86/OpenAL32.dll
+    ifneq ($(wildcard $(MOUNT_DIR)/openal/windows/x86/OpenAL32.dll),)
+      CLIENT_EXTRA_FILES += $(MOUNT_DIR)/openal/windows/x86/OpenAL32.dll
+    endif
   else
-    CLIENT_EXTRA_FILES += $(MOUNT_DIR)/openal/windows/x64/OpenAL32.dll
+    ifneq ($(wildcard $(MOUNT_DIR)/openal/windows/x64/OpenAL32.dll),)
+      CLIENT_EXTRA_FILES += $(MOUNT_DIR)/openal/windows/x64/OpenAL32.dll
+    endif
   endif
 
   ifeq ($(USE_CURL),1)
-    BASE_CFLAGS += -I$(MOUNT_DIR)/libcurl/windows/include
-    ifeq ($(ARCH),x86)
-      CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib32
-    else
-      CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libcurl/windows/mingw/lib64
-    endif
-    CLIENT_LDFLAGS += -lcurl -lz -lcrypt32
+    CLIENT_LDFLAGS += $(CURL_LIBS)
   endif
 
   ifeq ($(USE_OGG_VORBIS),1)
@@ -579,7 +612,7 @@ ifeq ($(COMPILE_PLATFORM),darwin)
   endif
 
   ifeq ($(USE_SYSTEM_JPEG),1)
-    CLIENT_LDFLAGS += -ljpeg
+    CLIENT_LDFLAGS += $(JPEG_LIBS)
   endif
 
   ifeq ($(USE_OGG_VORBIS),1)
@@ -651,12 +684,12 @@ else
   endif
 
   ifeq ($(USE_SYSTEM_JPEG),1)
-    CLIENT_LDFLAGS += -ljpeg
+    CLIENT_LDFLAGS += $(JPEG_LIBS)
   endif
 
   ifeq ($(USE_CURL),1)
     ifeq ($(USE_CURL_DLOPEN),0)
-      CLIENT_LDFLAGS += -lcurl
+      CLIENT_LDFLAGS += $(CURL_LIBS)
     endif
   endif
 

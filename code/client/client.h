@@ -31,7 +31,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "audio/snd_public.h"
 #include "keys.h"
 
-#ifdef USE_CURL
+#if defined(USE_CURL) && !defined(DEDICATED)
+#define USE_CLIENT_CURL 1
 #include "cl_curl.h"
 #endif
 
@@ -221,14 +222,14 @@ struct clientConnection_t {
 	char		downloadList[BIG_INFO_STRING]; // list of paks we need to download
 	qboolean	downloadRestart;	// if true, we need to do another FS_Restart because we downloaded a pak
 
-#ifdef USE_CURL
+#ifdef USE_CLIENT_CURL
 	qboolean	cURLEnabled;
 	qboolean	cURLUsed;
 	qboolean	cURLDisconnected;
 	char		downloadURL[MAX_OSPATH];
 	CURL		*downloadCURL;
 	CURLM		*downloadCURLM;
-#endif /* USE_CURL */
+#endif /* USE_CLIENT_CURL */
 
 	// demo information
 	char		demoName[MAX_OSPATH];
@@ -394,7 +395,7 @@ extern	clientStatic_t		cls;
 extern	char		cl_oldGame[MAX_QPATH];
 extern	qboolean	cl_oldGameSet;
 
-#ifdef USE_CURL
+#ifdef USE_CLIENT_CURL
 
 extern		download_t	download;
 qboolean	Com_DL_Perform( download_t *dl );
@@ -432,7 +433,7 @@ extern	cvar_t	*cl_aviPipeFormat;
 extern	cvar_t	*cl_activeAction;
 
 extern	cvar_t	*cl_allowDownload;
-#ifdef USE_CURL
+#ifdef USE_CLIENT_CURL
 extern	cvar_t	*cl_mapAutoDownload;
 extern	cvar_t	*cl_dlDirectory;
 #endif
@@ -444,6 +445,8 @@ extern	cvar_t	*cl_lanForcePackets;
 extern	cvar_t	*cl_autoRecordDemo;
 extern	cvar_t	*cl_drawRecording;
 extern	cvar_t	*cl_menuAspect;
+extern	cvar_t	*cl_menuDepthOfField;
+extern	cvar_t	*cl_menuDepthOfFieldTime;
 extern	cvar_t	*cl_cinematicAspect;
 extern	cvar_t	*cl_hudAspect;
 extern	cvar_t	*cl_hudDump;

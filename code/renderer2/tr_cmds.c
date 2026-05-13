@@ -589,6 +589,24 @@ void RE_ThrottleBackend( void )
 	//
 }
 
+void RE_DrawMenuDepthOfField( float amount )
+{
+	menuDepthOfFieldCommand_t *cmd;
+
+	amount = Com_Clamp( 0.0f, 1.0f, amount );
+	if ( amount <= 0.0f ) {
+		return;
+	}
+
+	cmd = R_GetCommandBuffer( sizeof( *cmd ) );
+	if ( !cmd ) {
+		return;
+	}
+
+	cmd->commandId = RC_MENU_DEPTH_OF_FIELD;
+	cmd->amount = amount;
+}
+
 qboolean RE_CanMinimize( void )
 {
 	return qfalse;

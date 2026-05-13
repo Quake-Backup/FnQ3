@@ -1399,7 +1399,7 @@ static const char *depthFadeFP = {
 qboolean GL_DepthFadeProgramAvailable( void )
 {
 #ifdef USE_FBO
-	return programCompiled && FBO_DepthFadeAvailable();
+	return programCompiled && FBO_DepthFadeReady();
 #else
 	return qfalse;
 #endif
@@ -2606,6 +2606,16 @@ qboolean FBO_DepthFadeAvailable( void )
 	return ( fboEnabled && depthFadeTexture && r_depthFade && r_depthFade->integer ) ? qtrue : qfalse;
 }
 
+qboolean FBO_DepthFadeReady( void )
+{
+	return ( FBO_DepthFadeAvailable() && depthFadeCopied ) ? qtrue : qfalse;
+}
+
+void FBO_ResetDepthFade( void )
+{
+	depthFadeCopied = qfalse;
+}
+
 void FBO_CopyDepthFade( void )
 {
 	if ( !FBO_DepthFadeAvailable() ) {
@@ -2627,7 +2637,7 @@ void FBO_CopyDepthFade( void )
 
 void FBO_BindDepthFadeTexture( int texUnit )
 {
-	GL_BindTexture( texUnit, ( FBO_DepthFadeAvailable() && depthFadeCopied ) ? depthFadeTexture : 0 );
+	GL_BindTexture( texUnit, FBO_DepthFadeReady() ? depthFadeTexture : 0 );
 }
 
 

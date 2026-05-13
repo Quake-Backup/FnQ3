@@ -591,6 +591,7 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #endif
 #ifdef USE_FBO
 	depthFadeSnapshot = qfalse;
+	FBO_ResetDepthFade();
 #endif
 	depthRange = qfalse;
 

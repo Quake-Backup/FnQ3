@@ -57,6 +57,11 @@ float DepthFadeLinearDepth(float depth)
 
 vec4 ApplyDepthFade(vec4 color)
 {
+	if (u_DepthFadeInfo.z <= 0.0)
+	{
+		return color;
+	}
+
 	float sceneDepth = texture2D(u_ScreenDepthMap, gl_FragCoord.xy * u_InvTexRes).r;
 	float sceneLinear = DepthFadeLinearDepth(sceneDepth);
 	float fragLinear = DepthFadeLinearDepth(gl_FragCoord.z);

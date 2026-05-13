@@ -1031,12 +1031,19 @@ void R_ComputeTexCoords( const int b, const textureBundle_t *bundle ) {
 ** RB_IterateStagesGeneric
 */
 #ifdef USE_VULKAN
-static qboolean RB_DepthFadeActive( void )
+static qboolean RB_DepthFadeShaderSupported( void )
 {
 	return ( r_depthFade->integer &&
 		tess.shader->dfType > DFT_NONE &&
 		tess.shader->dfType < DFT_TBD &&
-		vk_depth_fade_available() ) ? qtrue : qfalse;
+		vk_depth_fade_supported() ) ? qtrue : qfalse;
+}
+
+static qboolean RB_DepthFadeActive( void )
+{
+	return ( RB_DepthFadeShaderSupported() &&
+		( !backEnd.currentEntity || ( backEnd.currentEntity->e.renderfx & RF_DEPTHHACK ) == 0 ) &&
+		vk_depth_fade_ready() ) ? qtrue : qfalse;
 }
 
 
@@ -1047,6 +1054,12 @@ static void RB_SetDepthFade( vk_material_t *material, qboolean *pushUniform )
 	int i;
 
 	if ( !RB_DepthFadeActive() ) {
+		Com_Memset( uniform.depthFadeInfo, 0, sizeof( uniform.depthFadeInfo ) );
+		if ( RB_DepthFadeShaderSupported() ) {
+			vk_material_set_descriptor( material, VK_DESC_DEPTH_FADE,
+				vk_depth_fade_available() ? vk.depth_fade_descriptor : VK_NULL_HANDLE );
+			*pushUniform = qtrue;
+		}
 		return;
 	}
 

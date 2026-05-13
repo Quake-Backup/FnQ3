@@ -318,6 +318,7 @@ void vk_begin_frame( void );
 void vk_end_frame( void );
 qboolean vk_depth_fade_supported( void );
 qboolean vk_depth_fade_available( void );
+qboolean vk_depth_fade_ready( void );
 void vk_copy_depth_fade( void );
 void vk_present_frame( void );
 
@@ -490,6 +491,7 @@ typedef struct {
 	VkImage depth_fade_image;
 	VkImageView depth_fade_image_view;
 	VkDescriptorSet depth_fade_descriptor;
+	qboolean depth_fade_copied;
 
 	VkImage msaa_image;
 	VkImageView msaa_image_view;

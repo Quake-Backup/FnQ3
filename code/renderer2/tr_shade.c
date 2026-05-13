@@ -101,6 +101,7 @@ static qboolean RB_DepthFadeActive( void )
 		r_depthFade->integer &&
 		tess.shader->dfType > DFT_NONE &&
 		tess.shader->dfType < DFT_TBD &&
+		( !backEnd.currentEntity || ( backEnd.currentEntity->e.renderfx & RF_DEPTHHACK ) == 0 ) &&
 		tr.hdrDepthImage;
 }
 
@@ -114,6 +115,8 @@ static void RB_SetDepthFadeUniforms( shaderProgram_t *sp )
 	int i;
 
 	if ( !RB_DepthFadeActive() ) {
+		VectorSet4( info, 0.0f, 0.0f, 0.0f, 0.0f );
+		GLSL_SetUniformVec4( sp, UNIFORM_DEPTHFADEINFO, info );
 		return;
 	}
 

@@ -1692,6 +1692,8 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalPass )
 void FBO_CopyScreen( void );
 GLuint FBO_ScreenTexture( void );
 qboolean FBO_DepthFadeAvailable( void );
+qboolean FBO_DepthFadeReady( void );
+void FBO_ResetDepthFade( void );
 void FBO_CopyDepthFade( void );
 void FBO_BindDepthFadeTexture( int texUnit );
 #endif //  USE_FBO

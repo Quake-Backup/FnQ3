@@ -9188,6 +9188,7 @@ void vk_begin_main_render_pass( void )
 	VkFramebuffer frameBuffer = vk.framebuffers.main[ vk.cmd->swapchain_image_index ];
 
 	vk.renderPassIndex = RENDER_PASS_MAIN;
+	vk.depth_fade_copied = qfalse;
 
 	vk.renderWidth = glConfig.vidWidth;
 	vk.renderHeight = glConfig.vidHeight;
@@ -9304,6 +9305,12 @@ qboolean vk_depth_fade_available( void )
 }
 
 
+qboolean vk_depth_fade_ready( void )
+{
+	return ( vk_depth_fade_available() && vk.depth_fade_copied ) ? qtrue : qfalse;
+}
+
+
 void vk_copy_depth_fade( void )
 {
 	VkImageCopy region;
@@ -9343,6 +9350,7 @@ void vk_copy_depth_fade( void )
 	record_image_layout_transition( command_buffer, vk.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
 		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0, 0 );
 
+	vk.depth_fade_copied = qtrue;
 	vk_begin_main_render_pass_load();
 }
 

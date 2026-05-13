@@ -550,6 +550,7 @@ static qboolean RB_DepthFadeActive( const shaderStage_t *pStage )
 		tess.shader->dfType > DFT_NONE &&
 		tess.shader->dfType < DFT_TBD &&
 		pStage->bundle[1].image[0] == NULL &&
+		( !backEnd.currentEntity || ( backEnd.currentEntity->e.renderfx & RF_DEPTHHACK ) == 0 ) &&
 		GL_DepthFadeProgramAvailable();
 }
 

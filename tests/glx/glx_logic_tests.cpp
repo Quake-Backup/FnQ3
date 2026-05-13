@@ -1191,9 +1191,9 @@ bool RenderIRProductsValidate()
 	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
 	CHECK( output.sceneColorSpace == glx::SceneColorSpace::DisplayReferredSdr );
 	CHECK( output.toneMap == glx::ToneMapOperator::Legacy );
-	CHECK( output.grade == glx::ColorGradeMode::None );
+	CHECK( output.grade == glx::ColorGradeMode::Disabled );
 	CHECK( output.outputPrimaries == glx::OutputPrimaries::SrgbBt709 );
-	CHECK( output.gamutMap == glx::GamutMapMode::None );
+	CHECK( output.gamutMap == glx::GamutMapMode::Disabled );
 	CHECK( output.exposureAlgorithm == glx::ExposureReductionAlgorithm::Manual );
 	CHECK( output.autoExposure == qfalse );
 	CHECK( output.requestedPrecisionMode == 0 );
@@ -1737,7 +1737,7 @@ bool PostOutputPlansSeparatePlannedAndExecutableOwnership()
 	inputs.windowAdjusted = qtrue;
 	inputs.screenshotMask = 1;
 	output.toneMap = glx::ToneMapOperator::Legacy;
-	output.grade = glx::ColorGradeMode::None;
+	output.grade = glx::ColorGradeMode::Disabled;
 	inputs.output = output;
 	plan = glx::GLX_RenderIR_BuildPostOutputPlan( inputs );
 	CHECK( plan.glxOwned == qtrue );
@@ -1894,7 +1894,7 @@ bool CaptureExportPoliciesStayExplicitAndSdrDefault()
 	CHECK( capture.transfer == glx::OutputTransfer::ScreenshotSrgb );
 	CHECK( capture.sceneColorSpace == glx::SceneColorSpace::DisplayReferredSdr );
 	CHECK( capture.toneMap == glx::ToneMapOperator::Legacy );
-	CHECK( capture.grade == glx::ColorGradeMode::None );
+	CHECK( capture.grade == glx::ColorGradeMode::Disabled );
 	CHECK( capture.outputPrimaries == glx::OutputPrimaries::SrgbBt709 );
 	CHECK( capture.selectedBackend == ROUTPUT_BACKEND_SDR_SRGB );
 	CHECK( capture.outputHardwareActive == qfalse );
@@ -2129,7 +2129,7 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 	CHECK( lifted.r > neutral.r );
 	CHECK( NearlyEqual( lifted.g, neutral.g, 0.00001f ) );
 
-	output.grade = glx::ColorGradeMode::None;
+	output.grade = glx::ColorGradeMode::Disabled;
 	output.gradeLift[0] = 0.0f;
 	output.toneMap = glx::ToneMapOperator::AcesFitted;
 	output.transfer = glx::OutputTransfer::SdrSrgb;
@@ -2141,7 +2141,7 @@ bool HdrColorMathReferencesCoverPipelineContracts()
 	output.toneMap = glx::ToneMapOperator::Legacy;
 	output.transfer = glx::OutputTransfer::LinearSrgb;
 	output.outputPrimaries = glx::OutputPrimaries::DisplayP3;
-	output.gamutMap = glx::GamutMapMode::None;
+	output.gamutMap = glx::GamutMapMode::Disabled;
 	const glx::ColorMathVec3 p3Output = glx::GLX_PostOutputReference_Evaluate(
 		red, output, nullptr, 0, 0 );
 	CHECK( VecNearlyEqual( p3Output, glx::GLX_ColorMath_LinearSrgbToDisplayP3( red ),
@@ -2308,7 +2308,7 @@ bool PostShaderPlansClassifyOutputTransformProgramShape()
 	CHECK( glx::GLX_PostShader_BuildPlan( output ).hash != acesLutHash );
 
 	output.toneMap = glx::ToneMapOperator::Legacy;
-	output.grade = glx::ColorGradeMode::None;
+	output.grade = glx::ColorGradeMode::Disabled;
 	output.lutSize = 0.0f;
 	output.transfer = glx::OutputTransfer::Hdr10Pq;
 	output.outputPrimaries = glx::OutputPrimaries::Bt2020;

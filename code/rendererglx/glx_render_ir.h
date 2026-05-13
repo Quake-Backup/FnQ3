@@ -208,8 +208,8 @@ enum class ColorGradeMode {
 	LiftGammaGain,
 	Lut3D,
 	LiftGammaGainLut3D,
-	// Compatibility alias for older tests and call sites.
-	None = NoColorGrade
+	// Compatibility alias for older tests and call sites without colliding with X11's None macro.
+	Disabled = NoColorGrade
 };
 
 enum class OutputPrimaries {
@@ -225,8 +225,8 @@ enum class GamutMapMode {
 	NoGamutMap,
 	Clip,
 	CompressToOutput,
-	// Compatibility alias for older tests and call sites.
-	None = NoGamutMap
+	// Compatibility alias for older tests and call sites without colliding with X11's None macro.
+	Disabled = NoGamutMap
 };
 
 struct OutputTransform {

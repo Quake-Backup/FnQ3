@@ -44,6 +44,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifndef CINTERFACE
 #define CINTERFACE
 #endif
+#ifndef COBJMACROS
+#define COBJMACROS
+#endif
 #include <windows.h>
 //#if defined (_MSC_VER) && (_MSC_VER >= 1200)
 //#pragma warning( pop )

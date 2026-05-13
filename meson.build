@@ -201,14 +201,7 @@ endif
 platform_asm_src = []
 client_asm_src = []
 if win32 and cc.get_id() == 'msvc' and cpu_family == 'x86_64'
-  if add_languages('masm', required: false)
-    platform_asm_src += 'code/asm/common_x64.asm'
-    client_asm_src += 'code/asm/snd_mix_x64.asm'
-    common_c_args += ['-DUSE_WIN32_ASM']
-    common_cpp_args += ['-DUSE_WIN32_ASM']
-  else
-    warning('MSVC x64 build did not find MASM; Q_setjmp_c/Q_longjmp_c will be unresolved')
-  endif
+  warning('Meson MSVC x64 builds currently use portable C fallbacks instead of MASM helpers; behavior stays the same, but hot-path setjmp/audio mixing optimizations are disabled for this build path')
 elif cpu_family == 'x86_64'
   client_asm_src += 'code/asm/snd_mix_x86_64_preprocessed.S'
 endif
@@ -589,13 +582,13 @@ if win32
       win_resource = custom_target('win_resource',
         input: 'code/win32/win_resource.rc',
         output: 'win_resource.o',
-        command: [rc_prog, '-i', '@INPUT@', '-o', '@OUTPUT@'],
+        command: [rc_prog, '-i', '@INPUT@', '-o', '@OUTPUT@', '--include-dir', meson.project_source_root()],
       )
     else
       win_resource = custom_target('win_resource',
         input: 'code/win32/win_resource.rc',
         output: 'win_resource.res',
-        command: [rc_prog, '/fo', '@OUTPUT@', '@INPUT@'],
+        command: [rc_prog, '/fo', '@OUTPUT@', '/I', meson.project_source_root(), '@INPUT@'],
       )
     endif
   else

@@ -98,7 +98,8 @@ The script:
 
 ## CI Notes
 
-[`.github/workflows/release.yml`](../../.github/workflows/release.yml) owns main-branch build validation and manual release publishing.
+`.github/workflows/release.yml` owns main-branch build validation and manual release publishing.
+`.github/workflows/issue-triage.yml` owns automated new-issue triage, with maintainer tuning documented in [`ISSUE_TRIAGE.md`](./ISSUE_TRIAGE.md).
 
 Expected behavior:
 

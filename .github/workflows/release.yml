@@ -290,7 +290,10 @@ jobs:
         arch: [x86_64, aarch64]
     steps:
       - name: Install tools
-        run: brew install coreutils jpeg libogg libvorbis make openal-soft pkg-config sdl3
+        run: |
+          for pkg in coreutils jpeg libogg libvorbis make openal-soft pkg-config sdl3; do
+            brew list --versions "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
 
       - uses: actions/checkout@v6
         with:

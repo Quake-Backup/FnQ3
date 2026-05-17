@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = ROOT / ".github" / "issue-triage-config.json"
 GITHUB_API = "https://api.github.com"
 GITHUB_MODELS_ENDPOINT = "https://models.github.ai/inference/chat/completions"
-DEFAULT_TRIAGE_MODEL = "openai/gpt-4.1"
+DEFAULT_TRIAGE_MODEL_FALLBACK = "openai/gpt-4.1"
 MAX_REPO_CONTEXT_CHARS = 18000
 MAX_ISSUE_BODY_CHARS = 6000
 MAX_OPEN_ISSUE_BODY_CHARS = 1800
@@ -834,7 +834,7 @@ def resolve_model_name() -> str:
         value = os.environ.get(env_name, "").strip()
         if value:
             return value
-    return DEFAULT_TRIAGE_MODEL
+    return DEFAULT_TRIAGE_MODEL_FALLBACK
 
 
 def max_open_issues(config: dict[str, Any]) -> int:
@@ -874,6 +874,9 @@ def run_triage(args: argparse.Namespace) -> int:
     )
     repo_context = build_repo_context(issue)
     model_name = resolve_model_name()
+    available_labels_for_model = existing_labels_list + [
+        vars(label) for label in managed_labels.values() if label.name not in existing_labels
+    ]
     analysis: dict[str, Any]
 
     try:
@@ -883,7 +886,7 @@ def run_triage(args: argparse.Namespace) -> int:
             token=token,
             timeout=45,
             issue=issue,
-            labels=existing_labels_list + [vars(label) for label in managed_labels.values() if label.name not in existing_labels],
+            labels=available_labels_for_model,
             duplicate_candidates=duplicate_candidates,
             repo_context=repo_context,
             config=config,

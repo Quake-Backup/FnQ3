@@ -741,7 +741,7 @@ def build_comment(analysis: dict[str, Any], label_reasons: dict[str, str]) -> st
         ## Detected points
         {point_lines}
 
-        ## Categorisation
+        ## Categorization
         Applied labels:
         {label_lines}
 

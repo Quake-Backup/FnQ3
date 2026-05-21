@@ -743,7 +743,9 @@ t1 = most downstream according to spec
 static void DrawMultitextured( const shaderCommands_t *input, int stage ) {
 	const shaderStage_t *pStage;
 	qboolean glxStreamedDraw = qfalse;
+#ifdef RENDERER_GLX
 	GLint glxMultitextureEnv;
+#endif
 
 	pStage = tess.xstages[ stage ];
 
@@ -781,10 +783,14 @@ static void DrawMultitextured( const shaderCommands_t *input, int stage ) {
 
 	if ( r_lightmap->integer ) {
 		GL_TexEnv( GL_REPLACE );
+#ifdef RENDERER_GLX
 		glxMultitextureEnv = GL_REPLACE;
+#endif
 	} else {
 		GL_TexEnv( pStage->mtEnv );
+#ifdef RENDERER_GLX
 		glxMultitextureEnv = pStage->mtEnv;
+#endif
 	}
 
 #ifdef RENDERER_GLX

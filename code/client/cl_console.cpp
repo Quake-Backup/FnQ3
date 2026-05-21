@@ -25,9 +25,17 @@ extern "C" {
 #include "client.h"
 }
 
+#include "client_cpp.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
+
+using fnq3::FileWrite;
+using fnq3::ScopedFileHandle;
+using fnq3::ScopedTempMemory;
+using fnq3::ScopedZoneMemory;
+using fnq3::AllocateZoneMemory;
 
 namespace {
 
@@ -47,11 +55,6 @@ constexpr float CON_SELECTION_ALPHA = 0.35f;
 constexpr int CON_COMPLETION_MAX_MATCHES = 64;
 constexpr int CON_COMPLETION_MAX_VISIBLE = 8;
 constexpr float CON_TEXT_DRAG_THRESHOLD = 4.0f;
-
-static qboolean ToQboolean( bool value )
-{
-	return value ? qtrue : qfalse;
-}
 
 static int RoundToInt( float value )
 {
@@ -690,10 +693,10 @@ static void Con_CutInputSelection( void ) {
 
 
 static void Con_PasteClipboardToInput( void ) {
-	char *text;
 	int i;
 
-	text = Sys_GetClipboardData();
+	ScopedZoneMemory clipboardText( Sys_GetClipboardData() );
+	char *text = clipboardText.as<char>();
 	if ( !text ) {
 		return;
 	}
@@ -706,8 +709,6 @@ static void Con_PasteClipboardToInput( void ) {
 			Con_InsertInputChar( text[ i ] );
 		}
 	}
-
-	Z_Free( text );
 }
 
 
@@ -882,7 +883,6 @@ static void Con_SelectAllLog( void ) {
 
 
 static void Con_CopyLogSelection( void ) {
-	char *text;
 	int length;
 	int startLine, endLine;
 	int bufferSize;
@@ -893,16 +893,11 @@ static void Con_CopyLogSelection( void ) {
 
 	Con_GetLogSelectionRange( &startLine, nullptr, &endLine, nullptr );
 	bufferSize = ( endLine - startLine + 1 ) * ( con.linewidth + 1 ) + 1;
-#ifdef ZONE_DEBUG
-	text = static_cast<char *>( Z_MallocDebug( bufferSize, const_cast<char *>( "console log selection" ),
-		const_cast<char *>( __FILE__ ), __LINE__ ) );
-#else
-	text = static_cast<char *>( Z_Malloc( bufferSize ) );
-#endif
+	ScopedZoneMemory textStorage = AllocateZoneMemory( bufferSize, "console log selection", __FILE__, __LINE__ );
+	char *text = textStorage.as<char>();
 	length = Con_BuildLogSelectionText( text, bufferSize );
 	text[ length ] = '\0';
 	Sys_SetClipboardData( text );
-	Z_Free( text );
 }
 
 
@@ -3867,9 +3862,7 @@ static void Con_Dump_f( void )
 {
 	int		l, x, i, n;
 	short	*line;
-	fileHandle_t	f;
 	int		bufferlen;
-	char	*buffer;
 	std::array<char, MAX_OSPATH> filename;
 	const char *ext;
 
@@ -3887,8 +3880,8 @@ static void Con_Dump_f( void )
 		return;
 	}
 
-	f = FS_FOpenFileWrite( filename.data() );
-	if ( f == FS_INVALID_HANDLE )
+	ScopedFileHandle file( FS_FOpenFileWrite( filename.data() ) );
+	if ( !file )
 	{
 		Com_Printf( "ERROR: couldn't open %s.\n", filename.data() );
 		return;
@@ -3905,7 +3898,8 @@ static void Con_Dump_f( void )
 	}
 
 	bufferlen = con.linewidth + ARRAY_LEN( Q_NEWLINE ) * sizeof( char );
-	buffer = static_cast<char *>( Hunk_AllocateTempMemory( bufferlen ) );
+	auto bufferStorage = ScopedTempMemory::Allocate( bufferlen );
+	char *buffer = bufferStorage.as<char>();
 
 	// write the remaining lines
 	buffer[ bufferlen - 1 ] = '\0';
@@ -3925,11 +3919,8 @@ static void Con_Dump_f( void )
 				break;
 		}
 		Q_strcat( buffer, bufferlen, Q_NEWLINE );
-		FS_Write( buffer, strlen( buffer ), f );
+		FileWrite( file.get(), buffer, strlen( buffer ) );
 	}
-
-	Hunk_FreeTempMemory( buffer );
-	FS_FCloseFile( f );
 }
 
 						
@@ -4088,50 +4079,48 @@ void Con_CheckResize( void )
 			con.vispage = vispage;
 			Con_Fixup();
 			con.displayLine = static_cast<float>( con.display );
-			goto done;
+		} else {
+			oldwidth = con.linewidth;
+			oldtotallines = con.totallines;
+			oldcurrent = con.current;
+
+			con.linewidth = width;
+			con.totallines = CON_TEXTSIZE / con.linewidth;
+			con.vispage = vispage;
+
+			numchars = oldwidth;
+			if ( numchars > con.linewidth )
+				numchars = con.linewidth;
+
+			if ( oldcurrent > oldtotallines )
+				numlines = oldtotallines;
+			else
+				numlines = oldcurrent + 1;
+
+			if ( numlines > con.totallines )
+				numlines = con.totallines;
+
+			std::copy_n( con.text.begin(), CON_TEXTSIZE, tbuf.begin() );
+
+			for ( i = 0; i < CON_TEXTSIZE; i++ )
+				con.text[i] = (ColorIndex(COLOR_WHITE)<<8) | ' ';
+
+			for ( i = 0; i < numlines; i++ )
+			{
+				src = &tbuf[ ((oldcurrent - i + oldtotallines) % oldtotallines) * oldwidth ];
+				dst = con.text.data() + (numlines - 1 - i) * con.linewidth;
+				for ( j = 0; j < numchars; j++ )
+					*dst++ = *src++;
+			}
+
+			Con_ClearNotify();
+
+			con.current = numlines - 1;
+			con.display = con.current;
+			con.displayLine = static_cast<float>( con.display );
 		}
-
-		oldwidth = con.linewidth;
-		oldtotallines = con.totallines;
-		oldcurrent = con.current;
-
-		con.linewidth = width;
-		con.totallines = CON_TEXTSIZE / con.linewidth;
-		con.vispage = vispage;
-
-		numchars = oldwidth;
-		if ( numchars > con.linewidth )
-			numchars = con.linewidth;
-
-		if ( oldcurrent > oldtotallines )
-			numlines = oldtotallines;	
-		else
-			numlines = oldcurrent + 1;	
-
-		if ( numlines > con.totallines )
-			numlines = con.totallines;
-
-		std::copy_n( con.text.begin(), CON_TEXTSIZE, tbuf.begin() );
-
-		for ( i = 0; i < CON_TEXTSIZE; i++ ) 
-			con.text[i] = (ColorIndex(COLOR_WHITE)<<8) | ' ';
-
-		for ( i = 0; i < numlines; i++ )
-		{
-			src = &tbuf[ ((oldcurrent - i + oldtotallines) % oldtotallines) * oldwidth ];
-			dst = con.text.data() + (numlines - 1 - i) * con.linewidth;
-			for ( j = 0; j < numchars; j++ )
-				*dst++ = *src++;
-		}
-
-		Con_ClearNotify();
-
-		con.current = numlines - 1;
-		con.display = con.current;
-		con.displayLine = static_cast<float>( con.display );
 	}
 
-done:
 	Con_AdjustInputScroll( &g_consoleField );
 	con_scale->modified = qfalse;
 	if ( con_scaleUniform ) {

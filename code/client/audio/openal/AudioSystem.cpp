@@ -22,6 +22,8 @@ extern "C" {
 #include "../../../qcommon/cm_public.h"
 }
 
+#include "../../client_cpp.h"
+
 #include <AL/al.h>
 #include <AL/alc.h>
 #include <AL/alext.h>

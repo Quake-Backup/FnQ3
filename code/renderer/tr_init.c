@@ -2501,11 +2501,11 @@ static void R_Register( void )
 	r_dlightScale = ri.Cvar_Get( "r_dlightScale", "0.5", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightScale, "0.1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightScale, "Scales dynamic light radius." );
-	r_dlightSpecPower = ri.Cvar_Get( "r_dlightSpecPower", "8", CVAR_ARCHIVE_ND );
+	r_dlightSpecPower = ri.Cvar_Get( "r_dlightSpecPower", "10", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightSpecPower, "1", "32", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightSpecPower, "Factors specularity effect from dynamic lights on surfaces." );
 	ri.Cvar_SetGroup( r_dlightSpecPower, CVG_RENDERER );
-	r_dlightSpecColor = ri.Cvar_Get( "r_dlightSpecColor", "-0.25", CVAR_ARCHIVE_ND );
+	r_dlightSpecColor = ri.Cvar_Get( "r_dlightSpecColor", "-0.2", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightSpecColor, "-1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightSpecColor, "Color base for specular component:\n <= 0: use current texture and modulate by abs(r_dlightSpecColor)\n > 0: use constant color with RGB components set to \\r_dlightSpecColor" );
 	ri.Cvar_SetGroup( r_dlightSpecColor, CVG_RENDERER );
@@ -2585,7 +2585,7 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( r_tonemapExposure, CVG_RENDERER );
 	r_hudExcludePostProcess = ri.Cvar_Get( "r_hudExcludePostProcess", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_hudExcludePostProcess, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_hudExcludePostProcess, "Exclude 3D HUD scenes (RDF_NOWORLDMODEL after the world view) from bloom and scene HDR post-processing. Set to 0 for legacy post-processed HUD models." );
+	ri.Cvar_SetDescription( r_hudExcludePostProcess, "Exclude 3D HUD scenes (RDF_NOWORLDMODEL after the world view) from bloom and scene HDR post-processing. SDR FBO frames still apply the final legacy gamma/overbright transform to HUD output. Set to 0 for legacy post-processed HUD models." );
 	ri.Cvar_SetGroup( r_hudExcludePostProcess, CVG_RENDERER );
 	r_crt = ri.Cvar_Get( "r_crt", "0", CVAR_ARCHIVE_ND );
 	R_MakeCvarInstant( r_crt );

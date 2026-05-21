@@ -169,6 +169,18 @@ function Assert-WindowsOutputs {
 	}
 }
 
+function Clear-StaleMesonArchive {
+	param(
+		[string]$BuildPath,
+		[string]$ArchiveName
+	)
+
+	$archivePath = Join-Path $BuildPath $ArchiveName
+	if (Test-Path $archivePath) {
+		Remove-Item -LiteralPath $archivePath -Force
+	}
+}
+
 $workspaceRoot = Split-Path -Parent $PSScriptRoot
 $buildPath = Resolve-BuildPath -WorkspaceRoot $workspaceRoot -SelectedBuildDir $BuildDir
 $buildType = Convert-BuildType -SelectedConfiguration $Configuration
@@ -219,6 +231,8 @@ if ($SetupOnly) {
 	Write-Host 'Meson setup completed.'
 	exit 0
 }
+
+Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName 'libbotlib.a'
 
 $compileArgs = @('compile', '-C', $buildPath)
 Write-Host "==> $mesonPath $($compileArgs -join ' ')"

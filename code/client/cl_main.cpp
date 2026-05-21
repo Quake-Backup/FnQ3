@@ -25,11 +25,24 @@ extern "C" {
 #include "client.h"
 }
 
+#include "client_cpp.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstring>
 #include <limits.h>
+
+using fnq3::CloseFile;
+using fnq3::FileRead;
+using fnq3::FileReadObject;
+using fnq3::FileWrite;
+using fnq3::OpenFileRead;
+using fnq3::OpenSvFileRead;
+using fnq3::ReadUnaligned;
+using fnq3::ScopedFileHandle;
+using fnq3::ScopedFilePosition;
+using fnq3::ToQboolean;
 
 namespace {
 
@@ -37,17 +50,12 @@ constexpr const char *LEGACY_DEMOEXT = "dm3";
 constexpr int kMaxServersPerPacket = 256;
 constexpr std::size_t kServerAddressHashBuckets = 1024;
 
-static qboolean ToQboolean( bool value )
+static int OpenPureFileRead( const char *qpath, ScopedFileHandle &file )
 {
-	return value ? qtrue : qfalse;
-}
-
-template <typename T>
-static T ReadUnaligned( const void *data )
-{
-	T value;
-	std::memcpy( &value, data, sizeof( value ) );
-	return value;
+	FS_BypassPure();
+	const int length = OpenFileRead( qpath, file, qtrue );
+	FS_RestorePure();
+	return length;
 }
 
 } // namespace
@@ -172,15 +180,15 @@ message for the literal `protocol\NN` key so the parser can pick the correct
 static int CL_DetectLegacyDemoProtocol( fileHandle_t handle )
 {
 	std::array<byte, MAX_MSGLEN> buffer;
-	int currentPos;
 	int sequence;
 	int length;
+	int littleLength;
 	int protocol;
 	int r;
 	int i;
 
-	currentPos = FS_FTell( handle );
-	if ( currentPos < 0 ) {
+	ScopedFilePosition restorePosition( handle );
+	if ( !restorePosition.valid() ) {
 		return 43;
 	}
 
@@ -188,25 +196,26 @@ static int CL_DetectLegacyDemoProtocol( fileHandle_t handle )
 		return 43;
 	}
 
-	r = FS_Read( &sequence, 4, handle );
+	r = FileReadObject( handle, sequence );
 	if ( r != 4 ) {
-		goto done;
+		return 43;
 	}
 	static_cast<void>( sequence );
 
-	r = FS_Read( &length, 4, handle );
+	r = FileReadObject( handle, length );
 	if ( r != 4 ) {
-		goto done;
+		return 43;
 	}
 
-	length = LittleLong( length );
+	littleLength = LittleLong( length );
+	length = littleLength;
 	if ( length <= 0 || length > static_cast<int>( buffer.size() ) ) {
-		goto done;
+		return 43;
 	}
 
-	r = FS_Read( buffer.data(), length, handle );
+	r = FileRead( handle, buffer.data(), length );
 	if ( r != length ) {
-		goto done;
+		return 43;
 	}
 
 	for ( i = 0; i + 10 < length; i++ ) {
@@ -222,13 +231,10 @@ static int CL_DetectLegacyDemoProtocol( fileHandle_t handle )
 
 		protocol = ( scan[9] - '0' ) * 10 + ( scan[10] - '0' );
 		if ( protocol >= 43 && protocol <= 48 ) {
-			FS_Seek( handle, currentPos, FS_SEEK_SET );
 			return protocol;
 		}
 	}
 
-done:
-	FS_Seek( handle, currentPos, FS_SEEK_SET );
 	return 43;
 }
 
@@ -369,13 +375,13 @@ static void CL_WriteDemoMessage( msg_t *msg, int headerBytes ) {
 	// write the packet sequence
 	len = clc.serverMessageSequence;
 	swlen = LittleLong( len );
-	FS_Write( &swlen, 4, clc.recordfile );
+	FileWrite( clc.recordfile, &swlen, 4 );
 
 	// skip the packet sequencing information
 	len = msg->cursize - headerBytes;
 	swlen = LittleLong(len);
-	FS_Write( &swlen, 4, clc.recordfile );
-	FS_Write( msg->data + headerBytes, len, clc.recordfile );
+	FileWrite( clc.recordfile, &swlen, 4 );
+	FileWrite( clc.recordfile, msg->data + headerBytes, len );
 }
 
 
@@ -396,10 +402,9 @@ void CL_StopRecord_f( void ) {
 
 		// finish up
 		len = -1;
-		FS_Write( &len, 4, clc.recordfile );
-		FS_Write( &len, 4, clc.recordfile );
-		FS_FCloseFile( clc.recordfile );
-		clc.recordfile = FS_INVALID_HANDLE;
+		FileWrite( clc.recordfile, &len, 4 );
+		FileWrite( clc.recordfile, &len, 4 );
+		CloseFile( clc.recordfile );
 
 		// select proper extension
 		if ( clc.dm68compat || clc.demoplaying ) {
@@ -541,11 +546,11 @@ static void CL_WriteGamestate( qboolean initial )
 	else
 		len = LittleLong( clc.serverMessageSequence - 1 );
 
-	FS_Write( &len, 4, clc.recordfile );
+	FileWrite( clc.recordfile, &len, 4 );
 
 	len = LittleLong( msg.cursize );
-	FS_Write( &len, 4, clc.recordfile );
-	FS_Write( msg.data, msg.cursize, clc.recordfile );
+	FileWrite( clc.recordfile, &len, 4 );
+	FileWrite( clc.recordfile, msg.data, msg.cursize );
 }
 
 
@@ -671,11 +676,11 @@ static void CL_WriteSnapshot( void ) {
 		len = LittleLong( clc.demoMessageSequence );
 	else
 		len = LittleLong( clc.serverMessageSequence );
-	FS_Write( &len, 4, clc.recordfile );
+	FileWrite( clc.recordfile, &len, 4 );
 
 	len = LittleLong( msg.cursize );
-	FS_Write( &len, 4, clc.recordfile );
-	FS_Write( msg.data, msg.cursize, clc.recordfile );
+	FileWrite( clc.recordfile, &len, 4 );
+	FileWrite( clc.recordfile, msg.data, msg.cursize );
 
 	// save last sent state so if there any need - we can skip any further incoming messages
 	for ( i = 0; i < snap->numEntities; i++ )
@@ -862,7 +867,7 @@ void CL_ReadDemoMessage( void ) {
 	}
 
 	// get the sequence number
-	r = FS_Read( &s, 4, clc.demofile );
+	r = FileRead( clc.demofile, &s, 4 );
 	if ( r != 4 ) {
 		CL_DemoCompleted();
 		return;
@@ -873,7 +878,7 @@ void CL_ReadDemoMessage( void ) {
 	MSG_Init( &buf, bufData.data(), MAX_MSGLEN );
 
 	// get the length
-	r = FS_Read( &buf.cursize, 4, clc.demofile );
+	r = FileRead( clc.demofile, &buf.cursize, 4 );
 	if ( r != 4 ) {
 		CL_DemoCompleted();
 		return;
@@ -886,7 +891,7 @@ void CL_ReadDemoMessage( void ) {
 	if ( buf.cursize > buf.maxsize ) {
 		Com_Error (ERR_DROP, "CL_ReadDemoMessage: demoMsglen > MAX_MSGLEN");
 	}
-	r = FS_Read( buf.data, buf.cursize, clc.demofile );
+	r = FileRead( clc.demofile, buf.data, buf.cursize );
 	if ( r != buf.cursize ) {
 		Com_Printf( "Demo file was truncated.\n");
 		CL_DemoCompleted();
@@ -917,20 +922,18 @@ void CL_ReadDemoMessage( void ) {
 CL_WalkDemoExt
 ====================
 */
-static int CL_WalkDemoExt( const char *arg, char *name, int name_len, fileHandle_t *handle )
+static int CL_WalkDemoExt( const char *arg, char *name, int name_len, ScopedFileHandle &handle )
 {
 	int i;
 
-	*handle = FS_INVALID_HANDLE;
+	handle.reset();
 	i = 0;
 
 	while ( demo_protocols[ i ] )
 	{
 		Com_sprintf( name, name_len, "demos/%s.%s%d", arg, DEMOEXT, demo_protocols[ i ] );
-		FS_BypassPure();
-		FS_FOpenFileRead( name, handle, qtrue );
-		FS_RestorePure();
-		if ( *handle != FS_INVALID_HANDLE )
+		OpenPureFileRead( name, handle );
+		if ( handle )
 		{
 			Com_Printf( "Demo file: %s\n", name );
 			return demo_protocols[ i ];
@@ -941,10 +944,8 @@ static int CL_WalkDemoExt( const char *arg, char *name, int name_len, fileHandle
 	}
 
 	Com_sprintf( name, name_len, "demos/%s.%s", arg, LEGACY_DEMOEXT );
-	FS_BypassPure();
-	FS_FOpenFileRead( name, handle, qtrue );
-	FS_RestorePure();
-	if ( *handle != FS_INVALID_HANDLE )
+	OpenPureFileRead( name, handle );
+	if ( handle )
 	{
 		Com_Printf( "Demo file: %s\n", name );
 		return OLD_PROTOCOL_VERSION;
@@ -1030,7 +1031,7 @@ static void CL_PlayDemo_f( void ) {
 	int			protocol, i;
 	std::array<char, MAX_OSPATH> retry;
 	const char	*shortname, *slash;
-	fileHandle_t hFile;
+	ScopedFileHandle hFile;
 
 	if ( Cmd_Argc() != 2 ) {
 		Com_Printf( "demo <demoname>\n" );
@@ -1046,9 +1047,7 @@ static void CL_PlayDemo_f( void ) {
 	{
 		protocol = OLD_PROTOCOL_VERSION;
 		Com_sprintf( name.data(), static_cast<int>( name.size() ), "demos/%s", arg );
-		FS_BypassPure();
-		FS_FOpenFileRead( name.data(), &hFile, qtrue );
-		FS_RestorePure();
+		OpenPureFileRead( name.data(), hFile );
 	}
 	else if ( ext_test && !Q_stricmpn(ext_test + 1, DEMOEXT, ARRAY_LEN(DEMOEXT) - 1) )
 	{
@@ -1063,9 +1062,7 @@ static void CL_PlayDemo_f( void ) {
 		if ( demo_protocols[ i ] || protocol == com_protocol->integer  )
 		{
 			Com_sprintf( name.data(), static_cast<int>( name.size() ), "demos/%s", arg );
-			FS_BypassPure();
-			FS_FOpenFileRead( name.data(), &hFile, qtrue );
-			FS_RestorePure();
+			OpenPureFileRead( name.data(), hFile );
 		}
 		else
 		{
@@ -1080,19 +1077,18 @@ static void CL_PlayDemo_f( void ) {
 
 			Q_strncpyz( retry.data(), arg, static_cast<int>( len + 1 ) );
 			retry[len] = '\0';
-			protocol = CL_WalkDemoExt( retry.data(), name.data(), static_cast<int>( name.size() ), &hFile );
+			protocol = CL_WalkDemoExt( retry.data(), name.data(), static_cast<int>( name.size() ), hFile );
 		}
 	}
 	else
-		protocol = CL_WalkDemoExt( arg, name.data(), static_cast<int>( name.size() ), &hFile );
+		protocol = CL_WalkDemoExt( arg, name.data(), static_cast<int>( name.size() ), hFile );
 
-	if ( hFile == FS_INVALID_HANDLE ) {
+	if ( !hFile ) {
 		Com_Printf( S_COLOR_YELLOW "couldn't open %s\n", name.data() );
 		return;
 	}
 
-	FS_FCloseFile( hFile );
-	hFile = FS_INVALID_HANDLE;
+	hFile.reset();
 
 	// make sure a local server is killed
 	// 2 means don't force disconnect of local client
@@ -1328,11 +1324,11 @@ update cl_guid using QKEY_FILE and optional prefix
 static void CL_UpdateGUID( const char *prefix, int prefix_len )
 {
 #ifdef USE_Q3KEY
-	fileHandle_t f;
 	int len;
 
-	len = FS_SV_FOpenFileRead( QKEY_FILE, &f );
-	FS_FCloseFile( f );
+	ScopedFileHandle keyFile;
+	len = OpenSvFileRead( QKEY_FILE, keyFile );
+	keyFile.reset();
 
 	if( len != QKEY_SIZE )
 		Cvar_Set( "cl_guid", "" );
@@ -1408,16 +1404,14 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 
 	// Stop demo playback
 	if ( clc.demofile != FS_INVALID_HANDLE ) {
-		FS_FCloseFile( clc.demofile );
-		clc.demofile = FS_INVALID_HANDLE;
+		CloseFile( clc.demofile );
 	}
 	clc.demoLegacyFormat = qfalse;
 	clc.demoLegacyProtocol = 0;
 
 	// Finish downloads
 	if ( clc.download != FS_INVALID_HANDLE ) {
-		FS_FCloseFile( clc.download );
-		clc.download = FS_INVALID_HANDLE;
+		CloseFile( clc.download );
 	}
 	*clc.downloadTempName = *clc.downloadName = '\0';
 	Cvar_Set( "cl_downloadName", "" );
@@ -3906,10 +3900,10 @@ static void CL_GenerateQKey()
 {
 	int len = 0;
 	std::array<unsigned char, QKEY_SIZE> buff;
-	fileHandle_t f;
 
-	len = FS_SV_FOpenFileRead( QKEY_FILE, &f );
-	FS_FCloseFile( f );
+	ScopedFileHandle qkeyFile;
+	len = OpenSvFileRead( QKEY_FILE, qkeyFile );
+	qkeyFile.reset();
 	if( len == QKEY_SIZE ) {
 		Com_Printf( "QKEY found.\n" );
 		return;
@@ -3923,14 +3917,13 @@ static void CL_GenerateQKey()
 		Com_Printf( "QKEY building random string\n" );
 		Com_RandomBytes( buff.data(), static_cast<int>( buff.size() ) );
 
-		f = FS_SV_FOpenFileWrite( QKEY_FILE );
-		if( !f ) {
+		ScopedFileHandle outFile( FS_SV_FOpenFileWrite( QKEY_FILE ) );
+		if( !outFile ) {
 			Com_Printf( "QKEY could not open %s for write\n",
 				QKEY_FILE );
 			return;
 		}
-		FS_Write( buff.data(), static_cast<int>( buff.size() ), f );
-		FS_FCloseFile( f );
+		FileWrite( outFile.get(), buff.data(), buff.size() );
 		Com_Printf( "QKEY generated\n" );
 	}
 }

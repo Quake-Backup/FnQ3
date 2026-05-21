@@ -21,6 +21,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 //
 
+#pragma once
+
 /*****************************************************************************
  * name:		be_ai_weap.h
  *
@@ -31,16 +33,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *****************************************************************************/
 
 //projectile flags
-#define PFL_WINDOWDAMAGE			1		//projectile damages through window
-#define PFL_RETURN					2		//set when projectile returns to owner
+static constexpr int PFL_WINDOWDAMAGE = 1;		//projectile damages through window
+static constexpr int PFL_RETURN = 2;			//set when projectile returns to owner
 //weapon flags
-#define WFL_FIRERELEASED			1		//set when projectile is fired with key-up event
+static constexpr int WFL_FIRERELEASED = 1;		//set when projectile is fired with key-up event
 //damage types
-#define DAMAGETYPE_IMPACT			1		//damage on impact
-#define DAMAGETYPE_RADIAL			2		//radial damage
-#define DAMAGETYPE_VISIBLE			4		//damage to all entities visible to the projectile
+static constexpr int DAMAGETYPE_IMPACT = 1;		//damage on impact
+static constexpr int DAMAGETYPE_RADIAL = 2;		//radial damage
+static constexpr int DAMAGETYPE_VISIBLE = 4;	//damage to all entities visible to the projectile
 
-typedef struct projectileinfo_s
+struct projectileinfo_s
 {
 	char name[MAX_STRINGFIELD];
 	char model[MAX_STRINGFIELD];
@@ -56,9 +58,10 @@ typedef struct projectileinfo_s
 	float bounce;
 	float bouncefric;
 	float bouncestop;
-} projectileinfo_t;
+};
+using projectileinfo_t = projectileinfo_s;
 
-typedef struct weaponinfo_s
+struct weaponinfo_s
 {
 	int valid;					//true if the weapon info is valid
 	int number;									//number of the weapon
@@ -84,7 +87,8 @@ typedef struct weaponinfo_s
 	float spinup;
 	float spindown;
 	projectileinfo_t proj;						//pointer to the used projectile
-} weaponinfo_t;
+};
+using weaponinfo_t = weaponinfo_s;
 
 //setup the weapon AI
 int BotSetupWeaponAI(void);

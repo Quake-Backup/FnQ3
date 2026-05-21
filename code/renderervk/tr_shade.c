@@ -113,10 +113,8 @@ static VkDescriptorSet R_AnimatedImageDescriptor( const textureBundle_t *bundle 
 R_BindAnimatedImage
 =================
 */
+#ifndef USE_VULKAN
 static void R_BindAnimatedImage( const textureBundle_t *bundle ) {
-#ifdef USE_VULKAN
-	vk_update_descriptor( glState.currenttmu + VK_DESC_TEXTURE_BASE, R_AnimatedImageDescriptor( bundle ) );
-#else
 	int64_t index;
 	double	v;
 
@@ -152,8 +150,8 @@ static void R_BindAnimatedImage( const textureBundle_t *bundle ) {
 	index %= bundle->numImageAnimations;
 
 	GL_Bind( bundle->image[ index ] );
-#endif
 }
+#endif
 
 
 /*

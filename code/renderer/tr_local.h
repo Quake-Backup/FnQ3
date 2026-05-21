@@ -1707,7 +1707,7 @@ void R_TransformDlights( int count, dlight_t *dl, orientationr_t *or );
 int R_LightForPoint( vec3_t point, vec3_t ambientLight, vec3_t directedLight, vec3_t lightDir );
 
 #ifdef USE_PMLIGHT
-void ARB_SetupLightParams( void );
+void ARB_SetupLightParams( const shaderStage_t *pStage );
 void ARB_LightingPass( void );
 qboolean R_LightCullBounds( const dlight_t* dl, const vec3_t mins, const vec3_t maxs );
 #endif // USE_PMLIGHT

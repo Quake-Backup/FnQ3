@@ -879,6 +879,7 @@ static void ARB_DrawLightingElements( int numIndexes, const glIndex_t *indexes )
 		qglUnlockArraysEXT();
 }
 
+#ifndef RENDERER_GLX
 static void ARB_Lighting( const shaderStage_t* pStage )
 {
 	const dlight_t* dl;
@@ -957,6 +958,7 @@ static void ARB_Lighting( const shaderStage_t* pStage )
 	
 	ARB_DrawLightingElements( numIndexes, hitIndexes );
 }
+#endif
 
 
 static void ARB_Lighting_Fast( const shaderStage_t* pStage )
@@ -978,7 +980,25 @@ static void ARB_Lighting_Fast( const shaderStage_t* pStage )
 }
 
 
-void ARB_SetupLightParams( void )
+static float ARB_ComputeTextureIntensityScale( const image_t *image )
+{
+	if ( image == NULL || r_intensity->value <= 1.0f ) {
+		return 1.0f;
+	}
+
+	if ( image->flags & IMGFLAG_NOLIGHTSCALE ) {
+		return 1.0f;
+	}
+
+	if ( ( image->flags & IMGFLAG_MIPMAP ) || image->uploadWidth != image->width ||
+		image->uploadHeight != image->height ) {
+		return r_intensity->value;
+	}
+
+	return 1.0f;
+}
+
+void ARB_SetupLightParams( const shaderStage_t *pStage )
 {
 	programNum vertexProgram;
 	programNum fragmentProgram;
@@ -987,11 +1007,12 @@ void ARB_SetupLightParams( void )
 	const dlight_t *dl;
 	vec3_t lightRGB;
 	float radius;
+	float textureScale;
 
 	tess.dlightUpdateParams = qfalse;
 	tess.cullType = tess.shader->cullType;
 
-	if ( !programCompiled )
+	if ( !programCompiled || !pStage )
 		return;
 
 	dl = tess.light;
@@ -1028,6 +1049,8 @@ void ARB_SetupLightParams( void )
 	ARB_ProgramEnable( vertexProgram, fragmentProgram );
 
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, lightRGB[0], lightRGB[1], lightRGB[2], 1.0f / Square( radius ) );
+	textureScale = ARB_ComputeTextureIntensityScale( pStage->bundle[ tess.shader->lightingBundle ].image[0] );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 5, textureScale, 1.0f, 1.0f, 1.0f );
 
 	if ( dl->linear )
 	{
@@ -1060,9 +1083,11 @@ void ARB_LightingPass( void )
 	if ( tess.shader->lightingStage < 0 )
 		return;
 
-	// we may need to update programs for fog transitions
-	if ( tess.dlightUpdateParams )
-		ARB_SetupLightParams();
+	pStage = tess.xstages[ tess.shader->lightingStage ];
+	// Keep parity with VK_LightingPass: fog, light, and texture scale are
+	// resolved per lit batch because fogNum and the selected surface texture
+	// can change without an entity/light transform change.
+	ARB_SetupLightParams( pStage );
 
 	RB_DeformTessGeometry();
 
@@ -1074,8 +1099,6 @@ void ARB_LightingPass( void )
 		qglEnable( GL_POLYGON_OFFSET_FILL );
 		qglPolygonOffset( r_offsetFactor->value, r_offsetUnits->value );
 	}
-
-	pStage = tess.xstages[ tess.shader->lightingStage ];
 
 	R_ComputeTexCoords( 0, &pStage->bundle[ tess.shader->lightingBundle ] );
 
@@ -1089,11 +1112,15 @@ void ARB_LightingPass( void )
 	qglNormalPointer( GL_FLOAT, sizeof( tess.normal[0] ), tess.normal );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
 
+#ifdef RENDERER_GLX
+	ARB_Lighting_Fast( pStage );
+#else
 	// CPU may limit performance in following cases
 	if ( tess.light->linear || gl_version >= 40 )
 		ARB_Lighting_Fast( pStage );
 	else
 		ARB_Lighting( pStage );
+#endif
 
 	// reset polygon offset
 	if ( tess.shader->polygonOffset ) 
@@ -1220,10 +1247,11 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	"!!ARBfp1.0 \n"
 	"OPTION ARB_precision_hint_fastest; \n"
 	"PARAM lightRGB = program.local[0]; \n"
+	"PARAM texFactors = program.local[5]; \n"
 	//"PARAM lightRange2recip = program.local[1]; \n"
-	//"PARAM fogColor = program.local[5]; \n" // fogColor
 	"TEMP base, tmp; \n"
-	"TEX base, fragment.texcoord[0], texture[0], 2D; \n" );
+	"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
+	"MUL base.xyz, base, texFactors.x; \n" );
 
 	if ( linear ) {
 		strcat( program,
@@ -1331,7 +1359,7 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	}
 
 	strcat( program,
-	"MUL_SAT result.color, base, light; \n"
+	"MUL result.color, base, light; \n"
 	"END \n" );
 	
 	r_dlightSpecColor->modified = qfalse;

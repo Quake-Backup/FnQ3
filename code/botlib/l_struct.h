@@ -20,6 +20,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
+#pragma once
+
 /*****************************************************************************
  * name:		l_struct.h
  *
@@ -29,44 +31,52 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *****************************************************************************/
 
+#include <stddef.h>
 
-#define MAX_STRINGFIELD				80
+#ifndef BOTLIB_MAX_STRINGFIELD_DEFINED
+#define BOTLIB_MAX_STRINGFIELD_DEFINED
+static constexpr int MAX_STRINGFIELD = 80;
+#endif
 //field types
-#define FT_CHAR						1			// char
-#define FT_INT							2			// int
-#define FT_FLOAT						3			// float
-#define FT_STRING						4			// char [MAX_STRINGFIELD]
-#define FT_STRUCT						6			// struct (sub structure)
+static constexpr int FT_CHAR = 1;			// char
+static constexpr int FT_INT = 2;			// int
+static constexpr int FT_FLOAT = 3;			// float
+static constexpr int FT_STRING = 4;			// char [MAX_STRINGFIELD]
+static constexpr int FT_STRUCT = 6;			// struct (sub structure)
 //type only mask
-#define FT_TYPE						0x00FF	// only type, clear subtype
+static constexpr int FT_TYPE = 0x00FF;		// only type, clear subtype
 //sub types
-#define FT_ARRAY						0x0100	// array of type
-#define FT_BOUNDED					0x0200	// bounded value
-#define FT_UNSIGNED					0x0400
+static constexpr int FT_ARRAY = 0x0100;		// array of type
+static constexpr int FT_BOUNDED = 0x0200;	// bounded value
+static constexpr int FT_UNSIGNED = 0x0400;
+
+struct structdef_s;
 
 //structure field definition
-typedef struct fielddef_s
+struct fielddef_s
 {
 	const char *name;										//name of the field
-	int offset;										//offset in the structure
+	size_t offset;									//offset in the structure
 	int type;										//type of the field
 	//type specific fields
 	int maxarray;									//maximum array size
 	float floatmin, floatmax;					//float min and max
-	struct structdef_s *substruct;			//sub structure
-} fielddef_t;
+	structdef_s *substruct;					//sub structure
+};
+using fielddef_t = fielddef_s;
 
 //structure definition
-typedef struct structdef_s
+struct structdef_s
 {
 	int size;
 	const fielddef_t *fields;
-} structdef_t;
+};
+using structdef_t = structdef_s;
 
 //read a structure from a script
-int ReadStructure(source_t *source, const structdef_t *def, char *structure);
+int ReadStructure(source_t *source, const structdef_t *def, void *structure);
 //write a structure to a file
-int WriteStructure(FILE *fp, const structdef_t *def, const char *structure);
+int WriteStructure(FILE *fp, const structdef_t *def, const void *structure);
 //writes indents
 int WriteIndent(FILE *fp, int indent);
 //writes a float without trailing zeros

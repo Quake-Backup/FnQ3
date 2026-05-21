@@ -20,6 +20,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
+#pragma once
+
 /*****************************************************************************
  * name:		l_precomp.h
  *
@@ -53,22 +55,22 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #endif
 
 
-#define DEFINE_FIXED			0x0001
+static constexpr int DEFINE_FIXED = 0x0001;
 
-#define BUILTIN_LINE			1
-#define BUILTIN_FILE			2
-#define BUILTIN_DATE			3
-#define BUILTIN_TIME			4
-#define BUILTIN_STDC			5
+static constexpr int BUILTIN_LINE = 1;
+static constexpr int BUILTIN_FILE = 2;
+static constexpr int BUILTIN_DATE = 3;
+static constexpr int BUILTIN_TIME = 4;
+static constexpr int BUILTIN_STDC = 5;
 
-#define INDENT_IF				0x0001
-#define INDENT_ELSE				0x0002
-#define INDENT_ELIF				0x0004
-#define INDENT_IFDEF			0x0008
-#define INDENT_IFNDEF			0x0010
+static constexpr int INDENT_IF = 0x0001;
+static constexpr int INDENT_ELSE = 0x0002;
+static constexpr int INDENT_ELIF = 0x0004;
+static constexpr int INDENT_IFDEF = 0x0008;
+static constexpr int INDENT_IFNDEF = 0x0010;
 
 //macro definitions
-typedef struct define_s
+struct define_s
 {
 	char *name;							//define name
 	int flags;							//define flags
@@ -76,23 +78,25 @@ typedef struct define_s
 	int numparms;						//number of define parameters
 	token_t *parms;						//define parameters
 	token_t *tokens;					//macro tokens (possibly containing parm tokens)
-	struct define_s *next;				//next defined macro in a list
-	struct define_s *hashnext;			//next define in the hash chain
-} define_t;
+	define_s *next;						//next defined macro in a list
+	define_s *hashnext;					//next define in the hash chain
+};
+using define_t = define_s;
 
 //indents
 //used for conditional compilation directives:
 //#if, #else, #elif, #ifdef, #ifndef
-typedef struct indent_s
+struct indent_s
 {
 	int type;								//indent type
 	int skip;								//true if skipping current indent
 	script_t *script;						//script the indent was in
-	struct indent_s *next;					//next indent on the indent stack
-} indent_t;
+	indent_s *next;							//next indent on the indent stack
+};
+using indent_t = indent_s;
 
 //source file
-typedef struct source_s
+struct source_s
 {
 	char filename[1024];					//file name of the script
 	char includepath[1024];					//path to include files
@@ -104,19 +108,20 @@ typedef struct source_s
 	indent_t *indentstack;					//stack with indents
 	int skip;								// > 0 if skipping conditional code
 	token_t token;							//last read token
-} source_t;
+};
+using source_t = source_s;
 
 
 //read a token from the source
 int PC_ReadToken(source_t *source, token_t *token);
 //expect a certain token
-int PC_ExpectTokenString(source_t *source, char *string);
+int PC_ExpectTokenString(source_t *source, const char *string);
 //expect a certain token type
 int PC_ExpectTokenType(source_t *source, int type, int subtype, token_t *token);
 //expect a token
 int PC_ExpectAnyToken(source_t *source, token_t *token);
 //returns true when the token is available
-int PC_CheckTokenString(source_t *source, char *string);
+int PC_CheckTokenString(source_t *source, const char *string);
 //unread the last token read from the script
 void PC_UnreadLastToken(source_t *source);
 //unread the given token
@@ -127,13 +132,13 @@ int PC_AddGlobalDefine(const char *string);
 void PC_RemoveAllGlobalDefines(void);
 #if 0
 //skip tokens until the given token string is read
-int PC_SkipUntilString(source_t *source, char *string);
+int PC_SkipUntilString(source_t *source, const char *string);
 //returns true and reads the token when a token with the given type is available
 int PC_CheckTokenType(source_t *source, int type, int subtype, token_t *token);
 //remove the given global define
-int PC_RemoveGlobalDefine(char *name);
+int PC_RemoveGlobalDefine(const char *name);
 //add a define to the source
-int PC_AddDefine(source_t *source, char *string);
+int PC_AddDefine(source_t *source, const char *string);
 //add builtin defines
 void PC_AddBuiltinDefines(source_t *source);
 //set the source include path
@@ -141,7 +146,7 @@ void PC_SetIncludePath(source_t *source, const char *path);
 //set the punction set
 void PC_SetPunctuations(source_t *source, punctuation_t *p);
 //load a source from memory
-source_t *LoadSourceMemory(char *ptr, int length, char *name);
+source_t *LoadSourceMemory(const char *ptr, int length, const char *name);
 #endif
 //set the base folder to load files from
 void PC_SetBaseFolder(const char *path);
@@ -158,15 +163,16 @@ void QDECL SourceWarning(source_t *source, const char *fmt, ...)  __attribute__ 
 // some of BSPC source does include game/q_shared.h and some does not
 // we define pc_token_s pc_token_t if needed (yes, it's ugly)
 #ifndef __Q_SHARED_H
-#define MAX_TOKENLENGTH		1024
-typedef struct pc_token_s
+static constexpr int MAX_TOKENLENGTH = 1024;
+struct pc_token_s
 {
 	int type;
 	int subtype;
 	int intvalue;
 	float floatvalue;
 	char string[MAX_TOKENLENGTH];
-} pc_token_t;
+};
+using pc_token_t = pc_token_s;
 #endif //!_Q_SHARED_H
 #endif //BSPC
 

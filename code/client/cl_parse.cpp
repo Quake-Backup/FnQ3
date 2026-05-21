@@ -25,18 +25,15 @@ extern "C" {
 #include "client.h"
 }
 
+#include "client_cpp.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 
-namespace {
-
-static qboolean ToQboolean( bool value )
-{
-	return value ? qtrue : qfalse;
-}
-
-} // namespace
+using fnq3::CloseFile;
+using fnq3::FileWrite;
+using fnq3::ToQboolean;
 
 static constexpr std::array svc_strings = {
 	"svc_bad",
@@ -145,7 +142,7 @@ static int CL_TranslateLegacyConfigstringIndex( int index ) {
 }
 
 static int CL_TranslateLegacyEventNumber43( int event ) {
-	static const int legacyEventMap43[] = {
+	static constexpr std::array legacyEventMap43 = {
 		EV_NONE,
 		EV_FOOTSTEP,
 		EV_FOOTSTEP_METAL,
@@ -213,7 +210,7 @@ static int CL_TranslateLegacyEventNumber43( int event ) {
 		EV_TAUNT
 	};
 
-	if ( event < 0 || event >= ARRAY_LEN( legacyEventMap43 ) ) {
+	if ( event < 0 || static_cast<std::size_t>( event ) >= legacyEventMap43.size() ) {
 		return event;
 	}
 
@@ -305,7 +302,7 @@ static bool CL_AppendTranslatedToken( char *rewritten, int rewrittenSize, const 
 }
 
 static bool CL_TranslateLegacyScoresCommand( const char *command, char *rewritten, int rewrittenSize ) {
-	static const char *legacyScorePadding[] = { "0", "0", "0", "0", "0", "0", "0", "0" };
+	static constexpr std::array legacyScorePadding = { "0", "0", "0", "0", "0", "0", "0", "0" };
 	int argc;
 	int i;
 	int numScores;
@@ -334,7 +331,6 @@ static bool CL_TranslateLegacyScoresCommand( const char *command, char *rewritte
 
 	for ( i = 0; i < numScores; i++ ) {
 		int scoreArg;
-		int padArg;
 
 		for ( scoreArg = 0; scoreArg < 6; scoreArg++ ) {
 			if ( !CL_AppendTranslatedToken( rewritten, rewrittenSize, Cmd_Argv( i * 6 + 4 + scoreArg ) ) ) {
@@ -343,8 +339,8 @@ static bool CL_TranslateLegacyScoresCommand( const char *command, char *rewritte
 			}
 		}
 
-		for ( padArg = 0; padArg < ARRAY_LEN( legacyScorePadding ); padArg++ ) {
-			if ( !CL_AppendTranslatedToken( rewritten, rewrittenSize, legacyScorePadding[padArg] ) ) {
+		for ( const char *padding : legacyScorePadding ) {
+			if ( !CL_AppendTranslatedToken( rewritten, rewrittenSize, padding ) ) {
 				Q_strncpyz( rewritten, command, rewrittenSize );
 				return true;
 			}
@@ -1136,7 +1132,7 @@ static void CL_ParseDownload( msg_t *msg ) {
 	}
 
 	if (size)
-		FS_Write( data.data(), size, clc.download );
+		FileWrite( clc.download, data.data(), size );
 
 	CL_AddReliableCommand( va("nextdl %d", clc.downloadBlock), qfalse );
 	clc.downloadBlock++;
@@ -1148,8 +1144,7 @@ static void CL_ParseDownload( msg_t *msg ) {
 
 	if ( size == 0 ) { // A zero length block means EOF
 		if ( clc.download != FS_INVALID_HANDLE ) {
-			FS_FCloseFile( clc.download );
-			clc.download = FS_INVALID_HANDLE;
+			CloseFile( clc.download );
 
 			// rename the file
 			FS_SV_Rename( clc.downloadTempName, clc.downloadName );

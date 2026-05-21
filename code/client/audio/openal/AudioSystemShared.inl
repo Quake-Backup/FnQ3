@@ -100,11 +100,10 @@ static float ClampFloat( float value, float minimum, float maximum ) {
 }
 
 static short ReadLittlePCM16( const byte *data ) {
-	short value = 0;
 	if ( data != nullptr ) {
-		std::memcpy( &value, data, sizeof( value ) );
+		return LittleShort( fnq3::ReadUnaligned<short>( data ) );
 	}
-	return LittleShort( value );
+	return 0;
 }
 
 static bool PCMByteCountFitsALsizei( size_t sampleCount ) {
@@ -1133,20 +1132,19 @@ bool AudioZoneSet::Load( const char *qpath ) {
 		return false;
 	}
 
-	void *fileData = nullptr;
-	const int length = FS_ReadFile( qpath_.c_str(), &fileData );
-	if ( length <= 0 || fileData == nullptr ) {
-		if ( fileData != nullptr ) {
-			FS_FreeFile( fileData );
-		}
+	fnq3::ScopedReadFile fileData = fnq3::ScopedReadFile::Read( qpath_.c_str() );
+	if ( fileData.length() <= 0 || fileData.get() == nullptr ) {
 		Com_DPrintf( "No audio zone sidecar found for %s\n", qpath_.c_str() );
 		return false;
 	}
 
 	std::string error;
 	std::vector<azrt::AudioZone> parsedZones;
-	const bool parsed = azrt::ParseAudioZoneBinary( reinterpret_cast<const uint8_t *>( fileData ), static_cast<size_t>( length ), parsedZones, error );
-	FS_FreeFile( fileData );
+	const bool parsed = azrt::ParseAudioZoneBinary(
+		reinterpret_cast<const uint8_t *>( fileData.get() ),
+		static_cast<size_t>( fileData.length() ),
+		parsedZones,
+		error );
 	if ( !parsed ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: ignoring audio zone sidecar %s: %s\n", qpath_.c_str(), error.c_str() );
 		return false;
@@ -1198,12 +1196,12 @@ void AudioZoneSet::PrintStatus( const EnvironmentState &environment ) const {
 		Com_Printf( "Audio zones: none loaded (looked for %s)\n", qpath_.c_str() );
 		return;
 	}
-	char zoneSummary[128];
-	FormatAudioZoneSummary( environment, zoneSummary, sizeof( zoneSummary ) );
+	std::array<char, 128> zoneSummary;
+	FormatAudioZoneSummary( environment, zoneSummary.data(), zoneSummary.size() );
 	Com_Printf( "Audio zones: %lu loaded from %s, active %s, material %s, flags 0x%02x\n",
 		static_cast<unsigned long>( zones_.size() ),
 		qpath_.c_str(),
-		zoneSummary,
+		zoneSummary.data(),
 		environment.audioZone ? AudioZoneMaterialClassName( environment.zoneMaterialClass ) : "none",
 		environment.audioZone ? environment.zoneFlags : 0 );
 }
@@ -1213,14 +1211,14 @@ static std::string AudioZoneQpathForCurrentMap() {
 		return std::string();
 	}
 
-	char stripped[MAX_QPATH];
-	char zonePath[MAX_QPATH];
-	COM_StripExtension( cl.mapname, stripped, sizeof( stripped ) );
+	std::array<char, MAX_QPATH> stripped;
+	std::array<char, MAX_QPATH> zonePath;
+	COM_StripExtension( cl.mapname, stripped.data(), static_cast<int>( stripped.size() ) );
 	if ( stripped[0] == '\0' ) {
 		return std::string();
 	}
-	Com_sprintf( zonePath, sizeof( zonePath ), "%s.azb", stripped );
-	return zonePath;
+	Com_sprintf( zonePath.data(), static_cast<int>( zonePath.size() ), "%s.azb", stripped.data() );
+	return zonePath.data();
 }
 
 static EnvironmentState EnvironmentStateForAudioZone( const azrt::AudioZone &zone ) {

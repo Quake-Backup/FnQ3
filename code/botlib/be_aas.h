@@ -21,6 +21,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 //
 
+#pragma once
+
 /*****************************************************************************
  * name:		be_aas.h
  *
@@ -30,58 +32,60 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *****************************************************************************/
 
-#ifndef MAX_STRINGFIELD
-#define MAX_STRINGFIELD				80
+#ifndef BOTLIB_MAX_STRINGFIELD_DEFINED
+#define BOTLIB_MAX_STRINGFIELD_DEFINED
+static constexpr int MAX_STRINGFIELD = 80;
 #endif
 
 //travel flags
-#define TFL_INVALID				0x00000001	//traveling temporary not possible
-#define TFL_WALK				0x00000002	//walking
-#define TFL_CROUCH				0x00000004	//crouching
-#define TFL_BARRIERJUMP			0x00000008	//jumping onto a barrier
-#define TFL_JUMP				0x00000010	//jumping
-#define TFL_LADDER				0x00000020	//climbing a ladder
-#define TFL_WALKOFFLEDGE		0x00000080	//walking of a ledge
-#define TFL_SWIM				0x00000100	//swimming
-#define TFL_WATERJUMP			0x00000200	//jumping out of the water
-#define TFL_TELEPORT			0x00000400	//teleporting
-#define TFL_ELEVATOR			0x00000800	//elevator
-#define TFL_ROCKETJUMP			0x00001000	//rocket jumping
-#define TFL_BFGJUMP				0x00002000	//bfg jumping
-#define TFL_GRAPPLEHOOK			0x00004000	//grappling hook
-#define TFL_DOUBLEJUMP			0x00008000	//double jump
-#define TFL_RAMPJUMP			0x00010000	//ramp jump
-#define TFL_STRAFEJUMP			0x00020000	//strafe jump
-#define TFL_JUMPPAD				0x00040000	//jump pad
-#define TFL_AIR					0x00080000	//travel through air
-#define TFL_WATER				0x00100000	//travel through water
-#define TFL_SLIME				0x00200000	//travel through slime
-#define TFL_LAVA				0x00400000	//travel through lava
-#define TFL_DONOTENTER			0x00800000	//travel through donotenter area
-#define TFL_FUNCBOB				0x01000000	//func bobbing
-#define TFL_FLIGHT				0x02000000	//flight
-#define TFL_BRIDGE				0x04000000	//move over a bridge
+static constexpr int TFL_INVALID = 0x00000001;		//traveling temporary not possible
+static constexpr int TFL_WALK = 0x00000002;			//walking
+static constexpr int TFL_CROUCH = 0x00000004;		//crouching
+static constexpr int TFL_BARRIERJUMP = 0x00000008;	//jumping onto a barrier
+static constexpr int TFL_JUMP = 0x00000010;			//jumping
+static constexpr int TFL_LADDER = 0x00000020;		//climbing a ladder
+static constexpr int TFL_WALKOFFLEDGE = 0x00000080;	//walking of a ledge
+static constexpr int TFL_SWIM = 0x00000100;			//swimming
+static constexpr int TFL_WATERJUMP = 0x00000200;	//jumping out of the water
+static constexpr int TFL_TELEPORT = 0x00000400;		//teleporting
+static constexpr int TFL_ELEVATOR = 0x00000800;		//elevator
+static constexpr int TFL_ROCKETJUMP = 0x00001000;	//rocket jumping
+static constexpr int TFL_BFGJUMP = 0x00002000;		//bfg jumping
+static constexpr int TFL_GRAPPLEHOOK = 0x00004000;	//grappling hook
+static constexpr int TFL_DOUBLEJUMP = 0x00008000;	//double jump
+static constexpr int TFL_RAMPJUMP = 0x00010000;		//ramp jump
+static constexpr int TFL_STRAFEJUMP = 0x00020000;	//strafe jump
+static constexpr int TFL_JUMPPAD = 0x00040000;		//jump pad
+static constexpr int TFL_AIR = 0x00080000;			//travel through air
+static constexpr int TFL_WATER = 0x00100000;		//travel through water
+static constexpr int TFL_SLIME = 0x00200000;		//travel through slime
+static constexpr int TFL_LAVA = 0x00400000;			//travel through lava
+static constexpr int TFL_DONOTENTER = 0x00800000;	//travel through donotenter area
+static constexpr int TFL_FUNCBOB = 0x01000000;		//func bobbing
+static constexpr int TFL_FLIGHT = 0x02000000;		//flight
+static constexpr int TFL_BRIDGE = 0x04000000;		//move over a bridge
 //
-#define TFL_NOTTEAM1			0x08000000	//not team 1
-#define TFL_NOTTEAM2			0x10000000	//not team 2
+static constexpr int TFL_NOTTEAM1 = 0x08000000;		//not team 1
+static constexpr int TFL_NOTTEAM2 = 0x10000000;		//not team 2
 
 //default travel flags
-#define TFL_DEFAULT	TFL_WALK|TFL_CROUCH|TFL_BARRIERJUMP|\
-	TFL_JUMP|TFL_LADDER|\
-	TFL_WALKOFFLEDGE|TFL_SWIM|TFL_WATERJUMP|\
-	TFL_TELEPORT|TFL_ELEVATOR|\
-	TFL_AIR|TFL_WATER|TFL_JUMPPAD|TFL_FUNCBOB
+static constexpr int TFL_DEFAULT =
+	TFL_WALK | TFL_CROUCH | TFL_BARRIERJUMP |
+	TFL_JUMP | TFL_LADDER |
+	TFL_WALKOFFLEDGE | TFL_SWIM | TFL_WATERJUMP |
+	TFL_TELEPORT | TFL_ELEVATOR |
+	TFL_AIR | TFL_WATER | TFL_JUMPPAD | TFL_FUNCBOB;
 
-typedef enum
+enum solid_t
 {
 	SOLID_NOT,			// no interaction with other objects
 	SOLID_TRIGGER,		// only touch when inside, after moving
 	SOLID_BBOX,			// touch on edge
 	SOLID_BSP			// bsp clip, touch on edge
-} solid_t;
+};
 
 //a trace is returned when a box is swept through the AAS world
-typedef struct aas_trace_s
+struct aas_trace_s
 {
 	qboolean	startsolid;	// if true, the initial point was in a solid area
 	float		fraction;	// time completed, 1.0 = didn't hit anything
@@ -90,20 +94,22 @@ typedef struct aas_trace_s
 	int			lastarea;	// last area the trace was in (zero if none)
 	int			area;		// area blocking the trace (zero if none)
 	int			planenum;	// number of the plane that was hit
-} aas_trace_t;
+};
+using aas_trace_t = aas_trace_s;
 
 /* Defined in botlib.h
 
 //bsp_trace_t hit surface
-typedef struct bsp_surface_s
+struct bsp_surface_s
 {
 	char name[16];
 	int flags;
 	int value;
-} bsp_surface_t;
+};
+using bsp_surface_t = bsp_surface_s;
 
 //a trace is returned when a box is swept through the BSP world
-typedef struct bsp_trace_s
+struct bsp_trace_s
 {
 	qboolean		allsolid;	// if true, plane is not valid
 	qboolean		startsolid;	// if true, the initial point was in a solid area
@@ -115,12 +121,13 @@ typedef struct bsp_trace_s
 	bsp_surface_t	surface;	// hit surface
 	int				contents;	// contents on other side of surface hit
 	int				ent;		// number of entity hit
-} bsp_trace_t;
+};
+using bsp_trace_t = bsp_trace_s;
 //
 */
 
 //entity info
-typedef struct aas_entityinfo_s
+struct aas_entityinfo_s
 {
 	int		valid;			// true if updated this frame
 	int		type;			// entity type
@@ -145,10 +152,11 @@ typedef struct aas_entityinfo_s
 	int		weapon;			// determines weapon and flash model, etc
 	int		legsAnim;		// mask off ANIM_TOGGLEBIT
 	int		torsoAnim;		// mask off ANIM_TOGGLEBIT
-} aas_entityinfo_t;
+};
+using aas_entityinfo_t = aas_entityinfo_s;
 
 // area info
-typedef struct aas_areainfo_s
+struct aas_areainfo_s
 {
 	int contents;
 	int flags;
@@ -157,7 +165,8 @@ typedef struct aas_areainfo_s
 	vec3_t mins;
 	vec3_t maxs;
 	vec3_t center;
-} aas_areainfo_t;
+};
+using aas_areainfo_t = aas_areainfo_s;
 
 // client movement prediction stop events, stop as soon as:
 #define SE_NONE					0
@@ -175,7 +184,7 @@ typedef struct aas_areainfo_s
 #define SE_HITBOUNDINGBOX		2048	// hit the specified bounding box
 #define SE_TOUCHCLUSTERPORTAL	4096	// touching a cluster portal
 
-typedef struct aas_clientmove_s
+struct aas_clientmove_s
 {
 	vec3_t endpos;			//position at the end of movement prediction
 	int endarea;			//area at end of movement prediction
@@ -186,30 +195,32 @@ typedef struct aas_clientmove_s
 	int endcontents;		//contents at the end of movement prediction
 	float time;				//time predicted ahead
 	int frames;				//number of frames predicted ahead
-} aas_clientmove_t;
+};
+using aas_clientmove_t = aas_clientmove_s;
 
 // alternate route goals
-#define ALTROUTEGOAL_ALL				1
-#define ALTROUTEGOAL_CLUSTERPORTALS		2
-#define ALTROUTEGOAL_VIEWPORTALS		4
+static constexpr int ALTROUTEGOAL_ALL = 1;
+static constexpr int ALTROUTEGOAL_CLUSTERPORTALS = 2;
+static constexpr int ALTROUTEGOAL_VIEWPORTALS = 4;
 
-typedef struct aas_altroutegoal_s
+struct aas_altroutegoal_s
 {
 	vec3_t origin;
 	int areanum;
 	unsigned short starttraveltime;
 	unsigned short goaltraveltime;
 	unsigned short extratraveltime;
-} aas_altroutegoal_t;
+};
+using aas_altroutegoal_t = aas_altroutegoal_s;
 
 // route prediction stop events
-#define RSE_NONE				0
-#define RSE_NOROUTE				1	//no route to goal
-#define RSE_USETRAVELTYPE		2	//stop as soon as on of the given travel types is used
-#define RSE_ENTERCONTENTS		4	//stop when entering the given contents
-#define RSE_ENTERAREA			8	//stop when entering the given area
+static constexpr int RSE_NONE = 0;
+static constexpr int RSE_NOROUTE = 1;			//no route to goal
+static constexpr int RSE_USETRAVELTYPE = 2;		//stop as soon as on of the given travel types is used
+static constexpr int RSE_ENTERCONTENTS = 4;		//stop when entering the given contents
+static constexpr int RSE_ENTERAREA = 8;			//stop when entering the given area
 
-typedef struct aas_predictroute_s
+struct aas_predictroute_s
 {
 	vec3_t endpos;			//position at the end of movement prediction
 	int endarea;			//area at end of movement prediction
@@ -218,4 +229,5 @@ typedef struct aas_predictroute_s
 	int endtravelflags;		//end travel flags
 	int numareas;			//number of areas predicted ahead
 	int time;				//time predicted ahead (in hundredths of a sec)
-} aas_predictroute_t;
+};
+using aas_predictroute_t = aas_predictroute_s;

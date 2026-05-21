@@ -20,6 +20,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 //
+
+#pragma once
+
 /*****************************************************************************
  * name:		be_ai_chat.h
  *
@@ -29,42 +32,46 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *****************************************************************************/
 
-#define MAX_MESSAGE_SIZE		256
-#define MAX_CHATTYPE_NAME		32
-#define MAX_MATCHVARIABLES		8
+static constexpr int MAX_MESSAGE_SIZE = 256;
+static constexpr int MAX_CHATTYPE_NAME = 32;
+static constexpr int MAX_MATCHVARIABLES = 8;
 
-#define CHAT_GENDERLESS			0
-#define CHAT_GENDERFEMALE		1
-#define CHAT_GENDERMALE			2
+static constexpr int CHAT_GENDERLESS = 0;
+static constexpr int CHAT_GENDERFEMALE = 1;
+static constexpr int CHAT_GENDERMALE = 2;
 
-#define CHAT_ALL					0
-#define CHAT_TEAM					1
-#define CHAT_TELL					2
+static constexpr int CHAT_ALL = 0;
+static constexpr int CHAT_TEAM = 1;
+static constexpr int CHAT_TELL = 2;
 
 //a console message
-typedef struct bot_consolemessage_s
+struct bot_consolemessage_s
 {
 	int handle;
 	float time;									//message time
 	int type;									//message type
 	char message[MAX_MESSAGE_SIZE];				//message
-	struct bot_consolemessage_s *prev, *next;	//prev and next in list
-} bot_consolemessage_t;
+	bot_consolemessage_s *prev, *next;			//prev and next in list
+};
+using bot_consolemessage_t = bot_consolemessage_s;
 
 //match variable
-typedef struct bot_matchvariable_s
+struct bot_matchvariable_s
 {
 	char offset;
 	int length;
-} bot_matchvariable_t;
+};
+using bot_matchvariable_t = bot_matchvariable_s;
+
 //returned to AI when a match is found
-typedef struct bot_match_s
+struct bot_match_s
 {
 	char string[MAX_MESSAGE_SIZE];
 	int type;
 	int subtype;
 	bot_matchvariable_t variables[MAX_MATCHVARIABLES];
-} bot_match_t;
+};
+using bot_match_t = bot_match_s;
 
 //setup the chat AI
 int BotSetupChatAI(void);

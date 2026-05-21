@@ -1256,23 +1256,60 @@ RB_DrawSurfs
 =============
 */
 #ifdef USE_FBO
-static void RB_FinalizePostProcessForHud3D( const trRefdef_t *refdef ) {
+static qboolean RB_CanPreparePostProcessForHud( void ) {
 	if ( !fboEnabled || backEnd.framePostProcessed || !backEnd.doneSurfaces ) {
-		return;
+		return qfalse;
 	}
 	if ( !r_hudExcludePostProcess->integer ) {
-		return;
+		return qfalse;
 	}
 	// Keep scaled and capture frames on the FBO path; HUD viewports are in render-size coordinates.
 	if ( windowAdjusted || backEnd.screenshotMask || ri.CL_IsMinimized() ) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static qboolean RB_ShouldFinalizePostProcessForHud( void ) {
+	// SDR FBO output restores legacy overbright in the final pass, so keep HUD draws in that path.
+	return ( r_hdr && r_hdr->integer > 0 ) ? qtrue : qfalse;
+}
+
+static void RB_PrepareBloomForHud( void ) {
+	if ( !RB_CanPreparePostProcessForHud() ) {
 		return;
 	}
+	if ( !( r_bloom && r_bloom->integer == 1 && qglActiveTextureARB ) ) {
+		return;
+	}
+
+	if ( !backEnd.projection2D ) {
+		RB_SetGL2D();
+	}
+	qglColor4f( 1, 1, 1, 1 );
+	FBO_Bloom( 0, 0, qfalse );
+}
+
+static void RB_FinalizePostProcessForHud( void ) {
+	if ( !RB_CanPreparePostProcessForHud() || !RB_ShouldFinalizePostProcessForHud() ) {
+		return;
+	}
+
+	RB_EndSurface();
+	FBO_PostProcess();
+	backEnd.framePostProcessed = qtrue;
+}
+
+static void RB_PreparePostProcessForHud3D( const trRefdef_t *refdef ) {
 	if ( !( refdef->rdflags & RDF_NOWORLDMODEL ) ) {
 		return;
 	}
 
-	FBO_PostProcess();
-	backEnd.framePostProcessed = qtrue;
+	if ( RB_ShouldFinalizePostProcessForHud() ) {
+		RB_FinalizePostProcessForHud();
+	} else {
+		RB_PrepareBloomForHud();
+	}
 }
 #endif
 
@@ -1285,7 +1322,7 @@ static const void *RB_DrawSurfs( const void *data ) {
 	RB_EndSurface();
 
 #ifdef USE_FBO
-	RB_FinalizePostProcessForHud3D( &cmd->refdef );
+	RB_PreparePostProcessForHud3D( &cmd->refdef );
 #endif
 
 	backEnd.refdef = cmd->refdef;

@@ -30,15 +30,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *****************************************************************************/
 
 //library variable
-typedef struct libvar_s
+struct libvar_s
 {
 	char		*name;
 	char		*string;
 	int		flags;
 	qboolean	modified;	// set each time the cvar is changed
 	float		value;
-	struct	libvar_s *next;
-} libvar_t;
+	libvar_s	*next;
+};
+using libvar_t = libvar_s;
 
 //removes all library variables
 void LibVarDeAllocAll(void);

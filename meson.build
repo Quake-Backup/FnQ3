@@ -25,6 +25,7 @@ quiet_fallback_defaults = fallback_defaults + ['warning_level=0', 'c_args=-w', '
 curl_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
 openal_fallback_defaults = quiet_fallback_defaults
 vorbis_fallback_defaults = quiet_fallback_defaults + ['tests=false', 'ogg:default_library=static']
+jpeg_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
 
 win32 = host_machine.system() == 'windows'
 darwin = host_machine.system() == 'darwin'
@@ -245,34 +246,34 @@ client_src = [
 ]
 
 botlib_src = [
-  'code/botlib/be_aas_bspq3.c',
-  'code/botlib/be_aas_cluster.c',
-  'code/botlib/be_aas_debug.c',
-  'code/botlib/be_aas_entity.c',
-  'code/botlib/be_aas_file.c',
-  'code/botlib/be_aas_main.c',
-  'code/botlib/be_aas_move.c',
-  'code/botlib/be_aas_optimize.c',
-  'code/botlib/be_aas_reach.c',
-  'code/botlib/be_aas_route.c',
-  'code/botlib/be_aas_routealt.c',
-  'code/botlib/be_aas_sample.c',
-  'code/botlib/be_ai_char.c',
-  'code/botlib/be_ai_chat.c',
-  'code/botlib/be_ai_gen.c',
-  'code/botlib/be_ai_goal.c',
-  'code/botlib/be_ai_move.c',
-  'code/botlib/be_ai_weap.c',
-  'code/botlib/be_ai_weight.c',
-  'code/botlib/be_ea.c',
-  'code/botlib/be_interface.c',
-  'code/botlib/l_crc.c',
-  'code/botlib/l_libvar.c',
-  'code/botlib/l_log.c',
-  'code/botlib/l_memory.c',
-  'code/botlib/l_precomp.c',
-  'code/botlib/l_script.c',
-  'code/botlib/l_struct.c',
+  'code/botlib/be_aas_bspq3.cpp',
+  'code/botlib/be_aas_cluster.cpp',
+  'code/botlib/be_aas_debug.cpp',
+  'code/botlib/be_aas_entity.cpp',
+  'code/botlib/be_aas_file.cpp',
+  'code/botlib/be_aas_main.cpp',
+  'code/botlib/be_aas_move.cpp',
+  'code/botlib/be_aas_optimize.cpp',
+  'code/botlib/be_aas_reach.cpp',
+  'code/botlib/be_aas_route.cpp',
+  'code/botlib/be_aas_routealt.cpp',
+  'code/botlib/be_aas_sample.cpp',
+  'code/botlib/be_ai_char.cpp',
+  'code/botlib/be_ai_chat.cpp',
+  'code/botlib/be_ai_gen.cpp',
+  'code/botlib/be_ai_goal.cpp',
+  'code/botlib/be_ai_move.cpp',
+  'code/botlib/be_ai_weap.cpp',
+  'code/botlib/be_ai_weight.cpp',
+  'code/botlib/be_ea.cpp',
+  'code/botlib/be_interface.cpp',
+  'code/botlib/l_crc.cpp',
+  'code/botlib/l_libvar.cpp',
+  'code/botlib/l_log.cpp',
+  'code/botlib/l_memory.cpp',
+  'code/botlib/l_precomp.cpp',
+  'code/botlib/l_script.cpp',
+  'code/botlib/l_struct.cpp',
 ]
 
 renderer_common_src = [
@@ -548,7 +549,7 @@ else
   jpeg_dep = dependency('libjpeg',
     required: true,
     fallback: 'libjpeg-turbo',
-    default_options: quiet_fallback_defaults,
+    default_options: jpeg_fallback_defaults,
   )
   jpeg_source = jpeg_dep.type_name() == 'internal' ? 'subproject' : 'system'
 endif
@@ -668,7 +669,7 @@ endforeach
 
 botlib = static_library('botlib', botlib_src,
   include_directories: include_dirs,
-  c_args: common_c_args + ['-DBOTLIB'],
+  cpp_args: common_cpp_args + ['-DBOTLIB'],
   install: false,
 )
 botlib_objects = [botlib.extract_all_objects(recursive: false)]

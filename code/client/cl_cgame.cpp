@@ -27,16 +27,15 @@ extern "C" {
 #include "../botlib/botlib.h"
 }
 
+#include "client_cpp.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 
-namespace {
+using fnq3::ToQboolean;
 
-static qboolean ToQboolean( bool value )
-{
-	return value ? qtrue : qfalse;
-}
+namespace {
 
 static const char *SkipPath( const char *path )
 {
@@ -731,10 +730,13 @@ static qboolean CL_GetServerCommand( int serverCommandNumber ) {
 		return qfalse;
 	}
 
-rescan:
-	Cmd_TokenizeString( s );
-	cmd = Cmd_Argv(0);
-	argc = Cmd_Argc();
+	const auto tokenizeCurrentCommand = [&]() {
+		Cmd_TokenizeString( s );
+		cmd = Cmd_Argv(0);
+		argc = Cmd_Argc();
+	};
+
+	tokenizeCurrentCommand();
 
 	if ( !strcmp( cmd, "disconnect" ) ) {
 		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=552
@@ -767,7 +769,7 @@ rescan:
 		Q_strcat( bigConfigString.data(), static_cast<int>( bigConfigString.size() ), s );
 		Q_strcat( bigConfigString.data(), static_cast<int>( bigConfigString.size() ), "\"" );
 		s = bigConfigString.data();
-		goto rescan;
+		tokenizeCurrentCommand();
 	}
 
 	if ( !strcmp( cmd, "cs" ) ) {

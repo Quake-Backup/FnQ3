@@ -146,15 +146,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //		the length of the name
 
 //punctuation
-typedef struct punctuation_s
+struct punctuation_s
 {
 	const char *p;						//punctuation character(s)
 	int n;							//punctuation indication
-	struct punctuation_s *next;		//next punctuation
-} punctuation_t;
+	punctuation_s *next;				//next punctuation
+};
+using punctuation_t = punctuation_s;
 
 //token
-typedef struct token_s
+struct token_s
 {
 	char string[MAX_TOKEN];			//available token
 	int type;						//last read token type
@@ -167,11 +168,12 @@ typedef struct token_s
 	char *endwhitespace_p;			//start of white space before token
 	int line;						//line the token was on
 	int linescrossed;				//lines crossed in white space
-	struct token_s *next;			//next token in chain
-} token_t;
+	token_s *next;					//next token in chain
+};
+using token_t = token_s;
 
 //script file
-typedef struct script_s
+struct script_s
 {
 	char filename[1024];			//file name of the script
 	char *buffer;					//buffer containing the script
@@ -188,8 +190,9 @@ typedef struct script_s
 	punctuation_t *punctuations;	//the punctuations used in the script
 	punctuation_t **punctuationtable;
 	token_t token;					//available token
-	struct script_s *next;			//next script in a chain
-} script_t;
+	script_s *next;					//next script in a chain
+};
+using script_t = script_s;
 
 //read a token from the script
 int PS_ReadToken(script_t *script, token_t *token);
@@ -208,7 +211,7 @@ int PS_CheckTokenType(script_t *script, int type, int subtype, token_t *token);
 int PS_SkipUntilString(script_t *script, const char *string);
 //unread the given token
 void PS_UnreadToken(script_t *script, token_t *token);
-//returns the next character of the read white space, returns NULL if none
+//returns the next character of the read white space, returns 0 if none
 char PS_NextWhiteSpaceChar(script_t *script);
 //read a possible signed integer
 signed long int ReadSignedInt(script_t *script);

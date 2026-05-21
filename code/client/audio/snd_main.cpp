@@ -28,7 +28,11 @@ extern "C" {
 #include "snd_public.h"
 }
 
+#include "../client_cpp.h"
+
 #include <cstdlib>
+
+using fnq3::ToQboolean;
 
 extern "C" {
 cvar_t *s_volume;
@@ -53,11 +57,6 @@ cvar_t *s_alSpatializeStereo;
 
 namespace {
 static soundInterface_t si;
-
-static qboolean ToQboolean( bool value )
-{
-	return value ? qtrue : qfalse;
-}
 }
 
 /*

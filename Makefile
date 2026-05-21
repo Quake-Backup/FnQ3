@@ -823,6 +823,11 @@ $(echo_cmd) "BOT_CC $<"
 $(Q)$(CC) $(CFLAGS) $(BOTCFLAGS) -DBOTLIB -o $@ -c $<
 endef
 
+define DO_BOT_CXX
+$(echo_cmd) "BOT_CXX $<"
+$(Q)$(CXX) $(CXXFLAGS) $(BOTCFLAGS) -DBOTLIB -o $@ -c $<
+endef
+
 define DO_AS
 $(echo_cmd) "AS $<"
 $(Q)$(CC) $(CFLAGS) -DELF -x assembler-with-cpp -o $@ -c $<
@@ -1646,6 +1651,9 @@ $(B)/client/qvm/%.o: $(CMDIR)/%.c
 $(B)/client/%.o: $(BLIBDIR)/%.c
 	$(DO_BOT_CC)
 
+$(B)/client/%.o: $(BLIBDIR)/%.cpp
+	$(DO_BOT_CXX)
+
 $(B)/client/jpeg/%.o: $(JPDIR)/%.c
 	$(DO_CC)
 
@@ -1738,6 +1746,9 @@ $(B)/ded/qvm/%.o: $(CMDIR)/%.c
 
 $(B)/ded/%.o: $(BLIBDIR)/%.c
 	$(DO_BOT_CC)
+
+$(B)/ded/%.o: $(BLIBDIR)/%.cpp
+	$(DO_BOT_CXX)
 
 $(B)/ded/%.o: $(UDIR)/%.c
 	$(DO_DED_CC)

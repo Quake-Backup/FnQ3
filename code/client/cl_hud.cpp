@@ -18,9 +18,15 @@ extern "C" {
 #endif
 }
 
+#include "client_cpp.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
+
+using fnq3::FileWrite;
+using fnq3::ScopedFileHandle;
+using fnq3::ScopedReadFile;
 
 namespace {
 
@@ -213,33 +219,33 @@ qboolean CL_HudParseMode( const char *value, HudTransformMode *mode ) {
 }
 
 void CL_HudJsonWriteString( fileHandle_t file, const char *text ) {
-	FS_Write( "\"", 1, file );
+	FileWrite( file, "\"", 1 );
 
 	for ( const char *s = text; s && *s; s++ ) {
 		switch ( *s ) {
 		case '\\':
 		case '"': {
 			const char ch = '\\';
-			FS_Write( &ch, 1, file );
-			FS_Write( s, 1, file );
+			FileWrite( file, &ch, 1 );
+			FileWrite( file, s, 1 );
 			break;
 		}
 		case '\n':
-			FS_Write( "\\n", 2, file );
+			FileWrite( file, "\\n", 2 );
 			break;
 		case '\r':
-			FS_Write( "\\r", 2, file );
+			FileWrite( file, "\\r", 2 );
 			break;
 		case '\t':
-			FS_Write( "\\t", 2, file );
+			FileWrite( file, "\\t", 2 );
 			break;
 		default:
-			FS_Write( s, 1, file );
+			FileWrite( file, s, 1 );
 			break;
 		}
 	}
 
-	FS_Write( "\"", 1, file );
+	FileWrite( file, "\"", 1 );
 }
 
 void CL_HudClearRules() {
@@ -248,12 +254,10 @@ void CL_HudClearRules() {
 }
 
 qboolean CL_HudLoadRules( qboolean verbose ) {
-	void *buffer = nullptr;
-
 	CL_HudClearRules();
 
-	const int length = FS_ReadFile( kHudScriptFile, &buffer );
-	if ( length <= 0 || !buffer ) {
+	ScopedReadFile scriptFile = ScopedReadFile::Read( kHudScriptFile );
+	if ( !scriptFile ) {
 		hudScriptLoaded = true;
 		if ( verbose || ( !hudScriptWarned && cl_hudAspect && cl_hudAspect->integer > 0 ) ) {
 			Com_Printf( S_COLOR_YELLOW "HUD: no script loaded from %s, using centered uniform placement.\n", kHudScriptFile );
@@ -262,8 +266,8 @@ qboolean CL_HudLoadRules( qboolean verbose ) {
 		return qfalse;
 	}
 
-	const char *json = static_cast<const char *>( buffer );
-	const char *jsonEnd = json + length;
+	const char *json = scriptFile.as<const char>();
+	const char *jsonEnd = json + scriptFile.length();
 	const char *rulesJson = nullptr;
 
 	if ( JSON_ValueGetType( json, jsonEnd ) == JSONTYPE_OBJECT ) {
@@ -278,7 +282,6 @@ qboolean CL_HudLoadRules( qboolean verbose ) {
 			Com_Printf( S_COLOR_YELLOW "HUD: invalid script format in %s.\n", kHudScriptFile );
 			hudScriptWarned = true;
 		}
-		FS_FreeFile( buffer );
 		return qfalse;
 	}
 
@@ -349,7 +352,6 @@ qboolean CL_HudLoadRules( qboolean verbose ) {
 
 	hudScriptLoaded = true;
 	hudScriptWarned = false;
-	FS_FreeFile( buffer );
 	if ( verbose ) {
 		Com_Printf( "HUD: loaded %i rule%s from %s.\n", hudNumRules, hudNumRules == 1 ? "" : "s", kHudScriptFile );
 	}
@@ -698,52 +700,52 @@ void CL_HudWriteDumpFile() {
 		return;
 	}
 
-	const fileHandle_t file = FS_FOpenFileWrite( kHudDumpFile );
-	if ( file == FS_INVALID_HANDLE ) {
+	ScopedFileHandle file( FS_FOpenFileWrite( kHudDumpFile ) );
+	if ( !file ) {
 		Com_Printf( S_COLOR_YELLOW "HUD: failed to write dump file %s.\n", kHudDumpFile );
 		return;
 	}
+	const fileHandle_t dumpFile = file.get();
 
-	FS_Printf( file, "{\n  \"version\": 1,\n  \"rules\": [\n" );
+	FS_Printf( dumpFile, "{\n  \"version\": 1,\n  \"rules\": [\n" );
 
 	for ( int i = 0; i < hudDumpGroupCount; i++ ) {
 		const HudDumpGroup *group = &hudDumpGroups[i];
 
 		if ( i ) {
-			FS_Printf( file, ",\n" );
+			FS_Printf( dumpFile, ",\n" );
 		}
 
-		FS_Printf( file, "    {\n" );
-		FS_Printf( file, "      \"name\": " );
-		CL_HudJsonWriteString( file, va( "hud_%04i", i ) );
-		FS_Printf( file, ",\n      \"match\": {\n" );
+		FS_Printf( dumpFile, "    {\n" );
+		FS_Printf( dumpFile, "      \"name\": " );
+		CL_HudJsonWriteString( dumpFile, va( "hud_%04i", i ) );
+		FS_Printf( dumpFile, ",\n      \"match\": {\n" );
 
 		if ( group->shaderName[0] ) {
-			FS_Printf( file, "        \"shader\": " );
-			CL_HudJsonWriteString( file, group->shaderName.data() );
-			FS_Printf( file, ",\n" );
+			FS_Printf( dumpFile, "        \"shader\": " );
+			CL_HudJsonWriteString( dumpFile, group->shaderName.data() );
+			FS_Printf( dumpFile, ",\n" );
 		}
 
-		FS_Printf( file, "        \"textLike\": %i,\n", group->textLike ? 1 : 0 );
-		FS_Printf( file, "        \"region\": { \"x\": %.3f, \"y\": %.3f, \"w\": %.3f, \"h\": %.3f }\n",
+		FS_Printf( dumpFile, "        \"textLike\": %i,\n", group->textLike ? 1 : 0 );
+		FS_Printf( dumpFile, "        \"region\": { \"x\": %.3f, \"y\": %.3f, \"w\": %.3f, \"h\": %.3f }\n",
 			group->x1, group->y1, group->x2 - group->x1, group->y2 - group->y1 );
-		FS_Printf( file, "      },\n" );
+		FS_Printf( dumpFile, "      },\n" );
 
-		FS_Printf( file, "      \"mode\": " );
-		CL_HudJsonWriteString( file, group->mode == HudTransformMode::Stretch ? "stretch" : "uniform" );
-		FS_Printf( file, ",\n      \"align\": {\n        \"x\": " );
-		CL_HudJsonWriteString( file, CL_HudAlignXName( group->alignX ) );
-		FS_Printf( file, ",\n        \"y\": " );
-		CL_HudJsonWriteString( file, CL_HudAlignYName( group->alignY ) );
-		FS_Printf( file, "\n      },\n" );
-		FS_Printf( file, "      \"likelyAligned\": %i,\n", group->likelyAligned ? 1 : 0 );
-		FS_Printf( file, "      \"samples\": %i,\n", group->samples );
-		FS_Printf( file, "      \"drawCount\": %i\n", group->drawCount );
-		FS_Printf( file, "    }" );
+		FS_Printf( dumpFile, "      \"mode\": " );
+		CL_HudJsonWriteString( dumpFile, group->mode == HudTransformMode::Stretch ? "stretch" : "uniform" );
+		FS_Printf( dumpFile, ",\n      \"align\": {\n        \"x\": " );
+		CL_HudJsonWriteString( dumpFile, CL_HudAlignXName( group->alignX ) );
+		FS_Printf( dumpFile, ",\n        \"y\": " );
+		CL_HudJsonWriteString( dumpFile, CL_HudAlignYName( group->alignY ) );
+		FS_Printf( dumpFile, "\n      },\n" );
+		FS_Printf( dumpFile, "      \"likelyAligned\": %i,\n", group->likelyAligned ? 1 : 0 );
+		FS_Printf( dumpFile, "      \"samples\": %i,\n", group->samples );
+		FS_Printf( dumpFile, "      \"drawCount\": %i\n", group->drawCount );
+		FS_Printf( dumpFile, "    }" );
 	}
 
-	FS_Printf( file, "\n  ]\n}\n" );
-	FS_FCloseFile( file );
+	FS_Printf( dumpFile, "\n  ]\n}\n" );
 	hudDumpDirty = false;
 }
 

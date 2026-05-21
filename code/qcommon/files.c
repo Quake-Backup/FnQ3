@@ -2661,7 +2661,7 @@ static char *FS_CreateQuakeLiveDecryptedZipFile( const char *zipfile )
 		return NULL;
 	}
 
-	Com_sprintf( tempName, sizeof( tempName ), "quakelive-pk3/%08x_%u.pk3",
+	Com_sprintf( tempName, sizeof( tempName ), "quakelive-pk3/%08lx_%u.pk3",
 		FS_HashFileName( zipfile, 0U ), fs_quakeLivePk3TempCounter++ );
 
 	outPath = Z_TagMalloc( MAX_OSPATH * 3 + 1, TAG_GENERAL );

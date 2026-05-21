@@ -381,6 +381,10 @@ static qboolean BSP43_TranslateToV46(
 			BSP43_SetError( error, errorSize, "IBSP v43 surface references an invalid lightmap" );
 			goto cleanup;
 		}
+		if ( brushSideNum < -1 || brushSideNum >= brushSideCount ) {
+			BSP43_SetError( error, errorSize, "IBSP v43 surface references an invalid brush side" );
+			goto cleanup;
+		}
 
 		surfaceShaderNum[i] = 0;
 		surfaceFirstIndex[i] = totalIndexes;

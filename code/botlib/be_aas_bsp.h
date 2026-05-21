@@ -55,7 +55,10 @@ void AAS_PrintFreeBSPLinks(char *str);
 //
 #endif //AASINTERN
 
-#define MAX_EPAIRKEY		128
+#ifndef BOTLIB_MAX_EPAIRKEY_DEFINED
+#define BOTLIB_MAX_EPAIRKEY_DEFINED
+static constexpr int MAX_EPAIRKEY = 128;
+#endif
 
 //trace through the world
 bsp_trace_t AAS_Trace(	vec3_t start,

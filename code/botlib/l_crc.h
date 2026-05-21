@@ -21,7 +21,25 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 typedef unsigned short crc_t;
-unsigned short CRC_ProcessString(unsigned char *data, int length);
+unsigned short CRC_ProcessString(const unsigned char *data, int length);
+
+#ifdef __cplusplus
+#include <assert.h>
+#include <limits.h>
+#include <stddef.h>
+#include <type_traits>
+
+template <typename T>
+inline crc_t CRC_ProcessArray(const T *data, size_t count)
+{
+	static_assert(std::is_trivially_copyable<T>::value,
+		"CRC_ProcessArray hashes the raw object representation");
+	assert(count <= static_cast<size_t>(INT_MAX) / sizeof(T));
+	return CRC_ProcessString(reinterpret_cast<const unsigned char *>(data),
+		static_cast<int>(count * sizeof(T)));
+}
+#endif
+
 #if 0
 void CRC_ProcessByte(unsigned short *crcvalue, byte data);
 void CRC_ContinueProcessString(unsigned short *crc, char *data, int length);

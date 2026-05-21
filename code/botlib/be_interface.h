@@ -33,7 +33,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define RANDOMIZE		//randomize bot behaviour
 
 //FIXME: get rid of this global structure
-typedef struct botlib_globals_s
+struct botlib_globals_s
 {
 	int botlibsetup;						//true when the bot library has been setup
 	int maxentities;						//maximum number of entities
@@ -45,7 +45,8 @@ typedef struct botlib_globals_s
 	vec3_t goalorigin;
 	int runai;
 #endif
-} botlib_globals_t;
+};
+using botlib_globals_t = botlib_globals_s;
 
 
 extern botlib_globals_t botlibglobals;

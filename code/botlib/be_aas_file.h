@@ -31,9 +31,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #ifdef AASINTERN
 //loads the AAS file with the given name
-int AAS_LoadAASFile(char *filename);
+int AAS_LoadAASFile(const char *filename);
 //writes an AAS file with the given name
-qboolean AAS_WriteAASFile(char *filename);
+qboolean AAS_WriteAASFile(const char *filename);
 //dumps the loaded AAS data
 void AAS_DumpAASData(void);
 //print AAS file information

@@ -26,41 +26,19 @@ extern "C" {
 #include "snd_codec.h"
 }
 
+#include "../../client_cpp.h"
+
 #include <array>
+
+using fnq3::CloseFile;
+using fnq3::AllocateZoneMemory;
+using fnq3::OpenFileRead;
+using fnq3::ScopedFileHandle;
+using fnq3::ScopedZoneMemory;
 
 namespace {
 
 snd_codec_t *codecs = nullptr;
-
-class ScopedFileHandle {
-public:
-	ScopedFileHandle() = default;
-	explicit ScopedFileHandle( fileHandle_t handle ) : handle_( handle ) {
-	}
-
-	~ScopedFileHandle() {
-		Close();
-	}
-
-	ScopedFileHandle( const ScopedFileHandle & ) = delete;
-	ScopedFileHandle &operator=( const ScopedFileHandle & ) = delete;
-
-	fileHandle_t release() {
-		const fileHandle_t handle = handle_;
-		handle_ = FS_INVALID_HANDLE;
-		return handle;
-	}
-
-private:
-	void Close() {
-		if ( handle_ != FS_INVALID_HANDLE ) {
-			FS_FCloseFile( handle_ );
-			handle_ = FS_INVALID_HANDLE;
-		}
-	}
-
-	fileHandle_t handle_ = FS_INVALID_HANDLE;
-};
 
 void S_CodecRegister( snd_codec_t *codec ) {
 	codec->next = codecs;
@@ -215,21 +193,15 @@ S_CodecUtilOpen
 =================
 */
 extern "C" snd_stream_t *S_CodecUtilOpen( const char *filename, snd_codec_t *codec ) {
-	fileHandle_t hnd;
-
-	const int length = FS_FOpenFileRead( filename, &hnd, qtrue );
-	if ( hnd == FS_INVALID_HANDLE ) {
+	ScopedFileHandle file;
+	const int length = OpenFileRead( filename, file, qtrue );
+	if ( !file ) {
 		Com_DPrintf( "Can't read sound file %s\n", filename );
 		return nullptr;
 	}
 
-	ScopedFileHandle file( hnd );
-#ifdef ZONE_DEBUG
-	auto *stream = static_cast<snd_stream_t *>( Z_MallocDebug( sizeof( snd_stream_t ),
-		const_cast<char *>( "snd_stream_t" ), const_cast<char *>( __FILE__ ), __LINE__ ) );
-#else
-	auto *stream = static_cast<snd_stream_t *>( Z_Malloc( sizeof( snd_stream_t ) ) );
-#endif
+	ScopedZoneMemory streamStorage = AllocateZoneMemory( sizeof( snd_stream_t ), "snd_stream_t", __FILE__, __LINE__ );
+	auto *stream = streamStorage.as<snd_stream_t>();
 	if ( !stream ) {
 		return nullptr;
 	}
@@ -237,7 +209,7 @@ extern "C" snd_stream_t *S_CodecUtilOpen( const char *filename, snd_codec_t *cod
 	stream->codec = codec;
 	stream->file = file.release();
 	stream->length = length;
-	return stream;
+	return static_cast<snd_stream_t *>( streamStorage.release() );
 }
 
 /*
@@ -246,7 +218,7 @@ S_CodecUtilClose
 =================
 */
 extern "C" void S_CodecUtilClose( snd_stream_t **stream ) {
-	FS_FCloseFile( ( *stream )->file );
+	CloseFile( ( *stream )->file );
 	Z_Free( *stream );
 	*stream = nullptr;
 }

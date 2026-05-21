@@ -23,8 +23,12 @@ extern "C" {
 #include "client.h"
 }
 
+#include "client_cpp.h"
+
 #include <algorithm>
 #include <array>
+
+using fnq3::ScopedZoneMemory;
 
 /*
 
@@ -177,10 +181,10 @@ Field_Paste
 ================
 */
 static void Field_Paste( field_t *edit ) {
-	char	*cbd;
 	int		pasteLen, i;
 
-	cbd = Sys_GetClipboardData();
+	ScopedZoneMemory clipboardText( Sys_GetClipboardData() );
+	char *cbd = clipboardText.as<char>();
 
 	if ( !cbd ) {
 		return;
@@ -191,8 +195,6 @@ static void Field_Paste( field_t *edit ) {
 	for ( i = 0 ; i < pasteLen ; i++ ) {
 		Field_CharEvent( edit, cbd[i] );
 	}
-
-	Z_Free( cbd );
 }
 
 

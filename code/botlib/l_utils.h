@@ -29,9 +29,25 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *****************************************************************************/
 
-#define Vector2Angles(v,a)		vectoangles(v,a)
+#pragma once
+
+inline void Vector2Angles(const vec3_t v, vec3_t a)
+{
+	vectoangles(v, a);
+}
+
 #ifndef MAX_PATH
 #define MAX_PATH				MAX_QPATH
 #endif
-#define Maximum(x,y)			(x > y ? x : y)
-#define Minimum(x,y)			(x < y ? x : y)
+
+template <typename Left, typename Right>
+constexpr auto Maximum(Left x, Right y)
+{
+	return x > y ? x : y;
+}
+
+template <typename Left, typename Right>
+constexpr auto Minimum(Left x, Right y)
+{
+	return x < y ? x : y;
+}

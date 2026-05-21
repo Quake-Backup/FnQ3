@@ -31,7 +31,11 @@ enum
 };
 
 #ifdef JSON_IMPLEMENTATION
+#if defined(__GNUC__) || defined(__clang__)
+#define JSONDEF static __attribute__((unused))
+#else
 #define JSONDEF static
+#endif
 #else
 #define JSONDEF
 #endif

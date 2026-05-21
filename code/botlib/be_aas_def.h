@@ -20,6 +20,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
+#pragma once
+
 /*****************************************************************************
  * name:		be_aas_def.h
  *
@@ -44,24 +46,26 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #endif
 
 //structure to link entities to areas and areas to entities
-typedef struct aas_link_s
+struct aas_link_s
 {
 	int entnum;
 	int areanum;
-	struct aas_link_s *next_ent, *prev_ent;
-	struct aas_link_s *next_area, *prev_area;
-} aas_link_t;
+	aas_link_s *next_ent, *prev_ent;
+	aas_link_s *next_area, *prev_area;
+};
+using aas_link_t = aas_link_s;
 
 //structure to link entities to leaves and leaves to entities
-typedef struct bsp_link_s
+struct bsp_link_s
 {
 	int entnum;
 	int leafnum;
-	struct bsp_link_s *next_ent, *prev_ent;
-	struct bsp_link_s *next_leaf, *prev_leaf;
-} bsp_link_t;
+	bsp_link_s *next_ent, *prev_ent;
+	bsp_link_s *next_leaf, *prev_leaf;
+};
+using bsp_link_t = bsp_link_s;
 
-typedef struct bsp_entdata_s
+struct bsp_entdata_s
 {
 	vec3_t origin;
 	vec3_t angles;
@@ -69,10 +73,11 @@ typedef struct bsp_entdata_s
 	vec3_t absmaxs;
 	int solid;
 	int modelnum;
-} bsp_entdata_t;
+};
+using bsp_entdata_t = bsp_entdata_s;
 
 //entity
-typedef struct aas_entity_s
+struct aas_entity_s
 {
 	//entity info
 	aas_entityinfo_t i;
@@ -80,9 +85,10 @@ typedef struct aas_entity_s
 	aas_link_t *areas;
 	//links into the BSP leaves
 	bsp_link_t *leaves;
-} aas_entity_t;
+};
+using aas_entity_t = aas_entity_s;
 
-typedef struct aas_settings_s
+struct aas_settings_s
 {
 	vec3_t phys_gravitydirection;
 	float phys_friction;
@@ -121,13 +127,14 @@ typedef struct aas_settings_s
 	float rs_falldamage10;
 	float rs_maxfallheight;
 	float rs_maxjumpfallheight;
-} aas_settings_t;
+};
+using aas_settings_t = aas_settings_s;
 
-#define CACHETYPE_PORTAL		0
-#define CACHETYPE_AREA			1
+static constexpr int CACHETYPE_PORTAL = 0;
+static constexpr int CACHETYPE_AREA = 1;
 
 //routing cache
-typedef struct aas_routingcache_s
+struct aas_routingcache_s
 {
 	byte type;									//portal or area cache
 	float time;									//last time accessed or updated
@@ -137,14 +144,15 @@ typedef struct aas_routingcache_s
 	vec3_t origin;								//origin within the area
 	float starttraveltime;						//travel time to start with
 	int travelflags;							//combinations of the travel flags
-	struct aas_routingcache_s *prev, *next;
-	struct aas_routingcache_s *time_prev, *time_next;
+	aas_routingcache_s *prev, *next;
+	aas_routingcache_s *time_prev, *time_next;
 	unsigned char *reachabilities;				//reachabilities used for routing
 	unsigned short int traveltimes[1];			//travel time for every area (variable sized)
-} aas_routingcache_t;
+};
+using aas_routingcache_t = aas_routingcache_s;
 
 //fields for the routing algorithm
-typedef struct aas_routingupdate_s
+struct aas_routingupdate_s
 {
 	int cluster;
 	int areanum;								//area number of the update
@@ -152,32 +160,36 @@ typedef struct aas_routingupdate_s
 	unsigned short int tmptraveltime;			//temporary travel time
 	unsigned short int *areatraveltimes;		//travel times within the area
 	qboolean inlist;							//true if the update is in the list
-	struct aas_routingupdate_s *next;
-	struct aas_routingupdate_s *prev;
-} aas_routingupdate_t;
+	aas_routingupdate_s *next;
+	aas_routingupdate_s *prev;
+};
+using aas_routingupdate_t = aas_routingupdate_s;
 
 //reversed reachability link
-typedef struct aas_reversedlink_s
+struct aas_reversedlink_s
 {
 	int linknum;								//the aas_areareachability_t
 	int areanum;								//reachable from this area
-	struct aas_reversedlink_s *next;			//next link
-} aas_reversedlink_t;
+	aas_reversedlink_s *next;					//next link
+};
+using aas_reversedlink_t = aas_reversedlink_s;
 
 //reversed area reachability
-typedef struct aas_reversedreachability_s
+struct aas_reversedreachability_s
 {
 	int numlinks;
 	aas_reversedlink_t *first;
-} aas_reversedreachability_t;
+};
+using aas_reversedreachability_t = aas_reversedreachability_s;
 
 //areas a reachability goes through
-typedef struct aas_reachabilityareas_s
+struct aas_reachabilityareas_s
 {
 	int firstarea, numareas;
-} aas_reachabilityareas_t;
+};
+using aas_reachabilityareas_t = aas_reachabilityareas_s;
 
-typedef struct aas_s
+struct aas_s
 {
 	int loaded;									//true when an AAS file is loaded
 	int initialized;							//true when AAS has been initialized
@@ -267,7 +279,8 @@ typedef struct aas_s
 	//areas the reachabilities go through
 	int *reachabilityareaindex;
 	aas_reachabilityareas_t *reachabilityareas;
-} aas_t;
+};
+using aas_t = aas_s;
 
 #define AASINTERN
 

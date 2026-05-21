@@ -25,14 +25,37 @@ extern "C" {
 #include "client.h"
 }
 
+#include "client_cpp.h"
+
 #include <algorithm>
 #include <array>
+#include <memory>
+
+using fnq3::CloseFile;
+using fnq3::FileWrite;
 
 cvar_t *cl_cURLLib = nullptr;
 
 #define ALLOWED_PROTOCOLS ( CURLPROTO_HTTP | CURLPROTO_HTTPS | CURLPROTO_FTP | CURLPROTO_FTPS )
 
 #define ALLOWED_PROTOCOLS_STR "http,https,ftp,ftps"
+
+namespace {
+
+struct CurlEscapedStringDeleter {
+	download_t *download;
+
+	void operator()( char *ptr ) const
+	{
+		if ( ptr ) {
+			download->func.free( ptr );
+		}
+	}
+};
+
+using ScopedCurlEscapedString = std::unique_ptr<char, CurlEscapedStringDeleter>;
+
+} // namespace
 
 #ifdef USE_CURL_DLOPEN
 
@@ -269,7 +292,7 @@ static size_t CL_cURL_CallbackWrite( void *buffer, size_t size, size_t nmemb, vo
 		}
 	}
 
-	FS_Write( buffer, static_cast<int>( bytes ), static_cast<fileHandle_t *>( stream )[0] );
+	FileWrite( static_cast<fileHandle_t *>( stream )[0], buffer, bytes );
 	return bytes;
 }
 
@@ -303,9 +326,7 @@ static CURLcode qcurl_easy_setopt_warn(CURL *curl, int optionRaw, ...)
 
 static void CL_cURL_CloseDownload( void ) 
 {
-	if ( clc.download != FS_INVALID_HANDLE )
-		FS_FCloseFile( clc.download );
-	clc.download = FS_INVALID_HANDLE;
+	CloseFile( clc.download );
 }
 
 void CL_cURL_BeginDownload( const char *localName, const char *remoteURL )
@@ -705,8 +726,7 @@ void Com_DL_Cleanup( download_t *dl )
 	}
 	if ( dl->fHandle != FS_INVALID_HANDLE )
 	{
-		FS_FCloseFile( dl->fHandle );
-		dl->fHandle = FS_INVALID_HANDLE;
+		CloseFile( dl->fHandle );
 	}
 
 	if ( dl->mapAutoDownload )
@@ -843,7 +863,7 @@ static size_t Com_DL_CallbackWrite( void *ptr, size_t size, size_t nmemb, void *
 		}
 	}
 
-	FS_Write( ptr, static_cast<int>( bytes ), dl->fHandle );
+	FileWrite( dl->fHandle, ptr, bytes );
 
 	return bytes;
 }
@@ -977,7 +997,8 @@ qboolean Com_DL_Begin( download_t *dl, const char *localName, const char *remote
 	}
 
 	{
-		char *escapedName = dl->func.easy_escape( dl->cURL, localName, 0 );
+		ScopedCurlEscapedString escapedName( dl->func.easy_escape( dl->cURL, localName, 0 ),
+			CurlEscapedStringDeleter{ dl } );
 		if ( !escapedName ) 
 		{
 			Com_Printf( S_COLOR_RED "Com_DL_Begin: easy_escape() failed\n" );
@@ -987,18 +1008,17 @@ qboolean Com_DL_Begin( download_t *dl, const char *localName, const char *remote
 
 		Q_strncpyz( dl->URL, remoteURL, sizeof( dl->URL ) );
 
-		if ( !Q_replace( "%1", escapedName, dl->URL, sizeof( dl->URL ) ) )
+		if ( !Q_replace( "%1", escapedName.get(), dl->URL, sizeof( dl->URL ) ) )
 		{
 			if ( dl->URL[strlen(dl->URL)] != '/' )
 				Q_strcat( dl->URL, sizeof( dl->URL ), "/" );
-			Q_strcat( dl->URL, sizeof( dl->URL ), escapedName );
+			Q_strcat( dl->URL, sizeof( dl->URL ), escapedName.get() );
 			dl->headerCheck = qfalse;
 		}
 		else
 		{
 			dl->headerCheck = qtrue;
 		}
-		dl->func.free( escapedName );
 	}
 
 	Com_Printf( "URL: %s\n", dl->URL );
@@ -1129,8 +1149,7 @@ qboolean Com_DL_Perform( download_t *dl )
 
 	if ( dl->fHandle != FS_INVALID_HANDLE )
 	{
-		FS_FCloseFile( dl->fHandle );
-		dl->fHandle = FS_INVALID_HANDLE;
+		CloseFile( dl->fHandle );
 	}
 
 	if ( msg->msg == CURLMSG_DONE && msg->data.result == CURLE_OK )

@@ -26,8 +26,16 @@ extern "C" {
 #include "../botlib/botlib.h"
 }
 
+#include "client_cpp.h"
+
 #include <algorithm>
 #include <array>
+
+using fnq3::FileReadObject;
+using fnq3::FileWriteObject;
+using fnq3::OpenHomeFileRead;
+using fnq3::ScopedFileHandle;
+using fnq3::ScopedZoneMemory;
 
 extern botlib_export_t	*botlib_export;
 
@@ -110,33 +118,28 @@ LAN_LoadCachedServers
 ====================
 */
 static void LAN_LoadCachedServers( void ) {
-	fileHandle_t fileIn;
 	int size, file_size;
 
 	cls.numglobalservers = cls.numfavoriteservers = 0;
 	cls.numGlobalServerAddresses = 0;
 
-	file_size = FS_Home_FOpenFileRead( "servercache.dat", &fileIn );
+	ScopedFileHandle file;
+	file_size = OpenHomeFileRead( "servercache.dat", file );
 	if ( file_size < ( 3 * sizeof( int ) ) ) {
-		if ( fileIn != FS_INVALID_HANDLE ) {
-			FS_FCloseFile( fileIn );
-		}
 		return;
 	}
 
-	FS_Read( &cls.numglobalservers, sizeof( int ), fileIn );
-	FS_Read( &cls.numfavoriteservers, sizeof( int ), fileIn );
-	FS_Read( &size, sizeof( int ), fileIn );
+	FileReadObject( file.get(), cls.numglobalservers );
+	FileReadObject( file.get(), cls.numfavoriteservers );
+	FileReadObject( file.get(), size );
 
 	if ( size == sizeof(cls.globalServers) + sizeof(cls.favoriteServers) ) {
-		FS_Read( &cls.globalServers, sizeof(cls.globalServers), fileIn );
-		FS_Read( &cls.favoriteServers, sizeof(cls.favoriteServers), fileIn );
+		FileReadObject( file.get(), cls.globalServers );
+		FileReadObject( file.get(), cls.favoriteServers );
 	} else {
 		cls.numglobalservers = cls.numfavoriteservers = 0;
 		cls.numGlobalServerAddresses = 0;
 	}
-
-	FS_FCloseFile( fileIn );
 }
 
 
@@ -146,21 +149,18 @@ LAN_SaveServersToCache
 ====================
 */
 static void LAN_SaveServersToCache( void ) {
-	fileHandle_t fileOut;
 	int size;
 
-	fileOut = FS_FOpenFileWrite( "servercache.dat" );
-	if ( fileOut == FS_INVALID_HANDLE )
+	ScopedFileHandle file( FS_FOpenFileWrite( "servercache.dat" ) );
+	if ( !file )
 		return;
 
-	FS_Write(&cls.numglobalservers, sizeof( int ), fileOut);
-	FS_Write(&cls.numfavoriteservers, sizeof( int ), fileOut);
+	FileWriteObject( file.get(), cls.numglobalservers );
+	FileWriteObject( file.get(), cls.numfavoriteservers );
 	size = sizeof(cls.globalServers) + sizeof(cls.favoriteServers);
-	FS_Write(&size, sizeof( int ), fileOut);
-	FS_Write(&cls.globalServers, sizeof(cls.globalServers), fileOut);
-	FS_Write(&cls.favoriteServers, sizeof(cls.favoriteServers), fileOut);
-
-	FS_FCloseFile(fileOut);
+	FileWriteObject( file.get(), size );
+	FileWriteObject( file.get(), cls.globalServers );
+	FileWriteObject( file.get(), cls.favoriteServers );
 }
 
 
@@ -475,9 +475,8 @@ CL_GetClipboardData
 ====================
 */
 static void CL_GetClipboardData( char *buf, int buflen ) {
-	char	*cbd;
-
-	cbd = Sys_GetClipboardData();
+	ScopedZoneMemory clipboardText( Sys_GetClipboardData() );
+	char *cbd = clipboardText.as<char>();
 
 	if ( !cbd ) {
 		*buf = '\0';
@@ -485,8 +484,6 @@ static void CL_GetClipboardData( char *buf, int buflen ) {
 	}
 
 	Q_strncpyz( buf, cbd, buflen );
-
-	Z_Free( cbd );
 }
 
 

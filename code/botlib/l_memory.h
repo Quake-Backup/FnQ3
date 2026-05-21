@@ -31,20 +31,28 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 //#define MEMDEBUG
 
+#ifdef __cplusplus
+#include <assert.h>
+#include <limits.h>
+#include <stddef.h>
+#include <string.h>
+#include <type_traits>
+#endif
+
 #ifdef MEMDEBUG
 #define GetMemory(size)				GetMemoryDebug(size, #size, __FILE__, __LINE__);
 #define GetClearedMemory(size)		GetClearedMemoryDebug(size, #size, __FILE__, __LINE__);
 //allocate a memory block of the given size
-void *GetMemoryDebug(unsigned long size, char *label, char *file, int line);
+void *GetMemoryDebug(unsigned long size, const char *label, const char *file, int line);
 //allocate a memory block of the given size and clear it
-void *GetClearedMemoryDebug(unsigned long size, char *label, char *file, int line);
+void *GetClearedMemoryDebug(unsigned long size, const char *label, const char *file, int line);
 //
 #define GetHunkMemory(size)			GetHunkMemoryDebug(size, #size, __FILE__, __LINE__);
 #define GetClearedHunkMemory(size)	GetClearedHunkMemoryDebug(size, #size, __FILE__, __LINE__);
 //allocate a memory block of the given size
-void *GetHunkMemoryDebug(unsigned long size, char *label, char *file, int line);
+void *GetHunkMemoryDebug(unsigned long size, const char *label, const char *file, int line);
 //allocate a memory block of the given size and clear it
-void *GetClearedHunkMemoryDebug(unsigned long size, char *label, char *file, int line);
+void *GetClearedHunkMemoryDebug(unsigned long size, const char *label, const char *file, int line);
 #else
 //allocate a memory block of the given size
 void *GetMemory(unsigned long size);
@@ -60,6 +68,114 @@ void *GetHunkMemory(unsigned long size);
 //allocate a memory block of the given size and clear it
 void *GetClearedHunkMemory(unsigned long size);
 #endif
+#endif
+
+#ifdef __cplusplus
+#ifndef BOTLIB_MEMORY_CPP_HELPERS
+#define BOTLIB_MEMORY_CPP_HELPERS
+namespace botlib {
+
+template <typename T>
+constexpr void CheckAllocatorType()
+{
+	static_assert(std::is_trivially_default_constructible<T>::value,
+		"botlib allocators only reserve raw storage for trivial C-style types");
+	static_assert(std::is_trivially_destructible<T>::value,
+		"botlib allocators do not run destructors");
+}
+
+inline unsigned long CheckedAllocationSize(size_t bytes)
+{
+	assert(bytes <= static_cast<size_t>(ULONG_MAX));
+	return static_cast<unsigned long>(bytes);
+}
+
+template <typename T>
+inline unsigned long AllocationSize(size_t count = 1)
+{
+	CheckAllocatorType<T>();
+	assert(count <= static_cast<size_t>(ULONG_MAX) / sizeof(T));
+	return static_cast<unsigned long>(count * sizeof(T));
+}
+
+template <typename T>
+inline T *Alloc(size_t count = 1)
+{
+	void *memory = GetMemory(AllocationSize<T>(count));
+	return static_cast<T *>(memory);
+}
+
+template <typename T>
+inline T *ClearedAlloc(size_t count = 1)
+{
+	void *memory = GetClearedMemory(AllocationSize<T>(count));
+	return static_cast<T *>(memory);
+}
+
+template <typename T>
+inline T *HunkAlloc(size_t count = 1)
+{
+	void *memory = GetHunkMemory(AllocationSize<T>(count));
+	return static_cast<T *>(memory);
+}
+
+template <typename T>
+inline T *ClearedHunkAlloc(size_t count = 1)
+{
+	void *memory = GetClearedHunkMemory(AllocationSize<T>(count));
+	return static_cast<T *>(memory);
+}
+
+template <typename T>
+inline T *AllocBytes(size_t bytes)
+{
+	CheckAllocatorType<T>();
+	void *memory = GetMemory(CheckedAllocationSize(bytes));
+	return static_cast<T *>(memory);
+}
+
+template <typename T>
+inline T *ClearedAllocBytes(size_t bytes)
+{
+	CheckAllocatorType<T>();
+	void *memory = GetClearedMemory(CheckedAllocationSize(bytes));
+	return static_cast<T *>(memory);
+}
+
+template <typename T>
+inline T *HunkAllocBytes(size_t bytes)
+{
+	CheckAllocatorType<T>();
+	void *memory = GetHunkMemory(CheckedAllocationSize(bytes));
+	return static_cast<T *>(memory);
+}
+
+template <typename T>
+inline T *ClearedHunkAllocBytes(size_t bytes)
+{
+	CheckAllocatorType<T>();
+	void *memory = GetClearedHunkMemory(CheckedAllocationSize(bytes));
+	return static_cast<T *>(memory);
+}
+
+inline char *CopyString(const char *string)
+{
+	const size_t length = strlen(string) + 1;
+	char *copy = Alloc<char>(length);
+	memcpy(copy, string, length);
+	return copy;
+}
+
+inline char *HunkCopyString(const char *string)
+{
+	const size_t length = strlen(string) + 1;
+	char *copy = HunkAlloc<char>(length);
+	memcpy(copy, string, length);
+	return copy;
+}
+
+} // namespace botlib
+#endif // BOTLIB_MEMORY_CPP_HELPERS
 #endif
 
 //free the given memory block

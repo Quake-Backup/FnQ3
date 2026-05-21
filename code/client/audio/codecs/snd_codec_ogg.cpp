@@ -31,16 +31,33 @@ extern "C" {
 #include "snd_codec.h"
 }
 
+#include "../../client_cpp.h"
+
 // includes for the OGG codec
 #include <cerrno>
+#include <memory>
 #define OV_EXCLUDE_STATIC_CALLBACKS
 #include <vorbis/vorbisfile.h>
+
+using fnq3::AllocateZoneMemory;
+using fnq3::FileRead;
+using fnq3::ScopedTempMemory;
+using fnq3::ScopedZoneMemory;
 
 // The OGG codec can return the samples in a number of different formats,
 // we use the standard signed short format.
 namespace {
 
 constexpr int OGG_SAMPLEWIDTH = 2;
+
+struct OggStreamDeleter {
+	void operator()( snd_stream_t *stream ) const
+	{
+		if ( stream ) {
+			S_OGG_CodecCloseStream( stream );
+		}
+	}
+};
 
 } // namespace
 
@@ -91,8 +108,7 @@ size_t S_OGG_Callback_read( void *ptr, size_t size, size_t nmemb, void *datasour
 	// FS_Read does not support multi-byte elements
 	byteSize = nmemb * size;
 
-	// read it with the Q3 function FS_Read()
-	bytesRead = FS_Read(ptr, byteSize, stream->file);
+	bytesRead = FileRead( stream->file, ptr, byteSize );
 
 	// update the file position
 	stream->pos += bytesRead;
@@ -256,12 +272,8 @@ snd_stream_t *S_OGG_CodecOpenStream(const char *filename)
 	}
 
 	// alloctate the OggVorbis_File
-#ifdef ZONE_DEBUG
-	vf = static_cast<OggVorbis_File *>( Z_MallocDebug( sizeof( OggVorbis_File ),
-		const_cast<char *>( "OggVorbis_File" ), const_cast<char *>( __FILE__ ), __LINE__ ) );
-#else
-	vf = static_cast<OggVorbis_File *>( Z_Malloc( sizeof( OggVorbis_File ) ) );
-#endif
+	ScopedZoneMemory vfStorage = AllocateZoneMemory( sizeof( OggVorbis_File ), "OggVorbis_File", __FILE__, __LINE__ );
+	vf = vfStorage.as<OggVorbis_File>();
 	if (!vf)
 	{
 		S_CodecUtilClose(&stream);
@@ -272,8 +284,6 @@ snd_stream_t *S_OGG_CodecOpenStream(const char *filename)
 	// open the codec with our callbacks and stream as the generic pointer
 	if (ov_open_callbacks(stream, vf, nullptr, 0, S_OGG_Callbacks) != 0)
 	{
-		Z_Free(vf);
-
 		S_CodecUtilClose(&stream);
 
 		return nullptr;
@@ -283,8 +293,6 @@ snd_stream_t *S_OGG_CodecOpenStream(const char *filename)
 	if (!ov_seekable(vf))
 	{
 		ov_clear(vf);
-
-		Z_Free(vf);
 
 		S_CodecUtilClose(&stream);
 
@@ -296,8 +304,6 @@ snd_stream_t *S_OGG_CodecOpenStream(const char *filename)
 	{
 		ov_clear(vf);
 
-		Z_Free(vf);
-
 		S_CodecUtilClose(&stream);
 
 		return nullptr;  
@@ -308,8 +314,6 @@ snd_stream_t *S_OGG_CodecOpenStream(const char *filename)
 	if (!OGGInfo)
 	{
 		ov_clear(vf);
-
-		Z_Free(vf);
 
 		S_CodecUtilClose(&stream);
 
@@ -331,7 +335,7 @@ snd_stream_t *S_OGG_CodecOpenStream(const char *filename)
 	stream->pos = 0;
 	
 	// We use the generic pointer in stream for the OGG codec control structure
-	stream->ptr = vf;
+	stream->ptr = vfStorage.release();
 
 	return stream;
 }
@@ -431,8 +435,6 @@ where we read the whole stream at once.
 */
 void *S_OGG_CodecLoad(const char *filename, snd_info_t *info)
 {
-	snd_stream_t *stream;
-	byte *buffer;
 	int bytesRead;
 	
 	// check if input is valid
@@ -442,7 +444,7 @@ void *S_OGG_CodecLoad(const char *filename, snd_info_t *info)
 	}
 	
 	// open the file as a stream
-	stream = S_OGG_CodecOpenStream(filename);
+	std::unique_ptr<snd_stream_t, OggStreamDeleter> stream( S_OGG_CodecOpenStream(filename) );
 	if (!stream)
 	{
 		return nullptr;
@@ -458,29 +460,23 @@ void *S_OGG_CodecLoad(const char *filename, snd_info_t *info)
 
 	// allocate a buffer
 	// this buffer must be free-ed by the caller of this function
-    buffer = static_cast<byte *>( Hunk_AllocateTempMemory(info->size) );
+	ScopedTempMemory bufferStorage = ScopedTempMemory::Allocate(info->size);
+	byte *buffer = bufferStorage.as<byte>();
 	if (!buffer)
 	{
-		S_OGG_CodecCloseStream(stream);
-	
 		return nullptr;	
 	}
 
 	// fill the buffer
-	bytesRead = S_OGG_CodecReadStream(stream, info->size, buffer);
+	bytesRead = S_OGG_CodecReadStream(stream.get(), info->size, buffer);
 	
 	// we don't even have read a single byte
 	if (bytesRead <= 0)
 	{
-		Hunk_FreeTempMemory(buffer);
-		S_OGG_CodecCloseStream(stream);
-
 		return nullptr;	
 	}
 
-	S_OGG_CodecCloseStream(stream);
-	
-	return buffer;
+	return bufferStorage.release();
 }
 
 #endif // USE_OGG_VORBIS

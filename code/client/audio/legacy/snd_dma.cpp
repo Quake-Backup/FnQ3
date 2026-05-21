@@ -35,10 +35,11 @@ extern "C" {
 #include "../../client.h"
 }
 
+#include "../../client_cpp.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cstring>
 #include <memory>
 #include <new>
 
@@ -66,14 +67,12 @@ constexpr int kLoopHash = 128;
 
 static channel_t *GetChannelFreeLink( const channel_t *channel )
 {
-	channel_t *next;
-	std::memcpy( &next, channel, sizeof( next ) );
-	return next;
+	return fnq3::ReadUnaligned<channel_t *>( channel );
 }
 
 static void SetChannelFreeLink( channel_t *channel, channel_t *next )
 {
-	std::memcpy( static_cast<void *>( channel ), &next, sizeof( next ) );
+	fnq3::WriteUnaligned( channel, next );
 }
 
 } // namespace

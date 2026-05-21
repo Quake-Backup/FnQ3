@@ -26,37 +26,17 @@ extern "C" {
 #include "snd_codec.h"
 }
 
+#include "../../client_cpp.h"
+
 #include <array>
 
+using fnq3::FileRead;
+using fnq3::FileReadObject;
+using fnq3::OpenFileRead;
+using fnq3::ScopedFileHandle;
+using fnq3::ScopedTempMemory;
+
 namespace {
-
-class ScopedFileHandle {
-public:
-	ScopedFileHandle() = default;
-	explicit ScopedFileHandle( fileHandle_t handle ) : handle_( handle ) {
-	}
-
-	~ScopedFileHandle() {
-		Close();
-	}
-
-	ScopedFileHandle( const ScopedFileHandle & ) = delete;
-	ScopedFileHandle &operator=( const ScopedFileHandle & ) = delete;
-
-	fileHandle_t get() const {
-		return handle_;
-	}
-
-private:
-	void Close() {
-		if ( handle_ != FS_INVALID_HANDLE ) {
-			FS_FCloseFile( handle_ );
-			handle_ = FS_INVALID_HANDLE;
-		}
-	}
-
-	fileHandle_t handle_ = FS_INVALID_HANDLE;
-};
 
 /*
 =================
@@ -66,7 +46,7 @@ FGetLittleLong
 int FGetLittleLong( fileHandle_t f ) {
 	int v;
 
-	FS_Read( &v, sizeof( v ), f );
+	FileReadObject( f, v );
 
 	return LittleLong( v );
 }
@@ -79,7 +59,7 @@ FGetLittleShort
 short FGetLittleShort( fileHandle_t f ) {
 	short v;
 
-	FS_Read( &v, sizeof( v ), f );
+	FileReadObject( f, v );
 
 	return LittleShort( v );
 }
@@ -92,7 +72,7 @@ S_ReadChunkInfo
 int S_ReadChunkInfo( fileHandle_t f, char *name ) {
 	name[4] = '\0';
 
-	const int r = FS_Read( name, 4, f );
+	const int r = FileRead( f, name, 4 );
 	if ( r != 4 ) {
 		return -1;
 	}
@@ -164,7 +144,7 @@ S_ReadRIFFHeader
 qboolean S_ReadRIFFHeader( fileHandle_t file, snd_info_t *info ) {
 	std::array<char, 16> dump{};
 
-	FS_Read( dump.data(), 12, file );
+	FileRead( file, dump.data(), 12 );
 
 	int fmtlen = S_FindRIFFChunk( file, "fmt " );
 	if ( fmtlen < 0 ) {
@@ -220,13 +200,11 @@ S_WAV_CodecLoad
 =================
 */
 extern "C" void *S_WAV_CodecLoad( const char *filename, snd_info_t *info ) {
-	fileHandle_t fileHandle;
-
-	FS_FOpenFileRead( filename, &fileHandle, qtrue );
-	if ( fileHandle == FS_INVALID_HANDLE ) {
+	ScopedFileHandle file;
+	OpenFileRead( filename, file, qtrue );
+	if ( !file ) {
 		return nullptr;
 	}
-	ScopedFileHandle file( fileHandle );
 
 	if ( !S_ReadRIFFHeader( file.get(), info ) ) {
 		Com_Printf( S_COLOR_RED "ERROR: Incorrect/unsupported format in \"%s\"\n",
@@ -234,17 +212,18 @@ extern "C" void *S_WAV_CodecLoad( const char *filename, snd_info_t *info ) {
 		return nullptr;
 	}
 
-	auto *buffer = static_cast<byte *>( Hunk_AllocateTempMemory( info->size ) );
+	auto bufferStorage = ScopedTempMemory::Allocate( info->size );
+	byte *buffer = bufferStorage.as<byte>();
 	if ( !buffer ) {
 		Com_Printf( S_COLOR_RED "ERROR: Out of memory reading \"%s\"\n",
 			filename );
 		return nullptr;
 	}
 
-	FS_Read( buffer, info->size, file.get() );
+	FileRead( file.get(), buffer, info->size );
 	S_ByteSwapRawSamples( info->samples, info->width, info->channels, buffer );
 
-	return buffer;
+	return bufferStorage.release();
 }
 
 /*
@@ -291,7 +270,7 @@ extern "C" int S_WAV_CodecReadStream( snd_stream_t *stream, int bytes, void *buf
 
 	stream->pos += bytes;
 	const int samples = ( bytes / stream->info.width ) / stream->info.channels;
-	FS_Read( buffer, bytes, stream->file );
+	FileRead( stream->file, buffer, bytes );
 	S_ByteSwapRawSamples( samples, stream->info.width, stream->info.channels, static_cast<byte *>( buffer ) );
 	return bytes;
 }

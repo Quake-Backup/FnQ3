@@ -1220,7 +1220,6 @@ or crashing -- SV_FinalMessage() will handle that
 void SV_DropClient( client_t *drop, const char *reason ) {
 	std::array<char, sizeof( drop->name )> name{};
 	bool isBot;
-	int		i;
 
 	if ( drop->state == CS_ZOMBIE ) {
 		return;		// already dropped

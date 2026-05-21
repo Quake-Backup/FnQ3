@@ -59,6 +59,7 @@ static fnq3::sdl::ScopedGLContext SDL_glContext;
 #ifdef USE_VULKAN_API
 static PFN_vkGetInstanceProcAddr qvkGetInstanceProcAddr;
 #endif
+static qboolean glw_floatFramebufferActive = qfalse;
 
 cvar_t *r_stereoEnabled;
 cvar_t *in_nograb;
@@ -74,12 +75,39 @@ static qboolean GLW_ShouldRequestGLxDebugContext( void )
 	return Cvar_VariableIntegerValue( "r_glxDebug" ) ? qtrue : qfalse;
 }
 
-static qboolean GLW_ShouldRequestFloatFramebuffer( void )
+static qboolean GLW_DisplayReportsHdr( SDL_DisplayID display )
+{
+	SDL_PropertiesID displayProps;
+
+	if ( !display ) {
+		display = SDL_GetPrimaryDisplay();
+	}
+	if ( !display ) {
+		return qfalse;
+	}
+
+	displayProps = SDL_GetDisplayProperties( display );
+	if ( !displayProps ) {
+		return qfalse;
+	}
+
+	return SDL_GetBooleanProperty( displayProps,
+		SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false ) ? qtrue : qfalse;
+}
+
+static qboolean GLW_ShouldRequestFloatFramebuffer( SDL_DisplayID display )
 {
 	const int outputBackend = Cvar_VariableIntegerValue( "r_outputBackend" );
+	const int hdr = Cvar_VariableIntegerValue( "r_hdr" );
 
-	return ( outputBackend == ROUTPUT_REQUEST_WINDOWS_SCRGB ||
-		outputBackend == ROUTPUT_REQUEST_MACOS_EDR ) ? qtrue : qfalse;
+	if ( hdr <= 0 || !GLW_DisplayReportsHdr( display ) ) {
+		return qfalse;
+	}
+
+	return ( outputBackend == ROUTPUT_REQUEST_AUTO ||
+		outputBackend == ROUTPUT_REQUEST_WINDOWS_SCRGB ||
+		outputBackend == ROUTPUT_REQUEST_MACOS_EDR ||
+		outputBackend == ROUTPUT_REQUEST_LINUX_EXPERIMENTAL_HDR ) ? qtrue : qfalse;
 }
 
 static void GLW_InitDisplayOutput( rendererDisplayOutput_t *output )
@@ -150,6 +178,7 @@ static void GLW_QuitVideoSubsystem( void )
 static void GLW_DestroyWindow( void )
 {
 	SDL_glContext.reset();
+	glw_floatFramebufferActive = qfalse;
 
 	if ( SDL_window ) {
 		SDL_DestroyWindow( SDL_window );
@@ -411,7 +440,6 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 	{
 		flags |= SDL_WINDOW_OPENGL;
 		Com_Printf( "Initializing OpenGL display\n");
-		requestFloatFramebuffer = GLW_ShouldRequestFloatFramebuffer();
 	}
 
 	// If a window exists, note its display index
@@ -433,6 +461,16 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 		display = FindNearestDisplay( &x, &y, 640, 480 );
 
 		//Com_Printf("Selected display: %i\n", display );
+	}
+
+#ifdef USE_VULKAN_API
+	if ( !vulkan )
+#endif
+	{
+		requestFloatFramebuffer = GLW_ShouldRequestFloatFramebuffer( display );
+		if ( requestFloatFramebuffer ) {
+			Com_Printf( "...requesting floating-point OpenGL framebuffer for HDR output\n" );
+		}
 	}
 
 	desktopMode = display ? SDL_GetDesktopDisplayMode( display ) : NULL;
@@ -713,6 +751,18 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 			SDL_GL_GetAttribute( SDL_GL_BLUE_SIZE, &realColorBits[2] );
 			SDL_GL_GetAttribute( SDL_GL_DEPTH_SIZE, &config->depthBits );
 			SDL_GL_GetAttribute( SDL_GL_STENCIL_SIZE, &config->stencilBits );
+			{
+				int realFloatFramebuffer = 0;
+				if ( SDL_GL_GetAttribute( SDL_GL_FLOATBUFFERS, &realFloatFramebuffer ) ) {
+					glw_floatFramebufferActive = realFloatFramebuffer ? qtrue : qfalse;
+				} else {
+					glw_floatFramebufferActive = qfalse;
+				}
+				if ( requestFloatFramebuffer && !glw_floatFramebufferActive ) {
+					Com_DPrintf( "SDL did not provide a floating-point OpenGL framebuffer for HDR output: %s\n",
+						SDL_GetError() );
+				}
+			}
 
 			config->colorBits = realColorBits[0] + realColorBits[1] + realColorBits[2];
 		} // if ( !vulkan )
@@ -985,8 +1035,8 @@ void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
 		}
 #ifdef _WIN32
 		if ( SDL_GetPointerProperty( displayProps, SDL_PROP_DISPLAY_WINDOWS_HMONITOR_POINTER, NULL ) ) {
-			output->windowsScRgbSupported = qtrue;
-			output->windowsHdr10Supported = qtrue;
+			output->windowsScRgbSupported = glw_floatFramebufferActive ? qtrue : qfalse;
+			output->windowsHdr10Supported = qfalse;
 		}
 #endif
 #if !defined(_WIN32)
@@ -1031,29 +1081,34 @@ void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
 	}
 
 #if defined(_WIN32)
-	if ( output->hdrEnabled ) {
+	if ( output->hdrEnabled && glw_floatFramebufferActive ) {
 		output->windowsAdvancedColor = qtrue;
 		output->windowsScRgbSupported = qtrue;
-		output->windowsHdr10Supported = qtrue;
 		output->nativeBackend = ROUTPUT_BACKEND_WINDOWS_SCRGB;
 		GLW_SetDisplayOutputReason( output, "Windows HDR/Advanced Color headroom reported by SDL" );
+	} else if ( output->hdrEnabled ) {
+		GLW_SetDisplayOutputReason( output, "Windows HDR reported by SDL but the OpenGL framebuffer is not floating-point" );
 	} else {
 		GLW_SetDisplayOutputReason( output, "Windows display is SDR or SDL did not report HDR headroom" );
 	}
 #elif defined(MACOS_X) || defined(__APPLE__)
-	if ( output->hdrEnabled || output->hdrHeadroomValid ) {
+	if ( ( output->hdrEnabled || output->hdrHeadroomValid ) && glw_floatFramebufferActive ) {
 		output->macosEdrSupported = qtrue;
 		output->nativeBackend = ROUTPUT_BACKEND_MACOS_EDR;
 		GLW_SetDisplayOutputReason( output, "Apple EDR headroom reported by SDL" );
+	} else if ( output->hdrEnabled || output->hdrHeadroomValid ) {
+		GLW_SetDisplayOutputReason( output, "Apple EDR headroom reported by SDL but the OpenGL framebuffer is not floating-point" );
 	} else {
 		GLW_SetDisplayOutputReason( output, "Apple display is SDR or SDL did not report EDR headroom" );
 	}
 #else
-	if ( output->hdrEnabled && output->waylandColorProtocol ) {
+	if ( output->hdrEnabled && output->waylandColorProtocol && glw_floatFramebufferActive ) {
 		output->linuxHdrExperimental = qtrue;
 		output->explicitLinuxHdrProtocol = qtrue;
 		output->nativeBackend = ROUTPUT_BACKEND_LINUX_EXPERIMENTAL_HDR;
 		GLW_SetDisplayOutputReason( output, "Linux Wayland display reports HDR headroom; compositor HDR remains experimental" );
+	} else if ( output->hdrEnabled && output->waylandColorProtocol ) {
+		GLW_SetDisplayOutputReason( output, "Linux Wayland display reports HDR headroom but the OpenGL framebuffer is not floating-point" );
 	} else if ( output->hdrEnabled ) {
 		GLW_SetDisplayOutputReason( output, "Linux display reports HDR headroom without a validated compositor protocol" );
 	} else {

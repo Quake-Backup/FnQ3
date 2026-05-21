@@ -560,7 +560,7 @@ static qboolean IN_InitDIMouse( void ) {
 	}
 
 	// obtain an interface to the system mouse device.
-	hr = g_pdi->CreateDevice( GUID_SysMouse, &g_pMouse, NULL );
+	hr = IDirectInput_CreateDevice( g_pdi, GUID_SysMouse, &g_pMouse, NULL );
 
 	if (FAILED(hr)) {
 		Com_DPrintf ("Couldn't open DI mouse device\n");
@@ -568,7 +568,7 @@ static qboolean IN_InitDIMouse( void ) {
 	}
 
 	// set the data format to "mouse format".
-	hr = g_pMouse->SetDataFormat( &df );
+	hr = IDirectInputDevice_SetDataFormat( g_pMouse, &df );
 
 	if (FAILED(hr)) 	{
 		Com_DPrintf ("Couldn't set DI mouse format\n");
@@ -576,7 +576,7 @@ static qboolean IN_InitDIMouse( void ) {
 	}
 
 	// set the cooperativity level.
-	hr = g_pMouse->SetCooperativeLevel( g_wv.hWnd,
+	hr = IDirectInputDevice_SetCooperativeLevel( g_pMouse, g_wv.hWnd,
 			DISCL_EXCLUSIVE | DISCL_FOREGROUND );
 
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=50
@@ -588,7 +588,7 @@ static qboolean IN_InitDIMouse( void ) {
 
 	// set the buffer size to DINPUT_BUFFERSIZE elements.
 	// the buffer size is a DWORD property associated with the device
-	hr = g_pMouse->SetProperty( DIPROP_BUFFERSIZE, &dipdw.diph );
+	hr = IDirectInputDevice_SetProperty( g_pMouse, DIPROP_BUFFERSIZE, &dipdw.diph );
 
 	if (FAILED(hr)) {
 		Com_DPrintf ("Couldn't set DI buffersize\n");
@@ -611,12 +611,12 @@ IN_ShutdownDIMouse
 */
 static void IN_ShutdownDIMouse( void ) {
     if (g_pMouse) {
-		g_pMouse->Release();
+		IDirectInputDevice_Release( g_pMouse );
 		g_pMouse = NULL;
 	}
 
     if (g_pdi) {
-		g_pdi->Release();
+		IDirectInput_Release( g_pdi );
 		g_pdi = NULL;
 	}
 
@@ -638,7 +638,7 @@ static void IN_ActivateDIMouse( void ) {
 	}
 
 	// we may fail to reacquire if the window has been recreated
-	hr = g_pMouse->Acquire();
+	hr = IDirectInputDevice_Acquire( g_pMouse );
 	if (FAILED(hr)) {
 		if ( !IN_InitDIMouse() ) {
 			Com_Printf ("Falling back to Win32 mouse support...\n");
@@ -659,7 +659,7 @@ static void IN_DeactivateDIMouse( void ) {
 	if (!g_pMouse) {
 		return;
 	}
-	g_pMouse->Unacquire();
+	IDirectInputDevice_Unacquire( g_pMouse );
 }
 
 
@@ -684,9 +684,9 @@ static void IN_DIMouse( int *mx, int *my ) {
 	{
 		dwElements = 1;
 
-		hr = g_pMouse->GetDeviceData( sizeof( DIDEVICEOBJECTDATA ), &od, &dwElements, 0 );
+		hr = IDirectInputDevice_GetDeviceData( g_pMouse, sizeof( DIDEVICEOBJECTDATA ), &od, &dwElements, 0 );
 		if ((hr == DIERR_INPUTLOST) || (hr == DIERR_NOTACQUIRED)) {
-			g_pMouse->Acquire();
+			IDirectInputDevice_Acquire( g_pMouse );
 			return;
 		}
 
@@ -745,7 +745,7 @@ static void IN_DIMouse( int *mx, int *my ) {
 
 	// read the raw delta counter and ignore
 	// the individual sample time / values
-	hr = g_pMouse->GetDeviceState( sizeof( DIDEVICEOBJECTDATA ), &state );
+	hr = IDirectInputDevice_GetDeviceState( g_pMouse, sizeof( DIDEVICEOBJECTDATA ), &state );
 	if ( FAILED(hr) ) {
 		*mx = *my = 0;
 		return;

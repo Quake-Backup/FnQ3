@@ -24,7 +24,9 @@ extern "C" {
 #include "client.h"
 }
 
-#include <cstring>
+#include "client_cpp.h"
+
+using fnq3::ReadUnaligned;
 
 namespace {
 
@@ -57,14 +59,6 @@ private:
 };
 
 constexpr int kReliableCommandMask = MAX_RELIABLE_COMMANDS - 1;
-
-template <typename T>
-static T ReadUnaligned( const void *data )
-{
-	T value;
-	std::memcpy( &value, data, sizeof( value ) );
-	return value;
-}
 
 byte CL_NetchanSequenceKey( const msg_t *msg ) {
 	const int sequence = ReadUnaligned<int>( msg->data );

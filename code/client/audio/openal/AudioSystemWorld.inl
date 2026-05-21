@@ -152,8 +152,8 @@ bool SoundSample::EnsureLoaded( OpenALDevice &device, bool allowToneFallback ) {
 	loadAttempted_ = true;
 
 	snd_info_t info = {};
-	void *data = S_CodecLoad( name_.c_str(), &info );
-	if ( data == nullptr ) {
+	fnq3::ScopedTempMemory data( S_CodecLoad( name_.c_str(), &info ) );
+	if ( data.get() == nullptr ) {
 		missing_ = true;
 		defaultSample_ = allowToneFallback;
 		if ( allowToneFallback ) {
@@ -168,8 +168,7 @@ bool SoundSample::EnsureLoaded( OpenALDevice &device, bool allowToneFallback ) {
 			name_.c_str(), AudioSampleFormatName( sourceFormat ), info.channels );
 	}
 	const AudioSampleFormat loadFormat = AudioSampleFormatCanBeRepresented( sourceFormat ) ? sourceFormat : AudioSampleFormat{ AudioSampleEncoding::PCM, info.channels };
-	const std::vector<short> pcm = ConvertToPCM16( info, loadFormat, reinterpret_cast<const byte *>( data ) );
-	Hunk_FreeTempMemory( data );
+	const std::vector<short> pcm = ConvertToPCM16( info, loadFormat, static_cast<const byte *>( data.get() ) );
 
 	if ( pcm.empty() ) {
 		missing_ = true;
@@ -1288,8 +1287,8 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 	const SoundVoice *selected;
 	int activeOneShots = 0;
 	int activeLoops = 0;
-	char environmentSummary[64];
-	char zoneSummary[128];
+	std::array<char, 64> environmentSummary;
+	std::array<char, 128> zoneSummary;
 
 	if ( info == nullptr || overlayMode <= 0 ) {
 		return qfalse;
@@ -1309,17 +1308,17 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 		}
 	}
 
-	FormatEnvironmentSummary( environment_, environmentSummary, sizeof( environmentSummary ) );
-	FormatAudioZoneSummary( environment_, zoneSummary, sizeof( zoneSummary ) );
+	FormatEnvironmentSummary( environment_, environmentSummary.data(), environmentSummary.size() );
+	FormatAudioZoneSummary( environment_, zoneSummary.data(), zoneSummary.size() );
 	Com_sprintf( info->lines[info->lineCount++], S_SPATIAL_DEBUG_LINE_CHARS,
 		"spatial %s reverb:%s env:%s",
 		device.LibraryName().empty() ? "openal" : "openal-soft",
 		device.CurrentReverbName(),
-		environmentSummary );
+		environmentSummary.data() );
 	Com_sprintf( info->lines[info->lineCount++], S_SPATIAL_DEBUG_LINE_CHARS,
 		"listener:%d voices shot:%d loop:%d zone:%s",
 		listenerNumber_, activeOneShots, activeLoops,
-		zoneSummary );
+		zoneSummary.data() );
 	if ( overlayMode > 1 ) {
 		Com_sprintf( info->lines[info->lineCount++], S_SPATIAL_DEBUG_LINE_CHARS,
 			"env wet:%.2f lf/hf %.2f/%.2f wet %.2f/%.2f occx:%.2f",
@@ -1382,17 +1381,17 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 
 void Q3SoundWorld::DumpSpatialDebug( const OpenALDevice &device, int preferredEntity ) const {
 	const SoundVoice *selected = SelectDebugVoice( preferredEntity );
-	char environmentSummary[64];
-	char zoneSummary[128];
+	std::array<char, 64> environmentSummary;
+	std::array<char, 128> zoneSummary;
 	std::array<SourceClassDebugCounter, 12> sourceClassCounters = {};
 	int sourceClassCounterCount = 0;
 
-	FormatEnvironmentSummary( environment_, environmentSummary, sizeof( environmentSummary ) );
-	FormatAudioZoneSummary( environment_, zoneSummary, sizeof( zoneSummary ) );
+	FormatEnvironmentSummary( environment_, environmentSummary.data(), environmentSummary.size() );
+	FormatAudioZoneSummary( environment_, zoneSummary.data(), zoneSummary.size() );
 	Com_Printf( "----- Spatial Audio Debug -----\n" );
 	Com_Printf( "Environment: %s (zone %s, reverb %s, blend %.2f, wet %.2f, directLF/HF %.2f/%.2f, wetLF/HF %.2f/%.2f, occx %.2f, outdoors %d, underwater %d, transition %dms)\n",
-		environmentSummary,
-		zoneSummary,
+		environmentSummary.data(),
+		zoneSummary.data(),
 		device.CurrentReverbName(),
 		ClampFloat( environment_.blend, 0.0f, 1.0f ),
 		environment_.baseWet,

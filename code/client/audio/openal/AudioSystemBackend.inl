@@ -527,8 +527,8 @@ void AudioSystem::ServiceBackgroundTrack() {
 
 	int emptyRestarts = 0;
 	while ( musicPlayer_.QueuedBufferCount() < kQueuedStreamChunks ) {
-		byte raw[32768];
-		const int bytesRead = S_CodecReadStream( backgroundStream_, sizeof( raw ), raw );
+		std::array<byte, 32768> raw;
+		const int bytesRead = S_CodecReadStream( backgroundStream_, static_cast<int>( raw.size() ), raw.data() );
 		if ( bytesRead <= 0 ) {
 			if ( !backgroundLoop_.empty() ) {
 				if ( emptyRestarts > 0 ) {
@@ -570,7 +570,7 @@ void AudioSystem::ServiceBackgroundTrack() {
 		}
 		const int outputChannels = SelectStreamOutputChannels( device_, backgroundStream_->info.channels );
 		if ( !QueueStreamChunk( musicPlayer_, inputSamples, backgroundStream_->info.rate, backgroundStream_->info.width,
-			backgroundStream_->info.channels, raw, 1.0f, outputChannels, true ) ) {
+			backgroundStream_->info.channels, raw.data(), 1.0f, outputChannels, true ) ) {
 			break;
 		}
 		emptyRestarts = 0;

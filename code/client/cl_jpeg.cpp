@@ -26,7 +26,11 @@ extern "C" {
 //#include "../qcommon/q_shared.h"
 #include <setjmp.h>
 
+#include "client_cpp.h"
+
 #include <array>
+
+using fnq3::ScopedTempMemory;
 
 /*
  * Include file for users of JPEG library.
@@ -466,14 +470,12 @@ size_t CL_SaveJPGToBuffer(byte *buffer, size_t bufSize, int quality,
 
 void CL_SaveJPG( const char *filename, int quality, int image_width, int image_height, byte *image_buffer, int padding )
 {
-	byte *out;
 	size_t bufSize;
 
 	bufSize = image_width * image_height * 4;
-	out = static_cast<byte *>( Hunk_AllocateTempMemory(bufSize) );
+	auto outStorage = ScopedTempMemory::Allocate( bufSize );
+	byte *out = outStorage.as<byte>();
 
 	bufSize = CL_SaveJPGToBuffer( out, bufSize, quality, image_width, image_height, image_buffer, padding );
 	FS_WriteFile( filename, out, bufSize );
-
-	Hunk_FreeTempMemory(out);
 }

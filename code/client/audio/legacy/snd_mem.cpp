@@ -34,10 +34,15 @@ extern "C" {
 #include "../codecs/snd_codec.h"
 }
 
+#include "../../client_cpp.h"
+
 #include <algorithm>
-#include <cstring>
 #include <memory>
 #include <new>
+
+using fnq3::ReadUnaligned;
+using fnq3::ScopedTempMemory;
+using fnq3::WriteUnaligned;
 
 namespace {
 
@@ -51,13 +56,11 @@ int totalInUse = 0;
 std::unique_ptr<short[]> sfxScratchStorage;
 
 sndBuffer *GetFreeLink( const sndBuffer *chunk ) {
-	sndBuffer *next;
-	std::memcpy( &next, chunk, sizeof( next ) );
-	return next;
+	return ReadUnaligned<sndBuffer *>( chunk );
 }
 
 void SetFreeLink( sndBuffer *chunk, sndBuffer *next ) {
-	std::memcpy( static_cast<void *>( chunk ), &next, sizeof( next ) );
+	WriteUnaligned( chunk, next );
 }
 
 /*
@@ -249,7 +252,8 @@ of a forced fallback of a player specific sound
 extern "C" qboolean S_LoadSound( sfx_t *sfx ) {
 	snd_info_t info;
 
-	auto *data = static_cast<byte *>( S_CodecLoad( sfx->soundName, &info ) );
+	ScopedTempMemory dataStorage( S_CodecLoad( sfx->soundName, &info ) );
+	auto *data = dataStorage.as<byte>();
 	if ( !data ) {
 		return qfalse;
 	}
@@ -262,7 +266,8 @@ extern "C" qboolean S_LoadSound( sfx_t *sfx ) {
 		Com_DPrintf( S_COLOR_YELLOW "WARNING: %s is not a 22kHz audio file\n", sfx->soundName );
 	}
 
-	auto *samples = static_cast<short *>( Hunk_AllocateTempMemory( info.samples * sizeof( short ) * 2 ) );
+	ScopedTempMemory sampleStorage = ScopedTempMemory::Allocate( info.samples * sizeof( short ) * 2 );
+	auto *samples = sampleStorage.as<short>();
 
 	sfx->lastTimeUsed = s_soundtime + 1; // Com_Milliseconds()+1
 
@@ -292,9 +297,6 @@ extern "C" qboolean S_LoadSound( sfx_t *sfx ) {
 	}
 
 	sfx->soundChannels = info.channels;
-
-	Hunk_FreeTempMemory( samples );
-	Hunk_FreeTempMemory( data );
 
 	return qtrue;
 }

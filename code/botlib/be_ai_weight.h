@@ -20,6 +20,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
+#pragma once
+
 /*****************************************************************************
  * name:		be_ai_weight.h
  *
@@ -29,11 +31,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *****************************************************************************/
 
-#define WT_BALANCE			1
-#define MAX_WEIGHTS			128
+static constexpr int WT_BALANCE = 1;
+static constexpr int MAX_WEIGHTS = 128;
 
 //fuzzy separator
-typedef struct fuzzyseperator_s
+struct fuzzyseperator_s
 {
 	int index;
 	int value;
@@ -41,31 +43,34 @@ typedef struct fuzzyseperator_s
 	float weight;
 	float minweight;
 	float maxweight;
-	struct fuzzyseperator_s *child;
-	struct fuzzyseperator_s *next;
-} fuzzyseperator_t;
+	fuzzyseperator_s *child;
+	fuzzyseperator_s *next;
+};
+using fuzzyseperator_t = fuzzyseperator_s;
 
 //fuzzy weight
-typedef struct weight_s
+struct weight_s
 {
 	char *name;
-	struct fuzzyseperator_s *firstseperator;
-} weight_t;
+	fuzzyseperator_t *firstseperator;
+};
+using weight_t = weight_s;
 
 //weight configuration
-typedef struct weightconfig_s
+struct weightconfig_s
 {
 	int numweights;
 	weight_t weights[MAX_WEIGHTS];
 	char		filename[MAX_QPATH];
-} weightconfig_t;
+};
+using weightconfig_t = weightconfig_s;
 
 //reads a weight configuration
 weightconfig_t *ReadWeightConfig(const char *filename);
 //free a weight configuration
 void FreeWeightConfig(weightconfig_t *config);
 //writes a weight configuration, returns true if successful
-qboolean WriteWeightConfig(char *filename, weightconfig_t *config);
+qboolean WriteWeightConfig(const char *filename, const weightconfig_t *config);
 //find the fuzzy weight with the given name
 int FindFuzzyWeight(const weightconfig_t *wc, const char *name);
 //returns the fuzzy weight for the given inventory and weight

@@ -34,7 +34,7 @@ extern aas_settings_t aassettings;
 #endif //AASINTERN
 
 //movement prediction
-int AAS_PredictClientMovement(struct aas_clientmove_s *move,
+int AAS_PredictClientMovement(aas_clientmove_t *move,
 							int entnum, const vec3_t origin,
 							int presencetype, int onground,
 							const vec3_t velocity, const vec3_t cmdmove,
@@ -42,7 +42,7 @@ int AAS_PredictClientMovement(struct aas_clientmove_s *move,
 							int maxframes, float frametime,
 							int stopevent, int stopareanum, int visualize);
 //predict movement until bounding box is hit
-int AAS_ClientMovementHitBBox(struct aas_clientmove_s *move,
+int AAS_ClientMovementHitBBox(aas_clientmove_t *move,
 								int entnum, const vec3_t origin,
 								int presencetype, int onground,
 								const vec3_t velocity, const vec3_t cmdmove,
@@ -54,7 +54,7 @@ int AAS_OnGround(vec3_t origin, int presencetype, int passent);
 //returns true if swimming at the given origin
 int AAS_Swimming(vec3_t origin);
 //returns the jump reachability run start point
-void AAS_JumpReachRunStart(struct aas_reachability_s *reach, vec3_t runstart);
+void AAS_JumpReachRunStart(aas_reachability_t *reach, vec3_t runstart);
 //returns true if against a ladder at the given origin
 int AAS_AgainstLadder(vec3_t origin);
 //rocket jump Z velocity when rocket-jumping at origin

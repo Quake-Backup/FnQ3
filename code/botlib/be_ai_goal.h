@@ -20,6 +20,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 //
+
+#pragma once
+
 /*****************************************************************************
  * name:		be_ai_goal.h
  *
@@ -29,16 +32,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *****************************************************************************/
 
-#define MAX_AVOIDGOALS			256
-#define MAX_GOALSTACK			8
+static constexpr int MAX_AVOIDGOALS = 256;
+static constexpr int MAX_GOALSTACK = 8;
 
-#define GFL_NONE				0
-#define GFL_ITEM				1
-#define GFL_ROAM				2
-#define GFL_DROPPED				4
+static constexpr int GFL_NONE = 0;
+static constexpr int GFL_ITEM = 1;
+static constexpr int GFL_ROAM = 2;
+static constexpr int GFL_DROPPED = 4;
 
 //a bot goal
-typedef struct bot_goal_s
+struct bot_goal_s
 {
 	vec3_t origin;				//origin of the goal
 	int areanum;				//area number of the goal
@@ -47,7 +50,8 @@ typedef struct bot_goal_s
 	int number;					//goal number
 	int flags;					//goal flags
 	int iteminfo;				//item information
-} bot_goal_t;
+};
+using bot_goal_t = bot_goal_s;
 
 //reset the whole goal state, but keep the item weights
 void BotResetGoalState(int goalstate);

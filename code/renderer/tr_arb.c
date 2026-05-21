@@ -90,6 +90,23 @@ static int FBO_HdrSceneLinearMode( void )
 	return ( r_hdr && r_hdr->integer > 0 ) ? 1 : 0;
 }
 
+static int FBO_HdrSceneLinearColorMode( void )
+{
+	if ( !FBO_HdrSceneLinearMode() || !r_srgbTextures || !r_srgbTextures->integer ) {
+		return 0;
+	}
+	if ( r_tonemap && r_tonemap->integer > 0 ) {
+		return 1;
+	}
+	if ( r_colorGrade && r_colorGrade->integer > 0 ) {
+		return 1;
+	}
+	if ( r_outputBackend && r_outputBackend->integer > ROUTPUT_REQUEST_SDR_SRGB ) {
+		return 1;
+	}
+	return 0;
+}
+
 static int FBO_HdrPrecisionMode( void )
 {
 	const int precision = r_hdrPrecision ? r_hdrPrecision->integer : 0;
@@ -221,7 +238,7 @@ static int FBO_ToneMapMode( void )
 {
 	int mode;
 
-	if ( !FBO_HdrSceneLinearMode() || !r_tonemap ) {
+	if ( !FBO_HdrSceneLinearColorMode() || !r_tonemap ) {
 		return 0;
 	}
 	mode = r_tonemap->integer;
@@ -236,7 +253,7 @@ static int FBO_ToneMapMode( void )
 
 static float FBO_TonemapExposureCvar( void )
 {
-	if ( !FBO_HdrSceneLinearMode() || !r_tonemapExposure ) {
+	if ( !FBO_HdrSceneLinearColorMode() || !r_tonemapExposure ) {
 		return 1.0f;
 	}
 	return Com_Clamp( 0.1f, 8.0f, r_tonemapExposure->value );
@@ -244,7 +261,7 @@ static float FBO_TonemapExposureCvar( void )
 
 static float FBO_TonemapExposure( void )
 {
-	if ( !FBO_HdrSceneLinearMode() ) {
+	if ( !FBO_HdrSceneLinearColorMode() ) {
 		return 1.0f;
 	}
 	if ( fboExposureFrame != tr.frameCount ) {
@@ -257,7 +274,7 @@ static int FBO_ColorGradeMode( void )
 {
 	int mode;
 
-	if ( !FBO_HdrSceneLinearMode() || !r_colorGrade ) {
+	if ( !FBO_HdrSceneLinearColorMode() || !r_colorGrade ) {
 		return 0;
 	}
 	mode = r_colorGrade->integer;
@@ -530,14 +547,16 @@ static void FBO_PrepareGlxPostShaderColorGradeLut( void )
 
 static float FBO_OutputOverbrightScale( float obScale )
 {
-	return FBO_HdrSceneLinearMode() ? 1.0f : obScale;
+	return obScale;
 }
 
 static void FBO_SetOutputTransformParams( float gamma, float obScale )
 {
-	const float outputScale = FBO_OutputOverbrightScale( obScale );
-	const float exposure = FBO_TonemapExposure();
-	const float srgbOutput = FBO_HdrSceneLinearMode() ? 1.0f : 0.0f;
+	const int sceneLinear = FBO_HdrSceneLinearColorMode();
+	const float overbrightScale = FBO_OutputOverbrightScale( obScale );
+	const float outputScale = sceneLinear ? 1.0f : overbrightScale;
+	const float exposure = FBO_TonemapExposure() * ( sceneLinear ? overbrightScale : 1.0f );
+	const float srgbOutput = sceneLinear ? 1.0f : 0.0f;
 	const int gradeMode = FBO_ColorGradeMode();
 	const qboolean lgg = FBO_ColorGradeUsesLiftGammaGain( gradeMode );
 	vec3_t lift, gradeGamma, invGradeGamma, gain;
@@ -2746,7 +2765,7 @@ static void FBO_UpdateTonemapExposure( void )
 	fboEffectiveTonemapExposure = manualExposure;
 
 #ifdef RENDERER_GLX
-	if ( FBO_HdrSceneLinearMode() )
+	if ( FBO_HdrSceneLinearColorMode() )
 	{
 		int width = 0;
 		int height = 0;
@@ -3507,7 +3526,7 @@ void FBO_PostProcess( void )
 	GLX_CompatRecordPostProcessFrame( minimized,
 		( r_bloom->integer && programCompiled && qglActiveTextureARB ) ? qtrue : qfalse,
 		programCompiled ? qtrue : qfalse, backEnd.screenshotMask, windowAdjusted,
-		fboReadIndex, FBO_HdrSceneLinearMode(), r_renderScale->integer, r_greyscale->value,
+		fboReadIndex, FBO_HdrSceneLinearColorMode(), r_renderScale->integer, r_greyscale->value,
 		gamma, FBO_OutputOverbrightScale( obScale ) );
 	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_POSTPROCESS );
 #endif

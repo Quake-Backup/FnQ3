@@ -2524,9 +2524,9 @@ static void R_Register( void )
 	r_hdr = ri.Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_hdr, "-1", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_hdr,
-		"Selects the scene-linear HDR render pipeline. Requires \\r_fbo 1.\n"
+		"Selects the HDR-capable FBO render pipeline. Requires \\r_fbo 1.\n"
 		" 0: display-referred SDR compatibility path\n"
-		" 1: scene-linear HDR pipeline with exposure, bloom thresholding, tone mapping, and SDR output transform\n"
+		" 1: high-precision FBO path; legacy tone mapping preserves Quake III lighting, while non-legacy tone mapping, color grading, and explicit HDR output use scene-linear color\n"
 		"-1: legacy debug alias for \\r_hdrPrecision -1 without enabling scene-linear HDR\n"
 		"Requires vid_restart so FBO storage and texture sRGB decode state rebuild together." );
 	ri.Cvar_SetGroup( r_hdr, CVG_RENDERER );
@@ -2554,7 +2554,7 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( r_hdrBloomFormat, CVG_RENDERER );
 	r_srgbTextures = ri.Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_srgbTextures, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_srgbTextures, "Use sRGB texture formats for authored color images in the scene-linear HDR pipeline. Data, lightmap, fog, and utility textures stay linear/data. Requires vid_restart so existing textures can be reloaded safely." );
+	ri.Cvar_SetDescription( r_srgbTextures, "Use sRGB texture formats for authored color images when the HDR path is actually running scene-linear color. Data, lightmap, fog, and utility textures stay linear/data. Requires vid_restart so existing textures can be reloaded safely." );
 	ri.Cvar_SetGroup( r_srgbTextures, CVG_RENDERER );
 	r_framebufferSRGB = ri.Cvar_Get( "r_framebufferSRGB", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_framebufferSRGB, "0", "1", CV_INTEGER );
@@ -2585,7 +2585,7 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( r_tonemapExposure, CVG_RENDERER );
 	r_hudExcludePostProcess = ri.Cvar_Get( "r_hudExcludePostProcess", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_hudExcludePostProcess, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_hudExcludePostProcess, "Exclude 3D HUD scenes (RDF_NOWORLDMODEL after the world view) from bloom and scene HDR post-processing. SDR FBO frames still apply the final legacy gamma/overbright transform to HUD output. Set to 0 for legacy post-processed HUD models." );
+	ri.Cvar_SetDescription( r_hudExcludePostProcess, "Exclude 3D HUD scenes (RDF_NOWORLDMODEL after the world view) from bloom extraction while keeping HUD/2D in the final output transform. Set to 0 for legacy post-processed HUD models." );
 	ri.Cvar_SetGroup( r_hudExcludePostProcess, CVG_RENDERER );
 	r_crt = ri.Cvar_Get( "r_crt", "0", CVAR_ARCHIVE_ND );
 	R_MakeCvarInstant( r_crt );

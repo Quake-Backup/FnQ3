@@ -565,11 +565,19 @@ static imageColorSpace_t R_ImageColorSpaceForFlags( const char *name, imgFlags_t
 static qboolean R_ImageWantsSrgbDecode( imageColorSpace_t colorSpace )
 {
 #ifdef USE_FBO
-	return ( colorSpace == IMAGE_COLORSPACE_SRGB &&
-		r_srgbTextures && r_srgbTextures->integer &&
+	qboolean sceneLinearColorMode;
+
+	sceneLinearColorMode = ( r_srgbTextures && r_srgbTextures->integer &&
 		r_hdr && r_hdr->integer > 0 &&
 		r_fbo && r_fbo->integer &&
 		fboEnabled &&
+		( ( r_tonemap && r_tonemap->integer > 0 ) ||
+		( r_colorGrade && r_colorGrade->integer > 0 ) ||
+		( r_outputBackend && r_outputBackend->integer > ROUTPUT_REQUEST_SDR_SRGB ) ) ) ?
+		qtrue : qfalse;
+
+	return ( colorSpace == IMAGE_COLORSPACE_SRGB &&
+		sceneLinearColorMode &&
 		textureSrgbAvailable ) ? qtrue : qfalse;
 #else
 	(void)colorSpace;

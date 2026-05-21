@@ -1426,13 +1426,14 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         vulkan_init = (ROOT / "code" / "renderervk" / "tr_init.c").read_text(encoding="utf-8")
         glx_ir = (ROOT / "code" / "rendererglx" / "glx_render_ir.h").read_text(encoding="utf-8")
 
-        self.assertIn("`r_hdr`: Selects the scene-linear HDR render pipeline.", display_doc)
+        self.assertIn("`r_hdr`: Selects the HDR-capable FBO render pipeline.", display_doc)
         self.assertIn("`r_hdrPrecision`", display_doc)
-        self.assertIn("r_hdr` now means scene-linear pipeline intent", glx_doc)
+        self.assertIn("legacy tone mapping preserves Quake III display-referred lighting", glx_doc)
         self.assertNotIn("`r_hdr`: Controls framebuffer precision.", display_doc)
         self.assertNotIn("HDR precision mode", glx_doc)
+        self.assertIn("Selects the HDR-capable FBO render pipeline", renderer_init)
+        self.assertIn("Selects the scene-linear HDR render pipeline", vulkan_init)
         for source in (renderer_init, vulkan_init):
-            self.assertIn("Selects the scene-linear HDR render pipeline", source)
             self.assertIn("r_hdrPrecision", source)
             self.assertNotIn("Enables high dynamic range frame buffer texture format", source)
         self.assertIn("SceneColorSpace::SceneLinear", glx_ir)
@@ -3681,7 +3682,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             run
             for run in manifest["runs"]
             if run.get("type") == "color-sweep"
-            and run["colorSweepRow"]["id"] == "scene-linear-srgb-decode-off"
+            and run["colorSweepRow"]["id"] == "hdr-srgb-decode-off"
         )
         metrics = color_run["diagnostics"]["metrics"]
         metrics["colorAudit"]["srgbDecode"] = 1

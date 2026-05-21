@@ -1271,8 +1271,9 @@ static qboolean RB_CanPreparePostProcessForHud( void ) {
 }
 
 static qboolean RB_ShouldFinalizePostProcessForHud( void ) {
-	// SDR FBO output restores legacy overbright in the final pass, so keep HUD draws in that path.
-	return ( r_hdr && r_hdr->integer > 0 ) ? qtrue : qfalse;
+	// HUD/2D still need the final output transform. Prepare bloom before the
+	// HUD, but do not resolve early or post-HUD draws bypass sRGB/overbright.
+	return qfalse;
 }
 
 static void RB_PrepareBloomForHud( void ) {

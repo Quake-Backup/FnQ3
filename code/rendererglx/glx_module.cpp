@@ -1443,7 +1443,7 @@ void RendererModule::PrintFrameCounters() const
 		postprocess_.lastColorGradeLutSize, postprocess_.lastColorGradeLutScale );
 	RI().Printf( PRINT_ALL, "glx: color audit srgb-decode %s requested %s available %s framebuffer-srgb %s requested %s available %s capture %s capture-request %s capture-hdr-aware %s capture-supported %s target-float %s final-encode %s contract %s texture-consistent %s stale-srgb-decode %u\n",
 		BoolName( postprocess_.textureSrgbDecode ),
-		BoolName( postprocess_.r_srgbTextures && postprocess_.r_srgbTextures->integer ? qtrue : qfalse ),
+		BoolName( postprocess_.textureSrgbDecodeDesired ),
 		BoolName( postprocess_.textureSrgbAvailable ),
 		BoolName( postprocess_.framebufferSrgbEnabled ),
 		BoolName( postprocess_.r_framebufferSRGB && postprocess_.r_framebufferSRGB->integer ? qtrue : qfalse ),

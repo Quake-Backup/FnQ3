@@ -67,9 +67,9 @@ vid_restart
 These settings control the render path behind the display output.
 
 - `r_fbo`: Enables framebuffer-object rendering. This is the foundation for the modern display path and is required for bloom, HDR, multisample anti-aliasing, supersampling, greyscale, and arbitrary internal render resolutions.
-- `r_hdr`: Selects the scene-linear HDR render pipeline.
+- `r_hdr`: Selects the HDR-capable FBO render pipeline.
   - `0`: Display-referred SDR compatibility path.
-  - `1`: Scene-linear HDR path with exposure, bloom thresholding, tone mapping, color grading, and the selected output transform.
+  - `1`: High-precision FBO path. With the default legacy tone mapper this preserves Quake III's display-referred lighting; non-legacy tone mapping, color grading, and explicit HDR output use scene-linear color.
   - `-1`: Legacy debug alias for `r_hdrPrecision -1` without enabling scene-linear HDR.
 - `r_hdrPrecision`: Controls the internal FBO color storage used by the display pipeline.
   - `0`: Automatic. SDR uses 8-bit normalized storage; `r_hdr 1` uses `RGBA16F` floating-point scene storage.
@@ -81,7 +81,7 @@ These settings control the render path behind the display output.
   - `1`: Force `RGBA16F` bloom intermediates for conservative parity.
   - `2`: Prefer `R11G11B10F` for positive RGB bloom intermediates.
   - `3`: Prefer `RG16F` for positive two-channel intermediates; current RGB bloom safely falls back.
-- `r_srgbTextures`: Allows authored color textures to use hardware sRGB decode in the scene-linear `r_hdr 1` path. Lightmaps, fog, dynamic-light masks, and data textures remain linear/data.
+- `r_srgbTextures`: Allows authored color textures to use hardware sRGB decode when the `r_hdr 1` path is actually running scene-linear color. Lightmaps, fog, dynamic-light masks, and data textures remain linear/data.
 - `r_framebufferSRGB`: Allows `GL_FRAMEBUFFER_SRGB` only when the draw target itself is sRGB-encoded. The current OpenGL/GLx SDR final shader keeps it disabled because the shader already writes SDR sRGB output.
 - `r_outputBackend`: Selects the final hardware output backend.
   - `0`: Automatic. Conservative by default; Vulkan keeps using `r_hdrDisplay` to request HDR10, while GLx selects a non-SDR transform only when `r_hdr 1` and platform HDR/EDR state are visible.

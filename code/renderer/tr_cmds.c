@@ -477,6 +477,8 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 	// recompile GPU shaders if needed
 	if ( ri.Cvar_CheckGroup( CVG_RENDERER ) )
 	{
+		qboolean updateColorMappings = r_gamma->modified;
+
 		ARB_UpdatePrograms();
 
 #ifdef USE_FBO
@@ -484,14 +486,16 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 			r_hdrBloomFormat->modified ||
 			r_fbo->modified || r_ext_supersample->modified || r_renderWidth->modified ||
 			r_renderHeight->modified || r_renderScale->modified || r_flares->modified ||
-			r_bloom_passes->modified )
+			r_bloom_passes->modified ) {
 			QGL_InitFBO();
+			updateColorMappings = qtrue;
+		}
 #endif
 
 		if ( r_textureMode->modified )
 			GL_TextureMode( r_textureMode->string );
 
-		if ( r_gamma->modified )
+		if ( updateColorMappings )
 			R_SetColorMappings();
 
 		ri.Cvar_ResetGroup( CVG_RENDERER, qtrue );

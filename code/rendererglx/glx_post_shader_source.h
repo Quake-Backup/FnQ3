@@ -5,7 +5,7 @@
 
 namespace glx {
 
-static constexpr int GLX_POST_SHADER_SOURCE_VERSION = 7;
+static constexpr int GLX_POST_SHADER_SOURCE_VERSION = 8;
 static constexpr int GLX_POST_SHADER_VERTEX_SOURCE_BYTES = 1024;
 static constexpr int GLX_POST_SHADER_FRAGMENT_SOURCE_BYTES = 30000;
 
@@ -335,7 +335,7 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 	ok = ( GLX_PostShaderSource_WriteVersion( target, out, outSize, &used ) && ok ) ?
 		qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
-		"// GLx generated post/output shader source v7.\n" ) && ok ) ? qtrue : qfalse;
+		"// GLx generated post/output shader source v8.\n" ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_WriteFeatureDefines( plan, out, outSize, &used ) && ok ) ? qtrue : qfalse;
 	ok = ( GLX_PostShaderSource_Append( out, outSize, &used,
 		GLX_PostShaderSource_ModernTarget( target ) ?
@@ -522,7 +522,7 @@ static ID_INLINE qboolean GLX_PostShaderSource_WriteFragment(
 		"	color += glxFiniteVec3(GLX_POST_SAMPLE2D(u_Bloom, uv).rgb, vec3(0.0)) * glxBloomIntensity();\n"
 		"#endif\n"
 		"#if GLX_POST_OUTPUT_TRANSFORM && GLX_POST_SCENE_LINEAR\n"
-		"	color = glxNonNegativeVec3(color * glxExposure());\n"
+		"	color = glxNonNegativeVec3(color * glxExposure() * glxLegacyOverbright());\n"
 		"#if GLX_POST_LIFT_GAMMA_GAIN\n"
 		"	color = glxApplyLiftGammaGain(color);\n"
 		"#endif\n"

@@ -1081,7 +1081,7 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 	state->r_hdr = RI().Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	RI().Cvar_CheckRange( state->r_hdr, "-1", "1", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_hdr,
-		"Selects the scene-linear HDR render pipeline. Requires vid_restart so FBO storage and texture sRGB decode state rebuild together." );
+		"Selects the HDR-capable FBO render pipeline. Legacy tone mapping preserves Quake III lighting; non-legacy tone mapping, color grading, and explicit HDR output use scene-linear color. Requires vid_restart so FBO storage and texture sRGB decode state rebuild together." );
 	state->r_hdrPrecision = RI().Cvar_Get( "r_hdrPrecision", "0", CVAR_ARCHIVE_ND );
 	MakeCvarInstant( state->r_hdrPrecision );
 	RI().Cvar_CheckRange( state->r_hdrPrecision, "-1", "16", CV_INTEGER );
@@ -1095,7 +1095,7 @@ void GLX_PostProcess_RegisterCvars( PostProcessState *state )
 	state->r_srgbTextures = RI().Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	RI().Cvar_CheckRange( state->r_srgbTextures, "0", "1", CV_INTEGER );
 	RI().Cvar_SetDescription( state->r_srgbTextures,
-		"Use sRGB texture formats for authored color images in the scene-linear HDR pipeline. Requires vid_restart so existing textures can be reloaded safely." );
+		"Use sRGB texture formats for authored color images when the HDR path is actually running scene-linear color. Requires vid_restart so existing textures can be reloaded safely." );
 	state->r_framebufferSRGB = RI().Cvar_Get( "r_framebufferSRGB", "1", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->r_framebufferSRGB,
 		"Allow GL_FRAMEBUFFER_SRGB when the draw target is an sRGB framebuffer." );
@@ -1861,7 +1861,7 @@ void GLX_PostProcess_PrintInfo( const PostProcessState &state )
 	RI().Printf( PRINT_ALL,
 		"  color audit: srgb-decode %s requested %s available %s, framebuffer-srgb %s requested %s available %s, capture %s, capture-request %s, capture-hdr-aware %s, capture-supported %s, target-float %s, final-encode %s, contract %s, texture-consistent %s, stale-srgb-decode %u\n",
 		BoolName( state.textureSrgbDecode ),
-		BoolName( state.r_srgbTextures && state.r_srgbTextures->integer ? qtrue : qfalse ),
+		BoolName( state.textureSrgbDecodeDesired ),
 		BoolName( state.textureSrgbAvailable ),
 		BoolName( state.framebufferSrgbEnabled ),
 		BoolName( state.r_framebufferSRGB && state.r_framebufferSRGB->integer ? qtrue : qfalse ),

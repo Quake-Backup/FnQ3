@@ -289,7 +289,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: macos-14-large
+            runner: macos-15-intel
 
           - arch: aarch64
             runner: macos-14

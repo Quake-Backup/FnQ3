@@ -309,5 +309,21 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
         self.assertTrue(any("stress-light-budget" in failure for failure in failures))
 
 
+class VkRendererSourceTests(unittest.TestCase):
+    def test_vulkan_depth_fade_msaa_fallback_and_depth_resolve_scaffolding(self) -> None:
+        vk_c = (ROOT / "code" / "renderervk" / "vk.c").read_text(encoding="utf-8")
+        vk_h = (ROOT / "code" / "renderervk" / "vk.h").read_text(encoding="utf-8")
+
+        self.assertIn("VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME", vk_c)
+        self.assertIn("vkCreateRenderPass2KHR", vk_c)
+        self.assertIn("vk_depth_fade_uses_depth_resolve", vk_c)
+        self.assertIn("vk.depthStencilResolve", vk_c)
+        self.assertIn("VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT", vk_c)
+        self.assertIn("RENDER_PASS_MAIN_LOAD", vk_h)
+        self.assertIn("vk_pipeline_render_pass_index", vk_c)
+        self.assertIn("disabling MSAA so depth fade can use the single-sample depth copy path", vk_c)
+        self.assertIn("vkSamples = VK_SAMPLE_COUNT_1_BIT", vk_c)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 # Display Guide
 
-FnQuake3 splits display settings across three layers: how the window or fullscreen mode is created, how the scene is rendered internally, and which post-processing controls are applied to the final image. This guide covers renderer choice, video mode selection, framebuffer-based rendering, anti-aliasing, bloom, and the related scene presentation controls.
+FnQuake3 splits display settings across three layers: how the window or fullscreen mode is created, how the scene is rendered internally, and which post-processing controls are applied to the final image. This guide covers renderer choice, video mode selection, framebuffer-based rendering, anti-aliasing, bloom, soft particles, and the related scene presentation controls.
 
 For HUD, menu, and cinematic layout on widescreen displays, use the separate [Aspect Correction Guide](ASPECT_CORRECTION.md). For screenshot output and capture-specific options, use the [Screenshot Guide](SCREENSHOTS.md).
 
@@ -162,6 +162,82 @@ These settings affect the rendered scene itself rather than the window mode.
 - `r_greyscale`: Full-frame desaturation. Requires `r_fbo 1`.
 
 Use [ASPECT_CORRECTION.md](ASPECT_CORRECTION.md) for HUD, menu, and cinematic layout. That guide is intentionally separate because those settings solve a different problem than scene FOV, render scaling, or bloom.
+
+## Soft Particles
+
+Soft particles use the scene depth buffer to fade supported translucent effects as they intersect world geometry. This softens the hard clipping that can otherwise appear where smoke, explosions, blood trails, and similar sprites meet floors, walls, or other map surfaces. The effect is visual-only: it does not change demos, protocol behavior, assets, or game logic.
+
+- `r_depthFade`: Enables soft-particle depth fade for supported translucent shaders. Default is `1`. This is latched, so use `vid_restart` after changing it.
+
+Supported shaders include the built-in explosion, smoke, plasma, bullet, rail, BFG, and blood effect shaders that FnQuake3 marks for depth fade automatically, plus content shaders that declare `q3map_depthFade <distance> <bias>`. Opaque shaders, depth-writing shaders, and blend modes that cannot be faded safely keep their normal behavior.
+
+Renderer notes:
+
+- OpenGL-lineage renderers use the depth-texture path for this effect.
+- Vulkan uses the same kind of depth snapshot. If MSAA is requested, depth fade takes precedence and the main scene uses the single-sample depth-copy path.
+
+Typical setup:
+
+```cfg
+seta r_depthFade "1"
+vid_restart
+```
+
+## Dynamic Lighting And Shadowing
+
+FnQuake3 keeps classic Quake III dynamic lights available, then adds optional higher-quality dynamic-light rendering and shadow maps on the GLx/OpenGL-lineage and Vulkan paths. These effects are visual-only renderer features: they do not change demos, protocol behavior, map data, or game logic.
+
+Dynamic lighting controls:
+
+- `r_dynamiclight`: Enables dynamic lights such as weapon flashes and projectile lights. Default is `1`.
+- `r_dlightMode`: Selects the dynamic-light renderer.
+  - `0`: Vanilla Quake III style dynamic lights.
+  - `1`: High-quality per-pixel dynamic lights on world surfaces.
+  - `2`: Same as `1`, and also applies dynamic lights to entity models.
+- `r_dlightScale`: Scales dynamic-light radius. Default is `0.5`.
+- `r_dlightIntensity`: Scales dynamic-light intensity without changing radius. Default is `1.0`.
+- `r_dlightFalloff`: Blends the high-quality dynamic-light attenuation toward a smoother edge falloff. Default is `1`.
+- `r_dlightSaturation`: Adjusts dynamic-light color saturation in linear light. Default is `0.8`.
+
+Classic model shadow controls:
+
+- `cg_shadows`: Selects the classic player/model shadow mode.
+  - `0`: Disabled.
+  - `1`: Classic blob/blur-style model shadows.
+  - `2`: Stencil shadow volumes. This needs an available stencil buffer; `cl_stencilbits 8` is the usual compatible setting.
+  - `3`: Black planar projection shadows.
+
+Dynamic-light shadow-map controls:
+
+- `r_dlightShadows`: Enables dynamic-light shadow-map planning, atlas rendering, and filtered sampling. Default is `0`. This is latched, so use `vid_restart` after changing it.
+- `r_dlightShadowFilter`: Selects shadow filtering. Default is `2`.
+  - `0`: Hard shadows.
+  - `1`: 2x2 PCF.
+  - `2`: Four-tap poisson PCF.
+- `r_dlightShadowResolution`: Requested per-face shadow-map resolution. Valid range is `64..1024`, default is `256`. The renderer rounds this down to a power of two and may reduce it to fit the atlas.
+- `r_dlightShadowMaxLights`: Maximum dynamic lights allowed to cast shadows in one view. Default is `4`. Lower values give each light more atlas space; higher values favor coverage over sharpness.
+- `r_dlightShadowStrength`: Controls how strongly shadow-map occlusion dims the dynamic light. Default is `0.6`.
+- `r_dlightShadowBias`: Receiver bias in world units. Default is `4`.
+- `r_dlightShadowCasterDepthBias`: Constant depth bias while rendering shadow casters. Default is `1`.
+- `r_dlightShadowCasterSlopeBias`: Slope-scaled caster depth bias. Default is `1`.
+- `r_dlightShadowCasterNormalBias`: Light-aware caster normal offset in world units. Default is `0.25`.
+- `r_dlightShadowDebug`: Prints dynamic-light shadow planning and atlas counters. Use this or `r_speeds 4` when you want to confirm the effective atlas size and per-face resolution.
+
+Quality-first dynamic-light shadow-map setup:
+
+```cfg
+seta r_dynamiclight "1"
+seta r_dlightMode "2"
+seta r_dlightShadows "1"
+seta r_dlightShadowFilter "2"
+seta r_dlightShadowResolution "1024"
+seta r_dlightShadowMaxLights "2"
+vid_restart
+```
+
+If the debug output reports a smaller face size than requested, reduce `r_dlightShadowMaxLights` before increasing any bias values. Bias tuning is mainly for fixing acne, shimmering, or detached-looking shadows; the defaults are the best first pass for normal play.
+
+Directional cascaded shadow-map cvars such as `r_csmShadows` currently expose planning diagnostics only. They are useful for renderer validation, but they are not a visible player-facing directional shadow feature yet.
 
 ## Texture Picmip
 
@@ -426,6 +502,7 @@ Use `vid_restart` after changes to:
 - `r_hdrPrecision`
 - `r_ext_multisample`
 - `r_ext_alpha_to_coverage`
+- `r_depthFade`
 - `r_renderWidth`, `r_renderHeight`, `r_renderScale`
 - `r_ext_supersample`
 - OpenGL or GLx `r_bloom_passes`

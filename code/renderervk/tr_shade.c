@@ -1123,6 +1123,7 @@ static qboolean RB_DepthFadeShaderSupported( void )
 static qboolean RB_DepthFadeActive( void )
 {
 	return ( RB_DepthFadeShaderSupported() &&
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0 &&
 		( !backEnd.currentEntity || ( backEnd.currentEntity->e.renderfx & RF_DEPTHHACK ) == 0 ) &&
 		vk_depth_fade_ready() ) ? qtrue : qfalse;
 }

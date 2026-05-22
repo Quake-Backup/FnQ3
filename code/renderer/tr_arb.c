@@ -74,6 +74,7 @@ typedef struct frameBuffer_s {
 #ifdef USE_FBO
 static GLuint commonDepthStencil;
 static GLuint depthFadeTexture;
+static qboolean depthFadeTextureShared;
 static GLuint dlightShadowAtlasTexture;
 static GLuint dlightShadowAtlasFbo;
 static dlightShadowAtlasLayout_t dlightShadowAtlasLayout;
@@ -2560,9 +2561,17 @@ static void FBO_CleanDepth( void )
 	if ( depthFadeTexture )
 	{
 		GL_BindTexture( 1, 0 );
-		qglDeleteTextures( 1, &depthFadeTexture );
+		if ( !depthFadeTextureShared || depthFadeTexture != commonDepthStencil )
+		{
+			if ( commonDepthStencil == depthFadeTexture )
+			{
+				commonDepthStencil = 0;
+			}
+			qglDeleteTextures( 1, &depthFadeTexture );
+		}
 		depthFadeTexture = 0;
 		depthFadeCopied = qfalse;
+		depthFadeTextureShared = qfalse;
 	}
 
 #ifdef COMMON_DEPTH_STENCIL
@@ -2580,7 +2589,7 @@ static void FBO_CleanDepth( void )
 }
 
 
-static GLuint FBO_CreateDepthFadeTexture( GLsizei width, GLsizei height )
+static GLuint FBO_CreateDepthFadeTexture( GLsizei width, GLsizei height, qboolean depthStencil )
 {
 	GLuint tex;
 
@@ -2590,7 +2599,12 @@ static GLuint FBO_CreateDepthFadeTexture( GLsizei width, GLsizei height )
 	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
 	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
 	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-	qglTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL );
+	if ( depthStencil )
+		qglTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, width, height, 0,
+			GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, NULL );
+	else
+		qglTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, width, height, 0,
+			GL_DEPTH_COMPONENT, GL_FLOAT, NULL );
 
 	return tex;
 }
@@ -2676,6 +2690,16 @@ static GLuint FBO_CreateDepthTextureOrBuffer( GLsizei width, GLsizei height )
 	return buffer;
 #else
 	GLuint tex;
+	// Let the MSAA depth resolve write directly into the texture sampled by
+	// depth-fade and world-outline shaders.
+	if ( frameBufferMultiSampling && !depthFadeTexture &&
+		width == glConfig.vidWidth && height == glConfig.vidHeight )
+	{
+		depthFadeTexture = FBO_CreateDepthFadeTexture( width, height,
+			glConfig.stencilBits > 0 ? qtrue : qfalse );
+		depthFadeTextureShared = qtrue;
+		return depthFadeTexture;
+	}
 	qglGenTextures( 1, &tex );
 	GL_BindTexture( 0, tex );
 	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
@@ -3260,6 +3284,11 @@ static void FBO_CopyDepthTexture( void )
 
 	if ( frameBufferMultiSampling ) {
 		FBO_BlitMS( qtrue );
+		if ( depthFadeTextureShared ) {
+			depthFadeCopied = qtrue;
+			FBO_BindMain();
+			return;
+		}
 	}
 
 	FBO_Bind( GL_READ_FRAMEBUFFER, frameBuffers[ 0 ].fbo );
@@ -3548,6 +3577,9 @@ void FBO_BlitMS( qboolean depthOnly )
 	if ( depthOnly )
 	{
 		qglBlitFramebuffer( 0, 0, w, h, 0, 0, w, h, GL_DEPTH_BUFFER_BIT, GL_NEAREST );
+		if ( depthFadeTextureShared ) {
+			depthFadeCopied = qtrue;
+		}
 		FBO_Bind( GL_READ_FRAMEBUFFER, d->fbo );
 #ifdef RENDERER_GLX
 		GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_FBO_BLIT );
@@ -4425,6 +4457,7 @@ void QGL_InitFBO( void )
 	
 	fboEnabled = qfalse;
 	frameBufferMultiSampling = qfalse;
+	depthFadeTextureShared = qfalse;
 	fboInternalFormat = FBO_MainInternalFormat();
 	fboTextureFormat = 0;
 	fboTextureType = 0;
@@ -4461,7 +4494,8 @@ void QGL_InitFBO( void )
 	if ( FBO_CreateMS( &frameBufferMS, w, h ) )
 	{
 		frameBufferMultiSampling = qtrue;
-		if ( r_flares->integer || ( r_depthFade && r_depthFade->integer ) )
+		if ( r_flares->integer || ( r_depthFade && r_depthFade->integer ) ||
+			R_CelShadingWorldActive() )
 			depthStencil = qtrue;
 		else
 			depthStencil = qfalse;
@@ -4487,7 +4521,8 @@ void QGL_InitFBO( void )
 	if ( result )
 	{
 		fboEnabled = qtrue;
-		depthFadeTexture = FBO_CreateDepthFadeTexture( w, h );
+		if ( !depthFadeTexture )
+			depthFadeTexture = FBO_CreateDepthFadeTexture( w, h, qfalse );
 		FBO_CreateDlightShadowAtlas();
 		FBO_BindMain();
 		ri.Printf( PRINT_ALL, "...using %s (%s:%s) FBO\n", glDefToStr( fboInternalFormat ),

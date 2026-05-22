@@ -174,6 +174,7 @@ typedef struct {
 
 typedef enum {
 	RENDER_PASS_MAIN = 0,
+	RENDER_PASS_MAIN_LOAD,
 	RENDER_PASS_SCREENMAP,
 	RENDER_PASS_POST_BLOOM,
 	RENDER_PASS_DLIGHT_SHADOW,
@@ -721,7 +722,9 @@ typedef struct {
 	rendererOutputBackend_t outputBackend;
 	qboolean synchronization2;
 	qboolean dynamicRendering;
+	qboolean depthStencilResolve;
 	qboolean timestamps;
+	VkResolveModeFlagBits depthResolveMode;
 
 	float maxAnisotropy;
 	float maxLod;

@@ -502,6 +502,17 @@ static void SetViewportAndScissor( void ) {
 #endif
 }
 
+#ifdef USE_VULKAN
+static void RB_DrawWorldCelOutlineForScene( qboolean *drawn ) {
+	if ( *drawn || !R_CelShadingWorldActive() ) {
+		return;
+	}
+
+	vk_draw_world_cel_outline();
+	*drawn = qtrue;
+}
+#endif
+
 
 /*
 =================
@@ -579,7 +590,7 @@ static void RB_LightingPass( void );
 RB_RenderDrawSurfList
 ==================
 */
-static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	shader_t		*shader, *oldShader;
 	int				fogNum;
 	int				entityNum, oldEntityNum;
@@ -596,6 +607,7 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #endif
 #ifdef USE_VULKAN
 	qboolean		depthFadeSnapshot;
+	qboolean		worldCelOutlineDrawn;
 #endif
 	double			originalTime; // -EC-
 
@@ -616,6 +628,7 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #endif
 #ifdef USE_VULKAN
 	depthFadeSnapshot = qfalse;
+	worldCelOutlineDrawn = qfalse;
 #endif
 	depthRange = qfalse;
 
@@ -633,7 +646,9 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		if ( vk.renderPassIndex == RENDER_PASS_SCREENMAP && entityNum != REFENTITYNUM_WORLD && backEnd.refdef.entities[ entityNum ].e.renderfx & RF_DEPTHHACK ) {
 			continue;
 		}
-		if ( !depthFadeSnapshot && shader && shader->sort > SS_OPAQUE && vk.renderPassIndex == RENDER_PASS_MAIN && vk_depth_fade_available() ) {
+		if ( !depthFadeSnapshot && shader && shader->sort > SS_OPAQUE &&
+			( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0 &&
+			vk.renderPassIndex == RENDER_PASS_MAIN && vk_depth_fade_available() ) {
 			RB_EndSurface();
 			vk_copy_depth_fade();
 			depthFadeSnapshot = qtrue;
@@ -668,6 +683,12 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 				oldEntityNum = -1; // force matrix setup
 			}
 			oldShaderSort = shader->sort;
+#endif
+#ifdef USE_VULKAN
+			// Keep sprite/effect sorts above the screen-space world outline.
+			if ( shader->sort >= SS_BLEND0 ) {
+				RB_DrawWorldCelOutlineForScene( &worldCelOutlineDrawn );
+			}
 #endif
 			RB_BeginSurface( shader, fogNum );
 			oldShader = shader;
@@ -806,6 +827,12 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	if ( depthRange ) {
 		qglDepthRange(0, 1);
 	}
+#endif
+
+#ifdef USE_VULKAN
+	return worldCelOutlineDrawn;
+#else
+	return qfalse;
 #endif
 }
 
@@ -2249,6 +2276,9 @@ static void RB_FinishBloomForHud3D( const trRefdef_t *refdef ) {
 
 static const void *RB_DrawSurfs( const void *data ) {
 	const drawSurfsCommand_t *cmd;
+#ifdef USE_VULKAN
+	qboolean worldCelOutlineDrawn;
+#endif
 
 	cmd = (const drawSurfsCommand_t *)data;
 
@@ -2273,7 +2303,10 @@ static const void *RB_DrawSurfs( const void *data ) {
 	// clear the z buffer, set the modelview, etc
 	RB_BeginDrawingView();
 
-	RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
+#ifdef USE_VULKAN
+	worldCelOutlineDrawn =
+#endif
+		RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
 
 #ifdef USE_VBO
 	VBO_UnBind();
@@ -2297,7 +2330,9 @@ static const void *RB_DrawSurfs( const void *data ) {
 #endif
 
 #ifdef USE_VULKAN
-	vk_draw_world_cel_outline();
+	if ( !worldCelOutlineDrawn ) {
+		RB_DrawWorldCelOutlineForScene( &worldCelOutlineDrawn );
+	}
 #endif
 
 	// draw main system development information (surface outlines, etc)

@@ -512,6 +512,31 @@ static void SetViewportAndScissor( void ) {
 		backEnd.viewParms.scissorWidth, backEnd.viewParms.scissorHeight );
 }
 
+#ifdef USE_FBO
+static void RB_DrawWorldCelOutlineForScene( qboolean *drawn ) {
+	int savedTime;
+	double savedFloatTime;
+
+	if ( *drawn || !R_CelShadingWorldActive() ) {
+		return;
+	}
+
+	savedTime = backEnd.refdef.time;
+	savedFloatTime = backEnd.refdef.floatTime;
+
+	FBO_DrawWorldCelOutline();
+
+	backEnd.refdef.time = savedTime;
+	backEnd.refdef.floatTime = savedFloatTime;
+
+	if ( !backEnd.projection2D ) {
+		SetViewportAndScissor();
+	}
+
+	*drawn = qtrue;
+}
+#endif
+
 
 /*
 =================
@@ -572,12 +597,58 @@ static void RB_BeginDrawingView( void ) {
 static void RB_LightingPass( void );
 #endif
 
+#ifdef USE_FBO
+static qboolean RB_DrawSurfNeedsDepthFadeSnapshot( const drawSurf_t *drawSurf ) {
+	shader_t	*shader;
+	int			entityNum;
+	int			fogNum;
+	int			dlighted;
+
+	if ( !drawSurf ) {
+		return qfalse;
+	}
+
+	R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+	if ( !shader || shader->sort <= SS_OPAQUE ||
+		shader->dfType <= DFT_NONE || shader->dfType >= DFT_TBD ) {
+		return qfalse;
+	}
+	if ( entityNum != REFENTITYNUM_WORLD ) {
+		if ( entityNum < 0 || entityNum >= backEnd.refdef.num_entities ) {
+			return qfalse;
+		}
+		if ( backEnd.refdef.entities[ entityNum ].e.renderfx & RF_DEPTHHACK ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+static qboolean RB_DrawSurfListNeedsDepthFadeSnapshot( const drawSurf_t *drawSurfs,
+	int numDrawSurfs, int firstDrawSurf )
+{
+	int i;
+
+	if ( !drawSurfs || !FBO_DepthFadeAvailable() ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		return qfalse;
+	}
+
+	for ( i = firstDrawSurf; i < numDrawSurfs; i++ ) {
+		if ( RB_DrawSurfNeedsDepthFadeSnapshot( &drawSurfs[ i ] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+#endif
+
 /*
 ==================
 RB_RenderDrawSurfList
 ==================
 */
-static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	shader_t		*shader, *oldShader;
 	int				fogNum;
 	int				entityNum, oldEntityNum;
@@ -591,6 +662,7 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #endif
 #ifdef USE_FBO
 	qboolean		depthFadeSnapshot;
+	qboolean		worldCelOutlineDrawn;
 #endif
 	double			originalTime; // -EC-
 
@@ -609,6 +681,7 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #endif
 #ifdef USE_FBO
 	depthFadeSnapshot = qfalse;
+	worldCelOutlineDrawn = qfalse;
 	FBO_ResetDepthFade();
 #endif
 	depthRange = qfalse;
@@ -627,11 +700,13 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #ifdef USE_FBO
 		if ( !depthFadeSnapshot && shader && shader->sort > SS_OPAQUE &&
 			( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0 ) {
-			if ( oldShader != NULL ) {
-				RB_EndSurface();
-				oldShader = NULL;
+			if ( RB_DrawSurfListNeedsDepthFadeSnapshot( drawSurfs, numDrawSurfs, i ) ) {
+				if ( oldShader != NULL ) {
+					RB_EndSurface();
+					oldShader = NULL;
+				}
+				FBO_CopyDepthFade();
 			}
-			FBO_CopyDepthFade();
 			depthFadeSnapshot = qtrue;
 		}
 #endif
@@ -658,6 +733,12 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 				oldEntityNum = -1; // force matrix setup
 			}
 			oldShaderSort = shader->sort;
+#endif
+#ifdef USE_FBO
+			// Keep sprite/effect sorts above the screen-space world outline.
+			if ( shader->sort >= SS_BLEND0 ) {
+				RB_DrawWorldCelOutlineForScene( &worldCelOutlineDrawn );
+			}
 #endif
 			RB_BeginSurface( shader, fogNum );
 			oldShader = shader;
@@ -783,6 +864,12 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	if ( depthRange ) {
 		qglDepthRange(0, 1);
 	}
+
+#ifdef USE_FBO
+	return worldCelOutlineDrawn;
+#else
+	return qfalse;
+#endif
 }
 
 
@@ -2210,6 +2297,9 @@ static void RB_PreparePostProcessForHud3D( const trRefdef_t *refdef ) {
 
 static const void *RB_DrawSurfs( const void *data ) {
 	const drawSurfsCommand_t *cmd;
+#ifdef USE_FBO
+	qboolean worldCelOutlineDrawn;
+#endif
 
 	cmd = (const drawSurfsCommand_t *)data;
 
@@ -2234,7 +2324,10 @@ static const void *RB_DrawSurfs( const void *data ) {
 	// clear the z buffer, set the modelview, etc
 	RB_BeginDrawingView();
 
-	RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
+#ifdef USE_FBO
+	worldCelOutlineDrawn =
+#endif
+		RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
 
 #ifdef USE_VBO
 	VBO_UnBind();
@@ -2264,7 +2357,9 @@ static const void *RB_DrawSurfs( const void *data ) {
 		}
 	}
 
-	FBO_DrawWorldCelOutline();
+	if ( !worldCelOutlineDrawn ) {
+		RB_DrawWorldCelOutlineForScene( &worldCelOutlineDrawn );
+	}
 #endif
 
 	// draw main system development information (surface outlines, etc)

@@ -49,6 +49,7 @@ static VkSurfaceKHR vk_surface = VK_NULL_HANDLE;
 static qboolean vk_instance_debug_utils = qfalse;
 static qboolean vk_instance_swapchain_colorspace = qfalse;
 static char vk_current_render_pass_label[64];
+static VkRenderPass vk_current_render_pass = VK_NULL_HANDLE;
 
 #ifdef USE_VK_VALIDATION
 static VkDebugReportCallbackEXT vk_debug_callback = VK_NULL_HANDLE;
@@ -72,6 +73,8 @@ static PFN_vkGetPhysicalDeviceFeatures2KHR				qvkGetPhysicalDeviceFeatures2KHR;
 static PFN_vkGetPhysicalDeviceFormatProperties			qvkGetPhysicalDeviceFormatProperties;
 static PFN_vkGetPhysicalDeviceMemoryProperties			qvkGetPhysicalDeviceMemoryProperties;
 static PFN_vkGetPhysicalDeviceProperties				qvkGetPhysicalDeviceProperties;
+static PFN_vkGetPhysicalDeviceProperties2				qvkGetPhysicalDeviceProperties2;
+static PFN_vkGetPhysicalDeviceProperties2KHR			qvkGetPhysicalDeviceProperties2KHR;
 static PFN_vkGetPhysicalDeviceQueueFamilyProperties		qvkGetPhysicalDeviceQueueFamilyProperties;
 static PFN_vkDestroySurfaceKHR							qvkDestroySurfaceKHR;
 static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR	qvkGetPhysicalDeviceSurfaceCapabilitiesKHR;
@@ -127,6 +130,7 @@ static PFN_vkCreatePipelineLayout						qvkCreatePipelineLayout;
 static PFN_vkCreatePipelineCache						qvkCreatePipelineCache;
 static PFN_vkCreateQueryPool							qvkCreateQueryPool;
 static PFN_vkCreateRenderPass							qvkCreateRenderPass;
+static PFN_vkCreateRenderPass2KHR						qvkCreateRenderPass2KHR;
 static PFN_vkCreateSampler								qvkCreateSampler;
 static PFN_vkCreateSemaphore							qvkCreateSemaphore;
 static PFN_vkCreateShaderModule							qvkCreateShaderModule;
@@ -359,6 +363,11 @@ static const char *vk_result_string( VkResult code ) {
 	} \
 }
 
+static qboolean vk_depth_fade_resolve_supported( void );
+static qboolean vk_depth_fade_uses_depth_resolve( void );
+static qboolean vk_depth_fade_requested( void );
+static renderPass_t vk_pipeline_render_pass_index( void );
+
 
 static void vk_query_modern_device_features( VkPhysicalDevice physical_device,
 	qboolean querySynchronization2, qboolean queryDynamicRendering,
@@ -408,6 +417,47 @@ static void vk_query_modern_device_features( VkPhysicalDevice physical_device,
 
 	*synchronization2 = synchronization2_features.synchronization2 ? qtrue : qfalse;
 	*dynamicRendering = dynamic_rendering_features.dynamicRendering ? qtrue : qfalse;
+}
+
+static qboolean vk_query_depth_stencil_resolve( VkPhysicalDevice physical_device, VkResolveModeFlagBits *resolveMode )
+{
+	VkPhysicalDeviceProperties2 properties2;
+	VkPhysicalDeviceDepthStencilResolveProperties resolveProperties;
+	VkResolveModeFlagBits preferredMode;
+
+	if ( resolveMode == NULL ||
+		( qvkGetPhysicalDeviceProperties2 == NULL && qvkGetPhysicalDeviceProperties2KHR == NULL ) ) {
+		return qfalse;
+	}
+
+	Com_Memset( &properties2, 0, sizeof( properties2 ) );
+	Com_Memset( &resolveProperties, 0, sizeof( resolveProperties ) );
+	properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+	properties2.pNext = &resolveProperties;
+	resolveProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES;
+
+	if ( qvkGetPhysicalDeviceProperties2 != NULL ) {
+		qvkGetPhysicalDeviceProperties2( physical_device, &properties2 );
+	} else {
+		qvkGetPhysicalDeviceProperties2KHR( physical_device, &properties2 );
+	}
+
+#ifdef USE_REVERSED_DEPTH
+	preferredMode = VK_RESOLVE_MODE_MAX_BIT;
+#else
+	preferredMode = VK_RESOLVE_MODE_MIN_BIT;
+#endif
+
+	if ( resolveProperties.supportedDepthResolveModes & preferredMode ) {
+		*resolveMode = preferredMode;
+		return qtrue;
+	}
+	if ( resolveProperties.supportedDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT ) {
+		*resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+		return qtrue;
+	}
+
+	return qfalse;
 }
 
 
@@ -1538,22 +1588,132 @@ static void vk_create_dlight_shadow_render_pass( VkFormat depth_format )
 	SET_OBJECT_NAME( vk.render_pass.dlight_shadow, "render pass - dlight shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
 }
 
+static void vk_attachment_reference2_from_legacy( VkAttachmentReference2 *dst, const VkAttachmentReference *src )
+{
+	Com_Memset( dst, 0, sizeof( *dst ) );
+	dst->sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2;
+	if ( src ) {
+		dst->attachment = src->attachment;
+		dst->layout = src->layout;
+	} else {
+		dst->attachment = VK_ATTACHMENT_UNUSED;
+		dst->layout = VK_IMAGE_LAYOUT_UNDEFINED;
+	}
+}
+
+
+static VkResult vk_create_render_pass2_with_depth_resolve( const VkRenderPassCreateInfo *srcDesc,
+	const VkAttachmentReference *depthResolveRef, VkRenderPass *renderPass )
+{
+	VkAttachmentDescription2 attachments2[4];
+	VkAttachmentReference2 colorRefs2[1];
+	VkAttachmentReference2 colorResolveRefs2[1];
+	VkAttachmentReference2 depthRef2;
+	VkAttachmentReference2 depthResolveRef2;
+	VkSubpassDescriptionDepthStencilResolve depthResolve;
+	VkSubpassDescription2 subpass2;
+	VkSubpassDependency2 deps2[3];
+	VkRenderPassCreateInfo2 desc2;
+	const VkSubpassDescription *srcSubpass;
+	uint32_t i;
+
+	if ( !qvkCreateRenderPass2KHR || !srcDesc || !srcDesc->pSubpasses ||
+		srcDesc->subpassCount != 1 || srcDesc->attachmentCount > ARRAY_LEN( attachments2 ) ) {
+		return VK_ERROR_EXTENSION_NOT_PRESENT;
+	}
+
+	srcSubpass = &srcDesc->pSubpasses[0];
+	if ( srcSubpass->colorAttachmentCount > ARRAY_LEN( colorRefs2 ) ||
+		srcDesc->dependencyCount > ARRAY_LEN( deps2 ) ) {
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+
+	Com_Memset( attachments2, 0, sizeof( attachments2 ) );
+	for ( i = 0; i < srcDesc->attachmentCount; i++ ) {
+		attachments2[i].sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
+		attachments2[i].flags = srcDesc->pAttachments[i].flags;
+		attachments2[i].format = srcDesc->pAttachments[i].format;
+		attachments2[i].samples = srcDesc->pAttachments[i].samples;
+		attachments2[i].loadOp = srcDesc->pAttachments[i].loadOp;
+		attachments2[i].storeOp = srcDesc->pAttachments[i].storeOp;
+		attachments2[i].stencilLoadOp = srcDesc->pAttachments[i].stencilLoadOp;
+		attachments2[i].stencilStoreOp = srcDesc->pAttachments[i].stencilStoreOp;
+		attachments2[i].initialLayout = srcDesc->pAttachments[i].initialLayout;
+		attachments2[i].finalLayout = srcDesc->pAttachments[i].finalLayout;
+	}
+
+	for ( i = 0; i < srcSubpass->colorAttachmentCount; i++ ) {
+		vk_attachment_reference2_from_legacy( &colorRefs2[i], &srcSubpass->pColorAttachments[i] );
+		if ( srcSubpass->pResolveAttachments ) {
+			vk_attachment_reference2_from_legacy( &colorResolveRefs2[i], &srcSubpass->pResolveAttachments[i] );
+		}
+	}
+	vk_attachment_reference2_from_legacy( &depthRef2, srcSubpass->pDepthStencilAttachment );
+	vk_attachment_reference2_from_legacy( &depthResolveRef2, depthResolveRef );
+
+	Com_Memset( &depthResolve, 0, sizeof( depthResolve ) );
+	depthResolve.sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE;
+	depthResolve.depthResolveMode = vk.depthResolveMode;
+	depthResolve.stencilResolveMode = VK_RESOLVE_MODE_NONE;
+	depthResolve.pDepthStencilResolveAttachment = &depthResolveRef2;
+
+	Com_Memset( &subpass2, 0, sizeof( subpass2 ) );
+	subpass2.sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2;
+	subpass2.pNext = &depthResolve;
+	subpass2.flags = srcSubpass->flags;
+	subpass2.pipelineBindPoint = srcSubpass->pipelineBindPoint;
+	subpass2.inputAttachmentCount = srcSubpass->inputAttachmentCount;
+	subpass2.pColorAttachments = colorRefs2;
+	subpass2.colorAttachmentCount = srcSubpass->colorAttachmentCount;
+	subpass2.pResolveAttachments = srcSubpass->pResolveAttachments ? colorResolveRefs2 : NULL;
+	subpass2.pDepthStencilAttachment = srcSubpass->pDepthStencilAttachment ? &depthRef2 : NULL;
+	subpass2.preserveAttachmentCount = srcSubpass->preserveAttachmentCount;
+	subpass2.pPreserveAttachments = srcSubpass->pPreserveAttachments;
+
+	Com_Memset( deps2, 0, sizeof( deps2 ) );
+	for ( i = 0; i < srcDesc->dependencyCount; i++ ) {
+		deps2[i].sType = VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2;
+		deps2[i].srcSubpass = srcDesc->pDependencies[i].srcSubpass;
+		deps2[i].dstSubpass = srcDesc->pDependencies[i].dstSubpass;
+		deps2[i].srcStageMask = srcDesc->pDependencies[i].srcStageMask;
+		deps2[i].dstStageMask = srcDesc->pDependencies[i].dstStageMask;
+		deps2[i].srcAccessMask = srcDesc->pDependencies[i].srcAccessMask;
+		deps2[i].dstAccessMask = srcDesc->pDependencies[i].dstAccessMask;
+		deps2[i].dependencyFlags = srcDesc->pDependencies[i].dependencyFlags;
+	}
+
+	Com_Memset( &desc2, 0, sizeof( desc2 ) );
+	desc2.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2;
+	desc2.flags = srcDesc->flags;
+	desc2.attachmentCount = srcDesc->attachmentCount;
+	desc2.pAttachments = attachments2;
+	desc2.subpassCount = 1;
+	desc2.pSubpasses = &subpass2;
+	desc2.dependencyCount = srcDesc->dependencyCount;
+	desc2.pDependencies = deps2;
+
+	return qvkCreateRenderPass2KHR( vk.device, &desc2, NULL, renderPass );
+}
+
 
 static void vk_create_render_passes( void )
 {
-	VkAttachmentDescription attachments[3]; // color | depth | msaa color
+	VkAttachmentDescription attachments[4]; // color | depth | msaa color | depth resolve
 	VkAttachmentReference colorResolveRef;
 	VkAttachmentReference colorRef0;
 	VkAttachmentReference depthRef0;
+	VkAttachmentReference depthResolveRef;
 	VkSubpassDescription subpass;
 	VkSubpassDependency deps[3];
 	VkRenderPassCreateInfo desc;
 	VkFormat depth_format;
 	VkDevice device;
+	qboolean depthResolveActive;
 	uint32_t i;
 
 	depth_format = vk.depth_format;
 	device = vk.device;
+	depthResolveActive = vk_depth_fade_uses_depth_resolve();
 
 	if ( r_fbo->integer == 0 )
 	{
@@ -1664,6 +1824,22 @@ static void vk_create_render_passes( void )
 		subpass.pResolveAttachments = &colorResolveRef;
 	}
 
+	if ( depthResolveActive ) {
+		attachments[3].flags = 0;
+		attachments[3].format = depth_format;
+		attachments[3].samples = VK_SAMPLE_COUNT_1_BIT;
+		attachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		attachments[3].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attachments[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachments[3].initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		attachments[3].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		desc.attachmentCount = 4;
+		depthResolveRef.attachment = 3;
+		depthResolveRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+	}
+
 	// subpass dependencies
 
 	Com_Memset( &deps, 0, sizeof( deps ) );
@@ -1714,9 +1890,23 @@ static void vk_create_render_passes( void )
 	deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;						// Don't read things from the shader before ready
 	deps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;					// Only need the current fragment (or tile) synchronized, not the whole framebuffer
 
-	VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.main ) );
+	if ( depthResolveActive ) {
+		deps[0].dstStageMask |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		deps[0].dstAccessMask |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+		deps[1].srcStageMask |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		deps[1].srcAccessMask |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	}
+
+	if ( depthResolveActive ) {
+		VK_CHECK( vk_create_render_pass2_with_depth_resolve( &desc, &depthResolveRef, &vk.render_pass.main ) );
+	} else {
+		VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.main ) );
+	}
 	SET_OBJECT_NAME( vk.render_pass.main, "render pass - main", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
 
+	if ( depthResolveActive ) {
+		desc.attachmentCount = 3;
+	}
 	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 	attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 	attachments[1].stencilLoadOp = glConfig.stencilBits ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1742,6 +1932,9 @@ static void vk_create_render_passes( void )
 			// msaa render target
 			attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 			attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		}
+		if ( depthResolveActive ) {
+			desc.attachmentCount = 3;
 		}
 		VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.post_bloom ) );
 		SET_OBJECT_NAME( vk.render_pass.post_bloom, "render pass - post_bloom", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
@@ -2704,6 +2897,8 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 	vk.hdrMetadata = qfalse;
 	vk.synchronization2 = qfalse;
 	vk.dynamicRendering = qfalse;
+	vk.depthStencilResolve = qfalse;
+	vk.depthResolveMode = VK_RESOLVE_MODE_NONE;
 
 	// select surface format
 	if ( !vk_select_surface_format( physical_device, vk_surface ) ) {
@@ -2764,8 +2959,11 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 		qboolean hdrMetadata = qfalse;
 		qboolean synchronization2Extension = qfalse;
 		qboolean dynamicRenderingExtension = qfalse;
+		qboolean createRenderPass2Extension = qfalse;
+		qboolean depthStencilResolveExtension = qfalse;
 		qboolean synchronization2Feature = qfalse;
 		qboolean dynamicRenderingFeature = qfalse;
+		qboolean enableDepthStencilResolve = qfalse;
 		qboolean enableSynchronization2 = qfalse;
 		qboolean enableDynamicRendering = qfalse;
 		const void** pNextPtr;
@@ -2801,6 +2999,10 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 				synchronization2Extension = qtrue;
 			} else if ( strcmp( ext, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME ) == 0 ) {
 				dynamicRenderingExtension = qtrue;
+			} else if ( strcmp( ext, VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME ) == 0 ) {
+				createRenderPass2Extension = qtrue;
+			} else if ( strcmp( ext, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME ) == 0 ) {
+				depthStencilResolveExtension = qtrue;
 #ifdef _DEBUG
 			} else if ( strcmp( ext, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME ) == 0 ) {
 				timelineSemaphore = qtrue;
@@ -2831,6 +3033,8 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 			&synchronization2Feature, &dynamicRenderingFeature );
 		enableSynchronization2 = synchronization2Extension && synchronization2Feature;
 		enableDynamicRendering = dynamicRenderingExtension && dynamicRenderingFeature;
+		enableDepthStencilResolve = createRenderPass2Extension && depthStencilResolveExtension &&
+			vk_query_depth_stencil_resolve( physical_device, &vk.depthResolveMode );
 
 		if ( synchronization2Extension && !synchronization2Feature ) {
 			ri.Printf( PRINT_DEVELOPER, "...%s advertised but feature bit is unavailable\n", VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME );
@@ -2876,6 +3080,11 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 
 		if ( enableDynamicRendering ) {
 			device_extension_list[ device_extension_count++ ] = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
+		}
+
+		if ( enableDepthStencilResolve ) {
+			device_extension_list[ device_extension_count++ ] = VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME;
+			device_extension_list[ device_extension_count++ ] = VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME;
 		}
 #ifdef _DEBUG
 		if ( timelineSemaphore ) {
@@ -3010,6 +3219,7 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 		vk.hdrMetadata = hdrMetadata;
 		vk.synchronization2 = enableSynchronization2;
 		vk.dynamicRendering = enableDynamicRendering;
+		vk.depthStencilResolve = enableDepthStencilResolve;
 	}
 
 	return qtrue;
@@ -3079,6 +3289,8 @@ static void init_vulkan_library( void )
 	VkResult res;
 
 	Com_Memset( &vk, 0, sizeof( vk ) );
+	vk_current_render_pass = VK_NULL_HANDLE;
+	vk_current_render_pass_label[0] = '\0';
 
 	if ( vk_instance == VK_NULL_HANDLE ) {
 
@@ -3103,6 +3315,8 @@ static void init_vulkan_library( void )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceFormatProperties )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceMemoryProperties )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceProperties )
+		INIT_INSTANCE_FUNCTION_EXT( vkGetPhysicalDeviceProperties2 )
+		INIT_INSTANCE_FUNCTION_EXT( vkGetPhysicalDeviceProperties2KHR )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceQueueFamilyProperties )
 		INIT_INSTANCE_FUNCTION( vkDestroySurfaceKHR )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceSurfaceCapabilitiesKHR )
@@ -3334,6 +3548,13 @@ static void init_vulkan_library( void )
 			vk.dynamicRendering = qfalse;
 		}
 	}
+
+	if ( vk.depthStencilResolve ) {
+		INIT_DEVICE_FUNCTION_EXT(vkCreateRenderPass2KHR)
+		if ( !qvkCreateRenderPass2KHR ) {
+			vk.depthStencilResolve = qfalse;
+		}
+	}
 }
 
 #undef INIT_INSTANCE_FUNCTION
@@ -3358,6 +3579,8 @@ static void deinit_instance_functions( void )
 	qvkGetPhysicalDeviceFormatProperties = NULL;
 	qvkGetPhysicalDeviceMemoryProperties = NULL;
 	qvkGetPhysicalDeviceProperties = NULL;
+	qvkGetPhysicalDeviceProperties2 = NULL;
+	qvkGetPhysicalDeviceProperties2KHR = NULL;
 	qvkGetPhysicalDeviceQueueFamilyProperties = NULL;
 	qvkDestroySurfaceKHR = NULL;
 	qvkGetPhysicalDeviceSurfaceCapabilitiesKHR = NULL;
@@ -3419,6 +3642,7 @@ static void deinit_device_functions( void )
 	qvkCreatePipelineLayout						= NULL;
 	qvkCreateQueryPool							= NULL;
 	qvkCreateRenderPass							= NULL;
+	qvkCreateRenderPass2KHR						= NULL;
 	qvkCreateSampler							= NULL;
 	qvkCreateSemaphore							= NULL;
 	qvkCreateShaderModule						= NULL;
@@ -5148,9 +5372,11 @@ static void create_depth_attachment( uint32_t width, uint32_t height, VkSampleCo
 	VkMemoryRequirements memory_requirements;
 	VkImageAspectFlags image_aspect_flags;
 	qboolean depthFadeSource;
+	qboolean depthFadeResolveSource;
 
 	// create depth image
 	depthFadeSource = ( image == &vk.depth_image && vk_depth_fade_supported() );
+	depthFadeResolveSource = ( depthFadeSource && vk_depth_fade_resolve_supported() );
 
 	create_desc.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	create_desc.pNext = NULL;
@@ -5165,7 +5391,7 @@ static void create_depth_attachment( uint32_t width, uint32_t height, VkSampleCo
 	create_desc.samples = samples;
 	create_desc.tiling = VK_IMAGE_TILING_OPTIMAL;
 	create_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-	if ( depthFadeSource ) {
+	if ( depthFadeSource && !depthFadeResolveSource ) {
 		create_desc.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	}
 	if ( allowTransient && !depthFadeSource ) {
@@ -5192,6 +5418,12 @@ static void create_depth_fade_attachment( uint32_t width, uint32_t height, VkIma
 {
 	VkImageCreateInfo create_desc;
 	VkMemoryRequirements memory_requirements;
+	VkImageUsageFlags usage;
+
+	usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+	if ( vk_depth_fade_resolve_supported() ) {
+		usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+	}
 
 	create_desc.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	create_desc.pNext = NULL;
@@ -5205,7 +5437,7 @@ static void create_depth_fade_attachment( uint32_t width, uint32_t height, VkIma
 	create_desc.arrayLayers = 1;
 	create_desc.samples = VK_SAMPLE_COUNT_1_BIT;
 	create_desc.tiling = VK_IMAGE_TILING_OPTIMAL;
-	create_desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+	create_desc.usage = usage;
 	create_desc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	create_desc.queueFamilyIndexCount = 0;
 	create_desc.pQueueFamilyIndices = NULL;
@@ -5431,9 +5663,12 @@ static void vk_create_attachments( void )
 
 static void vk_create_framebuffers( void )
 {
-	VkImageView attachments[3];
+	VkImageView attachments[4];
 	VkFramebufferCreateInfo desc;
+	qboolean depthResolveActive;
 	uint32_t n;
+
+	depthResolveActive = vk_depth_fade_uses_depth_resolve();
 
 	desc.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 	desc.pNext = NULL;
@@ -5473,10 +5708,15 @@ static void vk_create_framebuffers( void )
 					desc.attachmentCount = 3;
 					attachments[2] = vk.msaa_image_view;
 				}
+				if ( depthResolveActive ) {
+					desc.attachmentCount = 4;
+					attachments[3] = vk.depth_fade_image_view;
+				}
 				VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.main[n] ) );
 				SET_OBJECT_NAME( vk.framebuffers.main[n], "framebuffer - main", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
 
 				desc.renderPass = vk.render_pass.main_load;
+				desc.attachmentCount = vk.msaaActive ? 3 : 2;
 				VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.main_load[n] ) );
 				SET_OBJECT_NAME( vk.framebuffers.main_load[n], "framebuffer - main load", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
 			}
@@ -5930,6 +6170,14 @@ void vk_initialize( void )
 		vkSamples = VK_SAMPLE_COUNT_1_BIT;
 	}
 
+	if ( vk.msaaActive && vk_depth_fade_requested() ) {
+		// Soft particles depend on the established single-sample depth snapshot.
+		ri.Printf( PRINT_WARNING,
+			"...Vulkan depth fade requested; disabling MSAA so depth fade can use the single-sample depth copy path\n" );
+		vkSamples = VK_SAMPLE_COUNT_1_BIT;
+		vk.msaaActive = qfalse;
+	}
+
 	vk.screenMapSamples = vk_select_sample_count( 4, vkMaxSamples );
 
 	vk.screenMapWidth = (float) glConfig.vidWidth / 16.0;
@@ -6006,6 +6254,12 @@ void vk_initialize( void )
 		glConfig.numTextureUnits = MAX_TEXTURE_UNITS;
 
 	vk.maxBoundDescriptorSets = props.limits.maxBoundDescriptorSets;
+
+	if ( vk_depth_fade_requested() && vk.maxBoundDescriptorSets < VK_DESC_COUNT ) {
+		ri.Printf( PRINT_WARNING,
+			"...Vulkan depth fade disabled: device exposes %u bound descriptor sets, %u required\n",
+			vk.maxBoundDescriptorSets, VK_DESC_COUNT );
+	}
 
 	if ( r_ext_texture_env_add->integer != 0 )
 		glConfig.textureEnvAddAvailable = qtrue;
@@ -6300,6 +6554,12 @@ void vk_warm_pipelines( qboolean include_screenmap )
 
 		if ( pipeline->handle[ RENDER_PASS_MAIN ] == VK_NULL_HANDLE ) {
 			pipeline->handle[ RENDER_PASS_MAIN ] = create_pipeline( &pipeline->def, RENDER_PASS_MAIN, i );
+			warmed++;
+		}
+
+		if ( vk_depth_fade_uses_depth_resolve() && vk.render_pass.main_load != VK_NULL_HANDLE &&
+			pipeline->handle[ RENDER_PASS_MAIN_LOAD ] == VK_NULL_HANDLE ) {
+			pipeline->handle[ RENDER_PASS_MAIN_LOAD ] = create_pipeline( &pipeline->def, RENDER_PASS_MAIN_LOAD, i );
 			warmed++;
 		}
 
@@ -8798,6 +9058,8 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 		create_info.renderPass = vk.render_pass.dlight_shadow;
 	else if ( renderPassIndex == RENDER_PASS_SCREENMAP )
 		create_info.renderPass = vk.render_pass.screenmap;
+	else if ( renderPassIndex == RENDER_PASS_MAIN_LOAD )
+		create_info.renderPass = vk.render_pass.main_load;
 	else
 		create_info.renderPass = vk.render_pass.main;
 
@@ -8835,7 +9097,7 @@ static uint32_t vk_alloc_pipeline( const Vk_Pipeline_Def *def ) {
 VkPipeline vk_gen_pipeline( uint32_t index ) {
 	if ( index < vk.pipelines_count ) {
 		VK_Pipeline_t *pipeline = vk.pipelines + index;
-		const renderPass_t pass = vk.renderPassIndex;
+		const renderPass_t pass = vk_pipeline_render_pass_index();
 		if ( pipeline->handle[ pass ] == VK_NULL_HANDLE ) {
 			pipeline->handle[ pass ] = create_pipeline( &pipeline->def, pass, index );
 		}
@@ -9630,6 +9892,7 @@ static void vk_begin_render_pass( VkRenderPass renderPass, VkFramebuffer frameBu
 
 	label = vk_render_pass_label( renderPass );
 	Q_strncpyz( vk_current_render_pass_label, label, sizeof( vk_current_render_pass_label ) );
+	vk_current_render_pass = renderPass;
 	vk_write_timestamp( va( "%s begin", label ), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT );
 	vk_begin_debug_label( vk.cmd->command_buffer, label, 0.25f, 0.55f, 0.95f, 1.0f );
 	qvkCmdBeginRenderPass( vk.cmd->command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE );
@@ -9675,7 +9938,9 @@ void vk_begin_main_render_pass_load( void )
 
 void vk_begin_post_bloom_render_pass( void )
 {
-	VkFramebuffer frameBuffer = vk.framebuffers.main[ vk.cmd->swapchain_image_index ];
+	VkFramebuffer frameBuffer = vk_depth_fade_uses_depth_resolve() ?
+		vk.framebuffers.main_load[ vk.cmd->swapchain_image_index ] :
+		vk.framebuffers.main[ vk.cmd->swapchain_image_index ];
 
 	vk.renderPassIndex = RENDER_PASS_POST_BLOOM;
 
@@ -9742,18 +10007,60 @@ static void vk_begin_screenmap_render_pass( void )
 
 void vk_end_render_pass( void )
 {
+	qboolean depthFadeResolved;
+
+	depthFadeResolved = ( vk_current_render_pass == vk.render_pass.main &&
+		vk_depth_fade_uses_depth_resolve() ) ? qtrue : qfalse;
+
 	qvkCmdEndRenderPass( vk.cmd->command_buffer );
 	vk_write_timestamp( va( "%s end", vk_current_render_pass_label[0] ? vk_current_render_pass_label : "render pass" ), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT );
 	vk_end_debug_label( vk.cmd->command_buffer );
+	if ( depthFadeResolved ) {
+		vk.depth_fade_copied = qtrue;
+	}
+	vk_current_render_pass = VK_NULL_HANDLE;
+	vk_current_render_pass_label[0] = '\0';
 
 //	vk.renderPassIndex = RENDER_PASS_MAIN;
 }
 
 
+static qboolean vk_depth_fade_resolve_supported( void )
+{
+	return ( vk.msaaActive && vk.depthStencilResolve ) ? qtrue : qfalse;
+}
+
+
+static qboolean vk_depth_fade_uses_depth_resolve( void )
+{
+	return ( vk_depth_fade_resolve_supported() &&
+		vk.depth_fade_image != VK_NULL_HANDLE &&
+		vk.depth_fade_image_view != VK_NULL_HANDLE ) ? qtrue : qfalse;
+}
+
+
+static qboolean vk_depth_fade_requested( void )
+{
+	return ( ( r_depthFade && r_depthFade->integer ) || R_CelShadingWorldActive() ) ? qtrue : qfalse;
+}
+
+
+static renderPass_t vk_pipeline_render_pass_index( void )
+{
+	if ( vk.renderPassIndex == RENDER_PASS_MAIN &&
+		vk_current_render_pass == vk.render_pass.main_load ) {
+		return RENDER_PASS_MAIN_LOAD;
+	}
+	return vk.renderPassIndex;
+}
+
+
 qboolean vk_depth_fade_supported( void )
 {
-	return ( ( ( r_depthFade && r_depthFade->integer ) || R_CelShadingWorldActive() ) &&
-		vk.maxBoundDescriptorSets >= VK_DESC_COUNT && !vk.msaaActive ) ? qtrue : qfalse;
+	const qboolean sampleCompatible = ( !vk.msaaActive || vk.depthStencilResolve ) ? qtrue : qfalse;
+
+	return ( vk_depth_fade_requested() &&
+		vk.maxBoundDescriptorSets >= VK_DESC_COUNT && sampleCompatible ) ? qtrue : qfalse;
 }
 
 
@@ -9838,6 +10145,22 @@ void vk_copy_depth_fade( void )
 	VkCommandBuffer command_buffer;
 
 	if ( !vk_depth_fade_available() || vk.renderPassIndex != RENDER_PASS_MAIN ) {
+		return;
+	}
+
+	if ( vk_depth_fade_uses_depth_resolve() ) {
+		if ( vk_depth_fade_ready() ) {
+			return;
+		}
+		if ( vk_current_render_pass != vk.render_pass.main ) {
+			return;
+		}
+		vk_end_render_pass();
+		vk_begin_main_render_pass_load();
+		return;
+	}
+
+	if ( vk_current_render_pass != vk.render_pass.main ) {
 		return;
 	}
 

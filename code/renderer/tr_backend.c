@@ -599,7 +599,8 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
 
 #ifdef USE_FBO
-		if ( !depthFadeSnapshot && shader && shader->sort > SS_OPAQUE ) {
+		if ( !depthFadeSnapshot && shader && shader->sort > SS_OPAQUE &&
+			( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0 ) {
 			if ( oldShader != NULL ) {
 				RB_EndSurface();
 				oldShader = NULL;

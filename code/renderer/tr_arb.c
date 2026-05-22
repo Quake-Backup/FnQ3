@@ -1393,6 +1393,7 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 static const char *dummyVP = {
 	"!!ARBvp1.0 \n"
 	"OPTION ARB_position_invariant; \n"
+	"MOV result.color, vertex.color; \n"
 	"MOV result.texcoord[0], vertex.texcoord; \n"
 	"END \n" 
 };
@@ -3797,7 +3798,7 @@ void QGL_InitFBO( void )
 	if ( FBO_CreateMS( &frameBufferMS, w, h ) )
 	{
 		frameBufferMultiSampling = qtrue;
-		if ( r_flares->integer )
+		if ( r_flares->integer || ( r_depthFade && r_depthFade->integer ) )
 			depthStencil = qtrue;
 		else
 			depthStencil = qfalse;

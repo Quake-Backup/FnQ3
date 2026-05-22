@@ -1509,6 +1509,35 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("GLX_CompatAutoExposureNeedsSamples", renderer_arb)
         self.assertIn("qglReadPixels( 0, 0, width, height, GL_RGBA, GL_FLOAT", renderer_arb)
 
+    def test_glx_depth_fade_arb_program_preserves_vertex_color(self) -> None:
+        renderer_arb = (ROOT / "code" / "renderer" / "tr_arb.c").read_text(encoding="utf-8")
+        dummy_vp = renderer_arb[
+            renderer_arb.index("static const char *dummyVP"):
+            renderer_arb.index("static const char *spriteFP")
+        ]
+        depth_fade_fp = renderer_arb[
+            renderer_arb.index("static const char *depthFadeFP"):
+            renderer_arb.index("qboolean GL_DepthFadeProgramAvailable")
+        ]
+
+        self.assertIn("MUL base, base, fragment.color", depth_fade_fp)
+        self.assertIn("MOV result.color, vertex.color", dummy_vp)
+
+    def test_glx_depth_fade_skips_noworldmodel_hud_views(self) -> None:
+        backend = (ROOT / "code" / "renderer" / "tr_backend.c").read_text(encoding="utf-8")
+        shade = (ROOT / "code" / "renderer" / "tr_shade.c").read_text(encoding="utf-8")
+        depth_snapshot = backend[
+            backend.index("if ( !depthFadeSnapshot"):
+            backend.index("FBO_CopyDepthFade();")
+        ]
+        depth_active = shade[
+            shade.index("static qboolean RB_DepthFadeActive"):
+            shade.index("static void RB_DrawDepthFadeStage")
+        ]
+
+        self.assertIn("( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0", depth_snapshot)
+        self.assertIn("( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0", depth_active)
+
     def test_hdr_screenshot_capture_policy_stays_sdr_by_default(self) -> None:
         renderer_init = (ROOT / "code" / "renderer" / "tr_init.c").read_text(encoding="utf-8")
         glx_render_ir = (ROOT / "code" / "rendererglx" / "glx_render_ir.h").read_text(encoding="utf-8")

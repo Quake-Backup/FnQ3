@@ -271,6 +271,7 @@ JSONDEF unsigned int JSON_ValueGetType(const char *json, const char *jsonEnd)
 JSONDEF unsigned int JSON_ValueGetString(const char *json, const char *jsonEnd, char *outString, unsigned int stringLen)
 {
 	const char *stringEnd, *stringStart;
+	unsigned int available;
 
 	if (!json)
 	{
@@ -294,8 +295,9 @@ JSONDEF unsigned int JSON_ValueGetString(const char *json, const char *jsonEnd, 
 		stringEnd--;
 
 	stringLen--;
-	if (stringLen > stringEnd - stringStart)
-		stringLen = stringEnd - stringStart;
+	available = (unsigned int)(stringEnd - stringStart);
+	if (stringLen > available)
+		stringLen = available;
 
 	json = stringStart;
 	while (stringLen--)

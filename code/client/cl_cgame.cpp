@@ -1239,9 +1239,9 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_CEIL:
 		return FloatAsInt( ceil( VMF(1) ) );
 	case CG_TESTPRINTINT:
-		return sprintf( VMA(1), "%i", static_cast<int>( args[2] ) );
+		return Com_sprintf( VMA(1), MAX_STRING_CHARS, "%i", static_cast<int>( args[2] ) );
 	case CG_TESTPRINTFLOAT:
-		return sprintf( VMA(1), "%f", VMF(2) );
+		return Com_sprintf( VMA(1), MAX_STRING_CHARS, "%f", VMF(2) );
 	case CG_ACOS:
 		return FloatAsInt( Q_acos( VMF(1) ) );
 
@@ -1349,7 +1349,7 @@ static intptr_t QDECL CL_DllSyscall( intptr_t arg, ... ) {
 
 	args[0] = arg;
 	va_start( ap, arg );
-	for (i = 1; i < ARRAY_LEN( args ); i++ )
+	for (i = 1; i < static_cast<int>( ARRAY_LEN( args ) ); i++ )
 		args[ i ] = va_arg( ap, intptr_t );
 	va_end( ap );
 

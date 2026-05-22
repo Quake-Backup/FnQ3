@@ -49,6 +49,16 @@ typedef void ( AL_APIENTRY *LPALEVENTCALLBACKSOFT )( ALEVENTPROCSOFT callback, v
 typedef ALCboolean ( ALC_APIENTRY *LPALCREOPENDEVICESOFT )( ALCdevice *device, const ALCchar *deviceName, const ALCint *attribs );
 #endif
 
+#ifndef AL_SOFT_direct_channels
+#define AL_SOFT_direct_channels
+#define AL_DIRECT_CHANNELS_SOFT 0x1033
+#endif
+
+#ifndef AL_SOFT_direct_channels_remix
+#define AL_SOFT_direct_channels_remix
+#define AL_REMIX_UNMATCHED_SOFT 0x0002
+#endif
+
 #ifndef AL_SOFT_UHJ
 #define AL_SOFT_UHJ
 #define AL_FORMAT_UHJ2CHN8_SOFT 0x19A2

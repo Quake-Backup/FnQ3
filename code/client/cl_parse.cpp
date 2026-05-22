@@ -622,7 +622,7 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 	// read areamask
 	newSnap.areabytes = MSG_ReadByte( msg );
 
-	if ( newSnap.areabytes > sizeof(newSnap.areamask) )
+	if ( newSnap.areabytes > static_cast<int>( sizeof(newSnap.areamask) ) )
 	{
 		Com_Error( ERR_DROP,"CL_ParseSnapshot: Invalid size %d for areamask", newSnap.areabytes );
 		return;
@@ -783,7 +783,7 @@ void CL_SystemInfoChanged( qboolean onlyGame ) {
 	// scan through all the variables in the systeminfo and locally set cvars to match
 	s = systemInfo;
 	do {
-		int cvar_flags;
+		unsigned cvar_flags;
 
 		s = Info_NextPair( s, key.data(), value.data() );
 		if ( key[0] == '\0' ) {

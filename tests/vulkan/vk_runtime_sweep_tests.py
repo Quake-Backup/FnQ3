@@ -323,6 +323,17 @@ class VkRendererSourceTests(unittest.TestCase):
         self.assertIn("vk_pipeline_render_pass_index", vk_c)
         self.assertIn("disabling MSAA so depth fade can use the single-sample depth copy path", vk_c)
         self.assertIn("vkSamples = VK_SAMPLE_COUNT_1_BIT", vk_c)
+        self.assertIn("#define VK_DESC_DEPTH_FADE   VK_DESC_TEXTURE1", vk_h)
+
+    def test_vulkan_depth_fade_matches_glx_single_texture_stage_rule(self) -> None:
+        vk_shader = (ROOT / "code" / "renderervk" / "tr_shader.c").read_text(encoding="utf-8")
+        vk_shade = (ROOT / "code" / "renderervk" / "tr_shade.c").read_text(encoding="utf-8")
+        gen_frag = (ROOT / "code" / "renderervk" / "shaders" / "gen_frag.tmpl").read_text(encoding="utf-8")
+
+        self.assertIn("pStage->bundle[1].image[0] == NULL && !pStage->depthFragment", vk_shader)
+        self.assertIn("pStage->bundle[1].image[0] == NULL", vk_shade)
+        self.assertIn("#define USE_DEPTH_FADE", gen_frag)
+        self.assertIn("layout(set = 2, binding = 0) uniform sampler2D depth_texture", gen_frag)
 
 
 if __name__ == "__main__":

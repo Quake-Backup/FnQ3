@@ -3288,12 +3288,12 @@ static void CPUID( int func, unsigned int *regs )
 }
 
 #ifdef USE_AFFINITY_MASK
-#if idx64 && !defined(__clang__)
+#if idx64 && !defined(__clang__) && !defined( Q3_NO_CUSTOM_SETJMP )
 extern void CPUID_EX( int func, int param, unsigned int *regs );
 #else
 static void CPUID_EX( int func, int param, unsigned int *regs )
 {
-#if defined(__clang__)
+#if defined(__clang__) || idx64
 	__cpuidex( (int*)regs, func, param );
 #else
 	__asm {

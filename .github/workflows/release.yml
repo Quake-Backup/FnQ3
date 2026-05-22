@@ -306,7 +306,11 @@ jobs:
         run: |
           BREW_PREFIX="$(brew --prefix)"
           export PKG_CONFIG_PATH="${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-          OPENAL_CFLAGS="$(pkg-config --cflags openal)" \
+          OPENAL_CFLAGS="$(pkg-config --cflags openal || true)"
+          if [ -z "${OPENAL_CFLAGS}" ]; then
+            OPENAL_CFLAGS="-I$(brew --prefix openal-soft)/include"
+          fi
+          OPENAL_CFLAGS="${OPENAL_CFLAGS}" \
           SDL_INCLUDE="$(pkg-config --cflags-only-I sdl3)" \
           SDL_LIBS="$(pkg-config --libs sdl3)" \
           JPEG_CFLAGS="$(pkg-config --cflags libjpeg)" \

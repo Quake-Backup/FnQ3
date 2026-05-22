@@ -8,6 +8,10 @@
 #define USE_CL1
 #endif
 
+#if !defined(USE_TX1) && !defined(USE_TX2) && !defined(USE_DF)
+#define USE_DEPTH_FADE
+#endif
+
 layout(set = 0, binding = 0) uniform UBO {
 	// light/env parameters:
 	vec4 eyePos;				// vertex
@@ -42,7 +46,9 @@ layout(set = 3, binding = 0) uniform sampler2D texture2;
 #ifdef USE_FOG
 layout(set = 4, binding = 0) uniform sampler2D fog_texture;
 #endif
-layout(set = 5, binding = 0) uniform sampler2D depth_texture;
+#ifdef USE_DEPTH_FADE
+layout(set = 2, binding = 0) uniform sampler2D depth_texture;
+#endif
 
 #if defined (USE_CLX_IDENT)
 // fixed identity (1.0) color for all textures
@@ -104,6 +110,7 @@ layout (constant_id = 10) const int acff = 0; // NONE, RGB, RGBA, ALPHA
 #endif
 layout (constant_id = 11) const int depth_fade = 0;
 
+#ifdef USE_DEPTH_FADE
 float DepthFadeLinearDepth(float depth)
 {
 	return depthFadeInfo.y / mix(1.0, depthFadeInfo.x, depth);
@@ -125,6 +132,7 @@ vec4 ApplyDepthFade(vec4 color)
 	fade = fade * fade * (3.0 - 2.0 * fade);
 	return mix(color * depthFadeScale + depthFadeBias, color, fade);
 }
+#endif
 
 #ifdef USE_ATEST
 float CorrectAlpha(float threshold, float alpha, vec2 tc)
@@ -532,9 +540,11 @@ void main() {
 
 	gl_FragDepth = gl_FragCoord.z;
 #else
+#ifdef USE_DEPTH_FADE
 	if ( depth_fade != 0 ) {
 		base = ApplyDepthFade(base);
 	}
+#endif
 	out_color = base;
 #endif
 }

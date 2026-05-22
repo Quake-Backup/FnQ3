@@ -125,7 +125,7 @@ static void LAN_LoadCachedServers( void ) {
 
 	ScopedFileHandle file;
 	file_size = OpenHomeFileRead( "servercache.dat", file );
-	if ( file_size < ( 3 * sizeof( int ) ) ) {
+	if ( file_size < static_cast<int>( 3 * sizeof( int ) ) ) {
 		return;
 	}
 
@@ -1174,7 +1174,7 @@ static intptr_t QDECL UI_DllSyscall( intptr_t arg, ... ) {
 
 	args[0] = arg;
 	va_start( ap, arg );
-	for (i = 1; i < ARRAY_LEN( args ); i++ )
+	for (i = 1; i < static_cast<int>( ARRAY_LEN( args ) ); i++ )
 		args[ i ] = va_arg( ap, intptr_t );
 	va_end( ap );
 

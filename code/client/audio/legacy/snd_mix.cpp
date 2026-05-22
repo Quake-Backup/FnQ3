@@ -406,11 +406,12 @@ static void S_TransferPaintBuffer( int endtime, byte *buffer )
 		count = (clc.aviFrameEndTime - s_paintedtime) * dma.channels;
 		out_idx = ( s_paintedtime * dma.channels ) % dma.samples;
 		while ( count > 0 ) {
+			const int dmaSamples = static_cast<int>( dma.samples );
 			int n = count;
-			if ( n + out_idx > dma.samples )
-				n = dma.samples - out_idx;
+			if ( n + out_idx > dmaSamples )
+				n = dmaSamples - out_idx;
 			CL_WriteAVIAudioFrame( buffer + out_idx * dma.samplebits / 8, n * dma.samplebits / 8 );
-			out_idx = (out_idx + n) % dma.samples;
+			out_idx = (out_idx + n) % dmaSamples;
 			count -= n;
 		}
 	}

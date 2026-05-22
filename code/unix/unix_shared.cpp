@@ -561,7 +561,7 @@ uint64_t Sys_GetAffinityMask( void )
 	if ( sched_getaffinity( getpid(), sizeof( cpu_set ), &cpu_set ) == 0 ) {
 		uint64_t mask = 0;
 		int cpu;
-		for ( cpu = 0; cpu < sizeof( mask ) * 8; cpu++ ) {
+		for ( cpu = 0; cpu < static_cast<int>( sizeof( mask ) * 8 ); cpu++ ) {
 			if ( CPU_ISSET( cpu, &cpu_set ) ) {
 				mask |= (1ULL << cpu);
 			}
@@ -584,7 +584,7 @@ qboolean Sys_SetAffinityMask( const uint64_t mask )
 	int cpu;
 
 	CPU_ZERO( &cpu_set );
-	for ( cpu = 0; cpu < sizeof( mask ) * 8; cpu++ ) {
+	for ( cpu = 0; cpu < static_cast<int>( sizeof( mask ) * 8 ); cpu++ ) {
 		if ( mask & (1ULL << cpu) ) {
 			CPU_SET( cpu, &cpu_set );
 		}

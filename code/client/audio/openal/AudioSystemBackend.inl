@@ -42,7 +42,6 @@ private:
 	bool UpdateDeviceState( int msec );
 	void CloseBackgroundStream();
 	SoundSample *GetSample( sfxHandle_t handle );
-	const SoundSample *GetSample( sfxHandle_t handle ) const;
 	qboolean IsSoftMuted() const;
 
 	OpenALDevice device_;
@@ -384,13 +383,6 @@ bool AudioSystem::UpdateDeviceState( int msec ) {
 }
 
 SoundSample *AudioSystem::GetSample( sfxHandle_t handle ) {
-	if ( handle < 0 || handle >= static_cast<sfxHandle_t>( samples_.size() ) ) {
-		return nullptr;
-	}
-	return &samples_[static_cast<size_t>( handle )];
-}
-
-const SoundSample *AudioSystem::GetSample( sfxHandle_t handle ) const {
 	if ( handle < 0 || handle >= static_cast<sfxHandle_t>( samples_.size() ) ) {
 		return nullptr;
 	}

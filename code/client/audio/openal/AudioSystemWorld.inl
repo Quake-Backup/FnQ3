@@ -666,7 +666,6 @@ public:
 	void StopLoopingSound( int entityNum );
 	void AddLoopingSound( int entityNum, const float *origin, const float *velocity, sfxHandle_t handle, SoundSample *sample, qboolean realLoop );
 	void StartSound( int entityNum, int entchannel, sfxHandle_t handle, SoundSample *sample, const float *origin );
-	void StartLocalSound( sfxHandle_t handle, SoundSample *sample, int channelNum );
 	void UpdateEntityPosition( int entityNum, const float *origin );
 	void Respatialize( int entityNum, const float *origin, float axis[3][3] );
 	void Update( qboolean softMuted );
@@ -950,10 +949,6 @@ void Q3SoundWorld::StartSound( int entityNum, int entchannel, sfxHandle_t handle
 	device_->AL().alSourcei( voice->source, AL_LOOPING, AL_FALSE );
 	ApplyVoice( *voice, qfalse );
 	device_->AL().alSourcePlay( voice->source );
-}
-
-void Q3SoundWorld::StartLocalSound( sfxHandle_t handle, SoundSample *sample, int channelNum ) {
-	StartSound( listenerNumber_, channelNum, handle, sample, nullptr );
 }
 
 void Q3SoundWorld::UpdateEntityPosition( int entityNum, const float *origin ) {

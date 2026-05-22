@@ -202,7 +202,8 @@ endif
 platform_asm_src = []
 client_asm_src = []
 if win32 and cc.get_id() == 'msvc' and cpu_family == 'x86_64'
-  warning('Meson MSVC x64 builds currently use portable C fallbacks instead of MASM helpers; behavior stays the same, but hot-path setjmp/audio mixing optimizations are disabled for this build path')
+  message('Meson MSVC x64 builds use portable C fallbacks instead of MASM helpers; behavior stays the same, but hot-path setjmp/audio mixing optimizations are disabled for this build path')
+  add_project_arguments('-DQ3_NO_CUSTOM_SETJMP', language: ['c', 'cpp'])
 elif cpu_family == 'x86_64'
   client_asm_src += 'code/asm/snd_mix_x86_64_preprocessed.S'
 endif
@@ -462,6 +463,7 @@ if win32
 endif
 
 openal_dep = dependency('openal',
+  method: 'pkg-config',
   required: get_option('build-client') or get_option('audio-tests'),
   fallback: 'openal-soft',
   default_options: openal_fallback_defaults,

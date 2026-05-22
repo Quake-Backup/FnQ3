@@ -860,10 +860,10 @@ default: release
 all: debug release
 
 debug:
-	@B="$(BD)" CFLAGS="$(CFLAGS) $(DEBUG_CFLAGS)" CXXFLAGS="$(CXXFLAGS) $(DEBUG_CXXFLAGS)" LDFLAGS="$(LDFLAGS) $(DEBUG_LDFLAGS)" $(RECURSIVE_MAKE) targets V=$(V)
+	+@B="$(BD)" CFLAGS="$(CFLAGS) $(DEBUG_CFLAGS)" CXXFLAGS="$(CXXFLAGS) $(DEBUG_CXXFLAGS)" LDFLAGS="$(LDFLAGS) $(DEBUG_LDFLAGS)" $(RECURSIVE_MAKE) targets V=$(V)
 
 release:
-	@B="$(BR)" CFLAGS="$(CFLAGS) $(RELEASE_CFLAGS)" CXXFLAGS="$(CXXFLAGS) $(RELEASE_CXXFLAGS)" $(RECURSIVE_MAKE) targets V=$(V)
+	+@B="$(BR)" CFLAGS="$(CFLAGS) $(RELEASE_CFLAGS)" CXXFLAGS="$(CXXFLAGS) $(RELEASE_CXXFLAGS)" $(RECURSIVE_MAKE) targets V=$(V)
 
 define ADD_COPY_TARGET
 TARGETS += $2
@@ -923,7 +923,7 @@ endif
 	done
 	@echo ""
 ifneq ($(TARGETS),)
-	@$(RECURSIVE_MAKE) $(TARGETS) V=$(V)
+	+@$(RECURSIVE_MAKE) $(TARGETS) V=$(V)
 endif
 
 makedirs:

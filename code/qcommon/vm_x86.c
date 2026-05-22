@@ -221,19 +221,20 @@ static void Emit4( int32_t v );
 static void Emit8( int64_t v );
 #endif
 
-#ifdef _MSC_VER
-#define DROP( reason, ... ) \
-	do { \
-		VM_FreeBuffers(); \
-		Com_Error( ERR_DROP, "%s: " reason, __func__, __VA_ARGS__ ); \
-	} while(0)
-#else
-#define DROP( reason, args... ) \
-	do { \
-		VM_FreeBuffers(); \
-		Com_Error( ERR_DROP, "%s: " reason, __func__, ##args ); \
-	} while(0)
-#endif
+static void QDECL VM_Drop( const char *functionName, const char *reason, ... )
+{
+	char message[MAX_STRING_CHARS];
+	va_list argptr;
+
+	va_start( argptr, reason );
+	Q_vsnprintf( message, sizeof( message ), reason, argptr );
+	va_end( argptr );
+
+	VM_FreeBuffers();
+	Com_Error( ERR_DROP, "%s: %s", functionName, message );
+}
+
+#define DROP( ... ) VM_Drop( __func__, __VA_ARGS__ )
 
 #define SWAP_INT( X, Y ) do { int T = X; X = Y; Y = T; } while ( 0 )
 

@@ -43,8 +43,8 @@
 #define VK_DESC_TEXTURE1     2
 #define VK_DESC_TEXTURE2     3
 #define VK_DESC_FOG_COLLAPSE 4
-#define VK_DESC_DEPTH_FADE   5
-#define VK_DESC_COUNT        6
+#define VK_DESC_DEPTH_FADE   VK_DESC_TEXTURE1
+#define VK_DESC_COUNT        5
 
 #define VK_DESC_TEXTURE_BASE VK_DESC_TEXTURE0
 #define VK_DESC_FOG_ONLY     VK_DESC_TEXTURE1
@@ -419,7 +419,7 @@ typedef struct vk_tess_s {
 
 	struct {
 		uint32_t		start, end;
-		VkDescriptorSet	current[VK_DESC_COUNT]; // 0:uniform, 1:color0, 2:color1, 3:color2, 4:fog, 5:depth fade
+		VkDescriptorSet	current[VK_DESC_COUNT]; // 0:uniform, 1:color0, 2:color1/depth fade, 3:color2, 4:fog
 		uint32_t		offset[1]; // 0 (uniform)
 	} descriptor_set;
 

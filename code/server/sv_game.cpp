@@ -263,14 +263,14 @@ static void SV_LocateGameData( sharedEntity_t *gEnts, int numGEntities, int size
 		if ( numGEntities > MAX_GENTITIES ) {
 			Com_Error( ERR_DROP, "%s: bad entity count %i", __func__, numGEntities );
 		} else {
-			if ( sizeofGEntity_t > gvm->exactDataLength / numGEntities ) {
+			if ( sizeofGEntity_t < 0 || static_cast<uint32_t>( sizeofGEntity_t ) > gvm->exactDataLength / numGEntities ) {
 				Com_Error( ERR_DROP, "%s: bad entity size %i", __func__, sizeofGEntity_t );	
 			} else if ( reinterpret_cast<byte *>( gEnts ) + ( numGEntities * sizeofGEntity_t ) > ( gvm->dataBase + gvm->exactDataLength ) ) {
 				Com_Error( ERR_DROP, "%s: entities located out of data segment", __func__ );
 			}
 		}
 
-		if ( sizeofGameClient > gvm->exactDataLength / MAX_CLIENTS ) {
+		if ( sizeofGameClient < 0 || static_cast<uint32_t>( sizeofGameClient ) > gvm->exactDataLength / MAX_CLIENTS ) {
 			Com_Error( ERR_DROP, "%s: bad game client size %i", __func__, sizeofGameClient );	
 		} else if ( reinterpret_cast<byte *>( clients ) + ( sizeofGameClient * MAX_CLIENTS ) > gvm->dataBase + gvm->exactDataLength ) {
 			Com_Error( ERR_DROP, "%s: clients located out of data segment", __func__ );
@@ -985,10 +985,10 @@ static intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		return FloatAsInt( ceil( VMF(1) ) );
 
 	case G_TESTPRINTINT:
-		return std::sprintf( static_cast<char *>( VMA(1) ), "%i", static_cast<int>( args[2] ) );
+		return Com_sprintf( static_cast<char *>( VMA(1) ), MAX_STRING_CHARS, "%i", static_cast<int>( args[2] ) );
 
 	case G_TESTPRINTFLOAT:
-		return std::sprintf( static_cast<char *>( VMA(1) ), "%f", VMF(2) );
+		return Com_sprintf( static_cast<char *>( VMA(1) ), MAX_STRING_CHARS, "%f", VMF(2) );
 
 	case G_CVAR_SETDESCRIPTION:
 		Cvar_SetDescription2( VMA(1), VMA(2) );

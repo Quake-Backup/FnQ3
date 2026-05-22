@@ -546,7 +546,7 @@ char *Sys_ConsoleInput( void )
 				tty_FlushIn();
 				return NULL;
 			}
-			if ( tty_con.cursor >= sizeof( text ) - 1 )
+			if ( tty_con.cursor >= static_cast<int>( sizeof( text ) ) - 1 )
 				return NULL;
 			// push regular character
 			tty_con.buffer[ tty_con.cursor ] = key;
@@ -683,7 +683,7 @@ static const struct Q3ToAnsiColorTable_s
 
 static const char *getANSIcolor( char Q3color ) {
 	int i;
-	for ( i = 0; i < ARRAY_LEN( tty_colorTable ); i++ ) {
+	for ( i = 0; i < static_cast<int>( ARRAY_LEN( tty_colorTable ) ); i++ ) {
 		if ( Q3color == tty_colorTable[ i ].Q3color ) {
 			return tty_colorTable[ i ].ANSIcolor;
 		}

@@ -755,7 +755,7 @@ static void record_image_layout_transition( VkCommandBuffer command_buffer, VkIm
 
 
 // debug markers
-#define SET_OBJECT_NAME(obj,objName,objType) vk_set_object_name( (uint64_t)(obj), (objName), (objType) )
+#define SET_OBJECT_NAME(obj,objName,objType) vk_set_object_name( (uint64_t)(uintptr_t)(obj), (objName), (objType) )
 
 static VkObjectType vk_debug_report_object_type_to_object_type( VkDebugReportObjectTypeEXT objType )
 {
@@ -6255,10 +6255,10 @@ void vk_initialize( void )
 
 	vk.maxBoundDescriptorSets = props.limits.maxBoundDescriptorSets;
 
-	if ( vk_depth_fade_requested() && vk.maxBoundDescriptorSets < VK_DESC_COUNT ) {
+	if ( vk_depth_fade_requested() && vk.maxBoundDescriptorSets <= VK_DESC_DEPTH_FADE ) {
 		ri.Printf( PRINT_WARNING,
 			"...Vulkan depth fade disabled: device exposes %u bound descriptor sets, %u required\n",
-			vk.maxBoundDescriptorSets, VK_DESC_COUNT );
+			vk.maxBoundDescriptorSets, VK_DESC_DEPTH_FADE + 1 );
 	}
 
 	if ( r_ext_texture_env_add->integer != 0 )
@@ -6440,7 +6440,6 @@ void vk_initialize( void )
 		set_layouts[2] = vk.set_layout_sampler; // lightmap / fog-only
 		set_layouts[3] = vk.set_layout_sampler; // blend
 		set_layouts[4] = vk.set_layout_sampler; // collapsed fog texture
-		set_layouts[5] = vk.set_layout_sampler; // depth fade texture
 		desc.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		desc.pNext = NULL;
 		desc.flags = 0;
@@ -10060,7 +10059,7 @@ qboolean vk_depth_fade_supported( void )
 	const qboolean sampleCompatible = ( !vk.msaaActive || vk.depthStencilResolve ) ? qtrue : qfalse;
 
 	return ( vk_depth_fade_requested() &&
-		vk.maxBoundDescriptorSets >= VK_DESC_COUNT && sampleCompatible ) ? qtrue : qfalse;
+		vk.maxBoundDescriptorSets > VK_DESC_DEPTH_FADE && sampleCompatible ) ? qtrue : qfalse;
 }
 
 

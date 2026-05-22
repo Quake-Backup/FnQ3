@@ -207,7 +207,7 @@ void CopyLongSwap( void *dest, void *src );
 #elif defined(__clang__)
 #define Q_setjmp setjmp
 #define Q_longjmp longjmp
-#elif idx64 && (_MSC_VER >= 1910)
+#elif idx64 && (_MSC_VER >= 1910) && !defined( Q3_NO_CUSTOM_SETJMP )
 // use custom setjmp()/longjmp() implementations
 #define Q_setjmp Q_setjmp_c
 #define Q_longjmp Q_longjmp_c

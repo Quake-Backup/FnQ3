@@ -3571,7 +3571,7 @@ static shader_t *FinishShader( void ) {
 #ifdef USE_VULKAN
 
 #ifdef USE_FOG_COLLAPSE
-	if ( vk.maxBoundDescriptorSets >= 6 && !(shader.contentFlags & CONTENTS_FOG) && shader.fogPass != FP_NONE ) {
+	if ( vk.maxBoundDescriptorSets >= VK_DESC_COUNT && !(shader.contentFlags & CONTENTS_FOG) && shader.fogPass != FP_NONE ) {
 		fogCollapse = qtrue;
 		if ( stage == 1 ) {
 			// we can always fog-collapse single-stage shaders
@@ -3641,7 +3641,8 @@ static shader_t *FinishShader( void ) {
 			int env_mask;
 			shaderStage_t *pStage = &stages[i];
 			def.state_bits = pStage->stateBits;
-			def.depth_fade = ( vk_depth_fade_supported() && shader.dfType > DFT_NONE && shader.dfType < DFT_TBD && !pStage->depthFragment ) ? 1 : 0;
+			def.depth_fade = ( vk_depth_fade_supported() && shader.dfType > DFT_NONE && shader.dfType < DFT_TBD &&
+				pStage->bundle[1].image[0] == NULL && !pStage->depthFragment ) ? 1 : 0;
 
 			if ( pStage->mtEnv3 ) {
 				switch ( pStage->mtEnv3 ) {

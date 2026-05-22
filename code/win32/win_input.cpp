@@ -22,10 +22,19 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // win_input.c -- win32 mouse and joystick code
 // 02/21/97 JCB Added extended DirectInput code to support external controllers.
 
+#ifndef CINTERFACE
+#define CINTERFACE
+#endif
+#ifndef COBJMACROS
+#define COBJMACROS
+#endif
+
 #include "../client/client.h"
 #include "win_local.h"
 #include "glw_win.h"
 #include "win_raii.h"
+
+#include <cstddef>
 
 
 typedef struct {
@@ -497,6 +506,7 @@ static DIDATAFORMAT	df = {
 
 static LPDIRECTINPUT		g_pdi;
 static LPDIRECTINPUTDEVICE	g_pMouse;
+static constexpr DWORD kDInputMouseWheelOffset = static_cast<DWORD>( offsetof( DIMOUSESTATE, lZ ) );
 
 static void IN_DIMouse( int *mx, int *my );
 
@@ -728,7 +738,7 @@ static void IN_DIMouse( int *mx, int *my ) {
 				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE4, qfalse, 0, NULL );
 			break;
 		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=50
-		case DIMOFS_Z:
+		case kDInputMouseWheelOffset:
 			value = od.dwData;
 			if (value == 0) {
 
@@ -745,7 +755,7 @@ static void IN_DIMouse( int *mx, int *my ) {
 
 	// read the raw delta counter and ignore
 	// the individual sample time / values
-	hr = IDirectInputDevice_GetDeviceState( g_pMouse, sizeof( DIDEVICEOBJECTDATA ), &state );
+	hr = IDirectInputDevice_GetDeviceState( g_pMouse, sizeof( state ), &state );
 	if ( FAILED(hr) ) {
 		*mx = *my = 0;
 		return;
@@ -917,7 +927,7 @@ void IN_RawMouseEvent( LPARAM lParam )
 	dwSize = sizeof( u.raw );
 
 	err = GRID( (HRAWINPUT) lParam, RID_INPUT, &u.raw, &dwSize, sizeof( RAWINPUTHEADER ) );
-	if ( err == -1 )
+	if ( err == static_cast<UINT>( -1 ) )
 		return;
 
 	if ( u.raw.header.dwType != RIM_TYPEMOUSE || u.raw.data.mouse.usFlags != MOUSE_MOVE_RELATIVE )

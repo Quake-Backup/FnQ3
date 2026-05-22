@@ -1010,12 +1010,14 @@ static void CL_CompleteDemoName(const char *args, int argNum )
 CL_CompleteDownloadMap
 ====================
 */
+#ifdef USE_CURL
 static void CL_CompleteDownloadMap( const char *args, int argNum )
 {
 	if ( argNum == 2 ) {
 		Field_CompleteFilename( "maps", "bsp", qtrue, FS_MATCH_ANY | FS_MATCH_STICK );
 	}
 }
+#endif
 
 
 /*
@@ -2760,10 +2762,10 @@ static void CL_ServersResponsePacket( const netadr_t* from, msg_t *msg, qboolean
 		{
 			buffptr++;
 
-			if (buffend - buffptr < sizeof(addresses[numservers].ipv._4) + sizeof(addresses[numservers].port) + 1)
+			if (buffend - buffptr < static_cast<decltype(buffend - buffptr)>( sizeof(addresses[numservers].ipv._4) + sizeof(addresses[numservers].port) + 1 ))
 				break;
 
-			for(i = 0; i < sizeof(addresses[numservers].ipv._4); i++)
+			for(i = 0; i < static_cast<int>( sizeof(addresses[numservers].ipv._4) ); i++)
 				addresses[numservers].ipv._4[i] = *buffptr++;
 
 			addresses[numservers].type = NA_IP;
@@ -2774,10 +2776,10 @@ static void CL_ServersResponsePacket( const netadr_t* from, msg_t *msg, qboolean
 		{
 			buffptr++;
 
-			if (buffend - buffptr < sizeof(addresses[numservers].ipv._6) + sizeof(addresses[numservers].port) + 1)
+			if (buffend - buffptr < static_cast<decltype(buffend - buffptr)>( sizeof(addresses[numservers].ipv._6) + sizeof(addresses[numservers].port) + 1 ))
 				break;
 
-			for(i = 0; i < sizeof(addresses[numservers].ipv._6); i++)
+			for(i = 0; i < static_cast<int>( sizeof(addresses[numservers].ipv._6) ); i++)
 				addresses[numservers].ipv._6[i] = *buffptr++;
 
 			addresses[numservers].type = NA_IP6;

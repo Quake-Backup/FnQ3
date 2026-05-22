@@ -61,7 +61,7 @@ static void signal_handler( int sig )
 #endif
 
 	signalcaught = qtrue;
-	sprintf( msg, "Signal caught (%d)", sig );
+	Com_sprintf( msg, sizeof( msg ), "Signal caught (%d)", sig );
 	VM_Forced_Unload_Start();
 #ifndef DEDICATED
 	CL_Shutdown( msg, qtrue );

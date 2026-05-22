@@ -184,7 +184,7 @@ int Win32_GetKey( const char **s, char *buf, int buflen )
 			return buf[0];
 	}
 
-	for ( i = 0; i < ARRAY_LEN( tokens ) - 1; i++ )
+	for ( i = 0; i < static_cast<int>( ARRAY_LEN( tokens ) ) - 1; i++ )
           if ( !strcmp( buf, tokens[i].name ) )
             return tokens[i].vk;
 

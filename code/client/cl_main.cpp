@@ -88,6 +88,8 @@ cvar_t	*cl_hudAspect;
 cvar_t	*cl_hudDump;
 cvar_t	*cl_captureActive;
 cvar_t	*cl_playerHighlight;
+cvar_t	*cl_playerHighlightRimIntensity;
+cvar_t	*cl_playerHighlightOutlineIntensity;
 cvar_t	*cl_playerHighlightOutlineScale;
 cvar_t	*cl_playerHighlightRedColor;
 cvar_t	*cl_playerHighlightBlueColor;
@@ -4212,6 +4214,12 @@ void CL_Init( void ) {
 		" 3 - rimlight and stencil border\n"
 		"Team modes tint red and blue teams separately unless teammate/enemy overrides are set; non-team modes use the free color.\n"
 		"Self and corpses are excluded." );
+	cl_playerHighlightRimIntensity = Cvar_Get( "cl_playerHighlightRimIntensity", "1.0", CVAR_ARCHIVE );
+	Cvar_CheckRange( cl_playerHighlightRimIntensity, "0.0", "2.0", CV_FLOAT );
+	Cvar_SetDescription( cl_playerHighlightRimIntensity, "Overall rimlight opacity multiplier for player highlighting; 0 disables the rimlight pass and 1 preserves the default strength." );
+	cl_playerHighlightOutlineIntensity = Cvar_Get( "cl_playerHighlightOutlineIntensity", "1.0", CVAR_ARCHIVE );
+	Cvar_CheckRange( cl_playerHighlightOutlineIntensity, "0.0", "2.0", CV_FLOAT );
+	Cvar_SetDescription( cl_playerHighlightOutlineIntensity, "Overall stencil border opacity multiplier for player highlighting; 0 disables the outline pass and 1 preserves the default strength." );
 	cl_playerHighlightOutlineScale = Cvar_Get( "cl_playerHighlightOutlineScale", "1.01", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_playerHighlightOutlineScale, "1.001", "1.250", CV_FLOAT );
 	Cvar_SetDescription( cl_playerHighlightOutlineScale, "Relative thickness factor applied to the highlight stencil border shell." );

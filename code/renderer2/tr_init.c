@@ -180,6 +180,7 @@ cvar_t	*r_singleShader;
 cvar_t	*r_roundImagesDown;
 cvar_t	*r_colorMipLevels;
 cvar_t	*r_picmip;
+cvar_t	*r_picmipFilter;
 cvar_t	*r_showtris;
 cvar_t	*r_showsky;
 cvar_t	*r_shownormals;
@@ -1241,7 +1242,7 @@ static void GfxInfo_f( void )
 	}
 
 	ri.Printf( PRINT_ALL, "texturemode: %s\n", r_textureMode->string );
-	ri.Printf( PRINT_ALL, "picmip: %d\n", r_picmip->integer );
+	ri.Printf( PRINT_ALL, "picmip: %d, filter: %d\n", r_picmip->integer, r_picmipFilter->integer );
 	ri.Printf( PRINT_ALL, "texture bits: %d\n", r_texturebits->integer );
 	ri.Printf( PRINT_ALL, "texenv add: %s\n", enablestrings[glConfig.textureEnvAddAvailable != 0] );
 	ri.Printf( PRINT_ALL, "compressed textures: %s\n", enablestrings[glConfig.textureCompression!=TC_NONE] );
@@ -1342,6 +1343,9 @@ static void R_Register( void )
 	r_picmip = ri.Cvar_Get ("r_picmip", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_picmip, "0", "16", CV_INTEGER );
 	ri.Cvar_SetDescription( r_picmip, "Set texture quality, lower is better." );
+	r_picmipFilter = ri.Cvar_Get( "r_picmipFilter", "1", CVAR_ARCHIVE | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_picmipFilter, "0", "15", CV_INTEGER );
+	ri.Cvar_SetDescription( r_picmipFilter, "Filter shader paths allowed to use \\r_picmip:\n 0: off (legacy, all picmip-capable images)\n 1: textures/*\n 2: models/*\n 4: sprites/*\n 8: gfx/*, icons/*, menu/*, ui/*, fonts/*\n Add values to combine categories." );
 	r_roundImagesDown = ri.Cvar_Get ("r_roundImagesDown", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_roundImagesDown, "When images are scaled, round images down instead of up." );
 	r_colorMipLevels = ri.Cvar_Get ("r_colorMipLevels", "0", CVAR_LATCH );
@@ -1508,7 +1512,7 @@ static void R_Register( void )
 	r_celOutline = ri.Cvar_Get( "r_celOutline", "1", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celOutline, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_celOutline, "Draw a silhouette outline shell around cel shaded model entities. Requires a stencil buffer." );
-	r_celOutlineScale = ri.Cvar_Get( "r_celOutlineScale", "1.01", CVAR_ARCHIVE );
+	r_celOutlineScale = ri.Cvar_Get( "r_celOutlineScale", "1.03", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celOutlineScale, "1.0", "1.25", CV_FLOAT );
 	ri.Cvar_SetDescription( r_celOutlineScale, "Expansion scale used for cel-shaded model outlines. Values just above 1.0 keep the outline tight." );
 	r_celOutlineColor = ri.Cvar_Get( "r_celOutlineColor", "0 0 0 255", CVAR_ARCHIVE );

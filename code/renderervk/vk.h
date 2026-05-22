@@ -252,6 +252,7 @@ typedef struct vkUniform_s {
 	vec4_t depthFadeInfo;		// fragment: zfar/znear, zfar, invDist, bias
 	vec4_t depthFadeScale;		// fragment
 	vec4_t depthFadeBias;		// fragment
+	vec4_t dlightFactors;		// fragment: dynamic light falloff controls
 } vkUniform_t;
 
 #define TESS_XYZ   (1)
@@ -336,6 +337,7 @@ void vk_draw_dot( uint32_t storage_offset );
 
 void vk_read_pixels( byte* buffer, uint32_t width, uint32_t height ); // screenshots
 qboolean vk_bloom( void );
+void vk_draw_world_cel_outline( void );
 
 qboolean vk_alloc_vbo( const byte *vbo_data, int vbo_size );
 void vk_update_mvp( const float *m );
@@ -602,6 +604,7 @@ typedef struct {
 		VkShaderModule bloom_fs;
 		VkShaderModule blur_fs;
 		VkShaderModule blend_fs;
+		VkShaderModule world_outline_fs;
 
 		VkShaderModule gamma_fs;
 		VkShaderModule gamma_vs;
@@ -677,6 +680,8 @@ typedef struct {
 	VkPipeline bloom_extract_pipeline;
 	VkPipeline blur_pipeline[VK_NUM_BLOOM_PASSES*2]; // horizontal & vertical pairs
 	VkPipeline bloom_blend_pipeline;
+	VkPipeline bloom_blend_cel_pipeline;
+	VkPipeline world_outline_pipeline;
 
 	uint32_t frame_count;
 	qboolean active;

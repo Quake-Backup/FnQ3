@@ -195,6 +195,16 @@ typedef char GLchar;
 #define GL_RENDERBUFFER                     0x8D41
 #endif
 
+#ifndef GL_MULTISAMPLE
+#define GL_MULTISAMPLE                    0x809D
+#endif
+#ifndef GL_SAMPLE_ALPHA_TO_COVERAGE
+#define GL_SAMPLE_ALPHA_TO_COVERAGE       0x809E
+#endif
+#ifndef GL_MAX_SAMPLES
+#define GL_MAX_SAMPLES                    0x8D57
+#endif
+
 //===========================================================================
 
 #define QGL_Core_PROCS \

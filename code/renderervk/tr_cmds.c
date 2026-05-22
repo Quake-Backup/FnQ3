@@ -303,6 +303,7 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 #ifdef USE_VULKAN
 	backEnd.doneBloom = qfalse;
 #endif
+	backEnd.bloomProtectHighlights = qfalse;
 
 	backEnd.color2D.u32 = ~0U;
 

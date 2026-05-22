@@ -1743,6 +1743,9 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 		}
 
 		GL_State( stateBits );
+		if ( fp ) {
+			GL_SetAlphaToCoverage( ( pStage->stateBits & GLS_ATEST_BITS ) ? qtrue : qfalse );
+		}
 
 		if ( pStage->tessFlags & ( TESS_ENV0 | TESS_ENV1 ) ) {
 			// setup viewpos needed for environment mapping program

@@ -1193,6 +1193,7 @@ typedef struct {
 	qboolean	projection2D;	// if qtrue, drawstretchpic doesn't need to change modes
 	color4ub_t	color2D;
 	qboolean	doneSurfaces;   // done any 3d surfaces already
+	qboolean	bloomProtectHighlights; // preserve dark cel/player-highlight edges during bloom composite
 	trRefEntity_t	entity2D;	// currentEntity will point at this when doing 2D rendering
 
 	int		screenshotMask;		// png | tga | jpg | bmp
@@ -1384,19 +1385,30 @@ extern cvar_t	*r_drawSun;				// controls drawing of sun quad
 extern cvar_t	*r_dynamiclight;		// dynamic lights enabled/disabled
 extern cvar_t	*r_depthFade;			// soft-particle depth fade enabled/disabled
 extern cvar_t	*r_celShading;			// cel shading enabled/disabled on model entities
+extern cvar_t	*r_celShadingWorld;		// cel edge outlines enabled/disabled on BSP world geometry
+extern cvar_t	*r_celShadingWorldWidth;		// screen-space world cel outline radius in pixels
+extern cvar_t	*r_celShadingWorldAlpha;		// screen-space world cel outline opacity
+extern cvar_t	*r_celShadingWorldDepthThreshold;	// depth discontinuity threshold for world cel outlines
+extern cvar_t	*r_celShadingModelShadows;	// diffuse shadow bands enabled/disabled on model entities
+extern cvar_t	*r_celViewWeapon;		// first-person weapon cel shading enabled/disabled
 extern cvar_t	*r_celShadingSteps;		// diffuse lighting bands for cel shading
 extern cvar_t	*r_celOutline;			// outline shell enabled/disabled on model entities
 extern cvar_t	*r_celOutlineScale;		// shell expansion factor for cel outlines
+extern cvar_t	*r_celOutlineAlpha;		// model cel outline opacity
+extern cvar_t	*r_celViewWeaponOutlineScale;	// first-person weapon shell expansion factor
+extern cvar_t	*r_celViewWeaponOutlineAlpha;	// first-person weapon cel outline opacity
 extern cvar_t	*r_celOutlineColor;		// outline color in "r g b a"
 extern cvar_t	*r_mergeLightmaps;
 #ifdef USE_PMLIGHT
 extern cvar_t	*r_dlightMode;			// 0 - vq3, 1 - pmlight
-//extern cvar_t	*r_dlightSpecPower;		// 1 - 32
-//extern cvar_t	*r_dlightSpecColor;		// -1.0 - 1.0
+extern cvar_t	*r_dlightSpecPower;		// 1 - 32
+extern cvar_t	*r_dlightSpecColor;		// -1.0 - 1.0
+extern cvar_t	*r_dlightFalloff;		// 0.0 - 1.0
 extern cvar_t	*r_dlightScale;			// 0.1 - 1.0
 extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
 extern cvar_t	*r_dlightSaturation;	// 0.0 - 1.0
+extern cvar_t	*r_dlightOverbrightGamut;	// 0.0 - 1.0
 #ifdef USE_VULKAN
 extern cvar_t	*r_device;
 #ifdef USE_VBO
@@ -1438,7 +1450,7 @@ extern cvar_t	*r_crtCurvature;
 extern cvar_t	*r_crtChromatic;
 extern cvar_t	*r_ext_multisample;
 extern cvar_t	*r_ext_supersample;
-//extern cvar_t	*r_ext_alpha_to_coverage;
+extern cvar_t	*r_ext_alpha_to_coverage;
 extern cvar_t	*r_renderWidth;
 extern cvar_t	*r_renderHeight;
 extern cvar_t	*r_renderScale;
@@ -1464,6 +1476,7 @@ extern	cvar_t	*r_singleShader;				// make most world faces use default shader
 extern	cvar_t	*r_roundImagesDown;
 extern	cvar_t	*r_colorMipLevels;				// development aid to see texture mip usage
 extern	cvar_t	*r_picmip;						// controls picmip values
+extern	cvar_t	*r_picmipFilter;				// filters shader paths allowed to picmip
 extern	cvar_t	*r_nomip;						// apply picmip only on worldspawn textures
 extern	cvar_t	*r_finish;
 extern	cvar_t	*r_textureMode;
@@ -1815,9 +1828,12 @@ void RB_EnemyRimTessEnd( void );
 void RB_EnemyOutlineTessEnd( void );
 void RB_CelOutlineTessEnd( void );
 void RB_ProjectionShadowDeform( void );
+int R_CelBandCount( void );
 qboolean R_CelShadingActive( const trRefEntity_t *ent );
+qboolean R_CelShadingWorldActive( void );
 qboolean R_CelOutlineActive( const trRefEntity_t *ent, const shader_t *shader );
-float R_CelQuantizeIncoming( float incoming );
+qboolean R_BloomProtectHighlightsActive( void );
+void R_CelQuantizeModelLighting( const trRefEntity_t *ent, byte color[4] );
 
 /*
 ============================================================

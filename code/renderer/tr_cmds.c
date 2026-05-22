@@ -329,6 +329,7 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 
 	backEnd.doneBloom = qfalse;
 	backEnd.framePostProcessed = qfalse;
+	backEnd.bloomProtectHighlights = qfalse;
 
 	backEnd.color2D.u32 = ~0U;
 

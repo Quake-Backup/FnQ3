@@ -74,17 +74,30 @@ cvar_t	*r_drawSun;
 cvar_t	*r_dynamiclight;
 cvar_t	*r_depthFade;
 cvar_t	*r_celShading;
+cvar_t	*r_celShadingWorld;
+cvar_t	*r_celShadingWorldWidth;
+cvar_t	*r_celShadingWorldAlpha;
+cvar_t	*r_celShadingWorldDepthThreshold;
+cvar_t	*r_celShadingModelShadows;
+cvar_t	*r_celViewWeapon;
 cvar_t	*r_celShadingSteps;
 cvar_t	*r_celOutline;
 cvar_t	*r_celOutlineScale;
+cvar_t	*r_celOutlineAlpha;
+cvar_t	*r_celViewWeaponOutlineScale;
+cvar_t	*r_celViewWeaponOutlineAlpha;
 cvar_t	*r_celOutlineColor;
 cvar_t  *r_mergeLightmaps;
 #ifdef USE_PMLIGHT
 cvar_t	*r_dlightMode;
+cvar_t	*r_dlightSpecPower;
+cvar_t	*r_dlightSpecColor;
+cvar_t	*r_dlightFalloff;
 cvar_t	*r_dlightScale;
 cvar_t	*r_dlightIntensity;
 #endif
 cvar_t	*r_dlightSaturation;
+cvar_t	*r_dlightOverbrightGamut;
 #ifdef USE_VULKAN
 cvar_t	*r_device;
 #ifdef USE_VBO
@@ -172,6 +185,7 @@ cvar_t	*r_singleShader;
 cvar_t	*r_roundImagesDown;
 cvar_t	*r_colorMipLevels;
 cvar_t	*r_picmip;
+cvar_t	*r_picmipFilter;
 cvar_t	*r_nomip;
 cvar_t	*r_showtris;
 cvar_t	*r_showsky;
@@ -529,7 +543,7 @@ static void R_InitExtensions( void )
 			{
 				ri.Printf( PRINT_ALL, "...using GL_EXT_texture_filter_anisotropic (max: %i)\n", maxAnisotropy );
 				textureFilterAnisotropic = qtrue;
-				maxAnisotropy = MIN( r_ext_texture_filter_anisotropic->integer, maxAnisotropy );
+				maxAnisotropy = MIN( r_ext_max_anisotropy->integer, maxAnisotropy );
 			}
 		}
 		else
@@ -2173,7 +2187,7 @@ static void VarInfo( void )
 
 	ri.Printf( PRINT_ALL, "texturemode: %s\n", r_textureMode->string );
 	ri.Printf( PRINT_ALL, "texture bits: %d\n", r_texturebits->integer ? r_texturebits->integer : 32 );
-	ri.Printf( PRINT_ALL, "picmip: %d%s\n", r_picmip->integer, r_nomip->integer ? ", worldspawn only" : "" );
+	ri.Printf( PRINT_ALL, "picmip: %d%s, filter: %d\n", r_picmip->integer, r_nomip->integer ? ", worldspawn only" : "", r_picmipFilter->integer );
 
 #ifdef USE_VULKAN
 	if ( r_vertexLight->integer ) {
@@ -2388,6 +2402,10 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_picmip, "0", "16", CV_INTEGER );
 	ri.Cvar_SetDescription( r_picmip, "Set texture quality, lower is better." );
 
+	r_picmipFilter = ri.Cvar_Get( "r_picmipFilter", "1", CVAR_ARCHIVE | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_picmipFilter, "0", "15", CV_INTEGER );
+	ri.Cvar_SetDescription( r_picmipFilter, "Filter shader paths allowed to use \\r_picmip:\n 0: off (legacy, all picmip-capable images)\n 1: textures/*\n 2: models/*\n 4: sprites/*\n 8: gfx/*, icons/*, menu/*, ui/*, fonts/*\n Add values to combine categories." );
+
 	r_nomip = ri.Cvar_Get( "r_nomip", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_nomip, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_nomip, "Apply picmip only on worldspawn textures." );
@@ -2457,16 +2475,43 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_depthFade, "Softens intersections between translucent particles and world geometry." );
 	r_celShading = ri.Cvar_Get( "r_celShading", "0", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celShading, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_celShading, "Enable cel shading on model entities, including world models, player models, and the first-person weapon." );
+	ri.Cvar_SetDescription( r_celShading, "Enable cel shading on model entities, including brush models, player models, and the first-person weapon." );
+	r_celShadingWorld = ri.Cvar_Get( "r_celShadingWorld", "0", CVAR_ARCHIVE );
+	ri.Cvar_CheckRange( r_celShadingWorld, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_celShadingWorld, "Draw cel-style black edge outlines over opaque BSP world geometry without modifying lightmaps." );
+	r_celShadingWorldWidth = ri.Cvar_Get( "r_celShadingWorldWidth", "2.0", CVAR_ARCHIVE );
+	ri.Cvar_CheckRange( r_celShadingWorldWidth, "1.0", "8.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_celShadingWorldWidth, "Screen-space radius in pixels used by world cel outline depth edge detection. Larger values draw thicker outlines." );
+	r_celShadingWorldAlpha = ri.Cvar_Get( "r_celShadingWorldAlpha", "1.0", CVAR_ARCHIVE );
+	ri.Cvar_CheckRange( r_celShadingWorldAlpha, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_celShadingWorldAlpha, "Opacity of world cel outline edges." );
+	r_celShadingWorldDepthThreshold = ri.Cvar_Get( "r_celShadingWorldDepthThreshold", "0.0015", CVAR_ARCHIVE );
+	ri.Cvar_CheckRange( r_celShadingWorldDepthThreshold, "0.0001", "0.02", CV_FLOAT );
+	ri.Cvar_SetDescription( r_celShadingWorldDepthThreshold, "Depth discontinuity threshold for world cel outlines. Lower values catch more subtle edges." );
+	r_celShadingModelShadows = ri.Cvar_Get( "r_celShadingModelShadows", "1", CVAR_ARCHIVE );
+	ri.Cvar_CheckRange( r_celShadingModelShadows, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_celShadingModelShadows, "Quantize model lighting intensity into cel shadow bands when r_celShading is enabled." );
+	r_celViewWeapon = ri.Cvar_Get( "r_celViewWeapon", "1", CVAR_ARCHIVE );
+	ri.Cvar_CheckRange( r_celViewWeapon, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_celViewWeapon, "Allow cel shading and cel outlines on the first-person weapon when r_celShading is enabled." );
 	r_celShadingSteps = ri.Cvar_Get( "r_celShadingSteps", "4", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celShadingSteps, "2", "8", CV_INTEGER );
-	ri.Cvar_SetDescription( r_celShadingSteps, "Number of diffuse lighting bands used by cel shading. Higher values keep more intermediate tones." );
+	ri.Cvar_SetDescription( r_celShadingSteps, "Number of diffuse lighting bands used by model cel shading. Higher values keep more intermediate tones." );
 	r_celOutline = ri.Cvar_Get( "r_celOutline", "1", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celOutline, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_celOutline, "Draw a silhouette outline shell around cel shaded model entities. Requires a stencil buffer." );
-	r_celOutlineScale = ri.Cvar_Get( "r_celOutlineScale", "1.01", CVAR_ARCHIVE );
+	r_celOutlineScale = ri.Cvar_Get( "r_celOutlineScale", "1.03", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celOutlineScale, "1.0", "1.25", CV_FLOAT );
 	ri.Cvar_SetDescription( r_celOutlineScale, "Expansion scale used for cel-shaded model outlines. Values just above 1.0 keep the outline tight." );
+	r_celOutlineAlpha = ri.Cvar_Get( "r_celOutlineAlpha", "1.0", CVAR_ARCHIVE );
+	ri.Cvar_CheckRange( r_celOutlineAlpha, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_celOutlineAlpha, "Opacity multiplier for cel-shaded model outlines." );
+	r_celViewWeaponOutlineScale = ri.Cvar_Get( "r_celViewWeaponOutlineScale", "1.006", CVAR_ARCHIVE );
+	ri.Cvar_CheckRange( r_celViewWeaponOutlineScale, "1.0", "1.10", CV_FLOAT );
+	ri.Cvar_SetDescription( r_celViewWeaponOutlineScale, "Expansion scale used for first-person weapon cel outlines." );
+	r_celViewWeaponOutlineAlpha = ri.Cvar_Get( "r_celViewWeaponOutlineAlpha", "1.0", CVAR_ARCHIVE );
+	ri.Cvar_CheckRange( r_celViewWeaponOutlineAlpha, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_celViewWeaponOutlineAlpha, "Opacity multiplier for first-person weapon cel outlines." );
 	r_celOutlineColor = ri.Cvar_Get( "r_celOutlineColor", "0 0 0 255", CVAR_ARCHIVE );
 	ri.Cvar_SetDescription( r_celOutlineColor, "Outline color for cel shaded model entities as \"r g b a\"." );
 #ifdef USE_PMLIGHT
@@ -2480,13 +2525,29 @@ static void R_Register( void )
 	r_dlightScale = ri.Cvar_Get( "r_dlightScale", "0.5", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightScale, "0.1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightScale, "Scales dynamic light radius." );
+	r_dlightSpecPower = ri.Cvar_Get( "r_dlightSpecPower", "10", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightSpecPower, "1", "32", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightSpecPower, "Factors specularity effect from dynamic lights on surfaces." );
+	ri.Cvar_SetGroup( r_dlightSpecPower, CVG_RENDERER );
+	r_dlightSpecColor = ri.Cvar_Get( "r_dlightSpecColor", "-0.2", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightSpecColor, "-1", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightSpecColor, "Color base for specular component:\n <= 0: use current texture and modulate by abs(r_dlightSpecColor)\n > 0: use constant color with RGB components set to \\r_dlightSpecColor" );
+	ri.Cvar_SetGroup( r_dlightSpecColor, CVG_RENDERER );
+	r_dlightFalloff = ri.Cvar_Get( "r_dlightFalloff", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightFalloff, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightFalloff, "Blends PMLIGHT dynamic light attenuation from the original curve at 0 to a smooth edge falloff at 1." );
+	ri.Cvar_SetGroup( r_dlightFalloff, CVG_RENDERER );
 	r_dlightIntensity = ri.Cvar_Get( "r_dlightIntensity", "1.0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightIntensity, "0.1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightIntensity, "Adjusts dynamic light intensity but not radius." );
 #endif // USE_PMLIGHT
 
-	r_dlightSaturation = ri.Cvar_Get( "r_dlightSaturation", "1", CVAR_ARCHIVE_ND );
+	r_dlightSaturation = ri.Cvar_Get( "r_dlightSaturation", "0.8", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightSaturation, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightSaturation, "Adjusts dynamic light color saturation in linear light before rendering." );
+	r_dlightOverbrightGamut = ri.Cvar_Get( "r_dlightOverbrightGamut", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightOverbrightGamut, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightOverbrightGamut, "Compresses overbright dynamic light chroma toward linear luminance; 0 preserves raw mod-provided colors." );
 
 	r_dlightBacks = ri.Cvar_Get( "r_dlightBacks", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_dlightBacks, "Whether or not dynamic lights should light up back-face culled geometry, affects only VQ3 dynamic lights." );
@@ -2671,10 +2732,12 @@ static void R_Register( void )
 	r_ext_texture_filter_anisotropic = ri.Cvar_Get( "r_ext_texture_filter_anisotropic",	"1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_ext_texture_filter_anisotropic, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_ext_texture_filter_anisotropic, "Allow anisotropic filtering." );
+	ri.Cvar_SetGroup( r_ext_texture_filter_anisotropic, CVG_RENDERER );
 
 	r_ext_max_anisotropy = ri.Cvar_Get( "r_ext_max_anisotropy", "8", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_ext_max_anisotropy, "1", NULL, CV_INTEGER );
 	ri.Cvar_SetDescription( r_ext_max_anisotropy, "Sets maximum anisotropic level for your graphics driver. Requires \\r_ext_texture_filter_anisotropic." );
+	ri.Cvar_SetGroup( r_ext_max_anisotropy, CVG_RENDERER );
 
 	//r_stencilbits = ri.Cvar_Get( "r_stencilbits", "8", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	r_ignorehwgamma = ri.Cvar_Get( "r_ignorehwgamma", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
@@ -2820,23 +2883,27 @@ static void R_Register( void )
 
 	r_ext_multisample = ri.Cvar_Get( "r_ext_multisample", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_ext_multisample, "0", "64", CV_INTEGER );
-	ri.Cvar_SetDescription( r_ext_multisample, "For anti-aliasing geometry edges, valid values: 0|2|4|6|8. Requires \\r_fbo 1." );
+	ri.Cvar_SetDescription( r_ext_multisample, "Requests multisample anti-aliasing for geometry edges. Requires \\r_fbo 1. Common values are 0, 2, 4, 8, and 16; unsupported values resolve to the best supported sample count not above the request." );
+	ri.Cvar_SetGroup( r_ext_multisample, CVG_RENDERER );
 
 	r_ext_supersample = ri.Cvar_Get( "r_ext_supersample", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_ext_supersample, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_ext_supersample, "Super-sample anti-aliasing, requires \\r_fbo 1." );
-#if 0
+	ri.Cvar_SetGroup( r_ext_supersample, CVG_RENDERER );
+
 	r_ext_alpha_to_coverage = ri.Cvar_Get( "r_ext_alpha_to_coverage", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_ext_alpha_to_coverage, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_ext_alpha_to_coverage, "Enables alpha-to-coverage multisampling, requires \\r_fbo 1." );
-#endif
+	ri.Cvar_SetDescription( r_ext_alpha_to_coverage, "Use multisample alpha-to-coverage for alpha-tested texture edges when \\r_ext_multisample is active. Default off for strict legacy alpha-test parity." );
+	ri.Cvar_SetGroup( r_ext_alpha_to_coverage, CVG_RENDERER );
 
 	r_renderWidth = ri.Cvar_Get( "r_renderWidth", "800", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_renderWidth, "96", NULL, CV_INTEGER );
 	ri.Cvar_SetDescription( r_renderWidth, "Video width to render to when \\r_renderScale > 0." );
+	ri.Cvar_SetGroup( r_renderWidth, CVG_RENDERER );
 	r_renderHeight = ri.Cvar_Get( "r_renderHeight", "600", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_renderHeight, "72", NULL, CV_INTEGER );
 	ri.Cvar_SetDescription( r_renderHeight, "Video height to render to when \\r_renderScale > 0." );
+	ri.Cvar_SetGroup( r_renderHeight, CVG_RENDERER );
 
 	r_renderScale = ri.Cvar_Get( "r_renderScale", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_renderScale, "0", "4", CV_INTEGER );
@@ -2846,6 +2913,7 @@ static void R_Register( void )
 		" 2 - nearest filtering, preserve aspect ratio (black bars on sides)\n"
 		" 3 - linear filtering, stretch to full size\n"
 		" 4 - linear filtering, preserve aspect ratio (black bars on sides)\n" );
+	ri.Cvar_SetGroup( r_renderScale, CVG_RENDERER );
 #endif // USE_VULKAN
 }
 

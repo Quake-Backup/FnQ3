@@ -204,6 +204,101 @@ static int isnan_fp( const float *f )
 	return (int)( u >> 31 );
 }
 
+static float R_DlightSrgbToLinear( float c )
+{
+	if ( c <= 0.0f ) {
+		return 0.0f;
+	}
+	if ( c <= 0.04045f ) {
+		return c / 12.92f;
+	}
+	if ( c < 1.0f ) {
+		return powf( ( c + 0.055f ) / 1.055f, 2.4f );
+	}
+	return c;
+}
+
+static float R_DlightLinearToSrgb( float c )
+{
+	if ( c <= 0.0f ) {
+		return 0.0f;
+	}
+	if ( c <= 0.0031308f ) {
+		return c * 12.92f;
+	}
+	if ( c < 1.0f ) {
+		return 1.055f * powf( c, 1.0f / 2.4f ) - 0.055f;
+	}
+	return c;
+}
+
+static void R_CompressDlightOverbrightGamut( vec3_t linearColor, float amount )
+{
+	float maxChannel;
+	float linearLuma;
+	float overbright;
+	float chromaScale;
+
+	if ( amount <= 0.0f ) {
+		return;
+	}
+
+	maxChannel = MAX( linearColor[0], MAX( linearColor[1], linearColor[2] ) );
+	if ( maxChannel <= 1.0f ) {
+		return;
+	}
+
+	linearLuma = LUMA( linearColor[0], linearColor[1], linearColor[2] );
+	if ( linearLuma <= 0.0f || maxChannel <= linearLuma ) {
+		return;
+	}
+
+	overbright = maxChannel - 1.0f;
+	chromaScale = 1.0f - amount * ( overbright / ( overbright + 1.0f ) );
+
+	linearColor[0] = linearLuma + ( linearColor[0] - linearLuma ) * chromaScale;
+	linearColor[1] = linearLuma + ( linearColor[1] - linearLuma ) * chromaScale;
+	linearColor[2] = linearLuma + ( linearColor[2] - linearLuma ) * chromaScale;
+}
+
+static void R_ApplyDlightColorControls( float *r, float *g, float *b )
+{
+	float saturation;
+	float overbrightGamut;
+	qboolean needsSaturation;
+	qboolean needsGamut;
+	vec3_t linearColor;
+	float linearLuma;
+
+	saturation = r_dlightSaturation ? r_dlightSaturation->value : 1.0f;
+	overbrightGamut = r_dlightOverbrightGamut ? r_dlightOverbrightGamut->value : 0.0f;
+	needsSaturation = ( saturation != 1.0f );
+	needsGamut = ( overbrightGamut > 0.0f && ( *r > 1.0f || *g > 1.0f || *b > 1.0f ) );
+
+	if ( !needsSaturation && !needsGamut ) {
+		return;
+	}
+
+	linearColor[0] = R_DlightSrgbToLinear( *r );
+	linearColor[1] = R_DlightSrgbToLinear( *g );
+	linearColor[2] = R_DlightSrgbToLinear( *b );
+
+	if ( needsSaturation ) {
+		linearLuma = LUMA( linearColor[0], linearColor[1], linearColor[2] );
+		linearColor[0] = LERP( linearLuma, linearColor[0], saturation );
+		linearColor[1] = LERP( linearLuma, linearColor[1], saturation );
+		linearColor[2] = LERP( linearLuma, linearColor[2], saturation );
+	}
+
+	if ( needsGamut ) {
+		R_CompressDlightOverbrightGamut( linearColor, overbrightGamut );
+	}
+
+	*r = R_DlightLinearToSrgb( linearColor[0] );
+	*g = R_DlightLinearToSrgb( linearColor[1] );
+	*b = R_DlightLinearToSrgb( linearColor[2] );
+}
+
 
 /*
 =====================
@@ -271,13 +366,7 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	}
 #endif
 
-	if ( r_dlightSaturation->value != 1.0 )
-	{
-		float luminance = LUMA( r, g, b );
-		r = LERP( luminance, r, r_dlightSaturation->value );
-		g = LERP( luminance, g, r_dlightSaturation->value );
-		b = LERP( luminance, b, r_dlightSaturation->value );
-	}
+	R_ApplyDlightColorControls( &r, &g, &b );
 
 	dl = &backEndData->dlights[r_numdlights++];
 	VectorCopy( org, dl->origin );
@@ -322,13 +411,7 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	}
 #endif
 
-	if ( r_dlightSaturation->value != 1.0 )
-	{
-		float luminance = LUMA( r, g, b );
-		r = LERP( luminance, r, r_dlightSaturation->value );
-		g = LERP( luminance, g, r_dlightSaturation->value );
-		b = LERP( luminance, b, r_dlightSaturation->value );
-	}
+	R_ApplyDlightColorControls( &r, &g, &b );
 
 	dl = &backEndData->dlights[ r_numdlights++ ];
 	VectorCopy( start, dl->origin );

@@ -63,6 +63,55 @@ return a hash value for the filename
 
 #define generateHashValue Com_GenerateHashValue
 
+#define PICMIP_FILTER_TEXTURES 0x01
+#define PICMIP_FILTER_MODELS   0x02
+#define PICMIP_FILTER_SPRITES  0x04
+#define PICMIP_FILTER_2D       0x08
+
+static qboolean R_ShaderPathStartsWith( const char *name, const char *dir ) {
+	int len = strlen( dir );
+
+	return !Q_stricmpn( name, dir, len ) && ( name[len] == '/' || name[len] == '\\' );
+}
+
+static qboolean R_ShaderPicMipAllowed( const char *name ) {
+	int filter;
+
+	if ( !r_picmipFilter ) {
+		return qtrue;
+	}
+
+	filter = r_picmipFilter->integer;
+	if ( filter <= 0 ) {
+		return qtrue;
+	}
+
+	if ( ( filter & PICMIP_FILTER_TEXTURES ) && R_ShaderPathStartsWith( name, "textures" ) ) {
+		return qtrue;
+	}
+	if ( ( filter & PICMIP_FILTER_MODELS ) && R_ShaderPathStartsWith( name, "models" ) ) {
+		return qtrue;
+	}
+	if ( ( filter & PICMIP_FILTER_SPRITES ) && R_ShaderPathStartsWith( name, "sprites" ) ) {
+		return qtrue;
+	}
+	if ( filter & PICMIP_FILTER_2D ) {
+		if ( R_ShaderPathStartsWith( name, "gfx" ) || R_ShaderPathStartsWith( name, "icons" ) ||
+				R_ShaderPathStartsWith( name, "menu" ) || R_ShaderPathStartsWith( name, "ui" ) ||
+				R_ShaderPathStartsWith( name, "fonts" ) ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static void R_ApplyShaderPicMipFilter( void ) {
+	if ( !R_ShaderPicMipAllowed( shader.name ) ) {
+		shader.noPicMip = qtrue;
+	}
+}
+
 void RE_RemapShader(const char *shaderName, const char *newShaderName, const char *timeOffset) {
 	char		strippedName[MAX_QPATH];
 	int			hash;
@@ -1356,7 +1405,11 @@ static void ParseSkyParms( const char **text ) {
 	static const char	*suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
 	char		pathname[MAX_QPATH];
 	int			i;
-	imgFlags_t imgFlags = IMGFLAG_MIPMAP | IMGFLAG_PICMIP;
+	imgFlags_t imgFlags = IMGFLAG_MIPMAP;
+
+	if ( !shader.noPicMip ) {
+		imgFlags |= IMGFLAG_PICMIP;
+	}
 
 	if ( r_neatsky->integer ) {
 		imgFlags = IMGFLAG_NONE;
@@ -2760,6 +2813,7 @@ static void InitShader( const char *name, int lightmapIndex ) {
 
 	Q_strncpyz( shader.name, name, sizeof( shader.name ) );
 	shader.lightmapIndex = lightmapIndex;
+	R_ApplyShaderPicMipFilter();
 
 	// we need to know original (unmodified) lightmap index
 	// because shader search functions expects this
@@ -3510,7 +3564,9 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 
 		if (mipRawImage)
 		{
-			flags |= IMGFLAG_MIPMAP | IMGFLAG_PICMIP;
+			flags |= IMGFLAG_MIPMAP;
+			if ( !shader.noPicMip )
+				flags |= IMGFLAG_PICMIP;
 		}
 		else
 		{

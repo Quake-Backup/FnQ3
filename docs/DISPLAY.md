@@ -93,7 +93,8 @@ These settings control the render path behind the display output.
 - `r_outputAllowExperimentalLinuxHDR`: Allows the Linux experimental HDR telemetry/prototype backend only when the platform reports HDR headroom and an explicit compositor/protocol path. Leave this disabled unless you are validating a known HDR-capable Wayland path.
 - On SDR output, GLx treats paper white as the max output reference for the final transform. HDR-only max-luminance headroom is used only when a hardware HDR/EDR backend is actually active.
 - Output primaries are explicit in the GLx final transform. SDR sRGB and Windows scRGB use sRGB/BT.709 primaries, HDR10/PQ uses BT.2020, and macOS EDR uses Display P3. The Linux experimental HDR path is the only native-primaries state: it performs no primaries matrix and expects the compositor/protocol path to own native colorimetry. Unknown primaries are not selectable output states.
-- `r_ext_multisample`: Geometry-edge anti-aliasing. The practical values are `0`, `2`, `4`, `6`, and `8`.
+- `r_ext_multisample`: Geometry-edge multisample anti-aliasing. GLx and Vulkan share this cvar. Common values are `0`, `2`, `4`, `8`, and `16`; the renderer resolves unsupported requests to the best supported sample count not above the request.
+- `r_ext_alpha_to_coverage`: Optional multisample smoothing for alpha-tested texture edges such as grates, foliage-style cutouts, and masked decals. Requires `r_ext_multisample`. Default is `0` for legacy alpha-test parity.
 - `r_ext_supersample`: Enables supersample anti-aliasing.
 - `r_renderWidth` and `r_renderHeight`: Internal render resolution when `r_renderScale > 0`.
 - `r_renderScale`: Controls how the internal render image is scaled to the actual window or fullscreen size.
@@ -107,6 +108,7 @@ Guidance:
 
 - Use `r_fbo 1` if you want any modern post-processing or internal render scaling.
 - Use `r_ext_multisample` for cleaner geometry edges.
+- Use `r_ext_alpha_to_coverage 1` with MSAA if alpha-tested texture edges need extra smoothing.
 - Use `r_ext_supersample 1` when you want higher image quality and can afford the extra GPU cost.
 - Use `r_renderWidth`, `r_renderHeight`, and `r_renderScale` when you want a lower or higher internal render resolution than the actual window size.
 
@@ -161,37 +163,105 @@ These settings affect the rendered scene itself rather than the window mode.
 
 Use [ASPECT_CORRECTION.md](ASPECT_CORRECTION.md) for HUD, menu, and cinematic layout. That guide is intentionally separate because those settings solve a different problem than scene FOV, render scaling, or bloom.
 
+## Texture Picmip
+
+Picmip lowers texture upload resolution to trade sharpness for memory use and speed. It is a latched texture-loading setting, so changes require `vid_restart` or a fresh renderer start before already-loaded images are rebuilt.
+
+Controls:
+
+- `r_picmip`: Texture reduction amount. `0` keeps full upload resolution. Higher values progressively shift eligible images down by powers of two.
+- `r_picmipFilter`: Filters which shader paths are allowed to use `r_picmip`. Default is `1`.
+  - `0`: Legacy behavior. Any picmip-capable shader or raw image can be reduced unless it was explicitly marked `nopicmip`.
+  - `1`: Allow `textures/*`. This is the default and keeps normal world-material textures under picmip while treating most UI, model, effect, and utility shaders like `nopicmip`.
+  - `2`: Allow `models/*`.
+  - `4`: Allow `sprites/*`.
+  - `8`: Allow 2D/UI-style paths: `gfx/*`, `icons/*`, `menu/*`, `ui/*`, and `fonts/*`.
+  - Add values to combine groups. For example, `3` allows `textures/*` and `models/*`; `15` allows every built-in group.
+- `r_nomip`: Applies picmip only while map/world images are loading. This is stricter than `r_picmipFilter` because it limits when picmip is applied, not only which shader names are eligible.
+- `r_neatsky`: Disables mipmapping and picmip for skybox images.
+
+Notes:
+
+- `r_picmipFilter` is intentionally shader-name based. It classifies the shader being registered, not every individual image referenced by a shader stage. A shader named `textures/foo/bar` can still picmip its eligible stages, even if one stage loads an image outside `textures/`.
+- Authored shader keywords still win. `nopicmip` and `nomipmaps` keep their historical meaning.
+- Use `r_picmipFilter 0` for old configs or visual comparisons that expect every picmip-capable image to be reduced.
+- Use `r_picmipFilter 1` when you want world textures to scale down without blurring HUD, menu, font, and most model/effect assets.
+- Use `r_picmipFilter 3` when you also want player, weapon, and item model skins to follow `r_picmip`.
+
+Example quality/performance setup:
+
+```cfg
+seta r_picmip "1"
+seta r_picmipFilter "1"
+vid_restart
+```
+
+Example aggressive legacy-style setup:
+
+```cfg
+seta r_picmip "2"
+seta r_picmipFilter "0"
+vid_restart
+```
+
 ## Cel Shading
 
-Cel shading is available for model entities in all supported renderers. In practice that means map world models, player models, and the first-person weapon can use banded lighting and an optional silhouette shell, while the main BSP world remains unchanged.
+Cel shading is split between model presentation and BSP world edge detection.
+
+Model cel shading applies to model entities, including player models, weapons, and inline brush models. It can quantize model lighting into hard bands and draw a stencil-style silhouette shell around eligible models. World cel shading is separate: it draws screen-space outlines from the world depth buffer so BSP geometry gets dark edge accents without changing lightmaps, vertex data, demos, protocol behavior, or assets.
+
+The GLx/OpenGL-lineage and Vulkan renderers expose the same user-facing controls.
 
 ### Controls
 
-- `r_celShading`: Master toggle.
+- `r_celShading`: Model cel-shading master toggle. Default is `0`.
   - `0`: Disabled.
-  - `1`: Enable cel shading on model entities.
-- `r_celShadingSteps`: Number of diffuse lighting bands. Lower values push a more stylized hard-step look. Higher values keep more intermediate tone.
-- `r_celOutline`: Enables the silhouette shell around cel-shaded model entities.
-- `r_celOutlineScale`: Outline shell expansion amount. Values just above `1.0` keep the outline tight. Larger values make it thicker.
-- `r_celOutlineColor`: Outline color as `"r g b a"`.
+  - `1`: Enable cel shading on model entities, including inline brush models.
+- `r_celShadingModelShadows`: Quantizes model lighting into cel shadow bands when `r_celShading` is enabled. Default is `1`.
+- `r_celViewWeapon`: Lets the first-person weapon participate in model cel shading and model cel outlines. Default is `1`.
+- `r_celShadingSteps`: Number of diffuse lighting bands for model cel shading. Valid range is `2..8`, default is `4`. Lower values push a harsher hard-step look. Higher values keep more intermediate tone.
+- `r_celOutline`: Enables the silhouette shell around cel-shaded model entities. Default is `1`.
+- `r_celOutlineScale`: Model outline shell expansion amount. Valid range is `1.0..1.25`, default is `1.03`. Values just above `1.0` keep the outline tight. Larger values make it thicker.
+- `r_celOutlineAlpha`: Model outline opacity multiplier. Valid range is `0.0..1.0`, default is `1.0`.
+- `r_celViewWeaponOutlineScale`: First-person weapon outline shell expansion amount. Valid range is `1.0..1.10`, default is `1.006`. This is separate because viewmodels sit much closer to the camera than other models.
+- `r_celViewWeaponOutlineAlpha`: First-person weapon outline opacity multiplier. Valid range is `0.0..1.0`, default is `1.0`.
+- `r_celOutlineColor`: Model outline color as `"r g b a"`. Default is `"0 0 0 255"`. The alpha channel is also multiplied by `r_celOutlineAlpha` or `r_celViewWeaponOutlineAlpha`.
+- `r_celShadingWorld`: Enables BSP world cel outlines. Default is `0`.
+  - `0`: Disabled.
+  - `1`: Draw screen-space depth-edge outlines over opaque BSP world geometry.
+- `r_celShadingWorldWidth`: World outline radius in pixels. Valid range is `1.0..8.0`, default is `2.0`. Increase this for thicker world edges.
+- `r_celShadingWorldAlpha`: World outline opacity. Valid range is `0.0..1.0`, default is `1.0`.
+- `r_celShadingWorldDepthThreshold`: Depth discontinuity threshold for world edge detection. Valid range is `0.0001..0.02`, default is `0.0015`. Lower values catch subtler depth edges; higher values restrict the effect to stronger geometry breaks.
 
 Notes:
 
 - `r_celOutline` depends on a stencil buffer being available.
-- The effect is meant for model presentation, not full-world BSP flat shading.
-- The outline color is shared across eligible model entities.
+- `r_celShadingWorld` uses depth edges only. It does not quantize or cel-shade BSP lightmaps.
+- `r_celShadingWorld` affects the main BSP world only. Inline brush models remain under `r_celShading`.
+- `r_celShadingWorld` needs the renderer depth-texture path. If that path is unavailable, the cvar is harmless and the world outline pass is skipped.
+- Model cel outlines, world cel outlines, and player highlight passes are drawn late enough to remain visible over bloom.
+- The model outline color is shared across eligible model entities.
 
 Recommended starting point:
 
 ```cfg
 seta r_celShading "1"
+seta r_celShadingModelShadows "1"
+seta r_celViewWeapon "1"
 seta r_celShadingSteps "4"
 seta r_celOutline "1"
-seta r_celOutlineScale "1.02"
+seta r_celOutlineScale "1.03"
+seta r_celOutlineAlpha "1.0"
+seta r_celViewWeaponOutlineScale "1.006"
+seta r_celViewWeaponOutlineAlpha "1.0"
 seta r_celOutlineColor "0 0 0 255"
+seta r_celShadingWorld "1"
+seta r_celShadingWorldWidth "2.0"
+seta r_celShadingWorldAlpha "1.0"
+seta r_celShadingWorldDepthThreshold "0.0015"
 ```
 
-For a harsher stylized look, reduce `r_celShadingSteps` to `2` or `3`. For a softer result, keep the outline enabled but raise `r_celShadingSteps` to `5` or `6`.
+For a harsher stylized model-lighting look, reduce `r_celShadingSteps` to `2` or `3`. For a softer result, keep the outline enabled but raise `r_celShadingSteps` to `5` or `6`. For stronger world edges, raise `r_celShadingWorldWidth`; for fewer world edges, raise `r_celShadingWorldDepthThreshold`.
 
 ## Bloom
 
@@ -355,6 +425,7 @@ Use `vid_restart` after changes to:
 - `r_hdr`
 - `r_hdrPrecision`
 - `r_ext_multisample`
+- `r_ext_alpha_to_coverage`
 - `r_renderWidth`, `r_renderHeight`, `r_renderScale`
 - `r_ext_supersample`
 - OpenGL or GLx `r_bloom_passes`
@@ -382,6 +453,20 @@ Settings that are usually safe to tune live:
 - `r_colorGradeAdaptWhitePoint`
 - `r_colorGradeLUT`
 - `r_colorGradeLUTScale`
+- `r_celShading`
+- `r_celShadingModelShadows`
+- `r_celViewWeapon`
+- `r_celShadingSteps`
+- `r_celOutline`
+- `r_celOutlineScale`
+- `r_celOutlineAlpha`
+- `r_celViewWeaponOutlineScale`
+- `r_celViewWeaponOutlineAlpha`
+- `r_celOutlineColor`
+- `r_celShadingWorld`
+- `r_celShadingWorldWidth`
+- `r_celShadingWorldAlpha`
+- `r_celShadingWorldDepthThreshold`
 - OpenGL or GLx `r_bloom_blend_base`
 - OpenGL or GLx `r_bloom_filter_size`
 - OpenGL or GLx `r_bloom_reflection`

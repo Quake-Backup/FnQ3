@@ -632,10 +632,19 @@ static float VK_ComputeTextureIntensityScale( const image_t *image )
 
 static void VK_SetTextureFactors( vkUniform_t *uniform, const shaderStage_t *pStage, int bundle )
 {
+	float specColor;
+
 	uniform->texFactors[0] = VK_ComputeTextureIntensityScale( pStage->bundle[ bundle ].image[0] );
-	uniform->texFactors[1] = 1.0f;
-	uniform->texFactors[2] = 1.0f;
-	uniform->texFactors[3] = 1.0f;
+	uniform->texFactors[1] = r_dlightSpecPower ? r_dlightSpecPower->value : 10.0f;
+
+	specColor = r_dlightSpecColor ? r_dlightSpecColor->value : -0.2f;
+	if ( specColor > 0.0f ) {
+		uniform->texFactors[2] = 0.0f;
+		uniform->texFactors[3] = specColor;
+	} else {
+		uniform->texFactors[2] = -specColor;
+		uniform->texFactors[3] = 0.0f;
+	}
 }
 
 /*
@@ -1299,6 +1308,10 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 
 	// fragment data
 	uniform->light.color[3] = 1.0f / Square( radius );
+	uniform->dlightFactors[0] = r_dlightFalloff ? r_dlightFalloff->value : 1.0f;
+	uniform->dlightFactors[1] = 0.0f;
+	uniform->dlightFactors[2] = 0.0f;
+	uniform->dlightFactors[3] = 0.0f;
 
 	if ( dl->linear )
 	{

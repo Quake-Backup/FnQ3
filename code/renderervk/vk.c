@@ -11,6 +11,36 @@
 static int vkSamples = VK_SAMPLE_COUNT_1_BIT;
 static int vkMaxSamples = VK_SAMPLE_COUNT_1_BIT;
 
+static int vk_select_sample_count( int requestedSamples, VkSampleCountFlags supportedSamples )
+{
+	static const int sampleCounts[] = {
+		VK_SAMPLE_COUNT_64_BIT,
+		VK_SAMPLE_COUNT_32_BIT,
+		VK_SAMPLE_COUNT_16_BIT,
+		VK_SAMPLE_COUNT_8_BIT,
+		VK_SAMPLE_COUNT_4_BIT,
+		VK_SAMPLE_COUNT_2_BIT,
+		VK_SAMPLE_COUNT_1_BIT
+	};
+	int i;
+
+	if ( requestedSamples <= 0 ) {
+		return VK_SAMPLE_COUNT_1_BIT;
+	}
+	if ( requestedSamples < 2 ) {
+		requestedSamples = 2;
+	}
+
+	for ( i = 0; i < ARRAY_LEN( sampleCounts ); i++ ) {
+		if ( sampleCounts[ i ] <= requestedSamples &&
+			( supportedSamples & sampleCounts[ i ] ) ) {
+			return sampleCounts[ i ];
+		}
+	}
+
+	return VK_SAMPLE_COUNT_1_BIT;
+}
+
 #define VK_POST_COLOR_SPACE_SDR 0
 #define VK_POST_COLOR_SPACE_HDR10_ST2084 1
 
@@ -3462,6 +3492,7 @@ static VkSampler vk_find_sampler( const Vk_Sampler_Def *def ) {
 	VkFilter mag_filter;
 	VkFilter min_filter;
 	VkSamplerMipmapMode mipmap_mode;
+	float requestedAnisotropy;
 	float maxLod;
 	int i;
 
@@ -3532,13 +3563,17 @@ static VkSampler vk_find_sampler( const Vk_Sampler_Def *def ) {
 	desc.addressModeW = address_mode;
 	desc.mipLodBias = 0.0f;
 
-	if ( def->noAnisotropy || mipmap_mode == VK_SAMPLER_MIPMAP_MODE_NEAREST || mag_filter == VK_FILTER_NEAREST ) {
-		desc.anisotropyEnable = VK_FALSE;
-		desc.maxAnisotropy = 1.0f;
-	} else {
-		desc.anisotropyEnable = (r_ext_texture_filter_anisotropic->integer && vk.samplerAnisotropy) ? VK_TRUE : VK_FALSE;
-		if ( desc.anisotropyEnable ) {
-			desc.maxAnisotropy = MIN( r_ext_max_anisotropy->integer, vk.maxAnisotropy );
+	desc.anisotropyEnable = VK_FALSE;
+	desc.maxAnisotropy = 1.0f;
+	if ( !def->noAnisotropy && mipmap_mode == VK_SAMPLER_MIPMAP_MODE_LINEAR &&
+		mag_filter != VK_FILTER_NEAREST &&
+		r_ext_texture_filter_anisotropic && r_ext_texture_filter_anisotropic->integer &&
+		vk.samplerAnisotropy ) {
+		requestedAnisotropy = Com_Clamp( 1.0f, vk.maxAnisotropy,
+			r_ext_max_anisotropy ? (float)r_ext_max_anisotropy->integer : 1.0f );
+		if ( requestedAnisotropy > 1.0f ) {
+			desc.anisotropyEnable = VK_TRUE;
+			desc.maxAnisotropy = requestedAnisotropy;
 		}
 	}
 
@@ -4122,10 +4157,12 @@ static void vk_create_shader_modules( void )
 	vk.modules.bloom_fs = SHADER_MODULE( bloom_frag_spv );
 	vk.modules.blur_fs = SHADER_MODULE( blur_frag_spv );
 	vk.modules.blend_fs = SHADER_MODULE( blend_frag_spv );
+	vk.modules.world_outline_fs = SHADER_MODULE( world_outline_frag_spv );
 
 	SET_OBJECT_NAME( vk.modules.bloom_fs, "bloom extraction fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.blur_fs, "gaussian blur fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.blend_fs, "final bloom blend fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+	SET_OBJECT_NAME( vk.modules.world_outline_fs, "world cel depth-outline fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 
 	vk.modules.gamma_fs = SHADER_MODULE( gamma_frag_spv );
 	vk.modules.gamma_vs = SHADER_MODULE( gamma_vert_spv );
@@ -4652,6 +4689,7 @@ void vk_update_post_process_pipelines( void )
 	if ( vk.fboActive ) {
 		// update gamma shader
 		vk_create_post_process_pipeline( 0, 0, 0 );
+		vk_create_post_process_pipeline( 5, glConfig.vidWidth, glConfig.vidHeight );
 		if ( vk.capture.image ) {
 			// update capture pipeline
 			vk_create_post_process_pipeline( 3, gls.captureWidth, gls.captureHeight );
@@ -4672,6 +4710,7 @@ void vk_update_post_process_pipelines( void )
 			}
 
 			vk_create_post_process_pipeline( 2, glConfig.vidWidth, glConfig.vidHeight ); // bloom blending
+			vk_create_post_process_pipeline( 4, glConfig.vidWidth, glConfig.vidHeight ); // bloom blending for cel outlines
 		}
 	}
 }
@@ -5627,30 +5666,33 @@ void vk_initialize( void )
 
 	vk_set_render_scale();
 
-	if ( r_fbo->integer ) {
-		vk.fboActive = qtrue;
-		if ( r_ext_multisample->integer ) {
-			vk.msaaActive = qtrue;
-		}
-	} else {
-		vk.fboActive = qfalse;
-	}
+	vk.fboActive = r_fbo->integer ? qtrue : qfalse;
+	vk.msaaActive = qfalse;
 
 	// multisampling
 
-	vkMaxSamples = MIN( props.limits.sampledImageColorSampleCounts, props.limits.sampledImageDepthSampleCounts );
+	vkMaxSamples = props.limits.framebufferColorSampleCounts &
+		props.limits.framebufferDepthSampleCounts;
 
-	if ( /*vk.fboActive &&*/ vk.msaaActive ) {
-		VkSampleCountFlags mask = vkMaxSamples;
-		vkSamples = MAX( log2pad( r_ext_multisample->integer, 1 ), VK_SAMPLE_COUNT_2_BIT );
-		while ( vkSamples > mask )
-				vkSamples >>= 1;
-		ri.Printf( PRINT_ALL, "...using %ix MSAA\n", vkSamples );
+	if ( vk.fboActive && r_ext_multisample->integer ) {
+		const int requestedSamples = MAX( r_ext_multisample->integer, 2 );
+		vkSamples = vk_select_sample_count( requestedSamples, vkMaxSamples );
+		vk.msaaActive = ( vkSamples > VK_SAMPLE_COUNT_1_BIT ) ? qtrue : qfalse;
+		if ( vk.msaaActive ) {
+			if ( vkSamples == requestedSamples ) {
+				ri.Printf( PRINT_ALL, "...using %ix MSAA\n", vkSamples );
+			} else {
+				ri.Printf( PRINT_ALL, "...using %ix MSAA (requested %ix)\n",
+					vkSamples, requestedSamples );
+			}
+		} else {
+			ri.Printf( PRINT_ALL, "...MSAA is not available for the selected Vulkan color/depth framebuffer formats\n" );
+		}
 	} else {
 		vkSamples = VK_SAMPLE_COUNT_1_BIT;
 	}
 
-	vk.screenMapSamples = MIN( vkMaxSamples, VK_SAMPLE_COUNT_4_BIT );
+	vk.screenMapSamples = vk_select_sample_count( 4, vkMaxSamples );
 
 	vk.screenMapWidth = (float) glConfig.vidWidth / 16.0;
 	if ( vk.screenMapWidth < 4 )
@@ -6163,6 +6205,16 @@ static void vk_destroy_pipelines( qboolean resetCounter )
 		vk.bloom_blend_pipeline = VK_NULL_HANDLE;
 	}
 
+	if ( vk.bloom_blend_cel_pipeline != VK_NULL_HANDLE ) {
+		qvkDestroyPipeline( vk.device, vk.bloom_blend_cel_pipeline, NULL );
+		vk.bloom_blend_cel_pipeline = VK_NULL_HANDLE;
+	}
+
+	if ( vk.world_outline_pipeline != VK_NULL_HANDLE ) {
+		qvkDestroyPipeline( vk.device, vk.world_outline_pipeline, NULL );
+		vk.world_outline_pipeline = VK_NULL_HANDLE;
+	}
+
 	for ( i = 0; i < ARRAY_LEN( vk.blur_pipeline ); i++ ) {
 		if ( vk.blur_pipeline[i] != VK_NULL_HANDLE ) {
 			qvkDestroyPipeline( vk.device, vk.blur_pipeline[i], NULL );
@@ -6304,6 +6356,7 @@ void vk_shutdown( refShutdownCode_t code )
 	qvkDestroyShaderModule(vk.device, vk.modules.bloom_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.blur_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.blend_fs, NULL);
+	qvkDestroyShaderModule(vk.device, vk.modules.world_outline_fs, NULL);
 
 	qvkDestroyShaderModule(vk.device, vk.modules.gamma_vs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.gamma_fs, NULL);
@@ -6853,6 +6906,24 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 			pipeline_name = "bloom blend pipeline";
 			blend = qtrue;
 			break;
+		case 4: // final bloom blend, preserving dark cel-outline pixels
+			pipeline = &vk.bloom_blend_cel_pipeline;
+			fsmodule = vk.modules.blend_fs;
+			renderpass = vk.render_pass.post_bloom;
+			layout = vk.pipeline_layout_blend;
+			samples = vkSamples;
+			pipeline_name = "bloom blend cel-outline pipeline";
+			blend = qtrue;
+			break;
+		case 5: // world cel depth edge overlay
+			pipeline = &vk.world_outline_pipeline;
+			fsmodule = vk.modules.world_outline_fs;
+			renderpass = vk.render_pass.main_load;
+			layout = vk.pipeline_layout_post_process;
+			samples = vkSamples;
+			pipeline_name = "world cel depth-outline pipeline";
+			blend = qtrue;
+			break;
 		case 3: // capture buffer extraction
 			pipeline = &vk.capture_pipeline;
 			fsmodule = vk.modules.gamma_fs;
@@ -7223,8 +7294,20 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	attachment_blend_state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 	if ( blend ) {
 		attachment_blend_state.blendEnable = VK_TRUE;
-		attachment_blend_state.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-		attachment_blend_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		if ( program_index == 5 ) {
+			attachment_blend_state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+			attachment_blend_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+			attachment_blend_state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+			attachment_blend_state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		} else {
+			attachment_blend_state.srcColorBlendFactor = ( program_index == 4 ) ?
+				VK_BLEND_FACTOR_DST_COLOR : VK_BLEND_FACTOR_ONE;
+			attachment_blend_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+			attachment_blend_state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+			attachment_blend_state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		}
+		attachment_blend_state.colorBlendOp = VK_BLEND_OP_ADD;
+		attachment_blend_state.alphaBlendOp = VK_BLEND_OP_ADD;
 	} else {
 		attachment_blend_state.blendEnable = VK_FALSE;
 	}
@@ -7725,12 +7808,11 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	// depth fragment threshold
 	frag_spec_data[2].f = 0.85f;
 
-#if 0
-	if ( r_ext_alpha_to_coverage->integer && vkSamples != VK_SAMPLE_COUNT_1_BIT && frag_spec_data[0].i ) {
+	if ( r_ext_alpha_to_coverage && r_ext_alpha_to_coverage->integer &&
+		vkSamples != VK_SAMPLE_COUNT_1_BIT && frag_spec_data[0].i ) {
 		frag_spec_data[3].i = 1;
 		alphaToCoverage = VK_TRUE;
 	}
-#endif
 
 	// constant color
 	switch ( def->shader_type ) {
@@ -9358,7 +9440,8 @@ void vk_end_render_pass( void )
 
 qboolean vk_depth_fade_supported( void )
 {
-	return ( r_depthFade && r_depthFade->integer && vk.maxBoundDescriptorSets >= VK_DESC_COUNT && !vk.msaaActive ) ? qtrue : qfalse;
+	return ( ( ( r_depthFade && r_depthFade->integer ) || R_CelShadingWorldActive() ) &&
+		vk.maxBoundDescriptorSets >= VK_DESC_COUNT && !vk.msaaActive ) ? qtrue : qfalse;
 }
 
 
@@ -9415,6 +9498,55 @@ void vk_copy_depth_fade( void )
 
 	vk.depth_fade_copied = qtrue;
 	vk_begin_main_render_pass_load();
+}
+
+
+void vk_draw_world_cel_outline( void )
+{
+	float constants[4];
+	float width;
+	float alpha;
+	float threshold;
+	VkDescriptorSet descriptor;
+
+	if ( !R_CelShadingWorldActive() ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		!vk.fboActive || vk.world_outline_pipeline == VK_NULL_HANDLE ||
+		!vk_depth_fade_available() || vk.renderPassIndex != RENDER_PASS_MAIN ) {
+		return;
+	}
+
+	width = r_celShadingWorldWidth ? Com_Clamp( 1.0f, 8.0f, r_celShadingWorldWidth->value ) : 2.0f;
+	alpha = r_celShadingWorldAlpha ? Com_Clamp( 0.0f, 1.0f, r_celShadingWorldAlpha->value ) : 1.0f;
+	threshold = r_celShadingWorldDepthThreshold ? Com_Clamp( 0.0001f, 0.02f, r_celShadingWorldDepthThreshold->value ) : 0.0015f;
+	if ( alpha <= 0.0f ) {
+		return;
+	}
+
+	if ( !vk_depth_fade_ready() ) {
+		vk_copy_depth_fade();
+	}
+	if ( !vk_depth_fade_ready() || vk.renderPassIndex != RENDER_PASS_MAIN ) {
+		return;
+	}
+
+	constants[0] = glConfig.vidWidth > 0 ? width / (float)glConfig.vidWidth : 1.0f;
+	constants[1] = glConfig.vidHeight > 0 ? width / (float)glConfig.vidHeight : 1.0f;
+	constants[2] = threshold;
+	constants[3] = alpha;
+
+	descriptor = vk.depth_fade_descriptor;
+	qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.world_outline_pipeline );
+	qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		vk.pipeline_layout_post_process, 0, 1, &descriptor, 0, NULL );
+	qvkCmdPushConstants( vk.cmd->command_buffer, vk.pipeline_layout_post_process,
+		VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof( constants ), constants );
+	qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
+
+	vk.cmd->last_pipeline = VK_NULL_HANDLE;
+	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
+	vk.cmd->descriptor_set.start = 0;
+	vk.cmd->descriptor_set.end = VK_DESC_COUNT - 1;
 }
 
 
@@ -10089,7 +10221,9 @@ qboolean vk_bloom( void )
 		}
 
 		// blend downscaled buffers to main fbo
-		qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.bloom_blend_pipeline );
+		qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			R_BloomProtectHighlightsActive() && vk.bloom_blend_cel_pipeline != VK_NULL_HANDLE ?
+				vk.bloom_blend_cel_pipeline : vk.bloom_blend_pipeline );
 		qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline_layout_blend, 0, ARRAY_LEN(dset), dset, 0, NULL );
 		qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
 	}

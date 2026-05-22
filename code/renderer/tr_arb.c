@@ -1069,7 +1069,15 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, lightRGB[0], lightRGB[1], lightRGB[2], 1.0f / Square( radius ) );
 	textureScale = ARB_ComputeTextureIntensityScale( pStage->bundle[ tess.shader->lightingBundle ].image[0] );
-	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 5, textureScale, 1.0f, 1.0f, 1.0f );
+	if ( r_dlightSpecColor->value > 0.0f ) {
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 5,
+			textureScale, r_dlightSpecPower->value, 0.0f, r_dlightSpecColor->value );
+	} else {
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 5,
+			textureScale, r_dlightSpecPower->value, -r_dlightSpecColor->value, 0.0f );
+	}
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 6,
+		r_dlightFalloff ? r_dlightFalloff->value : 1.0f, 0.0f, 0.0f, 0.0f );
 
 	if ( dl->linear )
 	{
@@ -1267,6 +1275,8 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	"OPTION ARB_precision_hint_fastest; \n"
 	"PARAM lightRGB = program.local[0]; \n"
 	"PARAM texFactors = program.local[5]; \n"
+	"PARAM dlightFactors = program.local[6]; \n"
+	"PARAM attenShape = { 3.0, -2.0, 0.0, 0.0 }; \n"
 	//"PARAM lightRange2recip = program.local[1]; \n"
 	"TEMP base, tmp; \n"
 	"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
@@ -1290,6 +1300,12 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	strcat( program,
 	"ATTRIB dnEV = fragment.texcoord[2]; \n" // 2
 	"ATTRIB n = fragment.texcoord[3]; \n"    // 3
+
+	// normalize interpolated normal
+	"TEMP nn; \n"
+	"DP3 tmp.w, n, n; \n"
+	"RSQ tmp.w, tmp.w; \n"
+	"MUL nn.xyz, n, tmp.w; \n"
 	
 	// normalize light vector
 	"TEMP lv; \n"
@@ -1303,13 +1319,12 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	"SUB tmp.x, {1.0}, tmp.x; \n"
 	// discard blank fragments
 	"KIL tmp.x; \n"
+	"MAD tmp.y, tmp.x, attenShape.y, attenShape.x; \n"
+	"MUL tmp.y, tmp.y, tmp.x; \n"
+	"MUL tmp.y, tmp.y, tmp.x; \n"
+	"LRP tmp.x, dlightFactors.x, tmp.y, tmp.x; \n"
 
 	"MUL light, lightRGB, tmp.x; \n" ); // light.rgb
-
-	if ( r_dlightSpecColor->value > 0 )
-		strcat( program, va( "PARAM specRGB = %1.2f; \n", r_dlightSpecColor->value ) );
-
-	strcat( program, va( "PARAM specEXP = %1.2f; \n", r_dlightSpecPower->value ) );
 
 	strcat( program,
 	// normalize eye vector
@@ -1327,40 +1342,34 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	// modulate specular strength
 	if ( abslight ) {
 		strcat( program,
-		"DP3 tmp.w, n, tmp; \n"
+		"DP3 tmp.w, nn, tmp; \n"
 		"ABS tmp.w, tmp.w; \n" );
 	} else {
 		strcat( program,
-		"DP3_SAT tmp.w, n, tmp; \n" );
+		"DP3_SAT tmp.w, nn, tmp; \n" );
 	}
 
 	strcat( program,
-	"POW tmp.w, tmp.w, specEXP.w; \n"
-	"TEMP spec; \n" );
-
-	if ( r_dlightSpecColor->value > 0 ) {
-		// by constant
-		strcat( program, "MUL spec, specRGB, tmp.w; \n" );
-	} else {
-		// by texture
-		strcat( program, va( "MUL tmp.w, tmp.w, %1.2f; \n", -r_dlightSpecColor->value ) );
-		strcat( program, "MUL spec, base, tmp.w; \n" );
-	}
+	"POW tmp.w, tmp.w, texFactors.y; \n"
+	"TEMP spec; \n"
+	"MUL spec, base, texFactors.z; \n"
+	"ADD spec, spec, texFactors.w; \n"
+	"MUL spec, spec, tmp.w; \n" );
 
 	// diffuse
 	if ( abslight ) {
 		strcat( program,
 		"TEMP bump; \n"
-		"DP3 bump.w, n, lv; \n"
+		"DP3 bump.w, nn, lv; \n"
 		// make sure that light and eye vectors are on the same plane side
-		"DP3 tmp.w, n, ev; \n"
+		"DP3 tmp.w, nn, ev; \n"
 		"MUL tmp.w, tmp.w, bump.w; \n"
 		"KIL tmp.w; \n"
 		"ABS bump.w, bump.w; \n" );
 	} else {
 		strcat( program,
 		"TEMP bump; \n"
-		"DP3_SAT bump.w, n, lv; \n" );
+		"DP3_SAT bump.w, nn, lv; \n" );
 	}
 
 	strcat( program, "MAD base, base, bump.w, spec; \n" );
@@ -1381,9 +1390,6 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	"MUL result.color, base, light; \n"
 	"END \n" );
 	
-	r_dlightSpecColor->modified = qfalse;
-	r_dlightSpecPower->modified = qfalse;
-
 	return program;
 }
 
@@ -1444,6 +1450,40 @@ static const char *depthFadeFP = {
 	"LRP result.color, fade.x, base, faded; \n"
 	"END \n"
 };
+
+#ifdef USE_FBO
+static const char *worldCelOutlineFP = {
+	"!!ARBfp1.0 \n"
+	"OPTION ARB_precision_hint_fastest; \n"
+	"PARAM outline = program.local[0]; \n"
+	"PARAM zero = { 0.0, 0.0, 0.0, 0.0 }; \n"
+	"PARAM negTwo = { -2.0, -2.0, -2.0, -2.0 }; \n"
+	"TEMP tc, center, left, right, up, down, edge; \n"
+	"TEX center, fragment.texcoord[0], texture[0], 2D; \n"
+	"ADD tc.x, fragment.texcoord[0].x, outline.x; \n"
+	"MOV tc.y, fragment.texcoord[0].y; \n"
+	"TEX right, tc, texture[0], 2D; \n"
+	"SUB tc.x, fragment.texcoord[0].x, outline.x; \n"
+	"TEX left, tc, texture[0], 2D; \n"
+	"MOV tc.x, fragment.texcoord[0].x; \n"
+	"ADD tc.y, fragment.texcoord[0].y, outline.y; \n"
+	"TEX up, tc, texture[0], 2D; \n"
+	"SUB tc.y, fragment.texcoord[0].y, outline.y; \n"
+	"TEX down, tc, texture[0], 2D; \n"
+	"ADD edge.x, left.x, right.x; \n"
+	"MAD edge.x, center.x, negTwo.x, edge.x; \n"
+	"ABS edge.x, edge.x; \n"
+	"ADD edge.y, up.x, down.x; \n"
+	"MAD edge.y, center.x, negTwo.x, edge.y; \n"
+	"ABS edge.y, edge.y; \n"
+	"MAX edge.x, edge.x, edge.y; \n"
+	"SGE edge.x, edge.x, outline.z; \n"
+	"MUL edge.x, edge.x, outline.w; \n"
+	"MOV result.color, zero; \n"
+	"MOV result.color.w, edge.x; \n"
+	"END \n"
+};
+#endif
 
 qboolean GL_DepthFadeProgramAvailable( void )
 {
@@ -1816,8 +1856,14 @@ static const char *blend2FP = {
 	"PARAM factor = program.local[1]; \n"
 	"TEMP base; \n"
 	"TEMP post; \n"
+	"TEMP gate; \n"
+	"TEMP guarded; \n"
 	"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
 	"TEX post, fragment.texcoord[0], texture[1], 2D; \n"
+	"MOV_SAT gate, base; \n"
+	"MUL guarded, post, gate; \n"
+	"SUB guarded, guarded, post; \n"
+	"MAD post, guarded, factor.y, post; \n"
 	"MAD base, post, factor.x, base; \n"
 	//"ADD base, base, post; \n"
 	"MOV base.w, 1.0; \n"
@@ -1834,9 +1880,15 @@ static const char *blend2gammaFP = {
 	"PARAM exposure = program.local[2]; \n"
 	"TEMP base; \n"
 	"TEMP post; \n"
+	"TEMP gate; \n"
+	"TEMP guarded; \n"
 	"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
 	"TEX post, fragment.texcoord[0], texture[1], 2D; \n"
 	//"ADD base, base, post; \n"
+	"MOV_SAT gate, base; \n"
+	"MUL guarded, post, gate; \n"
+	"SUB guarded, guarded, post; \n"
+	"MAD post, guarded, factor.y, post; \n"
 	"MAD base, post, factor.x, base; \n"
 	"MUL base.xyz, base, exposure.x; \n"
 	"%s" // scene-linear color grading, if requested
@@ -2072,6 +2124,9 @@ qboolean ARB_UpdatePrograms( void )
 		return qfalse;
 
 #ifdef USE_FBO
+	if ( !ARB_CompileProgram( Fragment, worldCelOutlineFP, programs[ WORLD_CEL_FRAGMENT ] ) )
+		return qfalse;
+
 	if ( !ARB_CompileProgram( Fragment, va( gammaFP,
 			ARB_BuildColorGradeProgram( buf ), ARB_BuildToneMapProgram( buf2 ),
 			ARB_BuildOutputEncodeProgram( buf3 ), ARB_BuildGreyscaleProgram( buf4 ) ),
@@ -2477,37 +2532,77 @@ static qboolean FBO_CreateWithFormat( frameBuffer_t *fb, GLsizei width, GLsizei 
 }
 
 
-static qboolean FBO_CreateMS( frameBuffer_t *fb, int width, int height )
+static void FBO_ClearGLErrors( void )
 {
-	GLsizei nSamples = r_ext_multisample->integer;
+	int i;
+
+	for ( i = 0; i < 16; i++ ) {
+		if ( qglGetError() == GL_NO_ERROR ) {
+			break;
+		}
+	}
+}
+
+static GLsizei FBO_NormalizeRequestedSamples( int requested )
+{
+	GLint maxSamples = 0;
+
+	if ( requested <= 0 ) {
+		return 0;
+	}
+	if ( requested < 2 ) {
+		requested = 2;
+	}
+	if ( requested > 64 ) {
+		requested = 64;
+	}
+	if ( requested & 1 ) {
+		requested--;
+	}
+
+	FBO_ClearGLErrors();
+	qglGetIntegerv( GL_MAX_SAMPLES, &maxSamples );
+	if ( qglGetError() == GL_NO_ERROR && maxSamples >= 2 && requested > maxSamples ) {
+		requested = maxSamples;
+		if ( requested & 1 ) {
+			requested--;
+		}
+	}
+
+	return requested >= 2 ? (GLsizei)requested : 0;
+}
+
+static GLsizei FBO_NextLowerSampleCount( GLsizei samples )
+{
+	if ( samples <= 2 ) {
+		return 0;
+	}
+
+	if ( samples > 8 ) {
+		GLsizei next = 8;
+		while ( next * 2 < samples ) {
+			next *= 2;
+		}
+		return next;
+	}
+
+	return samples - 2;
+}
+
+static qboolean FBO_TryCreateMS( frameBuffer_t *fb, int width, int height, GLsizei nSamples )
+{
 	int fboStatus;
 	
 	fb->multiSampled = qtrue;
-
-	if ( nSamples <= 0 || !qglRenderbufferStorageMultisample )
-	{
-		return qfalse;
-	}
-	nSamples = PAD( nSamples, 2 );
 
 	qglGenFramebuffers( 1, &fb->fbo );
 	FBO_Bind( GL_FRAMEBUFFER, fb->fbo );
 
 	qglGenRenderbuffers( 1, &fb->color );
 	qglBindRenderbuffer( GL_RENDERBUFFER, fb->color );
-	while ( nSamples > 0 ) {
-		qglRenderbufferStorageMultisample( GL_RENDERBUFFER, nSamples, fboInternalFormat, width, height );
-		if ( (int)qglGetError() == GL_INVALID_VALUE/* != GL_NO_ERROR */ ) {
-			ri.Printf( PRINT_ALL, "...%ix MSAA is not available\n", nSamples );
-			nSamples -= 2;
-		} else {
-			ri.Printf( PRINT_ALL, "...using %ix MSAA\n", nSamples );
-			break;
-		}
-	}
-
-	if ( nSamples <= 0 )
-	{
+	FBO_ClearGLErrors();
+	qglRenderbufferStorageMultisample( GL_RENDERBUFFER, nSamples, fboInternalFormat, width, height );
+	if ( qglGetError() != GL_NO_ERROR ) {
 		FBO_Clean( fb );
 		return qfalse;
 	}
@@ -2515,6 +2610,7 @@ static qboolean FBO_CreateMS( frameBuffer_t *fb, int width, int height )
 
 	qglGenRenderbuffers( 1, &fb->depthStencil );
 	qglBindRenderbuffer( GL_RENDERBUFFER, fb->depthStencil );
+	FBO_ClearGLErrors();
 	if ( glConfig.stencilBits == 0 )
 		qglRenderbufferStorageMultisample( GL_RENDERBUFFER, nSamples, GL_DEPTH_COMPONENT32, width, height );
 	else
@@ -2618,6 +2714,35 @@ static qboolean FBO_CreateBloom( void )
 }
 
 
+static qboolean FBO_CreateMS( frameBuffer_t *fb, int width, int height )
+{
+	const GLsizei requestedSamples = FBO_NormalizeRequestedSamples( r_ext_multisample->integer );
+	GLsizei nSamples = requestedSamples;
+
+	if ( nSamples <= 0 || !qglRenderbufferStorageMultisample )
+	{
+		return qfalse;
+	}
+
+	while ( nSamples >= 2 ) {
+		if ( FBO_TryCreateMS( fb, width, height, nSamples ) ) {
+			if ( nSamples == requestedSamples ) {
+				ri.Printf( PRINT_ALL, "...using %ix MSAA\n", nSamples );
+			} else {
+				ri.Printf( PRINT_ALL, "...using %ix MSAA (requested %ix)\n",
+					nSamples, requestedSamples );
+			}
+			return qtrue;
+		}
+
+		ri.Printf( PRINT_ALL, "...%ix MSAA is not available\n", nSamples );
+		nSamples = FBO_NextLowerSampleCount( nSamples );
+	}
+
+	return qfalse;
+}
+
+
 static qboolean FBO_Create( frameBuffer_t *fb, GLsizei width, GLsizei height,
 	qboolean depthStencil, GLint *outFormat, GLint *outType )
 {
@@ -2650,9 +2775,24 @@ GLuint FBO_ScreenTexture( void )
 	return frameBuffers[ 2 ].color;
 }
 
+qboolean FBO_MultisamplingEnabled( void )
+{
+	return ( fboEnabled && frameBufferMultiSampling ) ? qtrue : qfalse;
+}
+
 qboolean FBO_DepthFadeAvailable( void )
 {
 	return ( fboEnabled && depthFadeTexture && r_depthFade && r_depthFade->integer ) ? qtrue : qfalse;
+}
+
+static qboolean FBO_DepthTextureAvailable( void )
+{
+	return ( fboEnabled && depthFadeTexture ) ? qtrue : qfalse;
+}
+
+static qboolean FBO_DepthTextureReady( void )
+{
+	return ( FBO_DepthTextureAvailable() && depthFadeCopied ) ? qtrue : qfalse;
 }
 
 qboolean FBO_DepthFadeReady( void )
@@ -2665,9 +2805,9 @@ void FBO_ResetDepthFade( void )
 	depthFadeCopied = qfalse;
 }
 
-void FBO_CopyDepthFade( void )
+static void FBO_CopyDepthTexture( void )
 {
-	if ( !FBO_DepthFadeAvailable() ) {
+	if ( !FBO_DepthTextureAvailable() ) {
 		return;
 	}
 
@@ -2684,9 +2824,74 @@ void FBO_CopyDepthFade( void )
 	FBO_BindMain();
 }
 
+void FBO_CopyDepthFade( void )
+{
+	if ( !FBO_DepthFadeAvailable() ) {
+		return;
+	}
+
+	FBO_CopyDepthTexture();
+}
+
 void FBO_BindDepthFadeTexture( int texUnit )
 {
 	GL_BindTexture( texUnit, FBO_DepthFadeReady() ? depthFadeTexture : 0 );
+}
+
+void FBO_DrawWorldCelOutline( void )
+{
+	qboolean restore3D;
+	float width;
+	float alpha;
+	float threshold;
+
+	if ( !R_CelShadingWorldActive() ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		!programCompiled || !FBO_DepthTextureAvailable() ) {
+		return;
+	}
+
+	width = r_celShadingWorldWidth ? Com_Clamp( 1.0f, 8.0f, r_celShadingWorldWidth->value ) : 2.0f;
+	alpha = r_celShadingWorldAlpha ? Com_Clamp( 0.0f, 1.0f, r_celShadingWorldAlpha->value ) : 1.0f;
+	threshold = r_celShadingWorldDepthThreshold ? Com_Clamp( 0.0001f, 0.02f, r_celShadingWorldDepthThreshold->value ) : 0.0015f;
+	if ( alpha <= 0.0f ) {
+		return;
+	}
+
+	if ( !FBO_DepthTextureReady() ) {
+		FBO_CopyDepthTexture();
+	}
+	if ( !FBO_DepthTextureReady() ) {
+		return;
+	}
+
+	restore3D = !backEnd.projection2D;
+	if ( restore3D ) {
+		qglMatrixMode( GL_PROJECTION );
+		qglPushMatrix();
+		qglMatrixMode( GL_MODELVIEW );
+		qglPushMatrix();
+	}
+
+	RB_SetGL2D();
+	FBO_BindMain();
+	GL_Cull( CT_TWO_SIDED );
+	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
+	GL_BindTexture( 0, depthFadeTexture );
+	ARB_ProgramEnable( DUMMY_VERTEX, WORLD_CEL_FRAGMENT );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0,
+		width / (float)glConfig.vidWidth, width / (float)glConfig.vidHeight,
+		threshold, alpha );
+	RenderQuad( glConfig.vidWidth, glConfig.vidHeight );
+	ARB_ProgramDisable();
+
+	if ( restore3D ) {
+		qglMatrixMode( GL_PROJECTION );
+		qglPopMatrix();
+		qglMatrixMode( GL_MODELVIEW );
+		qglPopMatrix();
+		backEnd.projection2D = qfalse;
+	}
 }
 
 
@@ -3413,27 +3618,33 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 	if ( finalStage ) {
 #ifdef RENDERER_GLX
 		FBO_PrepareGlxPostShaderColorGradeLut();
-		glxPostShaderBound = GLX_CompatTryBindPostShaderFinal( qtrue, qtrue,
-			r_bloom_intensity->value );
+		if ( !R_BloomProtectHighlightsActive() ) {
+			glxPostShaderBound = GLX_CompatTryBindPostShaderFinal( qtrue, qtrue,
+				r_bloom_intensity->value );
+		}
 		if ( !glxPostShaderBound ) {
 #endif
 		// blend & apply gamma in one pass
 		ARB_ProgramEnable( DUMMY_VERTEX, BLEND2_GAMMA_FRAGMENT );
 		FBO_SetOutputTransformParams( gamma, obScale );
 		FBO_BindColorGradeLut();
-		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1, r_bloom_intensity->value, 0, 0, 0 );
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1,
+			r_bloom_intensity->value, R_BloomProtectHighlightsActive() ? 1.0f : 0.0f, 0, 0 );
 #ifdef RENDERER_GLX
 		}
 #endif
 	} else {
 #ifdef RENDERER_GLX
-		glxPostShaderBound = GLX_CompatTryBindPostShaderFinal( qtrue, qfalse,
-			r_bloom_intensity->value );
+		if ( !R_BloomProtectHighlightsActive() ) {
+			glxPostShaderBound = GLX_CompatTryBindPostShaderFinal( qtrue, qfalse,
+				r_bloom_intensity->value );
+		}
 		if ( !glxPostShaderBound ) {
 #endif
 		// just blend
 		ARB_ProgramEnable( DUMMY_VERTEX, BLEND2_FRAGMENT );
-		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1, r_bloom_intensity->value, 0, 0, 0 );
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1,
+			r_bloom_intensity->value, R_BloomProtectHighlightsActive() ? 1.0f : 0.0f, 0, 0 );
 #ifdef RENDERER_GLX
 		}
 #endif

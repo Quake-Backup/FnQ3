@@ -1439,6 +1439,10 @@ static const void *RB_DrawSurfs( const void *data ) {
 	}
 #endif
 
+#ifdef USE_VULKAN
+	vk_draw_world_cel_outline();
+#endif
+
 	// draw main system development information (surface outlines, etc)
 	RB_DebugGraphics();
 
@@ -1816,6 +1820,7 @@ static const void *RB_SwapBuffers( const void *data ) {
 
 	backEnd.projection2D = qfalse;
 	backEnd.doneSurfaces = qfalse;
+	backEnd.bloomProtectHighlights = qfalse;
 	backEnd.drawConsole = qfalse;
 #ifdef USE_VULKAN
 	backEnd.doneBloom = qfalse;

@@ -123,7 +123,7 @@ static void R_EnemyHighlightRestore( const vec4_t *originalXYZ ) {
 }
 
 
-static int R_CelShadeBandCount( void ) {
+int R_CelBandCount( void ) {
 	int bands = 4;
 
 	if ( r_celShadingSteps ) {
@@ -134,12 +134,57 @@ static int R_CelShadeBandCount( void ) {
 }
 
 
+static float R_CelQuantizeUnitValue( float incoming ) {
+	float scaled;
+	float denom;
+
+	if ( incoming <= 0.0f ) {
+		return 0.0f;
+	}
+
+	if ( incoming >= 1.0f ) {
+		return 1.0f;
+	}
+
+	denom = (float)R_CelBandCount() - 1.0f;
+	if ( denom <= 0.0f ) {
+		return incoming;
+	}
+
+	scaled = floorf( incoming * denom + 0.5f );
+	if ( scaled < 0.0f ) {
+		scaled = 0.0f;
+	} else if ( scaled > denom ) {
+		scaled = denom;
+	}
+
+	return scaled / denom;
+}
+
+
 qboolean R_CelShadingActive( const trRefEntity_t *ent ) {
 	if ( !ent || !r_celShading || !r_celShading->integer ) {
 		return qfalse;
 	}
 
-	return ent->e.reType == RT_MODEL;
+	if ( ent == &tr.worldEntity ) {
+		return qfalse;
+	}
+
+	if ( ent->e.reType != RT_MODEL ) {
+		return qfalse;
+	}
+
+	if ( ent->e.renderfx & RF_FIRST_PERSON ) {
+		return r_celViewWeapon && r_celViewWeapon->integer;
+	}
+
+	return qtrue;
+}
+
+
+qboolean R_CelShadingWorldActive( void ) {
+	return r_celShadingWorld && r_celShadingWorld->integer;
 }
 
 
@@ -163,43 +208,92 @@ qboolean R_CelOutlineActive( const trRefEntity_t *ent, const shader_t *shader ) 
 	return qtrue;
 }
 
-
-float R_CelQuantizeIncoming( float incoming ) {
-	float bands;
-	float scaled;
-	float denom;
-
-	if ( incoming <= 0.0f ) {
-		return 0.0f;
+qboolean R_BloomProtectHighlightsActive( void ) {
+	if ( backEnd.bloomProtectHighlights ) {
+		return qtrue;
 	}
 
-	if ( incoming >= 1.0f || !R_CelShadingActive( backEnd.currentEntity ) ) {
-		return incoming;
+	if ( R_CelShadingWorldActive() ) {
+		return qtrue;
 	}
 
-	bands = (float)R_CelShadeBandCount();
-	scaled = floorf( incoming * bands );
-	if ( scaled >= bands ) {
-		scaled = bands - 1.0f;
-	}
-
-	denom = bands - 1.0f;
-	if ( denom <= 0.0f ) {
-		return incoming;
-	}
-
-	return scaled / denom;
+	return r_celShading && r_celShading->integer &&
+		r_celOutline && r_celOutline->integer &&
+		glConfig.stencilBits > 0;
 }
 
 
-static float R_CelOutlineOffset( void ) {
-	float scale = r_celOutlineScale ? r_celOutlineScale->value : 1.02f;
+void R_CelQuantizeModelLighting( const trRefEntity_t *ent, byte color[4] ) {
+	float maxChannel;
+	float quantized;
+	float scale;
+	int i;
 
-	return R_EnemyHighlightOffset( scale, 1.02f );
+	if ( !color || !R_CelShadingActive( ent ) ||
+		!r_celShadingModelShadows || !r_celShadingModelShadows->integer ) {
+		return;
+	}
+
+	maxChannel = (float)color[0];
+	if ( color[1] > maxChannel ) {
+		maxChannel = (float)color[1];
+	}
+	if ( color[2] > maxChannel ) {
+		maxChannel = (float)color[2];
+	}
+
+	if ( maxChannel <= 0.0f ) {
+		return;
+	}
+
+	quantized = R_CelQuantizeUnitValue( maxChannel / 255.0f ) * 255.0f;
+	scale = quantized / maxChannel;
+
+	for ( i = 0; i < 3; i++ ) {
+		int value = myftol( color[i] * scale );
+
+		if ( value < 0 ) {
+			value = 0;
+		} else if ( value > 255 ) {
+			value = 255;
+		}
+
+		color[i] = (byte)value;
+	}
 }
 
 
-static void R_GetCelOutlineColor( color4ub_t *outColor ) {
+static float R_CelOutlineOffset( const trRefEntity_t *ent ) {
+	if ( ent && ( ent->e.renderfx & RF_FIRST_PERSON ) ) {
+		float scale = r_celViewWeaponOutlineScale ? r_celViewWeaponOutlineScale->value : 1.003f;
+
+		return R_EnemyHighlightOffset( scale, 1.003f );
+	}
+
+	return R_EnemyHighlightOffset( r_celOutlineScale ? r_celOutlineScale->value : 1.02f, 1.02f );
+}
+
+
+static byte R_CelOutlineAlpha( const trRefEntity_t *ent, byte colorAlpha ) {
+	cvar_t *alphaCvar;
+	float alpha;
+	int value;
+
+	alphaCvar = ( ent && ( ent->e.renderfx & RF_FIRST_PERSON ) ) ?
+		r_celViewWeaponOutlineAlpha : r_celOutlineAlpha;
+	alpha = alphaCvar ? Com_Clamp( 0.0f, 1.0f, alphaCvar->value ) : 1.0f;
+	value = myftol( (float)colorAlpha * alpha );
+	if ( value < 0 ) {
+		value = 0;
+	} else if ( value > 255 ) {
+		value = 255;
+	}
+
+	return (byte)value;
+}
+
+
+static void R_GetCelOutlineColor( const trRefEntity_t *ent, color4ub_t *outColor ) {
 	static color4ub_t cachedColor = { { 0, 0, 0, 255 } };
 	static qboolean initialized = qfalse;
 	char buffer[MAX_CVAR_VALUE_STRING];
@@ -213,6 +307,7 @@ static void R_GetCelOutlineColor( color4ub_t *outColor ) {
 
 	if ( initialized && ( !r_celOutlineColor || !r_celOutlineColor->modified ) ) {
 		*outColor = cachedColor;
+		outColor->rgba[3] = R_CelOutlineAlpha( ent, outColor->rgba[3] );
 		return;
 	}
 
@@ -223,6 +318,7 @@ static void R_GetCelOutlineColor( color4ub_t *outColor ) {
 
 	if ( !r_celOutlineColor || !r_celOutlineColor->string[0] ) {
 		*outColor = cachedColor;
+		outColor->rgba[3] = R_CelOutlineAlpha( ent, outColor->rgba[3] );
 		return;
 	}
 
@@ -250,6 +346,7 @@ static void R_GetCelOutlineColor( color4ub_t *outColor ) {
 	}
 
 	*outColor = cachedColor;
+	outColor->rgba[3] = R_CelOutlineAlpha( ent, outColor->rgba[3] );
 }
 
 
@@ -277,6 +374,8 @@ void RB_EnemyRimTessEnd( void ) {
 	if ( !backEnd.currentEntity ) {
 		return;
 	}
+
+	backEnd.bloomProtectHighlights = qtrue;
 
 	GL_ProgramDisable();
 	GL_ClientState( 1, CLS_NONE );
@@ -310,16 +409,14 @@ void RB_EnemyOutlineTessEnd( void ) {
 		return;
 	}
 
+	backEnd.bloomProtectHighlights = qtrue;
+
 	offset = R_EnemyHighlightOffset( backEnd.currentEntity->e.shaderTexCoord[0], 1.01f );
 
 	GL_ProgramDisable();
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
-
-	if ( qglLockArraysEXT ) {
-		qglLockArraysEXT( 0, tess.numVertexes );
-	}
 
 	qglDisable( GL_TEXTURE_2D );
 	qglEnable( GL_STENCIL_TEST );
@@ -359,10 +456,6 @@ void RB_EnemyOutlineTessEnd( void ) {
 	qglDisable( GL_STENCIL_TEST );
 	qglColor4f( 1, 1, 1, 1 );
 	qglEnable( GL_TEXTURE_2D );
-
-	if ( qglUnlockArraysEXT ) {
-		qglUnlockArraysEXT();
-	}
 }
 
 
@@ -376,17 +469,16 @@ void RB_CelOutlineTessEnd( void ) {
 		return;
 	}
 
-	offset = R_CelOutlineOffset();
-	R_GetCelOutlineColor( &outlineColor );
+	offset = R_CelOutlineOffset( backEnd.currentEntity );
+	R_GetCelOutlineColor( backEnd.currentEntity, &outlineColor );
+	if ( outlineColor.rgba[3] == 0 ) {
+		return;
+	}
 
 	GL_ProgramDisable();
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
-
-	if ( qglLockArraysEXT ) {
-		qglLockArraysEXT( 0, tess.numVertexes );
-	}
 
 	qglDisable( GL_TEXTURE_2D );
 	qglEnable( GL_STENCIL_TEST );
@@ -407,9 +499,9 @@ void RB_CelOutlineTessEnd( void ) {
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_KEEP );
 	GL_Cull( CT_BACK_SIDED );
 	GL_State( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
-	R_EnemyHighlightColor( &outlineColor );
-	GL_ClientState( 0, CLS_COLOR_ARRAY );
-	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, tess.svars.colors[0].rgba );
+	qglColor4f( outlineColor.rgba[0] / 255.0f, outlineColor.rgba[1] / 255.0f,
+		outlineColor.rgba[2] / 255.0f, outlineColor.rgba[3] / 255.0f );
+	GL_ClientState( 0, CLS_NONE );
 	R_DrawElements( tess.numIndexes, tess.indexes );
 
 	R_EnemyHighlightRestore( originalXYZ );
@@ -426,10 +518,6 @@ void RB_CelOutlineTessEnd( void ) {
 	qglDisable( GL_STENCIL_TEST );
 	qglColor4f( 1, 1, 1, 1 );
 	qglEnable( GL_TEXTURE_2D );
-
-	if ( qglUnlockArraysEXT ) {
-		qglUnlockArraysEXT();
-	}
 }
 
 static void R_AddEdgeDef( int i1, int i2, int f ) {

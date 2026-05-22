@@ -452,6 +452,8 @@ extern	cvar_t	*cl_hudAspect;
 extern	cvar_t	*cl_hudDump;
 extern	cvar_t	*cl_captureActive;
 extern	cvar_t	*cl_playerHighlight;
+extern	cvar_t	*cl_playerHighlightRimIntensity;
+extern	cvar_t	*cl_playerHighlightOutlineIntensity;
 extern	cvar_t	*cl_playerHighlightOutlineScale;
 extern	cvar_t	*cl_playerHighlightRedColor;
 extern	cvar_t	*cl_playerHighlightBlueColor;

@@ -201,9 +201,35 @@ void GL_TexEnv( GLint env )
 ** This routine is responsible for setting the most commonly changed state
 ** in Q3.
 */
+void GL_SetAlphaToCoverage( qboolean enable )
+{
+	static qboolean alphaToCoverageEnabled = qfalse;
+
+#ifdef USE_FBO
+	enable = ( enable && r_ext_alpha_to_coverage && r_ext_alpha_to_coverage->integer &&
+		FBO_MultisamplingEnabled() ) ? qtrue : qfalse;
+#else
+	enable = qfalse;
+#endif
+
+	if ( alphaToCoverageEnabled == enable ) {
+		return;
+	}
+
+	if ( enable ) {
+		qglEnable( GL_SAMPLE_ALPHA_TO_COVERAGE );
+	} else {
+		qglDisable( GL_SAMPLE_ALPHA_TO_COVERAGE );
+	}
+
+	alphaToCoverageEnabled = enable;
+}
+
 void GL_State( unsigned stateBits )
 {
 	unsigned diff = stateBits ^ glState.glStateBits;
+
+	GL_SetAlphaToCoverage( ( stateBits & GLS_ATEST_BITS ) ? qtrue : qfalse );
 
 	if ( !diff )
 	{
@@ -1366,6 +1392,8 @@ static const void *RB_DrawSurfs( const void *data ) {
 			FBO_CopyScreen();
 		}
 	}
+
+	FBO_DrawWorldCelOutline();
 #endif
 
 	// draw main system development information (surface outlines, etc)
@@ -1729,6 +1757,7 @@ static const void *RB_SwapBuffers( const void *data ) {
 	backEnd.doneBloom = qfalse;
 	backEnd.doneSurfaces = qfalse;
 	backEnd.framePostProcessed = qfalse;
+	backEnd.bloomProtectHighlights = qfalse;
 	backEnd.drawConsole = qfalse;
 
 	r_anaglyphMode->modified = qfalse;

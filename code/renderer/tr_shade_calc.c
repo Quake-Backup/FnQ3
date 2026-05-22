@@ -1255,9 +1255,9 @@ static void RB_CalcDiffuseColor_scalar( unsigned char *colors )
 		incoming = DotProduct (normal, lightDir);
 		if ( incoming <= 0 ) {
 			*(int *)&colors[i*4] = ambientLightInt;
+			R_CelQuantizeModelLighting( ent, &colors[i*4] );
 			continue;
 		}
-		incoming = R_CelQuantizeIncoming( incoming );
 		j = myftol( ambientLight[0] + incoming * directedLight[0] );
 		if ( j > 255 ) {
 			j = 255;
@@ -1277,6 +1277,7 @@ static void RB_CalcDiffuseColor_scalar( unsigned char *colors )
 		colors[i*4+2] = j;
 
 		colors[i*4+3] = 255;
+		R_CelQuantizeModelLighting( ent, &colors[i*4] );
 	}
 }
 

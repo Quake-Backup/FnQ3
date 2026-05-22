@@ -7,10 +7,10 @@ The format follows Keep a Changelog style with an `Unreleased` section that is p
 ## [Unreleased]
 
 ### Added
-- _None yet._
+- Added `r_picmipFilter` to let users restrict picmip to shader path groups such as `textures/*`, `models/*`, `sprites/*`, and UI/HUD paths.
 
 ### Changed
-- _None yet._
+- Default picmip eligibility now keeps non-`textures/*` shader paths at full resolution unless users opt them back in or select legacy filtering.
 
 ### Fixed
 - _None yet._

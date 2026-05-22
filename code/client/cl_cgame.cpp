@@ -316,7 +316,15 @@ static void CL_ParseEnemyHighlightColorString( const char *string, const color4u
 }
 
 
-static void CL_GetEnemyHighlightPassColor( EnemyHighlightColor colorSlot, byte defaultAlpha, color4ub_t *outColor ) {
+static byte CL_ScaleEnemyHighlightAlpha( byte alpha, const cvar_t *intensityCvar ) {
+	const float intensity = intensityCvar ? std::clamp( intensityCvar->value, 0.0f, 2.0f ) : 1.0f;
+	const int value = static_cast<int>( static_cast<float>( alpha ) * intensity + 0.5f );
+
+	return static_cast<byte>( std::clamp( value, 0, 255 ) );
+}
+
+
+static void CL_GetEnemyHighlightPassColor( EnemyHighlightColor colorSlot, byte defaultAlpha, const cvar_t *intensityCvar, color4ub_t *outColor ) {
 	color4ub_t defaultColor;
 	const cvar_t *cvar;
 
@@ -349,6 +357,7 @@ static void CL_GetEnemyHighlightPassColor( EnemyHighlightColor colorSlot, byte d
 		cvar = CL_GetEnemyHighlightColorCvar( colorSlot );
 	}
 	CL_ParseEnemyHighlightColorString( cvar ? cvar->string : nullptr, &defaultColor, outColor );
+	outColor->rgba[3] = CL_ScaleEnemyHighlightAlpha( outColor->rgba[3], intensityCvar );
 }
 
 
@@ -472,8 +481,8 @@ static void CL_FlushEnemyHighlightRefEntities( const refdef_t *fd ) {
 	CL_EnsureEnemyHighlightShaders();
 	for ( i = EnemyHighlightColorIndex( EnemyHighlightColor::Red ); i < kEnemyHighlightColorCount; i++ ) {
 		const EnemyHighlightColor colorSlot = static_cast<EnemyHighlightColor>( i );
-		CL_GetEnemyHighlightPassColor( colorSlot, 112, &rimColors[i] );
-		CL_GetEnemyHighlightPassColor( colorSlot, 208, &outlineColors[i] );
+		CL_GetEnemyHighlightPassColor( colorSlot, 112, cl_playerHighlightRimIntensity, &rimColors[i] );
+		CL_GetEnemyHighlightPassColor( colorSlot, 208, cl_playerHighlightOutlineIntensity, &outlineColors[i] );
 	}
 
 	for ( i = 0; i < cl_enemyHighlightNumPending; i++ ) {
@@ -483,7 +492,7 @@ static void CL_FlushEnemyHighlightRefEntities( const refdef_t *fd ) {
 		const color4ub_t *outlineColor = &outlineColors[colorIndex];
 		refEntity_t highlight = pending->ent;
 
-		if ( ( cl_playerHighlight->integer & 1 ) && cl_enemyHighlightRimShader ) {
+		if ( ( cl_playerHighlight->integer & 1 ) && cl_enemyHighlightRimShader && rimColor->rgba[3] != 0 ) {
 			highlight.customShader = cl_enemyHighlightRimShader;
 			highlight.renderfx |= RF_NOSHADOW;
 			highlight.shader = *rimColor;
@@ -492,7 +501,7 @@ static void CL_FlushEnemyHighlightRefEntities( const refdef_t *fd ) {
 			re.AddRefEntityToScene( &highlight, ToQboolean( pending->intShaderTime ) );
 		}
 
-		if ( ( cl_playerHighlight->integer & 2 ) && cl_enemyHighlightOutlineShader && cls.glconfig.stencilBits > 0 ) {
+		if ( ( cl_playerHighlight->integer & 2 ) && cl_enemyHighlightOutlineShader && cls.glconfig.stencilBits > 0 && outlineColor->rgba[3] != 0 ) {
 			highlight = pending->ent;
 			highlight.customShader = cl_enemyHighlightOutlineShader;
 			highlight.renderfx |= RF_NOSHADOW;

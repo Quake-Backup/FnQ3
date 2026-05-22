@@ -1,6 +1,10 @@
 # Visuals Guide
 
-FnQuake3 keeps retail Quake III visuals as the baseline, then adds a few optional engine-side presentation controls on top. This guide covers the current player highlight controls and points to the more focused guides for aspect correction and console presentation.
+FnQuake3 keeps retail Quake III visuals as the baseline, then adds a few optional engine-side presentation controls on top. This guide covers the current player highlight controls and points to the more focused guides for renderer display effects, aspect correction, and console presentation.
+
+## Cel Shading
+
+Cel-shaded model lighting, model outlines, first-person weapon outline tuning, model shadow banding, and BSP world depth-edge outlines are renderer display effects. Their full cvar reference lives in the [Display Guide](DISPLAY.md#cel-shading).
 
 ## Player Highlighting
 
@@ -37,6 +41,18 @@ Default values:
 - `cl_playerHighlightFreeColor "208 96 96"`
 
 The same base color drives both passes. The rimlight and outline use different internal alpha strengths so they read as separate effects instead of the same shell drawn twice.
+
+Overall pass intensity:
+
+- `cl_playerHighlightRimIntensity`: Multiplies rimlight opacity.
+- `cl_playerHighlightOutlineIntensity`: Multiplies stencil border opacity.
+
+Defaults:
+
+- `cl_playerHighlightRimIntensity "1.0"`
+- `cl_playerHighlightOutlineIntensity "1.0"`
+
+Use `0` to suppress that pass without changing the `cl_playerHighlight` bitmask. Values above `1` strengthen the pass until the final alpha reaches full opacity.
 
 ## Enemy And Teammate Overrides
 
@@ -105,5 +121,6 @@ The old `cl_enemyHighlight*` names have been replaced by `cl_playerHighlight*`.
 
 ## Related Guides
 
+- [Display Guide](DISPLAY.md) for renderer display effects such as cel shading, HDR, bloom, and render scaling.
 - [Aspect Correction Guide](ASPECT_CORRECTION.md) for HUD, menu, and cinematic layout.
 - [Console Guide](CONSOLE.md) for console scaling, interaction, and appearance.

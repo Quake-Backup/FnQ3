@@ -93,6 +93,7 @@ extern cvar_t *r_texturebits;			// number of desired texture bits
 #ifdef USE_FBO
 extern cvar_t *r_ext_multisample;
 extern cvar_t *r_ext_supersample;
+extern cvar_t *r_ext_alpha_to_coverage;
 #endif
 
 extern cvar_t *r_drawBuffer;

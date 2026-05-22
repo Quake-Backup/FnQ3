@@ -964,27 +964,39 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 
 /*
 =============
+R_IQMModelBounds
+=============
+*/
+static qboolean R_IQMModelBounds( const iqmData_t *data, const trRefEntity_t *ent, vec3_t mins, vec3_t maxs ) {
+	const vec_t		*oldBounds, *newBounds;
+	int		i;
+
+	if (!data->bounds) {
+		return qfalse;
+	}
+
+	oldBounds = data->bounds + 6*ent->e.oldframe;
+	newBounds = data->bounds + 6*ent->e.frame;
+
+	for (i = 0 ; i < 3 ; i++) {
+		mins[i] = oldBounds[i] < newBounds[i] ? oldBounds[i] : newBounds[i];
+		maxs[i] = oldBounds[i+3] > newBounds[i+3] ? oldBounds[i+3] : newBounds[i+3];
+	}
+
+	return qtrue;
+}
+
+/*
+=============
 R_CullIQM
 =============
 */
 static int R_CullIQM( const iqmData_t *data, const trRefEntity_t *ent ) {
 	vec3_t		bounds[2];
-	vec_t		*oldBounds, *newBounds;
-	int		i;
 
-	if (!data->bounds) {
+	if (!R_IQMModelBounds( data, ent, bounds[0], bounds[1] )) {
 		tr.pc.c_box_cull_md3_clip++;
 		return CULL_CLIP;
-	}
-
-	// compute bounds pointers
-	oldBounds = data->bounds + 6*ent->e.oldframe;
-	newBounds = data->bounds + 6*ent->e.frame;
-
-	// calculate a bounding box in the current coordinate system
-	for (i = 0 ; i < 3 ; i++) {
-		bounds[0][i] = oldBounds[i] < newBounds[i] ? oldBounds[i] : newBounds[i];
-		bounds[1][i] = oldBounds[i+3] > newBounds[i+3] ? oldBounds[i+3] : newBounds[i+3];
 	}
 
 	switch ( R_CullLocalBox( bounds ) )
@@ -1066,6 +1078,14 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	int			fogNum;
 	shader_t		*shader;
 	const skin_t			*skin;
+#ifdef USE_PMLIGHT
+	dlight_t		*dl;
+	int			n;
+	dlight_t		*dlights[ ARRAY_LEN( backEndData->dlights ) ];
+	int			numDlights;
+	vec3_t			bounds[2];
+	qboolean		haveDlightBounds;
+#endif
 
 	data = tr.currentModel->modelData;
 	surface = data->surfaces;
@@ -1116,6 +1136,19 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 		R_SetupEntityLighting( &tr.refdef, ent );
 	}
 
+#ifdef USE_PMLIGHT
+	numDlights = 0;
+	if ( R_GetDlightMode() >= 2 && ( !personalModel || R_ViewPassIsPortal( &tr.viewParms ) ) ) {
+		haveDlightBounds = R_IQMModelBounds( data, ent, bounds[0], bounds[1] );
+		R_TransformDlights( tr.viewParms.num_dlights, tr.viewParms.dlights, &tr.or );
+		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
+			dl = &tr.viewParms.dlights[ n ];
+			if ( !haveDlightBounds || !R_LightCullBounds( dl, bounds[0], bounds[1] ) )
+				dlights[ numDlights++ ] = dl;
+		}
+	}
+#endif
+
 	//
 	// see if we are in a fog volume
 	//
@@ -1163,6 +1196,16 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 		if( !personalModel ) {
 			R_AddDrawSurf( (void *)surface, shader, fogNum, 0 );
 		}
+
+#ifdef USE_PMLIGHT
+		if ( numDlights && shader->lightingStage >= 0 ) {
+			for ( n = 0; n < numDlights; n++ ) {
+				dl = dlights[ n ];
+				tr.light = dl;
+				R_AddLitSurf( (void *)surface, shader, fogNum );
+			}
+		}
+#endif
 
 		surface++;
 	}

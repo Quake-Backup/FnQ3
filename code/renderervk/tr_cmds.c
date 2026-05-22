@@ -28,10 +28,12 @@ R_PerformanceCounters
 */
 static void R_PerformanceCounters( void ) {
 	qboolean shadowDebug;
+	qboolean csmDebug;
 
 	shadowDebug = ( r_dlightShadowDebug && r_dlightShadowDebug->integer ) ? qtrue : qfalse;
+	csmDebug = ( r_csmDebug && r_csmDebug->integer ) ? qtrue : qfalse;
 
-	if ( !r_speeds->integer && !shadowDebug ) {
+	if ( !r_speeds->integer && !shadowDebug && !csmDebug ) {
 		// clear the counters even if we aren't printing
 		Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 		Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
@@ -72,19 +74,50 @@ static void R_PerformanceCounters( void ) {
 	if ( ( r_speeds->integer == 4 || shadowDebug ) &&
 		( tr.pc.c_dlightShadowConsidered || tr.pc.c_dlightShadowSkippedDisabled ) ) {
 		ri.Printf( PRINT_ALL,
-			"dlight shadows plan:%i/%i cand:%i atlas:%ix%i/%i render lights:%i faces:%i surfs:%i skip disabled:%i linear:%i nosurf:%i proj:%i budget:%i\n",
+			"dlight shadows plan:%i/%i cand:%i atlas:%ix%i/%i fill:%i%% render lights:%i faces:%i batches:%i draws:%i surfs:%i cpu:%ims skip disabled:%i linear:%i nosurf:%i proj:%i budget:%i lowvalue:%i\n",
 			tr.pc.c_dlightShadowPlanned, tr.pc.c_dlightShadowConsidered,
 			tr.pc.c_dlightShadowCandidates,
 			tr.pc.c_dlightShadowAtlasWidth, tr.pc.c_dlightShadowAtlasHeight,
 			tr.pc.c_dlightShadowAtlasFaceSize,
+			tr.pc.c_dlightShadowAtlasFill,
 			backEnd.pc.c_dlightShadowAtlasLights,
 			backEnd.pc.c_dlightShadowAtlasFaces,
+			backEnd.pc.c_dlightShadowAtlasBatches,
+			backEnd.pc.c_dlightShadowAtlasDraws,
 			backEnd.pc.c_dlightShadowAtlasSurfaces,
+			backEnd.pc.c_dlightShadowAtlasMsec,
 			tr.pc.c_dlightShadowSkippedDisabled,
 			tr.pc.c_dlightShadowSkippedLinear, tr.pc.c_dlightShadowSkippedNoSurfaces,
-			tr.pc.c_dlightShadowSkippedProjection, tr.pc.c_dlightShadowSkippedBudget );
+			tr.pc.c_dlightShadowSkippedProjection, tr.pc.c_dlightShadowSkippedBudget,
+			tr.pc.c_dlightShadowSkippedLowValue );
 	}
 #endif
+
+	if ( ( r_speeds->integer == 4 || csmDebug ) &&
+		( tr.csm.enabled || ( csmDebug && r_csmShadows && r_csmShadows->integer ) ) ) {
+		if ( tr.csm.enabled && tr.csm.cascadeCount > 0 ) {
+			float splitFar[CSM_MAX_CASCADES] = { 0.0f };
+			float texelSize[CSM_MAX_CASCADES] = { 0.0f };
+			int i;
+
+			for ( i = 0; i < tr.csm.cascadeCount && i < CSM_MAX_CASCADES; i++ ) {
+				splitFar[i] = tr.csm.cascades[i].splitFar;
+				texelSize[i] = tr.csm.cascades[i].texelSize;
+			}
+
+			ri.Printf( PRINT_ALL,
+				"csm plan cascades:%i res:%i max:%i lambda:%.2f filter:%s rbias:%.2f cbias:%.2f/%.2f/%.2f dir:%.2f %.2f %.2f split far:%.0f %.0f %.0f %.0f texel:%.2f %.2f %.2f %.2f rdoc:plan-only\n",
+				tr.pc.c_csmCascades, tr.pc.c_csmResolution, tr.pc.c_csmMaxDistance,
+				tr.csm.splitLambda, R_ShadowFilterModeName( tr.csm.filterMode ),
+				tr.csm.receiverBias, tr.csm.casterDepthBias, tr.csm.casterSlopeBias,
+				tr.csm.casterNormalBias,
+				tr.csm.lightDirection[0], tr.csm.lightDirection[1], tr.csm.lightDirection[2],
+				splitFar[0], splitFar[1], splitFar[2], splitFar[3],
+				texelSize[0], texelSize[1], texelSize[2], texelSize[3] );
+		} else {
+			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip no-world-or-sun\n" );
+		}
+	}
 
 	Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 	Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );

@@ -703,6 +703,9 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 #ifdef USE_TESS_NEEDS_NORMAL
 #ifdef USE_PMLIGHT
 	tess.needsNormal = state->needsNormal || tess.dlightPass || r_shownormals->integer;
+	if ( backEnd.viewParms.passFlags & VPF_DLIGHT_SHADOW ) {
+		tess.needsNormal = qtrue;
+	}
 #else
 	tess.needsNormal = state->needsNormal || r_shownormals->integer;
 #endif
@@ -729,6 +732,74 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 		tess.shaderTime = tess.shader->clampTime;
 	}
 }
+
+#ifdef USE_PMLIGHT
+static void RB_ApplyDlightShadowCasterNormalBias( void )
+{
+	float normalBias;
+	int i;
+
+	if ( !( backEnd.viewParms.passFlags & VPF_DLIGHT_SHADOW ) ) {
+		return;
+	}
+
+	normalBias = r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.5f;
+	normalBias = Com_Clamp( 0.0f, 8.0f, normalBias );
+	if ( normalBias <= 0.0f ) {
+		return;
+	}
+
+	for ( i = 0; i < tess.numVertexes; i++ ) {
+		vec3_t world;
+		vec3_t normalWorld;
+		vec3_t lightToVertex;
+		float normalLength;
+		float lightSide;
+		float normalScale;
+		float scale;
+
+		normalWorld[0] = tess.normal[i][0] * backEnd.or.axis[0][0] +
+			tess.normal[i][1] * backEnd.or.axis[1][0] +
+			tess.normal[i][2] * backEnd.or.axis[2][0];
+		normalWorld[1] = tess.normal[i][0] * backEnd.or.axis[0][1] +
+			tess.normal[i][1] * backEnd.or.axis[1][1] +
+			tess.normal[i][2] * backEnd.or.axis[2][1];
+		normalWorld[2] = tess.normal[i][0] * backEnd.or.axis[0][2] +
+			tess.normal[i][1] * backEnd.or.axis[1][2] +
+			tess.normal[i][2] * backEnd.or.axis[2][2];
+
+		normalLength = VectorNormalize( normalWorld );
+		if ( normalLength <= 0.0f ) {
+			continue;
+		}
+
+		world[0] = backEnd.or.origin[0] +
+			tess.xyz[i][0] * backEnd.or.axis[0][0] +
+			tess.xyz[i][1] * backEnd.or.axis[1][0] +
+			tess.xyz[i][2] * backEnd.or.axis[2][0];
+		world[1] = backEnd.or.origin[1] +
+			tess.xyz[i][0] * backEnd.or.axis[0][1] +
+			tess.xyz[i][1] * backEnd.or.axis[1][1] +
+			tess.xyz[i][2] * backEnd.or.axis[2][1];
+		world[2] = backEnd.or.origin[2] +
+			tess.xyz[i][0] * backEnd.or.axis[0][2] +
+			tess.xyz[i][1] * backEnd.or.axis[1][2] +
+			tess.xyz[i][2] * backEnd.or.axis[2][2];
+
+		VectorSubtract( world, backEnd.viewParms.or.origin, lightToVertex );
+		if ( VectorNormalize( lightToVertex ) <= 0.0f ) {
+			continue;
+		}
+		lightSide = DotProduct( normalWorld, lightToVertex );
+		normalScale = 1.0f - 0.65f * Com_Clamp( 0.0f, 1.0f, fabsf( lightSide ) );
+		scale = ( normalBias * normalScale ) / normalLength;
+		if ( lightSide < 0.0f ) {
+			scale = -scale;
+		}
+		VectorMA( tess.xyz[i], scale, tess.normal[i], tess.xyz[i] );
+	}
+}
+#endif
 
 
 /*
@@ -1447,6 +1518,9 @@ void RB_StageIteratorGeneric( void )
 	shader = input->shader;
 
 	RB_DeformTessGeometry();
+#ifdef USE_PMLIGHT
+	RB_ApplyDlightShadowCasterNormalBias();
+#endif
 
 	//
 	// set face culling appropriately

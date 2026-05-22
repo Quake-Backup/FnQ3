@@ -607,7 +607,8 @@ typedef enum {
 	VPF_MIRROR = 0x02,
 	VPF_SCISSOR = 0x04,
 	VPF_CLEAR_DEPTH = 0x08,
-	VPF_CLEAR_STENCIL = 0x10
+	VPF_CLEAR_STENCIL = 0x10,
+	VPF_DLIGHT_SHADOW = 0x20
 } viewPassFlags_t;
 
 typedef struct {
@@ -633,6 +634,81 @@ typedef struct {
 	struct dlight_s	*dlights;
 #endif
 } viewParms_t;
+
+#define CSM_MAX_CASCADES 4
+
+typedef enum {
+	SHADOW_FILTER_HARD = 0,
+	SHADOW_FILTER_PCF_2X2,
+	SHADOW_FILTER_POISSON_4,
+	SHADOW_FILTER_COUNT
+} shadowFilterMode_t;
+
+static ID_INLINE int R_ShadowClampFilterMode( int mode ) {
+	if ( mode < 0 ) {
+		return SHADOW_FILTER_HARD;
+	}
+	if ( mode >= SHADOW_FILTER_COUNT ) {
+		return SHADOW_FILTER_POISSON_4;
+	}
+	return mode;
+}
+
+static ID_INLINE const char *R_ShadowFilterModeName( int mode ) {
+	switch ( R_ShadowClampFilterMode( mode ) ) {
+		case SHADOW_FILTER_HARD:
+			return "hard";
+		case SHADOW_FILTER_PCF_2X2:
+			return "2x2";
+		default:
+			return "poisson4";
+	}
+}
+
+static ID_INLINE const char *R_ShadowFilterModeDescription( void ) {
+	return "Selects shadow filtering: 0 hard, 1 2x2 PCF, 2 four-tap poisson PCF.";
+}
+
+static ID_INLINE float R_ShadowClampReceiverBias( float bias ) {
+	return Com_Clamp( 0.0f, 64.0f, bias );
+}
+
+static ID_INLINE float R_ShadowClampCasterDepthBias( float bias ) {
+	return Com_Clamp( 0.0f, 64.0f, bias );
+}
+
+static ID_INLINE float R_ShadowClampCasterSlopeBias( float bias ) {
+	return Com_Clamp( 0.0f, 8.0f, bias );
+}
+
+static ID_INLINE float R_ShadowClampCasterNormalBias( float bias ) {
+	return Com_Clamp( 0.0f, 8.0f, bias );
+}
+
+typedef struct {
+	float		splitNear;
+	float		splitFar;
+	float		radius;
+	float		texelSize;
+	vec3_t		origin;
+	vec3_t		axis[3];
+	vec3_t		bounds[2];
+} csmCascadePlan_t;
+
+typedef struct {
+	qboolean	enabled;
+	int			cascadeCount;
+	int			resolution;
+	float		maxDistance;
+	float		splitLambda;
+	int			filterMode;
+	float		receiverBias;
+	float		casterDepthBias;
+	float		casterSlopeBias;
+	float		casterNormalBias;
+	vec3_t		lightDirection;
+	csmCascadePlan_t cascades[CSM_MAX_CASCADES];
+} csmPlan_t;
 
 static ID_INLINE void R_FinalizeViewPassFlags( viewParms_t *viewParms ) {
 	viewParms->passFlags |= VPF_CLEAR_DEPTH;
@@ -1050,6 +1126,9 @@ typedef struct {
 	int		c_leafs;
 	int		c_dlightSurfaces;
 	int		c_dlightSurfacesCulled;
+	int		c_csmCascades;
+	int		c_csmResolution;
+	int		c_csmMaxDistance;
 #ifdef USE_PMLIGHT
 	int		c_light_cull_out;
 	int		c_light_cull_in;
@@ -1065,9 +1144,11 @@ typedef struct {
 	int		c_dlightShadowSkippedNoSurfaces;
 	int		c_dlightShadowSkippedProjection;
 	int		c_dlightShadowSkippedBudget;
+	int		c_dlightShadowSkippedLowValue;
 	int		c_dlightShadowAtlasWidth;
 	int		c_dlightShadowAtlasHeight;
 	int		c_dlightShadowAtlasFaceSize;
+	int		c_dlightShadowAtlasFill;
 #endif
 } frontEndCounters_t;
 
@@ -1119,7 +1200,10 @@ typedef struct {
 	int		c_lit_vertices_lateculltest;
 	int		c_dlightShadowAtlasLights;
 	int		c_dlightShadowAtlasFaces;
+	int		c_dlightShadowAtlasBatches;
+	int		c_dlightShadowAtlasDraws;
 	int		c_dlightShadowAtlasSurfaces;
+	int		c_dlightShadowAtlasMsec;
 #endif
 } backEndCounters_t;
 
@@ -1263,6 +1347,7 @@ typedef struct {
 #endif
 	vec3_t					sunLight;			// from the sky shader for this level
 	vec3_t					sunDirection;
+	csmPlan_t				csm;
 
 	frontEndCounters_t		pc;
 	int						frontEndMsec;		// not in pc due to clearing issue
@@ -1364,6 +1449,10 @@ extern cvar_t	*r_dlightFalloff;		// 0.0 - 1.0
 extern cvar_t	*r_dlightShadows;		// 0 - 1
 extern cvar_t	*r_dlightShadowStrength;	// 0.0 - 1.0
 extern cvar_t	*r_dlightShadowBias;		// 0.0 - 64.0
+extern cvar_t	*r_dlightShadowCasterDepthBias;	// 0.0 - 64.0
+extern cvar_t	*r_dlightShadowCasterSlopeBias;	// 0.0 - 8.0
+extern cvar_t	*r_dlightShadowCasterNormalBias;	// 0.0 - 8.0
+extern cvar_t	*r_dlightShadowFilter;		// 0 - 2
 extern cvar_t	*r_dlightShadowMaxLights;	// 0 - MAX_DLIGHTS
 extern cvar_t	*r_dlightShadowResolution;	// 64 - 1024
 extern cvar_t	*r_dlightShadowDebug;		// 0 - 1
@@ -1372,6 +1461,17 @@ extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
 extern cvar_t	*r_dlightSaturation;	// 0.0 - 1.0
 extern cvar_t	*r_dlightOverbrightGamut;	// 0.0 - 1.0
+extern cvar_t	*r_csmShadows;			// 0 - 1
+extern cvar_t	*r_csmCascadeCount;		// 1 - CSM_MAX_CASCADES
+extern cvar_t	*r_csmMaxDistance;		// maximum shadowed camera distance
+extern cvar_t	*r_csmSplitLambda;		// 0.0 - 1.0
+extern cvar_t	*r_csmResolution;		// nominal per-cascade shadow-map resolution
+extern cvar_t	*r_csmShadowFilter;		// 0 - 2
+extern cvar_t	*r_csmShadowBias;		// 0.0 - 64.0
+extern cvar_t	*r_csmCasterDepthBias;	// 0.0 - 64.0
+extern cvar_t	*r_csmCasterSlopeBias;	// 0.0 - 8.0
+extern cvar_t	*r_csmCasterNormalBias;	// 0.0 - 8.0
+extern cvar_t	*r_csmDebug;			// 0 - 1
 #ifdef USE_VBO
 extern cvar_t	*r_vbo;
 #endif
@@ -1812,8 +1912,9 @@ qboolean FBO_DlightShadowsReady( void );
 qboolean FBO_DlightShadowAtlasAvailable( void );
 qboolean FBO_BeginDlightShadowAtlas( void );
 void FBO_EndDlightShadowAtlas( void );
+int FBO_DlightShadowAtlasWidth( void );
 int FBO_DlightShadowAtlasHeight( void );
-void FBO_CopyDlightShadowMap( void );
+unsigned int FBO_DlightShadowAtlasGeneration( void );
 void FBO_BindDlightShadowTexture( int texUnit );
 void FBO_DrawWorldCelOutline( void );
 #endif //  USE_FBO

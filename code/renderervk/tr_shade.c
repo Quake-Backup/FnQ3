@@ -331,6 +331,9 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 #ifdef USE_TESS_NEEDS_NORMAL
 #ifdef USE_PMLIGHT
 	tess.needsNormal = state->needsNormal || tess.dlightPass || r_shownormals->integer;
+	if ( backEnd.viewParms.passFlags & VPF_DLIGHT_SHADOW ) {
+		tess.needsNormal = qtrue;
+	}
 #else
 	tess.needsNormal = state->needsNormal || r_shownormals->integer;
 #endif
@@ -356,6 +359,74 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 		tess.shaderTime = tess.shader->clampTime;
 	}
 }
+
+#ifdef USE_PMLIGHT
+static void RB_ApplyDlightShadowCasterNormalBias( void )
+{
+	float normalBias;
+	int i;
+
+	if ( !( backEnd.viewParms.passFlags & VPF_DLIGHT_SHADOW ) ) {
+		return;
+	}
+
+	normalBias = r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.5f;
+	normalBias = Com_Clamp( 0.0f, 8.0f, normalBias );
+	if ( normalBias <= 0.0f ) {
+		return;
+	}
+
+	for ( i = 0; i < tess.numVertexes; i++ ) {
+		vec3_t world;
+		vec3_t normalWorld;
+		vec3_t lightToVertex;
+		float normalLength;
+		float lightSide;
+		float normalScale;
+		float scale;
+
+		normalWorld[0] = tess.normal[i][0] * backEnd.or.axis[0][0] +
+			tess.normal[i][1] * backEnd.or.axis[1][0] +
+			tess.normal[i][2] * backEnd.or.axis[2][0];
+		normalWorld[1] = tess.normal[i][0] * backEnd.or.axis[0][1] +
+			tess.normal[i][1] * backEnd.or.axis[1][1] +
+			tess.normal[i][2] * backEnd.or.axis[2][1];
+		normalWorld[2] = tess.normal[i][0] * backEnd.or.axis[0][2] +
+			tess.normal[i][1] * backEnd.or.axis[1][2] +
+			tess.normal[i][2] * backEnd.or.axis[2][2];
+
+		normalLength = VectorNormalize( normalWorld );
+		if ( normalLength <= 0.0f ) {
+			continue;
+		}
+
+		world[0] = backEnd.or.origin[0] +
+			tess.xyz[i][0] * backEnd.or.axis[0][0] +
+			tess.xyz[i][1] * backEnd.or.axis[1][0] +
+			tess.xyz[i][2] * backEnd.or.axis[2][0];
+		world[1] = backEnd.or.origin[1] +
+			tess.xyz[i][0] * backEnd.or.axis[0][1] +
+			tess.xyz[i][1] * backEnd.or.axis[1][1] +
+			tess.xyz[i][2] * backEnd.or.axis[2][1];
+		world[2] = backEnd.or.origin[2] +
+			tess.xyz[i][0] * backEnd.or.axis[0][2] +
+			tess.xyz[i][1] * backEnd.or.axis[1][2] +
+			tess.xyz[i][2] * backEnd.or.axis[2][2];
+
+		VectorSubtract( world, backEnd.viewParms.or.origin, lightToVertex );
+		if ( VectorNormalize( lightToVertex ) <= 0.0f ) {
+			continue;
+		}
+		lightSide = DotProduct( normalWorld, lightToVertex );
+		normalScale = 1.0f - 0.65f * Com_Clamp( 0.0f, 1.0f, fabsf( lightSide ) );
+		scale = ( normalBias * normalScale ) / normalLength;
+		if ( lightSide < 0.0f ) {
+			scale = -scale;
+		}
+		VectorMA( tess.xyz[i], scale, tess.normal[i], tess.xyz[i] );
+	}
+}
+#endif
 
 
 /*
@@ -1288,33 +1359,26 @@ void VK_SetFogParams( vkUniform_t *uniform, int *fogStage )
 
 
 #ifdef USE_PMLIGHT
-static qboolean VK_DlightShadowParams( const dlight_t *dl, vec4_t lightScreen, float *strength )
+static qboolean VK_DlightShadowParams( const dlight_t *dl, vec4_t shadowInfo, vec4_t shadowAtlas, vec4_t shadowMode, float *strength )
 {
-	vec4_t eye, clip, normalized, window;
+	int columns;
+	float zNear;
+	float zFar;
 	float s;
 
-	if ( !dl || dl->linear || !dl->shadowPlanned ||
+	if ( !dl || dl->linear || !dl->shadowPlanned || dl->shadowAtlasFaceSize <= 0 ||
+		dl->shadowAtlasBaseFace < 0 ||
 		!r_dlightShadows || !r_dlightShadows->integer ||
 		!r_dlightMode || !r_dlightMode->integer ||
-		!vk_depth_fade_ready() || vk.renderPassIndex != RENDER_PASS_MAIN ||
+		!vk_dlight_shadow_atlas_ready() || vk.renderPassIndex != RENDER_PASS_MAIN ||
+		backEnd.currentEntity != &tr.worldEntity ||
 		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
-		backEnd.viewParms.zFar <= 0.0f || !r_znear || r_znear->value <= 0.0f ||
-		glConfig.vidWidth <= 0 || glConfig.vidHeight <= 0 ) {
+		backEnd.viewParms.zFar <= 0.0f ) {
 		return qfalse;
 	}
 
-	R_TransformModelToClip( dl->transformed, backEnd.or.modelMatrix, backEnd.viewParms.projectionMatrix, eye, clip );
-	if ( clip[3] <= 0.0f ) {
-		return qfalse;
-	}
-
-	R_TransformClipToWindow( clip, &backEnd.viewParms, normalized, window );
-	lightScreen[0] = ( backEnd.viewParms.viewportX + window[0] ) / (float)glConfig.vidWidth;
-	lightScreen[1] = ( backEnd.viewParms.viewportY + window[1] ) / (float)glConfig.vidHeight;
-	lightScreen[2] = Com_Clamp( 0.0f, 1.0f, normalized[2] );
-	lightScreen[3] = 1.0f;
-
-	if ( normalized[2] < 0.0f || normalized[2] > 1.0f ) {
+	columns = vk_dlight_shadow_atlas_columns();
+	if ( columns <= 0 ) {
 		return qfalse;
 	}
 
@@ -1323,15 +1387,57 @@ static qboolean VK_DlightShadowParams( const dlight_t *dl, vec4_t lightScreen, f
 		return qfalse;
 	}
 
+	zNear = 1.0f;
+	zFar = MAX( dl->radius, 64.0f );
+
+	shadowInfo[0] = zNear;
+	shadowInfo[1] = zFar;
+	shadowInfo[2] = R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 8.0f );
+	shadowInfo[3] = 0.0f;
+	shadowAtlas[0] = (float)dl->shadowAtlasFaceSize;
+	shadowAtlas[1] = (float)dl->shadowAtlasBaseFace;
+	shadowAtlas[2] = (float)columns;
+	shadowAtlas[3] = 1.0f;
+#ifdef USE_REVERSED_DEPTH
+	shadowMode[0] = 1.0f;
+#else
+	shadowMode[0] = 0.0f;
+#endif
+	shadowMode[1] = 0.0f;
+	shadowMode[2] = 0.0f;
+	shadowMode[3] = 0.0f;
+
 	*strength = s;
 	return qtrue;
 }
 
+static void VK_DlightShadowFilterOffsets( float *inner, float *outer )
+{
+	int filter = r_dlightShadowFilter ? r_dlightShadowFilter->integer : SHADOW_FILTER_POISSON_4;
+
+	filter = R_ShadowClampFilterMode( filter );
+	switch ( filter ) {
+		case SHADOW_FILTER_HARD:
+			*inner = 0.0f;
+			*outer = 0.0f;
+			break;
+		case SHADOW_FILTER_PCF_2X2:
+			*inner = 0.5f;
+			*outer = 0.5f;
+			break;
+		default:
+			*inner = 0.25f;
+			*outer = 0.75f;
+			break;
+	}
+}
+
 static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	float radius;
-	vec4_t lightScreen = { 0.0f, 0.0f, 0.0f, 0.0f };
+	vec4_t shadowInfo = { 0.0f, 0.0f, 0.0f, 0.0f };
+	vec4_t shadowAtlas = { 0.0f, 0.0f, 0.0f, 0.0f };
+	vec4_t shadowMode = { 0.0f, 0.0f, 0.0f, 0.0f };
 	float shadowStrength = 0.0f;
-	float zNear;
 	qboolean dlightShadow;
 
 #ifdef USE_VULKAN
@@ -1352,20 +1458,19 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	// fragment data
 	uniform->light.color[3] = 1.0f / Square( radius );
 	uniform->dlightFactors[0] = r_dlightFalloff ? r_dlightFalloff->value : 1.0f;
-	dlightShadow = VK_DlightShadowParams( dl, lightScreen, &shadowStrength );
+	dlightShadow = VK_DlightShadowParams( dl, shadowInfo, shadowAtlas, shadowMode, &shadowStrength );
 	uniform->dlightFactors[1] = dlightShadow ? shadowStrength : 0.0f;
-	uniform->dlightFactors[2] = 0.0f;
-	uniform->dlightFactors[3] = 0.0f;
+	if ( dlightShadow ) {
+		VK_DlightShadowFilterOffsets( &uniform->dlightFactors[2], &uniform->dlightFactors[3] );
+	} else {
+		uniform->dlightFactors[2] = 0.0f;
+		uniform->dlightFactors[3] = 0.0f;
+	}
 
-	zNear = ( r_znear && r_znear->value > 0.0f ) ? r_znear->value : 1.0f;
-	uniform->depthFadeInfo[0] = backEnd.viewParms.zFar / zNear;
-	uniform->depthFadeInfo[1] = backEnd.viewParms.zFar;
-	uniform->depthFadeInfo[2] = r_dlightShadowBias ? r_dlightShadowBias->value : 8.0f;
-	uniform->depthFadeInfo[3] = 0.0f;
-	Vector4Copy( lightScreen, uniform->depthFadeScale );
+	Vector4Copy( shadowInfo, uniform->depthFadeInfo );
+	Vector4Copy( shadowAtlas, uniform->depthFadeScale );
+	Vector4Copy( shadowMode, uniform->depthFadeBias );
 	uniform->depthFadeScale[3] = dlightShadow ? 1.0f : 0.0f;
-	VectorClear( uniform->depthFadeBias );
-	uniform->depthFadeBias[3] = 0.0f;
 
 	if ( dl->linear )
 	{
@@ -1444,7 +1549,7 @@ void VK_LightingPass( void )
 		vk_material_init( &material );
 		vk_material_set_descriptor( &material, VK_DESC_TEXTURE0, R_AnimatedImageDescriptor( &pStage->bundle[ tess.shader->lightingBundle ] ) );
 		vk_material_set_descriptor( &material, VK_DESC_TEXTURE2,
-			vk_depth_fade_available() ? vk.depth_fade_descriptor : VK_NULL_HANDLE );
+			vk_dlight_shadow_atlas_available() ? vk.dlight_shadow_descriptor : VK_NULL_HANDLE );
 		if ( fog_stage ) {
 			vk_material_set_descriptor( &material, VK_DESC_FOG_DLIGHT, tr.fogImage->descriptor );
 		}
@@ -1479,7 +1584,12 @@ void RB_StageIteratorGeneric( void )
 		tess.vboStage = 0;
 	} else
 #endif
-	RB_DeformTessGeometry();
+	{
+		RB_DeformTessGeometry();
+#ifdef USE_PMLIGHT
+		RB_ApplyDlightShadowCasterNormalBias();
+#endif
+	}
 
 #ifdef USE_PMLIGHT
 	if ( tess.dlightPass ) {

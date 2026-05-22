@@ -857,6 +857,52 @@ def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
             },
         ],
     }
+    if glx_runtime_sweep.RC_GATE_PRESETS[gate]["requirements"].get("require_dlight_shadow_scenes"):
+        dlight_scenes = glx_runtime_sweep.dlight_shadow_evidence_scenes()
+        manifest["runs"].append(
+            {
+                "type": "dlight-shadow-scenes",
+                "status": "passed",
+                "renderer": "glx",
+                "maps": sorted({str(scene["map"]) for scene in dlight_scenes}),
+                "scenes": dlight_scenes,
+                "screenshots": [
+                    {
+                        "name": f"{gate}-{platform_id}-dlight-{scene['id']}",
+                        "found": True,
+                        "renderer": "glx",
+                        "map": scene["map"],
+                        "mapIndex": scene_index,
+                        "baselineKey": (
+                            f"{gate}-{platform_id}-dlight-shadows-{scene['id']}-glx"
+                        ),
+                        "baselineStatus": "not-compared",
+                        "histogram": screenshot_histogram(),
+                        "capturePolicy": sdr_capture_policy(),
+                        "falseColor": {"status": "passed"},
+                        "exposureFalseColor": {"status": "passed"},
+                        "scene": scene["id"],
+                        "evidenceCategories": list(scene["categories"]),
+                        "shadowScene": True,
+                    }
+                    for scene_index, scene in enumerate(dlight_scenes, start=1)
+                ],
+                "dlightShadow": {
+                    "found": True,
+                    "sampleCount": 1,
+                    "latest": {"planned": 2, "renderLights": 2},
+                    "max": {"planned": 2, "renderLights": 2},
+                    "scenes": {
+                        str(scene["id"]): {
+                            "sampleCount": 1,
+                            "latest": {"planned": 2, "renderLights": 2},
+                            "max": {"planned": 2, "renderLights": 2},
+                        }
+                        for scene in dlight_scenes
+                    },
+                },
+            }
+        )
     if glx_runtime_sweep.RC_GATE_PRESETS[gate]["requirements"].get("require_glx_color_sweep"):
         manifest["runs"].extend(color_sweep_runs(gate))
     for demo in manifest["demos"]:
@@ -3996,6 +4042,101 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         args.extra_set = ["r_glxColorPipelineDebug=0"]
         cvars = glx_runtime_sweep.make_cvars(args)
         self.assertEqual(cvars["r_glxColorPipelineDebug"], "0")
+
+    def test_rc_parity_gate_enables_dlight_shadow_scenes(self) -> None:
+        defaults = glx_runtime_sweep.RC_GATE_PRESETS["rc-parity"]["defaults"]
+        requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-parity"]["requirements"]
+
+        self.assertTrue(defaults["dlight_shadow_scenes"])
+        self.assertTrue(requirements["require_dlight_shadow_scenes"])
+
+    def test_dlight_shadow_config_uses_startup_cvars_and_test_lights(self) -> None:
+        args = argparse.Namespace(
+            startup_wait=1,
+            map_wait=1,
+            screenshot_wait=1,
+            perf_sample_wait=1,
+            profile="glx-parity",
+            no_perf_samples=False,
+        )
+        cvars = glx_runtime_sweep.dlight_shadow_scene_cvars({"r_fbo": "1"})
+        startup = glx_runtime_sweep.launch_cvars(cvars)
+        scenes = glx_runtime_sweep.dlight_shadow_evidence_scenes()
+
+        cfg, expected_shots = glx_runtime_sweep.build_dlight_shadow_cfg(
+            args,
+            cvars,
+            scenes,
+            "shadow-test",
+            "gs12345678",
+        )
+
+        self.assertEqual(startup["r_dlightShadows"], "1")
+        self.assertEqual(startup["r_dlightShadowMaxLights"], "8")
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN world-geometry", cfg)
+        self.assertIn("devmap q3dm6", cfg)
+        self.assertIn("devmap q3dm11", cfg)
+        self.assertIn("r_dlightTest 8 720 224 48 0", cfg)
+        self.assertIn("r_dlightTest 16 900 256 72 0", cfg)
+        self.assertIn("set r_speeds \"4\"", cfg)
+        self.assertTrue(all(shot["shadowScene"] for shot in expected_shots))
+        self.assertEqual(
+            glx_runtime_sweep.dlight_shadow_scene_categories(expected_shots),
+            set(glx_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES),
+        )
+        self.assertTrue(
+            any(
+                shot["baselineKey"] == "glx-parity-dlight-shadows-stress-light-budget-q3dm6-glx"
+                for shot in expected_shots
+            )
+        )
+
+    def test_dlight_shadow_log_analysis_extracts_active_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "glx.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "DLIGHT_SHADOW_SCENE_BEGIN world-geometry",
+                        "dlight shadows plan:2/4 cand:3 atlas:1024x512/128 fill:75% "
+                        "render lights:2 faces:10 batches:5 draws:5 surfs:20 cpu:1ms",
+                        "DLIGHT_SHADOW_SCENE_END world-geometry",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            analysis = glx_runtime_sweep.analyze_dlight_shadow_log(log)
+
+        self.assertTrue(analysis["found"])
+        self.assertEqual(analysis["max"]["planned"], 2)
+        self.assertEqual(analysis["max"]["renderLights"], 2)
+        self.assertEqual(analysis["scenes"]["world-geometry"]["max"]["planned"], 2)
+
+    def test_gate_evaluation_requires_dlight_shadow_scene_evidence(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest["runs"] = [
+            run for run in manifest["runs"] if run.get("type") != "dlight-shadow-scenes"
+        ]
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("dlight shadow scene run" in failure for failure in failures))
+
+    def test_gate_evaluation_requires_dlight_shadow_category_evidence(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        shadow_run = next(
+            run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
+        )
+        shadow_run["screenshots"] = [
+            shot for shot in shadow_run["screenshots"]
+            if shot.get("evidenceCategories") != ["stress-light-budget"]
+        ]
+        shadow_run["dlightShadow"]["scenes"].pop("stress-light-budget")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("stress-light-budget" in failure for failure in failures))
 
     def test_ownership_profile_preserves_independent_ownership_cvar(self) -> None:
         profile = dict(glx_runtime_sweep.PROFILE_CVARS["glx-ownership"])

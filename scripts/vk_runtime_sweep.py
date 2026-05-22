@@ -73,6 +73,24 @@ GPU_TIMING_RE = re.compile(
     r"\s*(?P<from>.*?)\s*->\s*(?P<to>.*?):\s*(?P<msec>\d+(?:\.\d+)?)\s*ms",
     re.IGNORECASE,
 )
+DLIGHT_SHADOW_PLAN_RE = re.compile(
+    r"dlight shadows plan:(?P<planned>\d+)/(?P<considered>\d+)\s+"
+    r"cand:(?P<candidates>\d+)\s+"
+    r"atlas:(?P<atlasWidth>\d+)x(?P<atlasHeight>\d+)/(?P<faceSize>\d+)\s+"
+    r"fill:(?P<fill>\d+)%\s+render lights:(?P<renderLights>\d+)\s+"
+    r"faces:(?P<faces>\d+)\s+batches:(?P<batches>\d+)\s+"
+    r"draws:(?P<draws>\d+)\s+surfs:(?P<surfs>\d+)\s+"
+    r"cpu:(?P<cpuMsec>\d+)ms",
+    re.IGNORECASE,
+)
+DLIGHT_SHADOW_SCENE_BEGIN_RE = re.compile(
+    r"DLIGHT_SHADOW_SCENE_BEGIN\s+(?P<scene>[A-Za-z0-9_.-]+)",
+    re.IGNORECASE,
+)
+DLIGHT_SHADOW_SCENE_END_RE = re.compile(
+    r"DLIGHT_SHADOW_SCENE_END\s+(?P<scene>[A-Za-z0-9_.-]+)",
+    re.IGNORECASE,
+)
 VULKAN_FAILURE_RE = re.compile(
     r"(VK_ERROR_[A-Z0-9_]+|device lost|validation error|returned VK_ERROR)",
     re.IGNORECASE,
@@ -89,6 +107,7 @@ DEFAULT_OPTIONS = {
     "screenshot_wait": 8,
     "perf_sample_wait": 4,
     "timeout": 240.0,
+    "dlight_shadow_scenes": False,
 }
 
 COMMON_CVARS = {
@@ -96,6 +115,107 @@ COMMON_CVARS = {
     "r_mode": "-1",
     "r_swapInterval": "0",
     "r_screenshotWriteViewpos": "1",
+}
+
+DLIGHT_SHADOW_SCENE_CVARS = {
+    "developer": "1",
+    "logfile": "2",
+    "r_dynamiclight": "1",
+    "r_dlightMode": "2",
+    "r_dlightShadows": "1",
+    "r_dlightShadowDebug": "1",
+    "r_dlightShadowFilter": "2",
+    "r_dlightShadowMaxLights": "8",
+    "r_dlightShadowResolution": "256",
+}
+
+DLIGHT_SHADOW_EVIDENCE_CATEGORIES = (
+    "world-geometry",
+    "brush-models",
+    "entities",
+    "alpha-tested-surfaces",
+    "portals-mirrors",
+    "stress-light-budget",
+)
+
+DLIGHT_SHADOW_EVIDENCE_SCENES = (
+    {
+        "id": "world-geometry",
+        "map": "q3dm6",
+        "categories": ("world-geometry",),
+        "description": "Large retail geometry scene for world caster and receiver coverage.",
+        "dlight": {"count": 8, "intensity": 720, "distance": 224, "height": 48, "seconds": 0},
+    },
+    {
+        "id": "brush-models",
+        "map": "q3dm1",
+        "categories": ("brush-models",),
+        "description": "Small retail scene with interactive brush-model coverage near player start.",
+        "dlight": {"count": 6, "intensity": 700, "distance": 192, "height": 48, "seconds": 0},
+    },
+    {
+        "id": "entities",
+        "map": "q3dm1",
+        "categories": ("entities",),
+        "description": "Entity-model dlight shadow coverage with r_dlightMode 2 enabled.",
+        "dlight": {"count": 8, "intensity": 760, "distance": 208, "height": 56, "seconds": 0},
+    },
+    {
+        "id": "alpha-tested-surfaces",
+        "map": "q3dm11",
+        "categories": ("alpha-tested-surfaces",),
+        "description": "Shader-heavy retail scene for alpha-test and material-stage receivers.",
+        "dlight": {"count": 8, "intensity": 740, "distance": 224, "height": 48, "seconds": 0},
+    },
+    {
+        "id": "portals-mirrors",
+        "map": "q3dm17",
+        "categories": ("portals-mirrors",),
+        "description": "Open retail scene with portals and mirrors explicitly left enabled.",
+        "cvars": {"r_noportals": "0", "r_portalOnly": "0"},
+        "dlight": {"count": 8, "intensity": 720, "distance": 240, "height": 64, "seconds": 0},
+    },
+    {
+        "id": "stress-light-budget",
+        "map": "q3dm6",
+        "categories": ("stress-light-budget",),
+        "description": "Over-budget dynamic-light ring to exercise atlas budget and skip logging.",
+        "dlight": {"count": 16, "intensity": 900, "distance": 256, "height": 72, "seconds": 0},
+    },
+)
+
+STARTUP_CVAR_NAMES = {
+    "developer",
+    "logfile",
+    "r_fullscreen",
+    "r_mode",
+    "r_customWidth",
+    "r_customHeight",
+    "r_fbo",
+    "r_hdr",
+    "r_hdrPrecision",
+    "r_hdrDisplay",
+    "r_bloom",
+    "r_bloom_soft_knee",
+    "r_ext_multisample",
+    "r_tonemap",
+    "r_tonemapExposure",
+    "r_colorGrade",
+    "r_colorGradeLift",
+    "r_colorGradeGamma",
+    "r_colorGradeGain",
+    "r_colorGradeWhitePoint",
+    "r_colorGradeAdaptWhitePoint",
+    "r_colorGradeLUT",
+    "r_colorGradeLUTScale",
+    "r_vbo",
+    "r_dynamiclight",
+    "r_dlightMode",
+    "r_dlightShadows",
+    "r_dlightShadowDebug",
+    "r_dlightShadowFilter",
+    "r_dlightShadowMaxLights",
+    "r_dlightShadowResolution",
 }
 
 PROFILE_CVARS = {
@@ -166,12 +286,15 @@ RC_GATE_PRESETS = {
             "maps": "q3dm1,q3dm17",
             "demos": "demo1",
             "timeout": 360.0,
+            "dlight_shadow_scenes": True,
         },
         "requirements": {
             "require_screenshots": True,
             "require_vkinfo": True,
             "require_gpu_timings": True,
             "require_timedemo_metrics": True,
+            "require_dlight_shadow_scenes": True,
+            "required_dlight_shadow_categories": DLIGHT_SHADOW_EVIDENCE_CATEGORIES,
         },
     },
     "vk-hdr": {
@@ -273,6 +396,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--perf-sample-wait", type=int)
     parser.add_argument("--timeout", type=float)
     parser.add_argument("--extra-set", action="append", default=[], metavar="NAME=VALUE")
+    shadow_group = parser.add_mutually_exclusive_group()
+    shadow_group.add_argument(
+        "--dlight-shadow-scenes",
+        dest="dlight_shadow_scenes",
+        action="store_true",
+        default=None,
+        help="Add dedicated r_dlightTest dynamic-light shadow map scenes to the sweep.",
+    )
+    shadow_group.add_argument(
+        "--no-dlight-shadow-scenes",
+        dest="dlight_shadow_scenes",
+        action="store_false",
+        help="Disable dlight shadow scenes requested by a gate preset.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-map-sweep", action="store_true")
     parser.add_argument("--no-demo-sweep", action="store_true")
@@ -300,6 +437,7 @@ def print_gate_list() -> None:
         print(
             "  "
             f"profile={defaults['profile']} maps={defaults['maps']} demos={defaults['demos'] or '-'}"
+            f" dlight-shadow-scenes={defaults.get('dlight_shadow_scenes', False)}"
         )
 
 
@@ -314,6 +452,52 @@ def make_cvars(args: argparse.Namespace) -> dict[str, str]:
     )
     cvars.update(parse_extra_sets(args.extra_set))
     return cvars
+
+
+def dlight_shadow_scene_cvars(cvars: dict[str, str]) -> dict[str, str]:
+    shadow_cvars = dict(cvars)
+    for name, value in DLIGHT_SHADOW_SCENE_CVARS.items():
+        shadow_cvars.setdefault(name, value)
+    return shadow_cvars
+
+
+def dlight_shadow_evidence_scenes() -> list[dict[str, object]]:
+    return [
+        {
+            **scene,
+            "categories": list(scene["categories"]),
+            "cvars": dict(scene.get("cvars", {})),
+            "dlight": dict(scene["dlight"]),
+        }
+        for scene in DLIGHT_SHADOW_EVIDENCE_SCENES
+    ]
+
+
+def dlight_shadow_scene_categories(screenshots: list[dict[str, object]]) -> set[str]:
+    categories: set[str] = set()
+    for shot in screenshots:
+        if not shot.get("shadowScene"):
+            continue
+        for category in shot.get("evidenceCategories", []):
+            text = str(category).strip()
+            if text:
+                categories.add(text)
+    return categories
+
+
+def format_dlight_test_command(dlight: dict[str, object]) -> str:
+    return (
+        "r_dlightTest "
+        f"{int(dlight['count'])} "
+        f"{float(dlight['intensity']):g} "
+        f"{float(dlight['distance']):g} "
+        f"{float(dlight['height']):g} "
+        f"{float(dlight['seconds']):g}"
+    )
+
+
+def launch_cvars(cvars: dict[str, str]) -> dict[str, str]:
+    return {name: value for name, value in cvars.items() if name in STARTUP_CVAR_NAMES}
 
 
 def cfg_preamble(cvars: dict[str, str], title: str) -> list[str]:
@@ -359,6 +543,65 @@ def build_map_cfg(
                 "renderer": "vulkan",
                 "map": map_name,
                 "mapIndex": map_index,
+            }
+        )
+
+    lines.append("quit")
+    lines.append("")
+    return "\n".join(lines), screenshots
+
+
+def build_dlight_shadow_cfg(
+    args: argparse.Namespace,
+    cvars: dict[str, str],
+    scenes: list[dict[str, object]],
+    run_id: str,
+) -> tuple[str, list[dict[str, object]]]:
+    lines = cfg_preamble(cvars, "Vulkan dynamic-light shadow scene sweep")
+    screenshots: list[dict[str, object]] = []
+
+    lines.append(f"wait {args.startup_wait}")
+    for scene_index, scene in enumerate(scenes, start=1):
+        scene_id = sanitize(str(scene["id"]))
+        map_name = str(scene["map"])
+        safe_map = sanitize(map_name)
+        categories = [str(category) for category in scene.get("categories", [])]
+        dlight = dict(scene["dlight"])  # type: ignore[arg-type]
+        shot_name = f"vkdl-{scene_index:02d}-{scene_id[:24].rstrip('._-')}-{safe_map}"
+        for name, value in sorted(dict(scene.get("cvars", {})).items()):
+            lines.append(f"set {name} {q3_quote(value)}")
+        lines.append(f"echo DLIGHT_SHADOW_SCENE_BEGIN {scene_id}")
+        lines.append(f"devmap {map_name}")
+        lines.append(f"wait {args.map_wait}")
+        lines.append("vkinfo")
+        lines.append(format_dlight_test_command(dlight))
+        lines.append("wait 4")
+        if not args.no_perf_samples:
+            lines.append('set r_speeds "4"')
+            lines.append(f"wait {args.perf_sample_wait}")
+        lines.append(f"screenshotPNG {shot_name}")
+        lines.append(f"wait {args.screenshot_wait}")
+        if not args.no_perf_samples:
+            lines.append('set r_speeds "0"')
+            lines.append("wait 1")
+        lines.append("r_dlightTest off")
+        lines.append("wait 1")
+        lines.append("vkinfo")
+        lines.append(f"echo DLIGHT_SHADOW_SCENE_END {scene_id}")
+        lines.append("disconnect")
+        lines.append("wait 30")
+        screenshots.append(
+            {
+                "name": shot_name,
+                "baselineKey": f"{args.profile}-dlight-shadows-{scene_id}-{safe_map}-vulkan",
+                "renderer": "vulkan",
+                "map": map_name,
+                "mapIndex": scene_index,
+                "scene": scene_id,
+                "description": scene.get("description", ""),
+                "evidenceCategories": categories,
+                "shadowScene": True,
+                "dlightTest": dlight,
             }
         )
 
@@ -520,6 +763,67 @@ def timedemo_metrics(log_path: Path) -> dict[str, object] | None:
         "seconds": float(match.group("seconds")),
         "fps": float(match.group("fps")),
     }
+
+
+def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
+    info: dict[str, object] = {
+        "found": False,
+        "sampleCount": 0,
+        "latest": {},
+        "max": {},
+        "scenes": {},
+    }
+    if not log_path.exists():
+        return info
+
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    samples: list[dict[str, int]] = []
+    scene_samples: dict[str, list[dict[str, int]]] = {}
+    current_scene = ""
+    for line in text.splitlines():
+        if match := DLIGHT_SHADOW_SCENE_BEGIN_RE.search(line):
+            current_scene = sanitize(match.group("scene"))
+            scene_samples.setdefault(current_scene, [])
+            continue
+        if match := DLIGHT_SHADOW_SCENE_END_RE.search(line):
+            if sanitize(match.group("scene")) == current_scene:
+                current_scene = ""
+            continue
+        if match := DLIGHT_SHADOW_PLAN_RE.search(line):
+            sample = {name: int(value) for name, value in match.groupdict().items()}
+            samples.append(sample)
+            if current_scene:
+                scene_samples.setdefault(current_scene, []).append(sample)
+
+    if not samples:
+        return info
+
+    maxima = {
+        name: max(sample[name] for sample in samples)
+        for name in samples[0]
+    }
+    scene_summaries = {
+        scene_id: {
+            "sampleCount": len(records),
+            "latest": records[-1],
+            "max": {
+                name: max(record[name] for record in records)
+                for name in records[0]
+            },
+        }
+        for scene_id, records in sorted(scene_samples.items())
+        if records
+    }
+    info.update(
+        {
+            "found": True,
+            "sampleCount": len(samples),
+            "latest": samples[-1],
+            "max": maxima,
+            "scenes": scene_summaries,
+        }
+    )
+    return info
 
 
 def parse_vkinfo_text(text: str) -> dict[str, object]:
@@ -727,6 +1031,108 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
         if timing_count <= 0:
             failures.append("No Vulkan GPU timing samples were found.")
 
+    if requirements.get("require_dlight_shadow_scenes"):
+        shadow_runs = [
+            run for run in runs
+            if isinstance(run, dict) and run.get("type") == "dlight-shadow-scenes"
+        ]
+        if not shadow_runs:
+            failures.append("No Vulkan dlight shadow scene run was planned or captured.")
+        else:
+            shadow_screenshots = [
+                shot
+                for run in shadow_runs
+                for shot in run.get("screenshots", [])  # type: ignore[union-attr]
+                if isinstance(shot, dict) and shot.get("shadowScene")
+            ]
+            if not shadow_screenshots:
+                failures.append("No Vulkan dlight shadow scene screenshots were planned or captured.")
+            required_categories = [
+                str(category)
+                for category in requirements.get(
+                    "required_dlight_shadow_categories",
+                    DLIGHT_SHADOW_EVIDENCE_CATEGORIES,
+                )
+            ]
+            covered_categories = dlight_shadow_scene_categories(shadow_screenshots)
+            missing_categories = [
+                category
+                for category in required_categories
+                if category not in covered_categories
+            ]
+            if missing_categories:
+                failures.append(
+                    "Vulkan dlight shadow scene coverage is missing categor"
+                    f"{'ies' if len(missing_categories) != 1 else 'y'}: "
+                    + ", ".join(missing_categories)
+                    + "."
+                )
+            missing_shadow = [
+                str(shot.get("name"))
+                for shot in shadow_screenshots
+                if not shot.get("found")
+            ]
+            if missing_shadow:
+                failures.append(
+                    f"Missing Vulkan dlight shadow screenshots: {len(missing_shadow)}/{len(shadow_screenshots)} "
+                    + ", ".join(missing_shadow[:8])
+                )
+            shadow_logs = [
+                run.get("dlightShadow")
+                for run in shadow_runs
+                if isinstance(run.get("dlightShadow"), dict)
+            ]
+            active_logs = [
+                summary
+                for summary in shadow_logs
+                if isinstance(summary, dict)
+                and summary.get("found")
+                and isinstance(summary.get("max"), dict)
+                and int(summary["max"].get("planned", 0)) > 0  # type: ignore[index]
+                and int(summary["max"].get("renderLights", 0)) > 0  # type: ignore[index]
+            ]
+            if not active_logs:
+                failures.append("No Vulkan dlight shadow planning/render log samples were found.")
+            else:
+                scene_categories: dict[str, set[str]] = {}
+                for shot in shadow_screenshots:
+                    scene_id = sanitize(str(shot.get("scene", "")))
+                    if not scene_id:
+                        continue
+                    scene_categories.setdefault(scene_id, set()).update(
+                        str(category)
+                        for category in shot.get("evidenceCategories", [])
+                        if str(category).strip()
+                    )
+                logged_scenes = {
+                    sanitize(str(scene_id))
+                    for summary in shadow_logs
+                    if isinstance(summary, dict)
+                    and isinstance(summary.get("scenes"), dict)
+                    for scene_id, scene_summary in summary["scenes"].items()  # type: ignore[union-attr]
+                    if isinstance(scene_summary, dict)
+                    and isinstance(scene_summary.get("max"), dict)
+                    and int(scene_summary["max"].get("planned", 0)) > 0  # type: ignore[index]
+                    and int(scene_summary["max"].get("renderLights", 0)) > 0  # type: ignore[index]
+                }
+                logged_categories = {
+                    category
+                    for scene_id in logged_scenes
+                    for category in scene_categories.get(scene_id, set())
+                }
+                missing_log_categories = [
+                    category
+                    for category in required_categories
+                    if category not in logged_categories
+                ]
+                if missing_log_categories:
+                    failures.append(
+                        "Vulkan dlight shadow logs are missing categor"
+                        f"{'ies' if len(missing_log_categories) != 1 else 'y'}: "
+                        + ", ".join(missing_log_categories)
+                        + "."
+                    )
+
     if requirements.get("require_timedemo_metrics"):
         demos = manifest.get("demos", [])
         if not isinstance(demos, list) or not demos:
@@ -878,35 +1284,10 @@ def main() -> int:
     maps = split_csv(args.maps)
     demos = split_csv(args.demos)
     cvars = make_cvars(args)
-    startup_cvars = {
-        name: value
-        for name, value in cvars.items()
-        if name
-        in {
-            "r_fullscreen",
-            "r_mode",
-            "r_customWidth",
-            "r_customHeight",
-            "r_fbo",
-            "r_hdr",
-            "r_hdrPrecision",
-            "r_hdrDisplay",
-            "r_bloom",
-            "r_bloom_soft_knee",
-            "r_ext_multisample",
-            "r_tonemap",
-            "r_tonemapExposure",
-            "r_colorGrade",
-            "r_colorGradeLift",
-            "r_colorGradeGamma",
-            "r_colorGradeGain",
-            "r_colorGradeWhitePoint",
-            "r_colorGradeAdaptWhitePoint",
-            "r_colorGradeLUT",
-            "r_colorGradeLUTScale",
-            "r_vbo",
-        }
-    }
+    startup_cvars = launch_cvars(cvars)
+    dlight_shadow_cvars = dlight_shadow_scene_cvars(cvars)
+    dlight_shadow_startup_cvars = launch_cvars(dlight_shadow_cvars)
+    dlight_shadow_scenes = dlight_shadow_evidence_scenes()
 
     run_id = (
         datetime.now(timezone.utc).strftime("vk-sweep-%Y%m%d-%H%M%S-%f")
@@ -933,6 +1314,42 @@ def main() -> int:
                 "config": str(cfg_path),
                 "maps": maps,
                 "screenshots": shots,
+            }
+        )
+        runs.append(result)
+
+    if args.dlight_shadow_scenes:
+        cfg_name = f"{run_id}-dlight-shadows.cfg"
+        cfg, expected_screenshots = build_dlight_shadow_cfg(
+            args,
+            dlight_shadow_cvars,
+            dlight_shadow_scenes,
+            run_id,
+        )
+        cfg_path = write_cfg(homepath, args.fs_game, cfg_name, cfg)
+        command = base_launch_args(
+            exe,
+            basepath,
+            homepath,
+            args.fs_game,
+            cfg_name,
+            dlight_shadow_startup_cvars,
+        )
+        log_path = logs_dir / "dlight-shadows.log"
+        result = run_engine(command, exe.parent, args.timeout, log_path, args.dry_run)
+        shots = screenshot_results(homepath, args.fs_game, expected_screenshots)
+        if not args.dry_run:
+            result["vkinfo"] = analyze_vk_log(log_path, args.profile)
+            result["dlightShadow"] = analyze_dlight_shadow_log(log_path)
+        result.update(
+            {
+                "type": "dlight-shadow-scenes",
+                "config": str(cfg_path),
+                "maps": sorted({str(scene["map"]) for scene in dlight_shadow_scenes}),
+                "scenes": dlight_shadow_scenes,
+                "screenshots": shots,
+                "cvars": dlight_shadow_cvars,
+                "startupCvars": dlight_shadow_startup_cvars,
             }
         )
         runs.append(result)
@@ -974,6 +1391,11 @@ def main() -> int:
         "profile": args.profile,
         "cvars": cvars,
         "startupCvars": startup_cvars,
+        "dlightShadowScenes": bool(args.dlight_shadow_scenes),
+        "dlightShadowEvidenceCategories": list(DLIGHT_SHADOW_EVIDENCE_CATEGORIES),
+        "dlightShadowEvidenceScenes": dlight_shadow_scenes if args.dlight_shadow_scenes else [],
+        "dlightShadowSceneCvars": dlight_shadow_cvars if args.dlight_shadow_scenes else {},
+        "dlightShadowSceneStartupCvars": dlight_shadow_startup_cvars if args.dlight_shadow_scenes else {},
         "maps": maps,
         "demos": demos,
         "runs": runs,

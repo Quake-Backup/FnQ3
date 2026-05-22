@@ -316,6 +316,7 @@ void vk_warm_pipelines( qboolean include_screenmap );
 
 void vk_clear_color( const vec4_t color );
 void vk_clear_depth( qboolean clear_stencil );
+void vk_clear_depth_force( qboolean clear_stencil );
 void vk_begin_frame( void );
 void vk_end_frame( void );
 qboolean vk_depth_fade_supported( void );
@@ -323,9 +324,12 @@ qboolean vk_depth_fade_available( void );
 qboolean vk_depth_fade_ready( void );
 void vk_copy_depth_fade( void );
 qboolean vk_dlight_shadow_atlas_available( void );
+qboolean vk_dlight_shadow_atlas_ready( void );
 qboolean vk_begin_dlight_shadow_render_pass( void );
 void vk_end_dlight_shadow_render_pass( void );
 int vk_dlight_shadow_atlas_height( void );
+int vk_dlight_shadow_atlas_columns( void );
+uint32_t vk_dlight_shadow_atlas_generation( void );
 void vk_present_frame( void );
 
 void vk_end_render_pass( void );
@@ -503,12 +507,14 @@ typedef struct {
 	VkImage dlight_shadow_image;
 	VkImageView dlight_shadow_image_view;
 	VkDescriptorSet dlight_shadow_descriptor;
+	qboolean dlight_shadow_rendered;
 	uint32_t dlight_shadow_atlas_width;
 	uint32_t dlight_shadow_atlas_height;
 	uint32_t dlight_shadow_face_size;
 	uint32_t dlight_shadow_atlas_columns;
 	uint32_t dlight_shadow_atlas_rows;
 	uint32_t dlight_shadow_max_lights;
+	uint32_t dlight_shadow_generation;
 
 	VkImage msaa_image;
 	VkImageView msaa_image_view;

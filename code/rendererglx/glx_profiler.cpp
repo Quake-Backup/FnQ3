@@ -54,6 +54,8 @@ const char *GLX_Profiler_GpuPassName( int pass )
 		return "copy-screen";
 	case GLX_GPU_PASS_FLARE:
 		return "flare";
+	case GLX_GPU_PASS_DLIGHT_SHADOW:
+		return "dlight-shadow-atlas";
 	default:
 		return "unknown";
 	}

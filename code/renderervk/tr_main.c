@@ -734,6 +734,205 @@ static void R_SetupProjectionZ( viewParms_t *dest )
 	}
 }
 
+static void R_ClearCSMPlan( void )
+{
+	Com_Memset( &tr.csm, 0, sizeof( tr.csm ) );
+}
+
+static float R_CSMSnapLightCoord( float value, float texelSize )
+{
+	if ( texelSize <= 0.0f ) {
+		return value;
+	}
+
+	return floorf( value / texelSize + 0.5f ) * texelSize;
+}
+
+static void R_CSMBuildLightAxis( const vec3_t lightDirection, vec3_t axis[3] )
+{
+	VectorScale( lightDirection, -1.0f, axis[0] );
+	PerpendicularVector( axis[1], axis[0] );
+	CrossProduct( axis[0], axis[1], axis[2] );
+	VectorNormalize( axis[1] );
+	VectorNormalize( axis[2] );
+}
+
+static void R_CSMBuildFrustumSliceCorners( float splitNear, float splitFar, vec3_t corners[8] )
+{
+	const viewParms_t *view;
+	float tanHalfFovX;
+	float tanHalfFovY;
+	int distanceIndex;
+	int xSign;
+	int ySign;
+	int corner;
+
+	view = &tr.viewParms;
+	tanHalfFovX = tanf( view->fovX * M_PI / 360.0f );
+	tanHalfFovY = tanf( view->fovY * M_PI / 360.0f );
+	corner = 0;
+
+	for ( distanceIndex = 0; distanceIndex < 2; distanceIndex++ ) {
+		float distance = distanceIndex ? splitFar : splitNear;
+		float halfWidth = distance * tanHalfFovX;
+		float halfHeight = distance * tanHalfFovY;
+		vec3_t center;
+
+		VectorMA( view->or.origin, distance, view->or.axis[0], center );
+
+		for ( xSign = -1; xSign <= 1; xSign += 2 ) {
+			for ( ySign = -1; ySign <= 1; ySign += 2 ) {
+				VectorCopy( center, corners[corner] );
+				VectorMA( corners[corner], xSign * halfWidth, view->or.axis[1], corners[corner] );
+				VectorMA( corners[corner], ySign * halfHeight, view->or.axis[2], corners[corner] );
+				corner++;
+			}
+		}
+	}
+}
+
+static void R_CSMPlanCascade( int cascadeIndex, float splitNear, float splitFar,
+	const vec3_t lightAxis[3], int resolution )
+{
+	csmCascadePlan_t *cascade;
+	vec3_t corners[8];
+	vec3_t center;
+	vec3_t lightCenter;
+	float radiusSquared;
+	float halfExtent;
+	int i;
+
+	cascade = &tr.csm.cascades[cascadeIndex];
+	R_CSMBuildFrustumSliceCorners( splitNear, splitFar, corners );
+
+	VectorClear( center );
+	for ( i = 0; i < 8; i++ ) {
+		VectorAdd( center, corners[i], center );
+	}
+	VectorScale( center, 1.0f / 8.0f, center );
+
+	radiusSquared = 0.0f;
+	for ( i = 0; i < 8; i++ ) {
+		vec3_t delta;
+		float cornerRadiusSquared;
+
+		VectorSubtract( corners[i], center, delta );
+		cornerRadiusSquared = VectorLengthSquared( delta );
+		if ( cornerRadiusSquared > radiusSquared ) {
+			radiusSquared = cornerRadiusSquared;
+		}
+	}
+
+	cascade->splitNear = splitNear;
+	cascade->splitFar = splitFar;
+	cascade->radius = MAX( sqrtf( radiusSquared ), 1.0f );
+	cascade->texelSize = ( cascade->radius * 2.0f ) / (float)resolution;
+	halfExtent = ceilf( cascade->radius / cascade->texelSize ) * cascade->texelSize;
+
+	for ( i = 0; i < 3; i++ ) {
+		lightCenter[i] = DotProduct( center, lightAxis[i] );
+		VectorCopy( lightAxis[i], cascade->axis[i] );
+	}
+	lightCenter[1] = R_CSMSnapLightCoord( lightCenter[1], cascade->texelSize );
+	lightCenter[2] = R_CSMSnapLightCoord( lightCenter[2], cascade->texelSize );
+
+	VectorClear( cascade->origin );
+	for ( i = 0; i < 3; i++ ) {
+		VectorMA( cascade->origin, lightCenter[i], lightAxis[i], cascade->origin );
+	}
+
+	cascade->bounds[0][0] = lightCenter[0] - halfExtent;
+	cascade->bounds[1][0] = lightCenter[0] + halfExtent;
+	cascade->bounds[0][1] = lightCenter[1] - halfExtent;
+	cascade->bounds[1][1] = lightCenter[1] + halfExtent;
+	cascade->bounds[0][2] = lightCenter[2] - halfExtent;
+	cascade->bounds[1][2] = lightCenter[2] + halfExtent;
+}
+
+static void R_PlanCascadedShadows( void )
+{
+	vec3_t lightDirection;
+	vec3_t lightAxis[3];
+	float zNear;
+	float maxDistance;
+	float splitLambda;
+	float receiverBias;
+	float casterDepthBias;
+	float casterSlopeBias;
+	float casterNormalBias;
+	float splitNear;
+	int filterMode;
+	int cascadeCount;
+	int resolution;
+	int i;
+
+	R_ClearCSMPlan();
+
+	if ( !r_csmShadows || !r_csmShadows->integer ||
+		( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		return;
+	}
+
+	if ( VectorNormalize2( tr.sunDirection, lightDirection ) <= 0.0f ) {
+		return;
+	}
+
+	zNear = MAX( r_znear->value, 1.0f );
+	maxDistance = r_csmMaxDistance ? r_csmMaxDistance->value : 2048.0f;
+	if ( tr.viewParms.zFar > zNear ) {
+		maxDistance = MIN( maxDistance, tr.viewParms.zFar );
+	}
+	if ( maxDistance <= zNear + 1.0f ) {
+		return;
+	}
+
+	cascadeCount = r_csmCascadeCount ? (int)Com_Clamp( 1, CSM_MAX_CASCADES, r_csmCascadeCount->integer ) : CSM_MAX_CASCADES;
+	resolution = r_csmResolution ? (int)Com_Clamp( 128, 4096, r_csmResolution->integer ) : 1024;
+	splitLambda = r_csmSplitLambda ? Com_Clamp( 0.0f, 1.0f, r_csmSplitLambda->value ) : 0.65f;
+	filterMode = R_ShadowClampFilterMode( r_csmShadowFilter ? r_csmShadowFilter->integer : SHADOW_FILTER_POISSON_4 );
+	receiverBias = R_ShadowClampReceiverBias( r_csmShadowBias ? r_csmShadowBias->value : 8.0f );
+	casterDepthBias = R_ShadowClampCasterDepthBias( r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f );
+	casterSlopeBias = R_ShadowClampCasterSlopeBias( r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f );
+	casterNormalBias = R_ShadowClampCasterNormalBias( r_csmCasterNormalBias ? r_csmCasterNormalBias->value : 0.5f );
+
+	R_CSMBuildLightAxis( lightDirection, lightAxis );
+
+	tr.csm.enabled = qtrue;
+	tr.csm.cascadeCount = cascadeCount;
+	tr.csm.resolution = resolution;
+	tr.csm.maxDistance = maxDistance;
+	tr.csm.splitLambda = splitLambda;
+	tr.csm.filterMode = filterMode;
+	tr.csm.receiverBias = receiverBias;
+	tr.csm.casterDepthBias = casterDepthBias;
+	tr.csm.casterSlopeBias = casterSlopeBias;
+	tr.csm.casterNormalBias = casterNormalBias;
+	VectorCopy( lightDirection, tr.csm.lightDirection );
+
+	splitNear = zNear;
+	for ( i = 0; i < cascadeCount; i++ ) {
+		float splitFar;
+
+		if ( i == cascadeCount - 1 ) {
+			splitFar = maxDistance;
+		} else {
+			float part = (float)( i + 1 ) / (float)cascadeCount;
+			float linear = zNear + ( maxDistance - zNear ) * part;
+			float logarithmic = zNear * powf( maxDistance / zNear, part );
+
+			splitFar = linear * ( 1.0f - splitLambda ) + logarithmic * splitLambda;
+			splitFar = Com_Clamp( splitNear + 1.0f, maxDistance, splitFar );
+		}
+
+		R_CSMPlanCascade( i, splitNear, splitFar, lightAxis, resolution );
+		splitNear = splitFar;
+	}
+
+	tr.pc.c_csmCascades = cascadeCount;
+	tr.pc.c_csmResolution = resolution;
+	tr.pc.c_csmMaxDistance = (int)maxDistance;
+}
+
 
 /*
 =============
@@ -1026,6 +1225,8 @@ void R_DecomposeLitSort( unsigned sort, int *entityNum, shader_t **shader, int *
 #ifdef USE_PMLIGHT
 #define DLIGHT_SHADOW_MIN_FACE_SIZE 64
 #define DLIGHT_SHADOW_MAX_FACE_SIZE 1024
+// Under overload, reject candidates far below the strongest shadow candidate.
+#define DLIGHT_SHADOW_LOW_VALUE_FRACTION 0.0625f
 
 static int R_DlightShadowFloorPowerOfTwo( int value )
 {
@@ -1181,10 +1382,14 @@ static void R_PlanDlightShadows( void )
 	int maxLights;
 	int candidates;
 	int planned;
+	float strongestPriority;
+	float throttleFloor;
 	qboolean atlasReady;
 
 	candidates = 0;
 	planned = 0;
+	strongestPriority = 0.0f;
+	throttleFloor = 0.0f;
 	atlasReady = qfalse;
 	maxLights = r_dlightShadowMaxLights ? r_dlightShadowMaxLights->integer : 4;
 	if ( maxLights < 0 ) {
@@ -1244,9 +1449,16 @@ static void R_PlanDlightShadows( void )
 			tr.pc.c_dlightShadowSkippedDisabled++;
 			continue;
 		}
+		if ( dl->shadowPriority > strongestPriority ) {
+			strongestPriority = dl->shadowPriority;
+		}
 
 		tr.pc.c_dlightShadowCandidates++;
 		candidates++;
+	}
+
+	if ( maxLights > 0 && candidates > maxLights && strongestPriority > 0.0f ) {
+		throttleFloor = strongestPriority * DLIGHT_SHADOW_LOW_VALUE_FRACTION;
 	}
 
 	for ( pass = 0; pass < maxLights; pass++ ) {
@@ -1264,6 +1476,9 @@ static void R_PlanDlightShadows( void )
 		}
 
 		if ( bestIndex < 0 ) {
+			break;
+		}
+		if ( throttleFloor > 0.0f && bestPriority < throttleFloor ) {
 			break;
 		}
 
@@ -1285,7 +1500,37 @@ static void R_PlanDlightShadows( void )
 	}
 
 	if ( candidates > planned ) {
-		tr.pc.c_dlightShadowSkippedBudget += candidates - planned;
+		int budgetSkipped;
+		int lowValueSkipped;
+
+		budgetSkipped = 0;
+		lowValueSkipped = 0;
+		for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
+			dl = &tr.viewParms.dlights[i];
+			if ( dl->shadowPlanned || dl->shadowPriority <= 0.0f ) {
+				continue;
+			}
+			if ( throttleFloor > 0.0f && dl->shadowPriority < throttleFloor ) {
+				lowValueSkipped++;
+			} else {
+				budgetSkipped++;
+			}
+		}
+
+		tr.pc.c_dlightShadowSkippedBudget += budgetSkipped;
+		tr.pc.c_dlightShadowSkippedLowValue += lowValueSkipped;
+	}
+
+	if ( atlasReady && atlasLayout.width > 0 && atlasLayout.height > 0 && planned > 0 ) {
+		int64_t usedPixels;
+		int64_t atlasPixels;
+		int fill;
+
+		usedPixels = (int64_t)planned * DLIGHT_SHADOW_FACES *
+			atlasLayout.faceSize * atlasLayout.faceSize;
+		atlasPixels = (int64_t)atlasLayout.width * atlasLayout.height;
+		fill = (int)( usedPixels * 100 / atlasPixels );
+		tr.pc.c_dlightShadowAtlasFill = Com_Clamp( 1, 100, fill );
 	}
 }
 #endif // USE_PMLIGHT
@@ -1518,6 +1763,7 @@ static void R_GenerateDrawSurfs( void ) {
 
 	// we know the size of the clipping volume. Now set the rest of the projection matrix.
 	R_SetupProjectionZ( &tr.viewParms );
+	R_PlanCascadedShadows();
 
 	R_AddEntitySurfaces();
 

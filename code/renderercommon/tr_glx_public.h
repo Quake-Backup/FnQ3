@@ -287,7 +287,8 @@ any later version.
 #define GLX_GPU_PASS_FBO_BLIT 11
 #define GLX_GPU_PASS_COPY_SCREEN 12
 #define GLX_GPU_PASS_FLARE 13
-#define GLX_GPU_PASS_COUNT 14
+#define GLX_GPU_PASS_DLIGHT_SHADOW 14
+#define GLX_GPU_PASS_COUNT 15
 
 typedef struct glxStreamReservation_s {
 	unsigned int buffer;

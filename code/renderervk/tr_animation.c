@@ -37,13 +37,33 @@ frame.
 
 /*
 =============
+R_MDRModelBounds
+=============
+*/
+static void R_MDRModelBounds( mdrHeader_t *header, const trRefEntity_t *ent, vec3_t mins, vec3_t maxs ) {
+	mdrFrame_t	*oldFrame, *newFrame;
+	int			i, frameSize;
+
+	frameSize = (size_t)( &((mdrFrame_t *)0)->bones[ header->numBones ] );
+
+	newFrame = ( mdrFrame_t * ) ( ( byte * ) header + header->ofsFrames + frameSize * ent->e.frame);
+	oldFrame = ( mdrFrame_t * ) ( ( byte * ) header + header->ofsFrames + frameSize * ent->e.oldframe);
+
+	for (i = 0 ; i < 3 ; i++) {
+		mins[i] = oldFrame->bounds[0][i] < newFrame->bounds[0][i] ? oldFrame->bounds[0][i] : newFrame->bounds[0][i];
+		maxs[i] = oldFrame->bounds[1][i] > newFrame->bounds[1][i] ? oldFrame->bounds[1][i] : newFrame->bounds[1][i];
+	}
+}
+
+/*
+=============
 R_MDRCullModel
 =============
 */
 static int R_MDRCullModel( mdrHeader_t *header, const trRefEntity_t *ent ) {
 	vec3_t		bounds[2];
 	mdrFrame_t	*oldFrame, *newFrame;
-	int			i, frameSize;
+	int			frameSize;
 
 	frameSize = (size_t)( &((mdrFrame_t *)0)->bones[ header->numBones ] );
 	
@@ -105,11 +125,7 @@ static int R_MDRCullModel( mdrHeader_t *header, const trRefEntity_t *ent ) {
 		}
 	}
 	
-	// calculate a bounding box in the current coordinate system
-	for (i = 0 ; i < 3 ; i++) {
-		bounds[0][i] = oldFrame->bounds[0][i] < newFrame->bounds[0][i] ? oldFrame->bounds[0][i] : newFrame->bounds[0][i];
-		bounds[1][i] = oldFrame->bounds[1][i] > newFrame->bounds[1][i] ? oldFrame->bounds[1][i] : newFrame->bounds[1][i];
-	}
+	R_MDRModelBounds( header, ent, bounds[0], bounds[1] );
 
 	switch ( R_CullLocalBox( bounds ) )
 	{
@@ -186,6 +202,13 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 	int				fogNum = 0;
 	int				cull;
 	qboolean	personalModel;
+#ifdef USE_PMLIGHT
+	dlight_t		*dl;
+	int				n;
+	dlight_t		*dlights[ ARRAY_LEN( backEndData->dlights ) ];
+	int				numDlights;
+	vec3_t			bounds[2];
+#endif
 
 	header = (mdrHeader_t *) tr.currentModel->modelData;
 
@@ -243,6 +266,19 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 		R_SetupEntityLighting( &tr.refdef, ent );
 	}
 
+#ifdef USE_PMLIGHT
+	numDlights = 0;
+	if ( r_dlightMode->integer >= 2 && ( !personalModel || R_ViewPassIsPortal( &tr.viewParms ) ) ) {
+		R_MDRModelBounds( header, ent, bounds[0], bounds[1] );
+		R_TransformDlights( tr.viewParms.num_dlights, tr.viewParms.dlights, &tr.or );
+		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
+			dl = &tr.viewParms.dlights[ n ];
+			if ( !R_LightCullBounds( dl, bounds[0], bounds[1] ) )
+				dlights[ numDlights++ ] = dl;
+		}
+	}
+#endif
+
 	// fogNum?
 	fogNum = R_MDRComputeFogNum( header, ent );
 
@@ -297,6 +333,16 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 			R_AddDrawSurf( (void *)surface, shader, fogNum, 0 );
 			tr.needScreenMap |= shader->hasScreenMap;
 		}
+
+#ifdef USE_PMLIGHT
+		if ( numDlights && shader->lightingStage >= 0 ) {
+			for ( n = 0; n < numDlights; n++ ) {
+				dl = dlights[ n ];
+				tr.light = dl;
+				R_AddLitSurf( (void *)surface, shader, fogNum );
+			}
+		}
+#endif
 
 		surface = (mdrSurface_t *)( (byte *)surface + surface->ofsEnd );
 	}

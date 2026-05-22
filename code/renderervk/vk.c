@@ -1493,7 +1493,7 @@ static void vk_create_dlight_shadow_render_pass( VkFormat depth_format )
 	Com_Memset( &attachment, 0, sizeof( attachment ) );
 	attachment.format = depth_format;
 	attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-	attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 	attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 	attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 	attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -1514,14 +1514,14 @@ static void vk_create_dlight_shadow_render_pass( VkFormat depth_format )
 	deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 	deps[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 	deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-	deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 	deps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
 	deps[1].srcSubpass = 0;
 	deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
 	deps[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 	deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-	deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 	deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 	deps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
@@ -4384,7 +4384,7 @@ static void vk_alloc_persistent_pipelines( void )
 		def.state_bits = GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
 		def.depth_fade = ( r_dlightShadows && r_dlightShadows->integer &&
 			r_dlightMode && r_dlightMode->integer &&
-			vk_depth_fade_supported() ) ? 1 : 0;
+			vk_dlight_shadow_atlas_available() ) ? 1 : 0;
 		//def.shader_type = TYPE_SIGNLE_TEXTURE_LIGHTING;
 		for (i = 0; i < 3; i++) { // cullType
 			def.face_culling = i;
@@ -5232,6 +5232,15 @@ static qboolean vk_depth_format_sampled_supported( void )
 }
 
 
+static void vk_invalidate_dlight_shadow_atlas_generation( void )
+{
+	vk.dlight_shadow_generation++;
+	if ( !vk.dlight_shadow_generation ) {
+		vk.dlight_shadow_generation++;
+	}
+}
+
+
 static void vk_clear_dlight_shadow_atlas_layout( void )
 {
 	vk.dlight_shadow_atlas_width = 0;
@@ -5240,6 +5249,8 @@ static void vk_clear_dlight_shadow_atlas_layout( void )
 	vk.dlight_shadow_atlas_columns = 0;
 	vk.dlight_shadow_atlas_rows = 0;
 	vk.dlight_shadow_max_lights = 0;
+	vk.dlight_shadow_rendered = qfalse;
+	vk_invalidate_dlight_shadow_atlas_generation();
 }
 
 
@@ -5270,6 +5281,7 @@ static void vk_store_dlight_shadow_atlas_layout( const dlightShadowAtlasLayout_t
 	vk.dlight_shadow_atlas_columns = layout->columns;
 	vk.dlight_shadow_atlas_rows = layout->rows;
 	vk.dlight_shadow_max_lights = layout->maxLights;
+	vk_invalidate_dlight_shadow_atlas_generation();
 }
 
 
@@ -7806,7 +7818,7 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	VkPipelineColorBlendStateCreateInfo blend_state;
 	VkPipelineColorBlendAttachmentState attachment_blend_state;
 	VkPipelineDynamicStateCreateInfo dynamic_state;
-	VkDynamicState dynamic_state_array[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+	VkDynamicState dynamic_state_array[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BIAS };
 	VkGraphicsPipelineCreateInfo create_info;
 	VkPipeline pipeline;
 	VkPipelineShaderStageCreateInfo shader_stages[2];
@@ -8538,7 +8550,12 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	rasterization_state.frontFace = VK_FRONT_FACE_CLOCKWISE; // Q3 defaults to clockwise vertex order
 
 	 // depth bias state
-	if ( def->polygon_offset ) {
+	if ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ) {
+		rasterization_state.depthBiasEnable = VK_TRUE;
+		rasterization_state.depthBiasClamp = 0.0f;
+		rasterization_state.depthBiasConstantFactor = 0.0f;
+		rasterization_state.depthBiasSlopeFactor = 0.0f;
+	} else if ( def->polygon_offset ) {
 		rasterization_state.depthBiasEnable = VK_TRUE;
 		rasterization_state.depthBiasClamp = 0.0f;
 #ifdef USE_REVERSED_DEPTH
@@ -8754,7 +8771,7 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
 	dynamic_state.pNext = NULL;
 	dynamic_state.flags = 0;
-	dynamic_state.dynamicStateCount = ARRAY_LEN( dynamic_state_array );
+	dynamic_state.dynamicStateCount = ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ) ? ARRAY_LEN( dynamic_state_array ) : 2;
 	dynamic_state.pDynamicStates = dynamic_state_array;
 
 	create_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -9009,15 +9026,15 @@ void vk_clear_color( const vec4_t color ) {
 }
 
 
-void vk_clear_depth( qboolean clear_stencil ) {
-
+static void vk_clear_depth_internal( qboolean clear_stencil, qboolean force )
+{
 	VkClearAttachment attachment;
 	VkClearRect clear_rect[1];
 
 	if ( !vk.active )
 		return;
 
-	if ( vk_world.dirty_depth_attachment == 0 )
+	if ( !force && vk_world.dirty_depth_attachment == 0 )
 		return;
 
 	attachment.colorAttachment = 0;
@@ -9038,6 +9055,18 @@ void vk_clear_depth( qboolean clear_stencil ) {
 	clear_rect[0].layerCount = 1;
 
 	qvkCmdClearAttachments( vk.cmd->command_buffer, 1, &attachment, 1, clear_rect );
+}
+
+
+void vk_clear_depth( qboolean clear_stencil )
+{
+	vk_clear_depth_internal( clear_stencil, qfalse );
+}
+
+
+void vk_clear_depth_force( qboolean clear_stencil )
+{
+	vk_clear_depth_internal( clear_stencil, qtrue );
 }
 
 
@@ -9413,6 +9442,28 @@ void vk_bind_descriptor_sets( void )
 	vk.cmd->descriptor_set.start = ~0U;
 }
 
+static void vk_set_dlight_shadow_depth_bias( void )
+{
+	float depthBias;
+	float slopeBias;
+
+	if ( !qvkCmdSetDepthBias ) {
+		return;
+	}
+
+	depthBias = r_dlightShadowCasterDepthBias ? r_dlightShadowCasterDepthBias->value : 1.5f;
+	slopeBias = r_dlightShadowCasterSlopeBias ? r_dlightShadowCasterSlopeBias->value : 1.5f;
+	depthBias = R_ShadowClampCasterDepthBias( depthBias );
+	slopeBias = R_ShadowClampCasterSlopeBias( slopeBias );
+
+#ifdef USE_REVERSED_DEPTH
+	depthBias = -depthBias;
+	slopeBias = -slopeBias;
+#endif
+
+	qvkCmdSetDepthBias( vk.cmd->command_buffer, depthBias, 0.0f, slopeBias );
+}
+
 
 void vk_bind_pipeline( uint32_t pipeline ) {
 	VkPipeline vkpipe;
@@ -9422,6 +9473,10 @@ void vk_bind_pipeline( uint32_t pipeline ) {
 	if ( vkpipe != vk.cmd->last_pipeline ) {
 		qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkpipe );
 		vk.cmd->last_pipeline = vkpipe;
+	}
+
+	if ( vk.renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ) {
+		vk_set_dlight_shadow_depth_bias();
 	}
 
 	vk_world.dirty_depth_attachment |= ( vk.pipelines[ pipeline ].def.state_bits & GLS_DEPTHMASK_TRUE );
@@ -9590,6 +9645,7 @@ void vk_begin_main_render_pass( void )
 
 	vk.renderPassIndex = RENDER_PASS_MAIN;
 	vk.depth_fade_copied = qfalse;
+	vk.dlight_shadow_rendered = qfalse;
 
 	vk.renderWidth = glConfig.vidWidth;
 	vk.renderHeight = glConfig.vidHeight;
@@ -9696,10 +9752,7 @@ void vk_end_render_pass( void )
 
 qboolean vk_depth_fade_supported( void )
 {
-	const qboolean dlightShadows = ( r_dlightShadows && r_dlightShadows->integer &&
-		r_dlightMode && r_dlightMode->integer ) ? qtrue : qfalse;
-
-	return ( ( ( r_depthFade && r_depthFade->integer ) || R_CelShadingWorldActive() || dlightShadows ) &&
+	return ( ( ( r_depthFade && r_depthFade->integer ) || R_CelShadingWorldActive() ) &&
 		vk.maxBoundDescriptorSets >= VK_DESC_COUNT && !vk.msaaActive ) ? qtrue : qfalse;
 }
 
@@ -9718,8 +9771,15 @@ qboolean vk_dlight_shadow_atlas_available( void )
 		vk.dlight_shadow_face_size > 0 ) ? qtrue : qfalse;
 }
 
+qboolean vk_dlight_shadow_atlas_ready( void )
+{
+	return ( vk_dlight_shadow_atlas_available() && vk.dlight_shadow_rendered ) ? qtrue : qfalse;
+}
+
 qboolean vk_begin_dlight_shadow_render_pass( void )
 {
+	vk.dlight_shadow_rendered = qfalse;
+
 	if ( !vk_dlight_shadow_atlas_available() ||
 		vk.render_pass.dlight_shadow == VK_NULL_HANDLE ||
 		vk.framebuffers.dlight_shadow == VK_NULL_HANDLE ||
@@ -9733,7 +9793,7 @@ qboolean vk_begin_dlight_shadow_render_pass( void )
 	vk.renderHeight = vk.dlight_shadow_atlas_height;
 	vk.renderScaleX = 1.0f;
 	vk.renderScaleY = 1.0f;
-	vk_begin_render_pass( vk.render_pass.dlight_shadow, vk.framebuffers.dlight_shadow, qtrue,
+	vk_begin_render_pass( vk.render_pass.dlight_shadow, vk.framebuffers.dlight_shadow, qfalse,
 		vk.renderWidth, vk.renderHeight );
 
 	return qtrue;
@@ -9747,11 +9807,22 @@ void vk_end_dlight_shadow_render_pass( void )
 
 	vk_end_render_pass();
 	vk_begin_main_render_pass_load();
+	vk.dlight_shadow_rendered = qtrue;
 }
 
 int vk_dlight_shadow_atlas_height( void )
 {
 	return (int)vk.dlight_shadow_atlas_height;
+}
+
+int vk_dlight_shadow_atlas_columns( void )
+{
+	return (int)vk.dlight_shadow_atlas_columns;
+}
+
+uint32_t vk_dlight_shadow_atlas_generation( void )
+{
+	return vk.dlight_shadow_generation;
 }
 
 

@@ -162,6 +162,152 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
         self.assertIn('set r_speeds "7"', cfg)
         self.assertEqual(screenshots[0]["baselineKey"], "vk-modern-map1-q3dm1-vulkan")
 
+    def test_modern_gate_requires_dlight_shadow_scene(self) -> None:
+        manifest = {
+            "gate": "vk-modern",
+            "dryRun": False,
+            "demos": ["demo1"],
+            "runs": [
+                {
+                    "type": "map-screenshots",
+                    "status": "passed",
+                    "screenshots": [{"name": "shot", "found": True}],
+                    "vkinfo": {
+                        "failures": [],
+                        "gpuTimings": [{"from": "a", "to": "b", "msec": 0.1}],
+                    },
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "demo": "demo1",
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+            ],
+        }
+
+        failures = vk_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("dlight shadow scene run" in failure for failure in failures))
+
+    def test_dlight_shadow_config_uses_startup_cvars_and_test_lights(self) -> None:
+        class Args:
+            profile = "vk-modern"
+            startup_wait = 30
+            map_wait = 180
+            screenshot_wait = 8
+            perf_sample_wait = 4
+            no_perf_samples = False
+
+        cvars = vk_runtime_sweep.dlight_shadow_scene_cvars({"r_fbo": "1"})
+        startup = vk_runtime_sweep.launch_cvars(cvars)
+        scenes = vk_runtime_sweep.dlight_shadow_evidence_scenes()
+        cfg, screenshots = vk_runtime_sweep.build_dlight_shadow_cfg(
+            Args(),
+            cvars,
+            scenes,
+            "run",
+        )
+
+        self.assertEqual(startup["r_dlightShadows"], "1")
+        self.assertEqual(startup["r_dlightShadowMaxLights"], "8")
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN world-geometry", cfg)
+        self.assertIn("devmap q3dm6", cfg)
+        self.assertIn("devmap q3dm11", cfg)
+        self.assertIn("r_dlightTest 8 720 224 48 0", cfg)
+        self.assertIn("r_dlightTest 16 900 256 72 0", cfg)
+        self.assertIn('set r_speeds "4"', cfg)
+        self.assertTrue(all(shot["shadowScene"] for shot in screenshots))
+        self.assertEqual(
+            vk_runtime_sweep.dlight_shadow_scene_categories(screenshots),
+            set(vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES),
+        )
+        self.assertTrue(
+            any(
+                shot["baselineKey"] == "vk-modern-dlight-shadows-stress-light-budget-q3dm6-vulkan"
+                for shot in screenshots
+            )
+        )
+
+    def test_dlight_shadow_log_analysis_extracts_active_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "vk.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "DLIGHT_SHADOW_SCENE_BEGIN world-geometry",
+                        "dlight shadows plan:2/4 cand:3 atlas:1024x512/128 fill:75% "
+                        "render lights:2 faces:10 batches:5 draws:5 surfs:20 cpu:1ms",
+                        "DLIGHT_SHADOW_SCENE_END world-geometry",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            analysis = vk_runtime_sweep.analyze_dlight_shadow_log(log)
+
+        self.assertTrue(analysis["found"])
+        self.assertEqual(analysis["max"]["planned"], 2)
+        self.assertEqual(analysis["max"]["renderLights"], 2)
+        self.assertEqual(analysis["scenes"]["world-geometry"]["max"]["planned"], 2)
+
+    def test_modern_gate_requires_dlight_shadow_category_evidence(self) -> None:
+        screenshots = [
+            {
+                "name": f"shot-{category}",
+                "found": True,
+                "shadowScene": True,
+                "scene": category,
+                "evidenceCategories": [category],
+            }
+            for category in vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES
+        ]
+        screenshots = [
+            shot for shot in screenshots
+            if shot["evidenceCategories"] != ["stress-light-budget"]
+        ]
+        manifest = {
+            "gate": "vk-modern",
+            "dryRun": False,
+            "demos": ["demo1"],
+            "runs": [
+                {
+                    "type": "map-screenshots",
+                    "status": "passed",
+                    "screenshots": [{"name": "shot", "found": True}],
+                    "vkinfo": {
+                        "failures": [],
+                        "gpuTimings": [{"from": "a", "to": "b", "msec": 0.1}],
+                    },
+                },
+                {
+                    "type": "dlight-shadow-scenes",
+                    "status": "passed",
+                    "screenshots": screenshots,
+                    "dlightShadow": {
+                        "found": True,
+                        "max": {"planned": 2, "renderLights": 2},
+                        "scenes": {
+                            str(shot["scene"]): {
+                                "max": {"planned": 2, "renderLights": 2}
+                            }
+                            for shot in screenshots
+                        },
+                    },
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "demo": "demo1",
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+            ],
+        }
+
+        failures = vk_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("stress-light-budget" in failure for failure in failures))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -78,6 +78,8 @@ static GLuint dlightShadowAtlasTexture;
 static GLuint dlightShadowAtlasFbo;
 static dlightShadowAtlasLayout_t dlightShadowAtlasLayout;
 static qboolean depthFadeCopied;
+static qboolean dlightShadowAtlasRendered;
+static unsigned int dlightShadowAtlasGeneration;
 
 static frameBuffer_t frameBufferMS;
 static frameBuffer_t frameBuffers[ FBO_COUNT ];
@@ -1021,31 +1023,33 @@ static float ARB_ComputeTextureIntensityScale( const image_t *image )
 	return 1.0f;
 }
 
-static qboolean ARB_DlightShadowParams( const dlight_t *dl, vec4_t lightScreen, float *strength )
+static qboolean ARB_DlightShadowParams( const dlight_t *dl, vec4_t shadowAtlas, vec4_t shadowDepth, float *strength )
 {
 #ifdef USE_FBO
-	vec4_t eye, clip, normalized, window;
+	int atlasWidth;
+	int atlasHeight;
+	int columns;
+	float zNear;
+	float zFar;
+	float depth;
 	float s;
 
-	if ( !dl || dl->linear || !dl->shadowPlanned || !dlightShadowProgramsCompiled || !FBO_DlightShadowsReady() ||
+	if ( !dl || dl->linear || !dl->shadowPlanned || dl->shadowAtlasFaceSize <= 0 ||
+		dl->shadowAtlasBaseFace < 0 || !dlightShadowProgramsCompiled || !FBO_DlightShadowsReady() ||
+		backEnd.currentEntity != &tr.worldEntity ||
 		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
-		backEnd.viewParms.zFar <= 0.0f || !r_znear || r_znear->value <= 0.0f ||
-		glConfig.vidWidth <= 0 || glConfig.vidHeight <= 0 ) {
+		backEnd.viewParms.zFar <= 0.0f ) {
 		return qfalse;
 	}
 
-	R_TransformModelToClip( dl->transformed, backEnd.or.modelMatrix, backEnd.viewParms.projectionMatrix, eye, clip );
-	if ( clip[3] <= 0.0f ) {
+	atlasWidth = FBO_DlightShadowAtlasWidth();
+	atlasHeight = FBO_DlightShadowAtlasHeight();
+	if ( atlasWidth <= 0 || atlasHeight <= 0 ) {
 		return qfalse;
 	}
 
-	R_TransformClipToWindow( clip, &backEnd.viewParms, normalized, window );
-	lightScreen[0] = ( backEnd.viewParms.viewportX + window[0] ) / (float)glConfig.vidWidth;
-	lightScreen[1] = ( backEnd.viewParms.viewportY + window[1] ) / (float)glConfig.vidHeight;
-	lightScreen[2] = Com_Clamp( 0.0f, 1.0f, normalized[2] );
-	lightScreen[3] = 1.0f;
-
-	if ( normalized[2] < 0.0f || normalized[2] > 1.0f ) {
+	columns = atlasWidth / dl->shadowAtlasFaceSize;
+	if ( columns <= 0 ) {
 		return qfalse;
 	}
 
@@ -1054,11 +1058,46 @@ static qboolean ARB_DlightShadowParams( const dlight_t *dl, vec4_t lightScreen, 
 		return qfalse;
 	}
 
+	zNear = 1.0f;
+	zFar = MAX( dl->radius, 64.0f );
+	depth = MAX( zFar - zNear, 1.0f );
+
+	shadowAtlas[0] = (float)dl->shadowAtlasFaceSize;
+	shadowAtlas[1] = (float)dl->shadowAtlasBaseFace;
+	shadowAtlas[2] = (float)columns;
+	shadowAtlas[3] = (float)atlasHeight;
+
+	shadowDepth[0] = zFar / depth;
+	shadowDepth[1] = ( zFar * zNear ) / depth;
+	shadowDepth[2] = zNear;
+	shadowDepth[3] = zFar;
+
 	*strength = s;
 	return qtrue;
 #else
 	return qfalse;
 #endif
+}
+
+static void ARB_DlightShadowFilterOffsets( float *inner, float *outer )
+{
+	int filter = r_dlightShadowFilter ? r_dlightShadowFilter->integer : SHADOW_FILTER_POISSON_4;
+
+	filter = R_ShadowClampFilterMode( filter );
+	switch ( filter ) {
+		case SHADOW_FILTER_HARD:
+			*inner = 0.0f;
+			*outer = 0.0f;
+			break;
+		case SHADOW_FILTER_PCF_2X2:
+			*inner = 0.5f;
+			*outer = 0.5f;
+			break;
+		default:
+			*inner = 0.25f;
+			*outer = 0.75f;
+			break;
+	}
 }
 
 void ARB_SetupLightParams( const shaderStage_t *pStage )
@@ -1070,11 +1109,13 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	qboolean dlightShadow;
 	const dlight_t *dl;
 	vec3_t lightRGB;
-	vec4_t lightScreen = { 0.0f, 0.0f, 0.0f, 0.0f };
+	vec4_t shadowAtlas = { 0.0f, 0.0f, 0.0f, 0.0f };
+	vec4_t shadowDepth = { 0.0f, 0.0f, 0.0f, 0.0f };
 	float radius;
 	float textureScale;
+	float shadowFilterInner = 0.0f;
+	float shadowFilterOuter = 0.0f;
 	float shadowStrength = 0.0f;
-	float zNear;
 
 	tess.dlightUpdateParams = qfalse;
 	tess.cullType = tess.shader->cullType;
@@ -1095,7 +1136,7 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	fp = NULL;
 
 	vertexProgram = DLIGHT_VERTEX;
-	dlightShadow = ARB_DlightShadowParams( dl, lightScreen, &shadowStrength );
+	dlightShadow = ARB_DlightShadowParams( dl, shadowAtlas, shadowDepth, &shadowStrength );
 
 	if ( dlightShadow && dl->linear ) {
 		fragmentProgram = (tess.shader->cullType == CT_TWO_SIDED) ? DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT : DLIGHT_SHADOW_LINEAR_FRAGMENT;
@@ -1132,15 +1173,18 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 6,
 		r_dlightFalloff ? r_dlightFalloff->value : 1.0f, 0.0f, 0.0f, 0.0f );
 
-	zNear = ( r_znear && r_znear->value > 0.0f ) ? r_znear->value : 1.0f;
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 7,
-		1.0f / (float)glConfig.vidWidth, 1.0f / (float)glConfig.vidHeight,
+		FBO_DlightShadowAtlasWidth() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasWidth() : 0.0f,
+		FBO_DlightShadowAtlasHeight() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasHeight() : 0.0f,
 		dlightShadow ? shadowStrength : 0.0f,
-		r_dlightShadowBias ? r_dlightShadowBias->value : 8.0f );
-	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 8,
-		lightScreen[0], lightScreen[1], lightScreen[2], dlightShadow ? 1.0f : 0.0f );
-	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 9,
-		backEnd.viewParms.zFar / zNear, backEnd.viewParms.zFar, 0.0f, 0.0f );
+		R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 8.0f ) );
+	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 8, shadowAtlas );
+	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 9, shadowDepth );
+	if ( dlightShadow ) {
+		ARB_DlightShadowFilterOffsets( &shadowFilterInner, &shadowFilterOuter );
+	}
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 10,
+		shadowFilterInner, shadowFilterOuter, 0.0f, 0.0f );
 
 	if ( dlightShadow ) {
 #ifdef USE_FBO
@@ -1415,49 +1459,113 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	if ( shadow ) {
 		strcat( program,
 		"PARAM dlightShadow = program.local[7]; \n"
-		"PARAM lightScreen = program.local[8]; \n"
-		"PARAM depthInfo = program.local[9]; \n"
+		"PARAM shadowAtlas = program.local[8]; \n"
+		"PARAM shadowDepth = program.local[9]; \n"
+		"PARAM shadowFilter = program.local[10]; \n"
 		"PARAM one = { 1.0, 1.0, 1.0, 1.0 }; \n"
+		"PARAM half = { 0.5, 0.5, 0.5, 0.5 }; \n"
+		"PARAM two = { 2.0, 2.0, 2.0, 2.0 }; \n"
+		"PARAM faceConst = { 3.0, 5.0, 0.0001, 0.0 }; \n"
 		"PARAM eps = { 0.00001, 0.0, 0.0, 0.0 }; \n"
-		"PARAM shadowSteps = { 0.5, 0.0, 0.0, 0.0 }; \n"
-		"TEMP screenTC, shadowRay, sampleTC, depthTap, denom, edgeDist, absRay, rayLimit, sampleT; \n"
-		"TEMP sceneLinear, fragLinear, lightLinear, rayLinear, receiverLinear, occ, shadowFactor; \n"
-		"MUL screenTC.xy, fragment.position.xy, dlightShadow.xy; \n"
-		"SUB shadowRay.xy, lightScreen.xy, screenTC.xy; \n"
-		"ABS absRay.xy, shadowRay.xy; \n"
-		"MAX absRay.xy, absRay.xy, eps.x; \n"
-		"SUB edgeDist.xy, one.xy, screenTC.xy; \n"
-		"SGE rayLimit.xy, shadowRay.xy, eps.y; \n"
-		"LRP edgeDist.xy, rayLimit.xy, edgeDist.xy, screenTC.xy; \n"
-		"RCP rayLimit.z, absRay.x; \n"
-		"RCP rayLimit.w, absRay.y; \n"
-		"MUL edgeDist.xy, edgeDist.xy, rayLimit.zw; \n"
-		"MIN rayLimit.x, edgeDist.x, edgeDist.y; \n"
-		"MIN rayLimit.x, rayLimit.x, one.x; \n"
-		"MAX rayLimit.x, rayLimit.x, eps.y; \n"
-		"SUB denom.y, depthInfo.x, one.x; \n"
-		"MAD denom.x, fragment.position.z, denom.y, one.x; \n"
-		"RCP fragLinear.x, denom.x; \n"
-		"MUL fragLinear.x, fragLinear.x, depthInfo.y; \n"
-		"MAD denom.x, lightScreen.z, denom.y, one.x; \n"
-		"RCP lightLinear.x, denom.x; \n"
-		"MUL lightLinear.x, lightLinear.x, depthInfo.y; \n"
-		"MUL sampleT.x, rayLimit.x, shadowSteps.x; \n"
-		"MAD sampleTC.xy, shadowRay.xy, sampleT.x, screenTC.xy; \n"
-		"TEX depthTap, sampleTC, texture[2], 2D; \n"
-		"MAD denom.x, depthTap.x, denom.y, one.x; \n"
-		"RCP sceneLinear.x, denom.x; \n"
-		"MUL sceneLinear.x, sceneLinear.x, depthInfo.y; \n"
-		"SUB rayLinear.x, lightLinear.x, fragLinear.x; \n"
-		"MAD rayLinear.x, rayLinear.x, sampleT.x, fragLinear.x; \n"
-		"SUB rayLinear.x, rayLinear.x, dlightShadow.w; \n"
-		"SUB receiverLinear.x, fragLinear.x, dlightShadow.w; \n"
-		"SLT occ.x, sceneLinear.x, rayLinear.x; \n"
-		"SLT occ.z, sceneLinear.x, receiverLinear.x; \n"
-		"MUL occ.x, occ.x, occ.z; \n"
+		"TEMP shadowVec, absVec, masks, signMask, faceInfo, local, tile, depthTap, occ, shadowFactor; \n"
+		"MOV shadowVec.xyz, -dnLV; \n"
+		"ABS absVec.xyz, shadowVec; \n"
+		"MAX faceInfo.x, absVec.x, absVec.y; \n"
+		"MAX faceInfo.x, faceInfo.x, absVec.z; \n"
+		"MAX faceInfo.x, faceInfo.x, faceConst.z; \n"
+		"DP3 local.x, nn, lv; \n"
+		"ABS local.x, local.x; \n"
+		"MAD local.x, local.x, -half.x, one.x; \n"
+		"MUL local.x, local.x, dlightShadow.w; \n"
+		"ADD faceInfo.y, faceInfo.x, -local.x; \n"
+		"MAX faceInfo.y, faceInfo.y, shadowDepth.z; \n"
+		"RCP faceInfo.z, faceInfo.x; \n"
+		"SGE masks.x, absVec.x, absVec.y; \n"
+		"SGE masks.y, absVec.x, absVec.z; \n"
+		"MUL masks.x, masks.x, masks.y; \n"
+		"SGE masks.y, absVec.y, absVec.z; \n"
+		"SUB masks.z, one.x, masks.x; \n"
+		"MUL masks.y, masks.z, masks.y; \n"
+		"SUB masks.z, masks.z, masks.y; \n"
+		"SGE signMask.xyz, shadowVec, eps.y; \n"
+		"MAD faceInfo.w, signMask.x, -one.x, one.x; \n"
+		"MAD local.z, signMask.y, -one.x, faceConst.x; \n"
+		"MAD local.w, signMask.z, -one.x, faceConst.y; \n"
+		"MUL faceInfo.w, faceInfo.w, masks.x; \n"
+		"MAD faceInfo.w, local.z, masks.y, faceInfo.w; \n"
+		"MAD faceInfo.w, local.w, masks.z, faceInfo.w; \n"
+		"MAD signMask.w, signMask.x, -two.x, one.x; \n"
+		"MUL local.x, shadowVec.y, signMask.w; \n"
+		"MAD local.x, local.x, faceInfo.z, one.x; \n"
+		"MUL local.x, local.x, half.x; \n"
+		"MAD signMask.w, signMask.y, two.x, -one.x; \n"
+		"MUL local.y, shadowVec.x, signMask.w; \n"
+		"MAD local.y, local.y, faceInfo.z, one.x; \n"
+		"MUL local.y, local.y, half.x; \n"
+		"MUL local.z, shadowVec.y, -faceInfo.z; \n"
+		"ADD local.z, local.z, one.x; \n"
+		"MUL local.z, local.z, half.x; \n"
+		"MUL tile.x, local.x, masks.x; \n"
+		"MAD tile.x, local.y, masks.y, tile.x; \n"
+		"MAD tile.x, local.z, masks.z, tile.x; \n"
+		"MAD local.x, shadowVec.z, faceInfo.z, one.x; \n"
+		"MUL local.x, local.x, half.x; \n"
+		"MAD signMask.w, signMask.z, -two.x, one.x; \n"
+		"MUL local.y, shadowVec.x, signMask.w; \n"
+		"MAD local.y, local.y, faceInfo.z, one.x; \n"
+		"MUL local.y, local.y, half.x; \n"
+		"ADD masks.w, masks.x, masks.y; \n"
+		"MUL tile.y, local.x, masks.w; \n"
+		"MAD tile.y, local.y, masks.z, tile.y; \n"
+		"RCP local.z, shadowAtlas.x; \n"
+		"SUB local.w, one.x, local.z; \n"
+		"MAX tile.xy, tile.xy, local.zzzz; \n"
+		"MIN tile.xy, tile.xy, local.wwww; \n"
+		"ADD faceInfo.w, faceInfo.w, shadowAtlas.y; \n"
+		"RCP local.z, shadowAtlas.z; \n"
+		"MUL local.w, faceInfo.w, local.z; \n"
+		"FLR tile.z, local.w; \n"
+		"MUL local.z, tile.z, shadowAtlas.z; \n"
+		"SUB tile.w, faceInfo.w, local.z; \n"
+		"MUL local.x, tile.w, shadowAtlas.x; \n"
+		"ADD local.y, tile.z, one.x; \n"
+		"MUL local.y, local.y, shadowAtlas.x; \n"
+		"SUB local.y, shadowAtlas.w, local.y; \n"
+		"MAD tile.x, tile.x, shadowAtlas.x, local.x; \n"
+		"MAD tile.y, tile.y, shadowAtlas.x, local.y; \n"
+		"MUL tile.xy, tile.xy, dlightShadow.xy; \n"
+		"RCP occ.y, faceInfo.y; \n"
+		"MUL occ.y, occ.y, shadowDepth.y; \n"
+		"SUB occ.y, shadowDepth.x, occ.y; \n"
+		"MUL local.x, dlightShadow.x, shadowFilter.x; \n"
+		"MUL local.y, dlightShadow.y, shadowFilter.x; \n"
+		"MUL masks.z, dlightShadow.x, shadowFilter.y; \n"
+		"MUL masks.w, dlightShadow.y, shadowFilter.y; \n"
+		"MOV occ.x, eps.y; \n"
+		"SUB local.z, tile.x, masks.z; \n"
+		"SUB local.w, tile.y, local.y; \n"
+		"TEX depthTap, local.zwzw, texture[2], 2D; \n"
+		"SLT occ.z, depthTap.x, occ.y; \n"
+		"ADD occ.x, occ.x, occ.z; \n"
+		"ADD local.z, tile.x, local.x; \n"
+		"SUB local.w, tile.y, masks.w; \n"
+		"TEX depthTap, local.zwzw, texture[2], 2D; \n"
+		"SLT occ.z, depthTap.x, occ.y; \n"
+		"ADD occ.x, occ.x, occ.z; \n"
+		"SUB local.z, tile.x, local.x; \n"
+		"ADD local.w, tile.y, masks.w; \n"
+		"TEX depthTap, local.zwzw, texture[2], 2D; \n"
+		"SLT occ.z, depthTap.x, occ.y; \n"
+		"ADD occ.x, occ.x, occ.z; \n"
+		"ADD local.z, tile.x, masks.z; \n"
+		"ADD local.w, tile.y, local.y; \n"
+		"TEX depthTap, local.zwzw, texture[2], 2D; \n"
+		"SLT occ.z, depthTap.x, occ.y; \n"
+		"ADD occ.x, occ.x, occ.z; \n"
+		"MUL occ.x, occ.x, half.x; \n"
+		"MUL occ.x, occ.x, half.x; \n"
 		"MUL occ.x, occ.x, dlightShadow.z; \n"
 		"SUB shadowFactor.x, one.x, occ.x; \n"
-		"MAX shadowFactor.x, shadowFactor.x, shadowSteps.w; \n"
 		"MUL light, light, shadowFactor.x; \n" );
 	}
 
@@ -2406,6 +2514,15 @@ static void FBO_CleanBloom( void )
 }
 
 
+static void FBO_InvalidateDlightShadowAtlasGeneration( void )
+{
+	dlightShadowAtlasGeneration++;
+	if ( !dlightShadowAtlasGeneration ) {
+		dlightShadowAtlasGeneration++;
+	}
+}
+
+
 static void FBO_CleanDlightShadowAtlas( void )
 {
 	if ( dlightShadowAtlasFbo )
@@ -2421,6 +2538,8 @@ static void FBO_CleanDlightShadowAtlas( void )
 		dlightShadowAtlasTexture = 0;
 	}
 	Com_Memset( &dlightShadowAtlasLayout, 0, sizeof( dlightShadowAtlasLayout ) );
+	dlightShadowAtlasRendered = qfalse;
+	FBO_InvalidateDlightShadowAtlasGeneration();
 }
 
 
@@ -2522,6 +2641,7 @@ static qboolean FBO_CreateDlightShadowAtlas( void )
 
 	qglClear( GL_DEPTH_BUFFER_BIT );
 	dlightShadowAtlasLayout = layout;
+	FBO_InvalidateDlightShadowAtlasGeneration();
 	FBO_Bind( GL_FRAMEBUFFER, 0 );
 	qglDrawBuffer( GL_BACK );
 	qglReadBuffer( GL_BACK );
@@ -3053,7 +3173,7 @@ qboolean FBO_DepthFadeReady( void )
 qboolean FBO_DlightShadowsAvailable( void )
 {
 #ifdef USE_PMLIGHT
-	return ( FBO_DepthTextureAvailable() &&
+	return ( FBO_DlightShadowAtlasAvailable() &&
 		dlightShadowProgramsCompiled &&
 		r_dlightMode && r_dlightMode->integer &&
 		r_dlightShadows && r_dlightShadows->integer &&
@@ -3071,6 +3191,8 @@ qboolean FBO_DlightShadowAtlasAvailable( void )
 
 qboolean FBO_BeginDlightShadowAtlas( void )
 {
+	dlightShadowAtlasRendered = qfalse;
+
 	if ( !FBO_DlightShadowAtlasAvailable() ) {
 		return qfalse;
 	}
@@ -3081,7 +3203,6 @@ qboolean FBO_BeginDlightShadowAtlas( void )
 	qglViewport( 0, 0, dlightShadowAtlasLayout.width, dlightShadowAtlasLayout.height );
 	qglScissor( 0, 0, dlightShadowAtlasLayout.width, dlightShadowAtlasLayout.height );
 	GL_State( GLS_DEFAULT );
-	qglClear( GL_DEPTH_BUFFER_BIT );
 
 	return qtrue;
 }
@@ -3093,6 +3214,12 @@ void FBO_EndDlightShadowAtlas( void )
 		qglDrawBuffer( GL_COLOR_ATTACHMENT0 );
 		qglReadBuffer( GL_COLOR_ATTACHMENT0 );
 	}
+	dlightShadowAtlasRendered = qtrue;
+}
+
+int FBO_DlightShadowAtlasWidth( void )
+{
+	return dlightShadowAtlasLayout.width;
 }
 
 int FBO_DlightShadowAtlasHeight( void )
@@ -3100,9 +3227,14 @@ int FBO_DlightShadowAtlasHeight( void )
 	return dlightShadowAtlasLayout.height;
 }
 
+unsigned int FBO_DlightShadowAtlasGeneration( void )
+{
+	return dlightShadowAtlasGeneration;
+}
+
 qboolean FBO_DlightShadowsReady( void )
 {
-	return ( FBO_DlightShadowsAvailable() && depthFadeCopied ) ? qtrue : qfalse;
+	return ( FBO_DlightShadowsAvailable() && dlightShadowAtlasRendered ) ? qtrue : qfalse;
 }
 
 void FBO_ResetDepthFade( void )
@@ -3138,15 +3270,6 @@ void FBO_CopyDepthFade( void )
 	FBO_CopyDepthTexture();
 }
 
-void FBO_CopyDlightShadowMap( void )
-{
-	if ( !FBO_DlightShadowsAvailable() ) {
-		return;
-	}
-
-	FBO_CopyDepthTexture();
-}
-
 void FBO_BindDepthFadeTexture( int texUnit )
 {
 	GL_BindTexture( texUnit, FBO_DepthFadeReady() ? depthFadeTexture : 0 );
@@ -3154,7 +3277,7 @@ void FBO_BindDepthFadeTexture( int texUnit )
 
 void FBO_BindDlightShadowTexture( int texUnit )
 {
-	GL_BindTexture( texUnit, FBO_DlightShadowsReady() ? depthFadeTexture : 0 );
+	GL_BindTexture( texUnit, FBO_DlightShadowsReady() ? dlightShadowAtlasTexture : 0 );
 }
 
 void FBO_DrawWorldCelOutline( void )

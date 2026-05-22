@@ -1310,8 +1310,8 @@ static void RB_SetDlightShadowView( const viewParms_t *shadowParms )
 static void RB_SetDlightShadowCasterDepthBias( qboolean enable )
 {
 	if ( enable ) {
-		float slopeBias = r_dlightShadowCasterSlopeBias ? r_dlightShadowCasterSlopeBias->value : 1.5f;
-		float depthBias = r_dlightShadowCasterDepthBias ? r_dlightShadowCasterDepthBias->value : 1.5f;
+		float slopeBias = r_dlightShadowCasterSlopeBias ? r_dlightShadowCasterSlopeBias->value : 1.0f;
+		float depthBias = r_dlightShadowCasterDepthBias ? r_dlightShadowCasterDepthBias->value : 1.0f;
 
 		slopeBias = R_ShadowClampCasterSlopeBias( slopeBias );
 		depthBias = R_ShadowClampCasterDepthBias( depthBias );

@@ -9451,8 +9451,8 @@ static void vk_set_dlight_shadow_depth_bias( void )
 		return;
 	}
 
-	depthBias = r_dlightShadowCasterDepthBias ? r_dlightShadowCasterDepthBias->value : 1.5f;
-	slopeBias = r_dlightShadowCasterSlopeBias ? r_dlightShadowCasterSlopeBias->value : 1.5f;
+	depthBias = r_dlightShadowCasterDepthBias ? r_dlightShadowCasterDepthBias->value : 1.0f;
+	slopeBias = r_dlightShadowCasterSlopeBias ? r_dlightShadowCasterSlopeBias->value : 1.0f;
 	depthBias = R_ShadowClampCasterDepthBias( depthBias );
 	slopeBias = R_ShadowClampCasterSlopeBias( slopeBias );
 

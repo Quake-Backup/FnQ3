@@ -99,7 +99,10 @@ float DlightShadowFactor()
 	float zFar = depthFadeInfo.y;
 	float depthRange = max(zFar - zNear, 1.0);
 	float receiverNDotL = clamp(abs(dot(normalize(N), normalize(L.xyz))), 0.0, 1.0);
-	float receiverBias = depthFadeInfo.z * (1.0 - 0.5 * receiverNDotL);
+	float receiverSlope = 1.0 - receiverNDotL;
+	float receiverBias = depthFadeInfo.z * (0.125 + 0.375 * receiverSlope);
+	float texelWorldBias = max(2.0 * faceDist / faceSize, 0.125);
+	receiverBias = min(receiverBias, texelWorldBias);
 	float biasedDist = max(faceDist - receiverBias, zNear);
 	float forwardDepth = zFar / depthRange - (zFar * zNear) / (depthRange * biasedDist);
 	float reversedDepth = (zFar * zNear) / (depthRange * biasedDist) - zNear / depthRange;

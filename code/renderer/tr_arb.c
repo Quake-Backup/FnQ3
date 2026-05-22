@@ -1115,6 +1115,7 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	float textureScale;
 	float shadowFilterInner = 0.0f;
 	float shadowFilterOuter = 0.0f;
+	float shadowReceiverBiasScale = 0.0f;
 	float shadowStrength = 0.0f;
 
 	tess.dlightUpdateParams = qfalse;
@@ -1137,6 +1138,10 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 
 	vertexProgram = DLIGHT_VERTEX;
 	dlightShadow = ARB_DlightShadowParams( dl, shadowAtlas, shadowDepth, &shadowStrength );
+	if ( dlightShadow && shadowAtlas[0] > 0.0f ) {
+		shadowReceiverBiasScale =
+			R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0];
+	}
 
 	if ( dlightShadow && dl->linear ) {
 		fragmentProgram = (tess.shader->cullType == CT_TWO_SIDED) ? DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT : DLIGHT_SHADOW_LINEAR_FRAGMENT;
@@ -1177,7 +1182,7 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 		FBO_DlightShadowAtlasWidth() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasWidth() : 0.0f,
 		FBO_DlightShadowAtlasHeight() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasHeight() : 0.0f,
 		dlightShadow ? shadowStrength : 0.0f,
-		R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 8.0f ) );
+		shadowReceiverBiasScale );
 	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 8, shadowAtlas );
 	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 9, shadowDepth );
 	if ( dlightShadow ) {
@@ -1476,7 +1481,9 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 		"DP3 local.x, nn, lv; \n"
 		"ABS local.x, local.x; \n"
 		"MAD local.x, local.x, -half.x, one.x; \n"
+		"MUL local.x, local.x, half.x; \n"
 		"MUL local.x, local.x, dlightShadow.w; \n"
+		"MUL local.x, local.x, faceInfo.x; \n"
 		"ADD faceInfo.y, faceInfo.x, -local.x; \n"
 		"MAX faceInfo.y, faceInfo.y, shadowDepth.z; \n"
 		"RCP faceInfo.z, faceInfo.x; \n"
@@ -1519,8 +1526,10 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 		"MAD tile.y, local.y, masks.z, tile.y; \n"
 		"RCP local.z, shadowAtlas.x; \n"
 		"SUB local.w, one.x, local.z; \n"
-		"MAX tile.xy, tile.xy, local.zzzz; \n"
-		"MIN tile.xy, tile.xy, local.wwww; \n"
+		"MAX tile.x, tile.x, local.z; \n"
+		"MAX tile.y, tile.y, local.z; \n"
+		"MIN tile.x, tile.x, local.w; \n"
+		"MIN tile.y, tile.y, local.w; \n"
 		"ADD faceInfo.w, faceInfo.w, shadowAtlas.y; \n"
 		"RCP local.z, shadowAtlas.z; \n"
 		"MUL local.w, faceInfo.w, local.z; \n"
@@ -1533,7 +1542,8 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 		"SUB local.y, shadowAtlas.w, local.y; \n"
 		"MAD tile.x, tile.x, shadowAtlas.x, local.x; \n"
 		"MAD tile.y, tile.y, shadowAtlas.x, local.y; \n"
-		"MUL tile.xy, tile.xy, dlightShadow.xy; \n"
+		"MUL tile.x, tile.x, dlightShadow.x; \n"
+		"MUL tile.y, tile.y, dlightShadow.y; \n"
 		"RCP occ.y, faceInfo.y; \n"
 		"MUL occ.y, occ.y, shadowDepth.y; \n"
 		"SUB occ.y, shadowDepth.x, occ.y; \n"

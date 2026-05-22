@@ -370,7 +370,7 @@ static void RB_ApplyDlightShadowCasterNormalBias( void )
 		return;
 	}
 
-	normalBias = r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.5f;
+	normalBias = r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.25f;
 	normalBias = Com_Clamp( 0.0f, 8.0f, normalBias );
 	if ( normalBias <= 0.0f ) {
 		return;
@@ -418,7 +418,7 @@ static void RB_ApplyDlightShadowCasterNormalBias( void )
 			continue;
 		}
 		lightSide = DotProduct( normalWorld, lightToVertex );
-		normalScale = 1.0f - 0.65f * Com_Clamp( 0.0f, 1.0f, fabsf( lightSide ) );
+		normalScale = 0.25f + 0.50f * ( 1.0f - Com_Clamp( 0.0f, 1.0f, fabsf( lightSide ) ) );
 		scale = ( normalBias * normalScale ) / normalLength;
 		if ( lightSide < 0.0f ) {
 			scale = -scale;
@@ -1392,7 +1392,7 @@ static qboolean VK_DlightShadowParams( const dlight_t *dl, vec4_t shadowInfo, ve
 
 	shadowInfo[0] = zNear;
 	shadowInfo[1] = zFar;
-	shadowInfo[2] = R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 8.0f );
+	shadowInfo[2] = R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f );
 	shadowInfo[3] = 0.0f;
 	shadowAtlas[0] = (float)dl->shadowAtlasFaceSize;
 	shadowAtlas[1] = (float)dl->shadowAtlasBaseFace;

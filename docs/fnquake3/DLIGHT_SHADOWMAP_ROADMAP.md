@@ -51,6 +51,9 @@ As of May 22, 2026:
   `r_dlightShadowFilter` modes for per-face point-light lookups on world
   receivers: hard shadows, 2x2 PCF, and the default four-tap poisson-style PCF.
   The temporary screen-space fallback has been removed.
+- `[x]` GLx shadow sampling uses ARB-fragment-program-safe scalar atlas
+  coordinate clamps/scales so drivers that reject short source swizzles compile
+  the dlight shadow programs instead of disabling `r_dlightShadows`.
 - `[x]` Brush-model casters are rendered into the atlas from lit-surface brush
   model entries.
 - `[x]` Entity-model casters are rendered into the atlas from lit-surface MD3,
@@ -60,8 +63,9 @@ As of May 22, 2026:
   skipped before viewport/scissor setup or draw submission.
 - `[x]` GLx and Vulkan apply tuned dlight-shadow bias: lower default
   slope/constant caster depth bias during atlas writes, angle-aware caster
-  normal offset before CPU tessellation is submitted, and angle-aware receiver
-  bias during atlas sampling.
+  normal offset before CPU tessellation is submitted, and angle-aware,
+  texel-scaled receiver bias during atlas sampling so wall-contact shadows do
+  not detach at corners.
 - `[x]` Basic 2x2 PCF filtering has been upgraded to selectable GLx and Vulkan
   dlight shadow-map filters: hard shadows, 2x2 PCF, and default four-tap
   poisson-style PCF. CSM work remains a follow-up task.
@@ -161,7 +165,7 @@ reviewed evidence makes the default-enable release gate ready.
 - `[x]` Add 2x2 PCF.
 - `[x]` Add a small rotated or poisson-style PCF kernel.
 - `[x]` Tune normal/slope bias and receiver bias to reduce acne without
-  peter-panning.
+  peter-panning, including texel-scaled receiver bias for contact corners.
 - `[x]` Make filtering selectable without changing compatibility defaults.
 
 ### Phase 6: Efficiency
@@ -533,6 +537,69 @@ Build and script evidence:
   default-enable release gate on May 22, 2026; Ninja reported no work to do.
 - `[x]` `git diff --check` passed after adding the dlight shadow
   default-enable release gate on May 22, 2026; Git reported only existing
+  LF-to-CRLF working-copy warnings.
+- `[x]` `python tests\dlight_shadow_bias_tests.py` passed after
+  contact-preserving dlight shadow bias revision on May 22, 2026.
+- `[x]` `glslangValidator -S frag -V` passed for the Vulkan dlight lighting
+  fragment template variants: base, fog, line, and line+fog after
+  contact-preserving dlight shadow bias revision on May 22, 2026.
+- `[x]` `python -m py_compile scripts\dlight_shadow_test.py` passed after
+  contact-preserving dlight shadow bias revision on May 22, 2026.
+- `[x]` `python scripts\dlight_shadow_test.py --renderer vulkan --extra-set
+  r_dlightMode=2 --extra-set r_dlightShadowFilter=2 --dry-run` passed after
+  contact-preserving dlight shadow bias revision on May 22, 2026.
+- `[x]` `python scripts\dlight_shadow_test.py --renderer glx --extra-set
+  r_dlightMode=2 --extra-set r_dlightShadowFilter=2 --dry-run` passed after
+  contact-preserving dlight shadow bias revision on May 22, 2026.
+- `[x]` `meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64
+  fnquake3_vulkan_x86_64` passed after contact-preserving dlight shadow bias
+  revision on May 22, 2026.
+- `[x]` `git diff --check` passed after contact-preserving dlight shadow bias
+  revision on May 22, 2026; Git reported only existing LF-to-CRLF
+  working-copy warnings.
+- `[x]` `python tests\dlight_shadow_bias_tests.py` passed after the GLx
+  ARB-safe texel-scaled receiver-bias simplification on May 22, 2026.
+- `[x]` `python -m py_compile scripts\dlight_shadow_test.py` passed after the
+  GLx ARB-safe texel-scaled receiver-bias simplification on May 22, 2026.
+- `[x]` `python scripts\dlight_shadow_test.py --renderer glx --extra-set
+  r_dlightMode=2 --extra-set r_dlightShadowFilter=2 --dry-run` passed after
+  the GLx ARB-safe texel-scaled receiver-bias simplification on
+  May 22, 2026.
+- `[x]` `python scripts\dlight_shadow_test.py --renderer vulkan --extra-set
+  r_dlightMode=2 --extra-set r_dlightShadowFilter=2 --dry-run` passed after
+  the GLx ARB-safe texel-scaled receiver-bias simplification on
+  May 22, 2026.
+- `[x]` `meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64
+  fnquake3_vulkan_x86_64` passed after the GLx ARB-safe texel-scaled
+  receiver-bias simplification on May 22, 2026.
+- `[x]` `git diff --check` passed after the GLx ARB-safe texel-scaled
+  receiver-bias simplification on May 22, 2026; Git reported only existing
+  LF-to-CRLF working-copy warnings.
+- `[x]` `python tests\dlight_shadow_bias_tests.py` passed after the GLx ARB
+  shadow-program scalar swizzle compatibility fix on May 22, 2026.
+- `[x]` `python -m py_compile scripts\dlight_shadow_test.py` passed after the
+  GLx ARB shadow-program scalar swizzle compatibility fix on May 22, 2026.
+- `[x]` `python scripts\dlight_shadow_test.py --renderer glx --extra-set
+  r_dlightMode=2 --extra-set r_dlightShadowFilter=2 --dry-run` passed after
+  the GLx ARB shadow-program scalar swizzle compatibility fix on
+  May 22, 2026.
+- `[x]` `python scripts\dlight_shadow_test.py --renderer vulkan --extra-set
+  r_dlightMode=2 --extra-set r_dlightShadowFilter=2 --dry-run` passed after
+  the GLx ARB shadow-program scalar swizzle compatibility fix on
+  May 22, 2026.
+- `[x]` `meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64
+  fnquake3_vulkan_x86_64` passed after the GLx ARB shadow-program scalar
+  swizzle compatibility fix on May 22, 2026.
+- `[x]` `meson compile -C meson\build fnquake3_glx_x86_64
+  fnquake3_vulkan_x86_64` passed after the GLx ARB shadow-program scalar
+  swizzle compatibility fix on May 22, 2026.
+- `[x]` A non-dry-run GLx renderer-init smoke launch against the local Q3Test
+  assets no longer logs `FP Compile Error` or `WARNING: ARB dynamic light
+  shadow programs failed` after the GLx ARB shadow-program scalar swizzle
+  compatibility fix on May 22, 2026. The launch still stops at the known
+  Q3Test 1.09 UI VM version mismatch before gameplay evidence can be captured.
+- `[x]` `git diff --check` passed after the GLx ARB shadow-program scalar
+  swizzle compatibility fix on May 22, 2026; Git reported only existing
   LF-to-CRLF working-copy warnings.
 
 ## Maintenance Rule

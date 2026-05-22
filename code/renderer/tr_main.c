@@ -45,6 +45,22 @@ static surfaceType_t entitySurface = SF_ENTITY;
 
 #define R_BASE_VIEWPORT_ASPECT ( 4.0f / 3.0f )
 
+static qboolean R_FovCorrectionUsePhysicalAspect( void )
+{
+#ifdef USE_FBO
+	if ( r_fbo && r_fbo->integer && r_renderScale && r_renderScale->integer > 0 ) {
+		const int scaleMode = r_renderScale->integer - 1;
+		// Preserve-aspect blits display the render target without stretching its projection.
+		if ( ( scaleMode & 1 ) &&
+			( gls.windowWidth != glConfig.vidWidth || gls.windowHeight != glConfig.vidHeight ) ) {
+			return qfalse;
+		}
+	}
+#endif
+
+	return qtrue;
+}
+
 void R_ApplyViewportFovCorrection( int viewportWidth, int viewportHeight, qboolean usePhysicalAspect, float *fovX, float *fovY )
 {
 	float viewportAspect;
@@ -69,7 +85,8 @@ void R_ApplyViewportFovCorrection( int viewportWidth, int viewportHeight, qboole
 
 	viewportAspect = (float)viewportWidth / (float)viewportHeight;
 
-	if ( usePhysicalAspect && glConfig.vidWidth > 0 && glConfig.vidHeight > 0 && glConfig.windowAspect > 0.0f ) {
+	if ( usePhysicalAspect && R_FovCorrectionUsePhysicalAspect() &&
+		glConfig.vidWidth > 0 && glConfig.vidHeight > 0 && glConfig.windowAspect > 0.0f ) {
 		renderAspect = (float)glConfig.vidWidth / (float)glConfig.vidHeight;
 		if ( renderAspect > 0.0f ) {
 			viewportAspect *= glConfig.windowAspect / renderAspect;

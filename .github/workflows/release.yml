@@ -283,11 +283,16 @@ jobs:
   macos-x86:
     needs: [prepare]
     name: Build macOS ${{ matrix.arch }}
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, aarch64]
+        include:
+          - arch: x86_64
+            runner: macos-14-large
+
+          - arch: aarch64
+            runner: macos-14
     steps:
       - name: Install tools
         run: |
@@ -306,7 +311,7 @@ jobs:
         run: |
           BREW_PREFIX="$(brew --prefix)"
           export PKG_CONFIG_PATH="${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-          OPENAL_CFLAGS="$(pkg-config --cflags openal || true)"
+          OPENAL_CFLAGS="$(pkg-config --cflags openal 2>/dev/null || true)"
           if [ -z "${OPENAL_CFLAGS}" ]; then
             OPENAL_CFLAGS="-I$(brew --prefix openal-soft)/include"
           fi

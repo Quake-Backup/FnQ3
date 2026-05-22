@@ -93,6 +93,12 @@ cvar_t	*r_dlightMode;
 cvar_t	*r_dlightSpecPower;
 cvar_t	*r_dlightSpecColor;
 cvar_t	*r_dlightFalloff;
+cvar_t	*r_dlightShadows;
+cvar_t	*r_dlightShadowStrength;
+cvar_t	*r_dlightShadowBias;
+cvar_t	*r_dlightShadowMaxLights;
+cvar_t	*r_dlightShadowResolution;
+cvar_t	*r_dlightShadowDebug;
 cvar_t	*r_dlightScale;
 cvar_t	*r_dlightIntensity;
 #endif
@@ -2372,6 +2378,9 @@ static void R_Register( void )
 	ri.Cmd_AddCommand( "screenshotJPEG", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "screenshotBMP", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "gfxinfo", GfxInfo_f );
+#ifdef USE_PMLIGHT
+	ri.Cmd_AddCommand( "r_dlightTest", R_DlightTest_f );
+#endif
 #ifdef USE_VULKAN
 	ri.Cmd_AddCommand( "vkinfo", VkInfo_f );
 #endif
@@ -2537,6 +2546,30 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_dlightFalloff, "0", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightFalloff, "Blends PMLIGHT dynamic light attenuation from the original curve at 0 to a smooth edge falloff at 1." );
 	ri.Cvar_SetGroup( r_dlightFalloff, CVG_RENDERER );
+	r_dlightShadows = ri.Cvar_Get( "r_dlightShadows", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_dlightShadows, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_dlightShadows, "Enables dynamic-light shadow planning and the current screen-space fallback." );
+	ri.Cvar_SetGroup( r_dlightShadows, CVG_RENDERER );
+	r_dlightShadowStrength = ri.Cvar_Get( "r_dlightShadowStrength", "0.6", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightShadowStrength, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightShadowStrength, "Controls how strongly dynamic-light screen-space shadows dim the light." );
+	ri.Cvar_SetGroup( r_dlightShadowStrength, CVG_RENDERER );
+	r_dlightShadowBias = ri.Cvar_Get( "r_dlightShadowBias", "8", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightShadowBias, "0", "64", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightShadowBias, "Depth bias in world units for dynamic-light screen-space shadows." );
+	ri.Cvar_SetGroup( r_dlightShadowBias, CVG_RENDERER );
+	r_dlightShadowMaxLights = ri.Cvar_Get( "r_dlightShadowMaxLights", "4", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_dlightShadowMaxLights, "0", va( "%i", MAX_DLIGHTS ), CV_INTEGER );
+	ri.Cvar_SetDescription( r_dlightShadowMaxLights, "Maximum number of dynamic lights allowed to cast shadows in a view." );
+	ri.Cvar_SetGroup( r_dlightShadowMaxLights, CVG_RENDERER );
+	r_dlightShadowResolution = ri.Cvar_Get( "r_dlightShadowResolution", "256", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_dlightShadowResolution, "64", "1024", CV_INTEGER );
+	ri.Cvar_SetDescription( r_dlightShadowResolution, "Nominal per-face resolution for dynamic-light shadow maps. The renderer rounds it down as needed to fit the atlas." );
+	ri.Cvar_SetGroup( r_dlightShadowResolution, CVG_RENDERER );
+	r_dlightShadowDebug = ri.Cvar_Get( "r_dlightShadowDebug", "0", CVAR_CHEAT );
+	ri.Cvar_CheckRange( r_dlightShadowDebug, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_dlightShadowDebug, "Prints dynamic-light shadow planning counters each frame." );
+	ri.Cvar_SetGroup( r_dlightShadowDebug, CVG_RENDERER );
 	r_dlightIntensity = ri.Cvar_Get( "r_dlightIntensity", "1.0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightIntensity, "0.1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightIntensity, "Adjusts dynamic light intensity but not radius." );
@@ -2641,7 +2674,7 @@ static void R_Register( void )
 	r_showcluster = ri.Cvar_Get ("r_showcluster", "0", CVAR_CHEAT);
 	ri.Cvar_SetDescription( r_showcluster, "Shows current cluster index." );
 	r_speeds = ri.Cvar_Get ("r_speeds", "0", CVAR_CHEAT);
-	ri.Cvar_SetDescription( r_speeds, "Prints out various debugging stats from PVS:\n 0: Disabled\n 1: Backend BSP\n 2: Frontend grid culling\n 3: Current view cluster index\n 4: Dynamic lighting\n 5: zFar clipping\n 6: Flares\n 7: Vulkan GPU pass timings" );
+	ri.Cvar_SetDescription( r_speeds, "Prints out various debugging stats from PVS:\n 0: Disabled\n 1: Backend BSP\n 2: Frontend grid culling\n 3: Current view cluster index\n 4: Dynamic lighting and dlight shadow planning\n 5: zFar clipping\n 6: Flares\n 7: Vulkan GPU pass timings" );
 	r_debugSurface = ri.Cvar_Get ("r_debugSurface", "0", CVAR_CHEAT);
 	ri.Cvar_SetDescription( r_debugSurface, "Backend visual debugging tool for bezier mesh surfaces." );
 	r_nobind = ri.Cvar_Get ("r_nobind", "0", CVAR_CHEAT);
@@ -3047,6 +3080,9 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 	ri.Cmd_RemoveCommand( "shaderlist" );
 	ri.Cmd_RemoveCommand( "skinlist" );
 	ri.Cmd_RemoveCommand( "gfxinfo" );
+#ifdef USE_PMLIGHT
+	ri.Cmd_RemoveCommand( "r_dlightTest" );
+#endif
 	ri.Cmd_RemoveCommand( "shaderstate" );
 #ifdef USE_VULKAN
 	ri.Cmd_RemoveCommand( "vkinfo" );

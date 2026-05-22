@@ -22,6 +22,7 @@ layout(set = 1, binding = 0) uniform sampler2D texture0;
 #ifdef USE_FOG
 layout(set = 2, binding = 0) uniform sampler2D fogtexture;
 #endif
+layout(set = 3, binding = 0) uniform sampler2D dlight_shadow_texture;
 
 layout(location = 0) centroid in vec2 frag_tex_coord;
 layout(location = 1) in vec3 N;  // normalized object-space normal vector
@@ -39,6 +40,7 @@ layout (constant_id = 1) const float alpha_test_value = 0.0;
 layout (constant_id = 3) const int alpha_to_coverage = 0;
 //layout (constant_id = 4) const int color_mode = 0;
 layout (constant_id = 5) const int abs_light = 0;
+layout (constant_id = 11) const int dlight_shadow = 0;
 
 float CorrectAlpha(float threshold, float alpha, vec2 tc)
 {
@@ -49,6 +51,53 @@ float CorrectAlpha(float threshold, float alpha, vec2 tc)
 	float scale = max(1.0 / dxy, 1.0);
 	float ac = threshold + (alpha - threshold) * scale;
 	return ac;
+}
+
+float DlightShadowLinearDepth(float depth)
+{
+	return depthFadeInfo.y / mix(1.0, depthFadeInfo.x, depth);
+}
+
+float DlightShadowSample(vec2 screenUV, vec2 ray, float t, float fragLinear, float lightLinear)
+{
+	vec2 sampleUV = screenUV + ray * t;
+	float sceneLinear = DlightShadowLinearDepth(texture(dlight_shadow_texture, sampleUV).r);
+	float rayLinear = mix(fragLinear, lightLinear, t) - depthFadeInfo.z;
+	float receiverLinear = fragLinear - depthFadeInfo.z;
+
+	return sceneLinear < rayLinear && sceneLinear < receiverLinear ? 1.0 : 0.0;
+}
+
+float DlightShadowRayLimit(vec2 screenUV, vec2 ray)
+{
+	vec2 absRay = max(abs(ray), vec2(0.00001));
+	vec2 edgeDist = mix(screenUV, vec2(1.0) - screenUV, step(vec2(0.0), ray));
+
+	return clamp(min(min(edgeDist.x / absRay.x, edgeDist.y / absRay.y), 1.0), 0.0, 1.0);
+}
+
+float DlightShadowFactor()
+{
+	if (dlight_shadow == 0 || dlightFactors.y <= 0.0 || depthFadeScale.w <= 0.0)
+		return 1.0;
+
+	vec2 screenUV = gl_FragCoord.xy / vec2(textureSize(dlight_shadow_texture, 0));
+	vec2 ray = depthFadeScale.xy - screenUV;
+	float fragLinear = DlightShadowLinearDepth(gl_FragCoord.z);
+	float lightLinear = DlightShadowLinearDepth(depthFadeScale.z);
+	float rayLimit = DlightShadowRayLimit(screenUV, ray);
+	float occlusion;
+
+	if (rayLimit <= 0.0)
+		return 1.0;
+
+	occlusion = DlightShadowSample(screenUV, ray, rayLimit * 0.2, fragLinear, lightLinear);
+	occlusion += DlightShadowSample(screenUV, ray, rayLimit * 0.4, fragLinear, lightLinear);
+	occlusion += DlightShadowSample(screenUV, ray, rayLimit * 0.6, fragLinear, lightLinear);
+	occlusion += DlightShadowSample(screenUV, ray, rayLimit * 0.8, fragLinear, lightLinear);
+	occlusion *= 0.25;
+
+	return clamp(1.0 - occlusion * dlightFactors.y, 0.0, 1.0);
 }
 
 void main() {
@@ -101,6 +150,7 @@ void main() {
 	float smoothFactor = intensFactor * intensFactor * (3.0 - 2.0 * intensFactor);
 	intensFactor = mix(intensFactor, smoothFactor, clamp(dlightFactors.x, 0.0, 1.0));
 	vec3 intens = lightColorRadius.rgb * intensFactor;
+	intens *= DlightShadowFactor();
 
 #ifdef USE_FOG
 	// modulate base by inverted fog alpha

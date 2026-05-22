@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define USE_PMLIGHT			// promode dynamic lights via \r_dlightMode 1|2
 #define MAX_REAL_DLIGHTS	(MAX_DLIGHTS*2)
 #define MAX_LITSURFS		(MAX_DRAWSURFS)
+#define DLIGHT_SHADOW_FACES	6
 
 #define MAX_TEXTURE_SIZE	2048 // must be less or equal to 32768
 
@@ -79,8 +80,28 @@ typedef struct dlight_s {
 #ifdef USE_PMLIGHT
 	struct litSurf_s	*head;
 	struct litSurf_s	*tail;
+	qboolean shadowPlanned;
+	int shadowIndex;
+	int shadowAtlasBaseFace;
+	int shadowAtlasFaceSize;
+	int shadowAtlasX[DLIGHT_SHADOW_FACES];
+	int shadowAtlasY[DLIGHT_SHADOW_FACES];
+	int shadowReceiverCount;
+	float shadowPriority;
 #endif
 } dlight_t;
+
+#ifdef USE_PMLIGHT
+typedef struct {
+	int maxLights;
+	int totalFaces;
+	int faceSize;
+	int columns;
+	int rows;
+	int width;
+	int height;
+} dlightShadowAtlasLayout_t;
+#endif
 
 
 // a trRefEntity_t has all the information passed in by
@@ -1036,6 +1057,17 @@ typedef struct {
 	int		c_lit_surfs;
 	int		c_lit_culls;
 	int		c_lit_masks;
+	int		c_dlightShadowConsidered;
+	int		c_dlightShadowCandidates;
+	int		c_dlightShadowPlanned;
+	int		c_dlightShadowSkippedDisabled;
+	int		c_dlightShadowSkippedLinear;
+	int		c_dlightShadowSkippedNoSurfaces;
+	int		c_dlightShadowSkippedProjection;
+	int		c_dlightShadowSkippedBudget;
+	int		c_dlightShadowAtlasWidth;
+	int		c_dlightShadowAtlasHeight;
+	int		c_dlightShadowAtlasFaceSize;
 #endif
 } frontEndCounters_t;
 
@@ -1085,6 +1117,9 @@ typedef struct {
 	int		c_lit_indices_latecull_in;
 	int		c_lit_indices_latecull_out;
 	int		c_lit_vertices_lateculltest;
+	int		c_dlightShadowAtlasLights;
+	int		c_dlightShadowAtlasFaces;
+	int		c_dlightShadowAtlasSurfaces;
 #endif
 } backEndCounters_t;
 
@@ -1326,6 +1361,12 @@ extern cvar_t	*r_dlightMode;			// 0 - vq3, 1 - pmlight
 extern cvar_t	*r_dlightSpecPower;		// 1 - 32
 extern cvar_t	*r_dlightSpecColor;		// -1.0 - 1.0
 extern cvar_t	*r_dlightFalloff;		// 0.0 - 1.0
+extern cvar_t	*r_dlightShadows;		// 0 - 1
+extern cvar_t	*r_dlightShadowStrength;	// 0.0 - 1.0
+extern cvar_t	*r_dlightShadowBias;		// 0.0 - 64.0
+extern cvar_t	*r_dlightShadowMaxLights;	// 0 - MAX_DLIGHTS
+extern cvar_t	*r_dlightShadowResolution;	// 64 - 1024
+extern cvar_t	*r_dlightShadowDebug;		// 0 - 1
 extern cvar_t	*r_dlightScale;			// 0.1 - 1.0
 extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
@@ -1727,6 +1768,7 @@ int R_LightForPoint( vec3_t point, vec3_t ambientLight, vec3_t directedLight, ve
 void ARB_SetupLightParams( const shaderStage_t *pStage );
 void ARB_LightingPass( void );
 qboolean R_LightCullBounds( const dlight_t* dl, const vec3_t mins, const vec3_t maxs );
+qboolean R_DlightShadowAtlasLayout( int maxLights, int requestedFaceSize, int maxTextureSize, dlightShadowAtlasLayout_t *layout );
 #endif // USE_PMLIGHT
 
 void R_BindAnimatedImage( const textureBundle_t *bundle );
@@ -1765,6 +1807,14 @@ qboolean FBO_DepthFadeReady( void );
 void FBO_ResetDepthFade( void );
 void FBO_CopyDepthFade( void );
 void FBO_BindDepthFadeTexture( int texUnit );
+qboolean FBO_DlightShadowsAvailable( void );
+qboolean FBO_DlightShadowsReady( void );
+qboolean FBO_DlightShadowAtlasAvailable( void );
+qboolean FBO_BeginDlightShadowAtlas( void );
+void FBO_EndDlightShadowAtlas( void );
+int FBO_DlightShadowAtlasHeight( void );
+void FBO_CopyDlightShadowMap( void );
+void FBO_BindDlightShadowTexture( int texUnit );
 void FBO_DrawWorldCelOutline( void );
 #endif //  USE_FBO
 
@@ -1845,6 +1895,9 @@ void RE_AddPolyToScene( qhandle_t hShader , int numVerts, const polyVert_t *vert
 void RE_AddLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float intensity, float r, float g, float b );
+#ifdef USE_PMLIGHT
+void R_DlightTest_f( void );
+#endif
 
 void RE_RenderScene( const refdef_t *fd );
 
@@ -2162,6 +2215,18 @@ typedef enum {
 
 	DLIGHT_LINEAR_ABS_FRAGMENT,
 	DLIGHT_LINEAR_ABS_FRAGMENT_FOG,
+
+	DLIGHT_SHADOW_FRAGMENT,
+	DLIGHT_SHADOW_FRAGMENT_FOG,
+
+	DLIGHT_SHADOW_ABS_FRAGMENT,
+	DLIGHT_SHADOW_ABS_FRAGMENT_FOG,
+
+	DLIGHT_SHADOW_LINEAR_FRAGMENT,
+	DLIGHT_SHADOW_LINEAR_FRAGMENT_FOG,
+
+	DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT,
+	DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT_FOG,
 #endif
 	SPRITE_FRAGMENT,
 	DEPTH_FADE_FRAGMENT,

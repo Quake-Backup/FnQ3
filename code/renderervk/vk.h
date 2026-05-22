@@ -33,7 +33,7 @@
 #define USE_DEDICATED_ALLOCATION
 #endif
 //#define MIN_IMAGE_ALIGN (128*1024)
-#define MAX_ATTACHMENTS_IN_POOL (9+VK_NUM_BLOOM_PASSES*2) // depth + depth fade + msaa + msaa-resolve + depth-resolve + screenmap.msaa + screenmap.resolve + screenmap.depth + bloom_extract + blur pairs
+#define MAX_ATTACHMENTS_IN_POOL (10+VK_NUM_BLOOM_PASSES*2) // depth + depth fade + dlight shadow atlas + msaa + msaa-resolve + depth-resolve + screenmap.msaa + screenmap.resolve + screenmap.depth + bloom_extract + blur pairs
 #define VK_MAX_FRAME_TIMESTAMPS 64
 #define VK_PIPELINE_CACHE_MAX_BYTES (32 * 1024 * 1024)
 
@@ -176,6 +176,7 @@ typedef enum {
 	RENDER_PASS_MAIN = 0,
 	RENDER_PASS_SCREENMAP,
 	RENDER_PASS_POST_BLOOM,
+	RENDER_PASS_DLIGHT_SHADOW,
 	RENDER_PASS_COUNT
 } renderPass_t;
 
@@ -321,6 +322,10 @@ qboolean vk_depth_fade_supported( void );
 qboolean vk_depth_fade_available( void );
 qboolean vk_depth_fade_ready( void );
 void vk_copy_depth_fade( void );
+qboolean vk_dlight_shadow_atlas_available( void );
+qboolean vk_begin_dlight_shadow_render_pass( void );
+void vk_end_dlight_shadow_render_pass( void );
+int vk_dlight_shadow_atlas_height( void );
 void vk_present_frame( void );
 
 void vk_end_render_pass( void );
@@ -466,6 +471,7 @@ typedef struct {
 		VkRenderPass bloom_extract;
 		VkRenderPass blur[VK_NUM_BLOOM_PASSES*2]; // horizontal-vertical pairs
 		VkRenderPass post_bloom;
+		VkRenderPass dlight_shadow;
 	} render_pass;
 
 	VkDescriptorPool descriptor_pool;
@@ -494,6 +500,15 @@ typedef struct {
 	VkImageView depth_fade_image_view;
 	VkDescriptorSet depth_fade_descriptor;
 	qboolean depth_fade_copied;
+	VkImage dlight_shadow_image;
+	VkImageView dlight_shadow_image_view;
+	VkDescriptorSet dlight_shadow_descriptor;
+	uint32_t dlight_shadow_atlas_width;
+	uint32_t dlight_shadow_atlas_height;
+	uint32_t dlight_shadow_face_size;
+	uint32_t dlight_shadow_atlas_columns;
+	uint32_t dlight_shadow_atlas_rows;
+	uint32_t dlight_shadow_max_lights;
 
 	VkImage msaa_image;
 	VkImageView msaa_image_view;
@@ -525,6 +540,7 @@ typedef struct {
 		VkFramebuffer gamma[MAX_SWAPCHAIN_IMAGES];
 		VkFramebuffer screenmap;
 		VkFramebuffer capture;
+		VkFramebuffer dlight_shadow;
 	} framebuffers;
 
 #ifdef USE_UPLOAD_QUEUE

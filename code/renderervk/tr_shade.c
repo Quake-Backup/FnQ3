@@ -1288,8 +1288,51 @@ void VK_SetFogParams( vkUniform_t *uniform, int *fogStage )
 
 
 #ifdef USE_PMLIGHT
+static qboolean VK_DlightShadowParams( const dlight_t *dl, vec4_t lightScreen, float *strength )
+{
+	vec4_t eye, clip, normalized, window;
+	float s;
+
+	if ( !dl || dl->linear || !dl->shadowPlanned ||
+		!r_dlightShadows || !r_dlightShadows->integer ||
+		!r_dlightMode || !r_dlightMode->integer ||
+		!vk_depth_fade_ready() || vk.renderPassIndex != RENDER_PASS_MAIN ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		backEnd.viewParms.zFar <= 0.0f || !r_znear || r_znear->value <= 0.0f ||
+		glConfig.vidWidth <= 0 || glConfig.vidHeight <= 0 ) {
+		return qfalse;
+	}
+
+	R_TransformModelToClip( dl->transformed, backEnd.or.modelMatrix, backEnd.viewParms.projectionMatrix, eye, clip );
+	if ( clip[3] <= 0.0f ) {
+		return qfalse;
+	}
+
+	R_TransformClipToWindow( clip, &backEnd.viewParms, normalized, window );
+	lightScreen[0] = ( backEnd.viewParms.viewportX + window[0] ) / (float)glConfig.vidWidth;
+	lightScreen[1] = ( backEnd.viewParms.viewportY + window[1] ) / (float)glConfig.vidHeight;
+	lightScreen[2] = Com_Clamp( 0.0f, 1.0f, normalized[2] );
+	lightScreen[3] = 1.0f;
+
+	if ( normalized[2] < 0.0f || normalized[2] > 1.0f ) {
+		return qfalse;
+	}
+
+	s = r_dlightShadowStrength ? Com_Clamp( 0.0f, 1.0f, r_dlightShadowStrength->value ) : 0.6f;
+	if ( s <= 0.0f ) {
+		return qfalse;
+	}
+
+	*strength = s;
+	return qtrue;
+}
+
 static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	float radius;
+	vec4_t lightScreen = { 0.0f, 0.0f, 0.0f, 0.0f };
+	float shadowStrength = 0.0f;
+	float zNear;
+	qboolean dlightShadow;
 
 #ifdef USE_VULKAN
 	if ( !glConfig.deviceSupportsGamma && !vk.fboActive )
@@ -1309,9 +1352,20 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	// fragment data
 	uniform->light.color[3] = 1.0f / Square( radius );
 	uniform->dlightFactors[0] = r_dlightFalloff ? r_dlightFalloff->value : 1.0f;
-	uniform->dlightFactors[1] = 0.0f;
+	dlightShadow = VK_DlightShadowParams( dl, lightScreen, &shadowStrength );
+	uniform->dlightFactors[1] = dlightShadow ? shadowStrength : 0.0f;
 	uniform->dlightFactors[2] = 0.0f;
 	uniform->dlightFactors[3] = 0.0f;
+
+	zNear = ( r_znear && r_znear->value > 0.0f ) ? r_znear->value : 1.0f;
+	uniform->depthFadeInfo[0] = backEnd.viewParms.zFar / zNear;
+	uniform->depthFadeInfo[1] = backEnd.viewParms.zFar;
+	uniform->depthFadeInfo[2] = r_dlightShadowBias ? r_dlightShadowBias->value : 8.0f;
+	uniform->depthFadeInfo[3] = 0.0f;
+	Vector4Copy( lightScreen, uniform->depthFadeScale );
+	uniform->depthFadeScale[3] = dlightShadow ? 1.0f : 0.0f;
+	VectorClear( uniform->depthFadeBias );
+	uniform->depthFadeBias[3] = 0.0f;
 
 	if ( dl->linear )
 	{
@@ -1389,6 +1443,8 @@ void VK_LightingPass( void )
 
 		vk_material_init( &material );
 		vk_material_set_descriptor( &material, VK_DESC_TEXTURE0, R_AnimatedImageDescriptor( &pStage->bundle[ tess.shader->lightingBundle ] ) );
+		vk_material_set_descriptor( &material, VK_DESC_TEXTURE2,
+			vk_depth_fade_available() ? vk.depth_fade_descriptor : VK_NULL_HANDLE );
 		if ( fog_stage ) {
 			vk_material_set_descriptor( &material, VK_DESC_FOG_DLIGHT, tr.fogImage->descriptor );
 		}

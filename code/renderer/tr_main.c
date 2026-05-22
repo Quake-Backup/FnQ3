@@ -993,6 +993,274 @@ void R_DecomposeLitSort( unsigned sort, int *entityNum, shader_t **shader, int *
 #endif // USE_PMLIGHT
 
 
+#ifdef USE_PMLIGHT
+#define DLIGHT_SHADOW_MIN_FACE_SIZE 64
+#define DLIGHT_SHADOW_MAX_FACE_SIZE 1024
+
+static int R_DlightShadowFloorPowerOfTwo( int value )
+{
+	int power;
+
+	power = 1;
+	while ( power <= ( 1 << 29 ) && power * 2 <= value ) {
+		power *= 2;
+	}
+
+	return power;
+}
+
+
+qboolean R_DlightShadowAtlasLayout( int maxLights, int requestedFaceSize, int maxTextureSize, dlightShadowAtlasLayout_t *layout )
+{
+	int faceSize;
+	int totalFaces;
+
+	if ( layout ) {
+		Com_Memset( layout, 0, sizeof( *layout ) );
+	}
+	if ( !layout || maxTextureSize < DLIGHT_SHADOW_MIN_FACE_SIZE ) {
+		return qfalse;
+	}
+
+	maxLights = Com_Clamp( 0, MAX_DLIGHTS, maxLights );
+	if ( maxLights <= 0 ) {
+		return qfalse;
+	}
+
+	if ( requestedFaceSize <= 0 ) {
+		requestedFaceSize = 256;
+	}
+	requestedFaceSize = Com_Clamp( DLIGHT_SHADOW_MIN_FACE_SIZE, DLIGHT_SHADOW_MAX_FACE_SIZE, requestedFaceSize );
+	requestedFaceSize = MIN( requestedFaceSize, maxTextureSize );
+	faceSize = R_DlightShadowFloorPowerOfTwo( requestedFaceSize );
+	if ( faceSize < DLIGHT_SHADOW_MIN_FACE_SIZE ) {
+		faceSize = DLIGHT_SHADOW_MIN_FACE_SIZE;
+	}
+
+	totalFaces = maxLights * DLIGHT_SHADOW_FACES;
+	while ( faceSize >= DLIGHT_SHADOW_MIN_FACE_SIZE ) {
+		int columns;
+		int rows;
+		int width;
+		int height;
+
+		columns = maxTextureSize / faceSize;
+		if ( columns <= 0 ) {
+			faceSize /= 2;
+			continue;
+		}
+		if ( columns > totalFaces ) {
+			columns = totalFaces;
+		}
+		rows = ( totalFaces + columns - 1 ) / columns;
+		width = columns * faceSize;
+		height = rows * faceSize;
+
+		if ( width <= maxTextureSize && height <= maxTextureSize ) {
+			layout->maxLights = maxLights;
+			layout->totalFaces = totalFaces;
+			layout->faceSize = faceSize;
+			layout->columns = columns;
+			layout->rows = rows;
+			layout->width = width;
+			layout->height = height;
+			return qtrue;
+		}
+
+		faceSize /= 2;
+	}
+
+	return qfalse;
+}
+
+
+static void R_ClearDlightShadowPlan( dlight_t *dl )
+{
+	dl->shadowPlanned = qfalse;
+	dl->shadowIndex = -1;
+	dl->shadowAtlasBaseFace = -1;
+	dl->shadowAtlasFaceSize = 0;
+	Com_Memset( dl->shadowAtlasX, 0, sizeof( dl->shadowAtlasX ) );
+	Com_Memset( dl->shadowAtlasY, 0, sizeof( dl->shadowAtlasY ) );
+	dl->shadowReceiverCount = 0;
+	dl->shadowPriority = 0.0f;
+}
+
+
+static int R_CountDlightShadowReceivers( const dlight_t *dl )
+{
+	const struct litSurf_s *surf;
+	int count;
+
+	count = 0;
+	for ( surf = dl->head; surf != NULL; surf = surf->next ) {
+		count++;
+	}
+
+	return count;
+}
+
+
+static qboolean R_DlightShadowProjectionValid( const dlight_t *dl )
+{
+	vec4_t eye, clip, normalized, window;
+
+	R_TransformModelToClip( dl->origin, tr.viewParms.world.modelMatrix, tr.viewParms.projectionMatrix, eye, clip );
+	if ( clip[3] <= 0.0f ) {
+		return qfalse;
+	}
+
+	R_TransformClipToWindow( clip, &tr.viewParms, normalized, window );
+	return ( normalized[2] >= 0.0f && normalized[2] <= 1.0f ) ? qtrue : qfalse;
+}
+
+
+static float R_DlightShadowPriority( const dlight_t *dl, int receivers )
+{
+	vec3_t delta;
+	float brightness;
+	float dist2;
+	float radius2;
+	float receiverScale;
+
+	brightness = dl->color[0];
+	if ( dl->color[1] > brightness ) {
+		brightness = dl->color[1];
+	}
+	if ( dl->color[2] > brightness ) {
+		brightness = dl->color[2];
+	}
+	if ( brightness <= 0.0f || dl->radius <= 0.0f ) {
+		return 0.0f;
+	}
+
+	VectorSubtract( dl->origin, tr.viewParms.or.origin, delta );
+	dist2 = DotProduct( delta, delta );
+	radius2 = Square( dl->radius );
+	receiverScale = 1.0f + 0.03125f * Com_Clamp( 0.0f, 64.0f, (float)receivers );
+
+	return brightness * receiverScale * radius2 / ( dist2 + radius2 + 1.0f );
+}
+
+
+static void R_PlanDlightShadows( void )
+{
+	dlightShadowAtlasLayout_t atlasLayout;
+	dlight_t *dl;
+	int i, pass;
+	int maxLights;
+	int candidates;
+	int planned;
+	qboolean atlasReady;
+
+	candidates = 0;
+	planned = 0;
+	atlasReady = qfalse;
+	maxLights = r_dlightShadowMaxLights ? r_dlightShadowMaxLights->integer : 4;
+	if ( maxLights < 0 ) {
+		maxLights = 0;
+	}
+	if ( maxLights > MAX_DLIGHTS ) {
+		maxLights = MAX_DLIGHTS;
+	}
+
+	for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
+		R_ClearDlightShadowPlan( &tr.viewParms.dlights[i] );
+	}
+
+	if ( !r_dlightShadows || !r_dlightShadows->integer || !R_GetDlightMode() ||
+		( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		tr.pc.c_dlightShadowSkippedDisabled += tr.viewParms.num_dlights;
+		return;
+	}
+
+	atlasReady = R_DlightShadowAtlasLayout( maxLights,
+		r_dlightShadowResolution ? r_dlightShadowResolution->integer : 256,
+		glConfig.maxTextureSize, &atlasLayout );
+	if ( atlasReady ) {
+		tr.pc.c_dlightShadowAtlasWidth = atlasLayout.width;
+		tr.pc.c_dlightShadowAtlasHeight = atlasLayout.height;
+		tr.pc.c_dlightShadowAtlasFaceSize = atlasLayout.faceSize;
+	}
+
+	for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
+		int receivers;
+
+		dl = &tr.viewParms.dlights[i];
+		tr.pc.c_dlightShadowConsidered++;
+
+		if ( dl->linear ) {
+			tr.pc.c_dlightShadowSkippedLinear++;
+			continue;
+		}
+		if ( dl->head == NULL ) {
+			tr.pc.c_dlightShadowSkippedNoSurfaces++;
+			continue;
+		}
+		if ( !R_DlightShadowProjectionValid( dl ) ) {
+			tr.pc.c_dlightShadowSkippedProjection++;
+			continue;
+		}
+
+		receivers = R_CountDlightShadowReceivers( dl );
+		if ( receivers <= 0 ) {
+			tr.pc.c_dlightShadowSkippedNoSurfaces++;
+			continue;
+		}
+
+		dl->shadowReceiverCount = receivers;
+		dl->shadowPriority = R_DlightShadowPriority( dl, receivers );
+		if ( dl->shadowPriority <= 0.0f ) {
+			tr.pc.c_dlightShadowSkippedDisabled++;
+			continue;
+		}
+
+		tr.pc.c_dlightShadowCandidates++;
+		candidates++;
+	}
+
+	for ( pass = 0; pass < maxLights; pass++ ) {
+		float bestPriority;
+		int bestIndex;
+
+		bestPriority = 0.0f;
+		bestIndex = -1;
+		for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
+			dl = &tr.viewParms.dlights[i];
+			if ( !dl->shadowPlanned && dl->shadowPriority > bestPriority ) {
+				bestPriority = dl->shadowPriority;
+				bestIndex = i;
+			}
+		}
+
+		if ( bestIndex < 0 ) {
+			break;
+		}
+
+		dl = &tr.viewParms.dlights[bestIndex];
+		dl->shadowPlanned = qtrue;
+		dl->shadowIndex = planned++;
+		if ( atlasReady ) {
+			int face;
+
+			dl->shadowAtlasBaseFace = dl->shadowIndex * DLIGHT_SHADOW_FACES;
+			dl->shadowAtlasFaceSize = atlasLayout.faceSize;
+			for ( face = 0; face < DLIGHT_SHADOW_FACES; face++ ) {
+				int tile = dl->shadowAtlasBaseFace + face;
+				dl->shadowAtlasX[face] = ( tile % atlasLayout.columns ) * atlasLayout.faceSize;
+				dl->shadowAtlasY[face] = ( tile / atlasLayout.columns ) * atlasLayout.faceSize;
+			}
+		}
+		tr.pc.c_dlightShadowPlanned++;
+	}
+
+	if ( candidates > planned ) {
+		tr.pc.c_dlightShadowSkippedBudget += candidates - planned;
+	}
+}
+#endif // USE_PMLIGHT
+
+
 //==========================================================================================
 
 /*
@@ -1222,6 +1490,10 @@ static void R_GenerateDrawSurfs( void ) {
 	R_SetupProjectionZ( &tr.viewParms );
 
 	R_AddEntitySurfaces();
+
+#ifdef USE_PMLIGHT
+	R_PlanDlightShadows();
+#endif
 }
 
 

@@ -27,7 +27,11 @@ R_PerformanceCounters
 =====================
 */
 static void R_PerformanceCounters( void ) {
-	if ( !r_speeds->integer ) {
+	qboolean shadowDebug;
+
+	shadowDebug = ( r_dlightShadowDebug && r_dlightShadowDebug->integer ) ? qtrue : qfalse;
+
+	if ( !r_speeds->integer && !shadowDebug ) {
 		// clear the counters even if we aren't printing
 		Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 		Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
@@ -63,6 +67,24 @@ static void R_PerformanceCounters( void ) {
 		ri.Printf( PRINT_ALL, "flare adds:%i tests:%i renders:%i\n", 
 			backEnd.pc.c_flareAdds, backEnd.pc.c_flareTests, backEnd.pc.c_flareRenders );
 	}
+
+#ifdef USE_PMLIGHT
+	if ( ( r_speeds->integer == 4 || shadowDebug ) &&
+		( tr.pc.c_dlightShadowConsidered || tr.pc.c_dlightShadowSkippedDisabled ) ) {
+		ri.Printf( PRINT_ALL,
+			"dlight shadows plan:%i/%i cand:%i atlas:%ix%i/%i render lights:%i faces:%i surfs:%i skip disabled:%i linear:%i nosurf:%i proj:%i budget:%i\n",
+			tr.pc.c_dlightShadowPlanned, tr.pc.c_dlightShadowConsidered,
+			tr.pc.c_dlightShadowCandidates,
+			tr.pc.c_dlightShadowAtlasWidth, tr.pc.c_dlightShadowAtlasHeight,
+			tr.pc.c_dlightShadowAtlasFaceSize,
+			backEnd.pc.c_dlightShadowAtlasLights,
+			backEnd.pc.c_dlightShadowAtlasFaces,
+			backEnd.pc.c_dlightShadowAtlasSurfaces,
+			tr.pc.c_dlightShadowSkippedDisabled,
+			tr.pc.c_dlightShadowSkippedLinear, tr.pc.c_dlightShadowSkippedNoSurfaces,
+			tr.pc.c_dlightShadowSkippedProjection, tr.pc.c_dlightShadowSkippedBudget );
+	}
+#endif
 
 	Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 	Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );

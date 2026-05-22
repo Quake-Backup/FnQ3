@@ -376,6 +376,16 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	dl->color[2] = b;
 	dl->additive = additive;
 	dl->linear = qfalse;
+#ifdef USE_PMLIGHT
+	dl->shadowPlanned = qfalse;
+	dl->shadowIndex = -1;
+	dl->shadowAtlasBaseFace = -1;
+	dl->shadowAtlasFaceSize = 0;
+	Com_Memset( dl->shadowAtlasX, 0, sizeof( dl->shadowAtlasX ) );
+	Com_Memset( dl->shadowAtlasY, 0, sizeof( dl->shadowAtlasY ) );
+	dl->shadowReceiverCount = 0;
+	dl->shadowPriority = 0.0f;
+#endif
 }
 
 
@@ -422,7 +432,125 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	dl->color[2] = b;
 	dl->additive = 0;
 	dl->linear = qtrue;
+#ifdef USE_PMLIGHT
+	dl->shadowPlanned = qfalse;
+	dl->shadowIndex = -1;
+	dl->shadowAtlasBaseFace = -1;
+	dl->shadowAtlasFaceSize = 0;
+	Com_Memset( dl->shadowAtlasX, 0, sizeof( dl->shadowAtlasX ) );
+	Com_Memset( dl->shadowAtlasY, 0, sizeof( dl->shadowAtlasY ) );
+	dl->shadowReceiverCount = 0;
+	dl->shadowPriority = 0.0f;
+#endif
 }
+
+
+#ifdef USE_PMLIGHT
+typedef struct {
+	qboolean active;
+	int count;
+	float intensity;
+	float distance;
+	float height;
+	int endTime;
+} dlightTestState_t;
+
+static dlightTestState_t r_dlightTestState;
+
+
+static void R_DlightTestStatus( void )
+{
+	ri.Printf( PRINT_ALL,
+		"r_dlightTest: %s count:%i intensity:%.1f distance:%.1f height:%.1f %s\n",
+		r_dlightTestState.active ? "on" : "off",
+		r_dlightTestState.count,
+		r_dlightTestState.intensity,
+		r_dlightTestState.distance,
+		r_dlightTestState.height,
+		r_dlightTestState.endTime ? "timed" : "persistent" );
+	ri.Printf( PRINT_ALL,
+		"usage: r_dlightTest <count> [intensity] [distance] [height] [seconds], or r_dlightTest off\n" );
+}
+
+
+void R_DlightTest_f( void )
+{
+	int argc;
+	const char *arg;
+	float seconds;
+
+	argc = ri.Cmd_Argc();
+	if ( argc <= 1 ) {
+		R_DlightTestStatus();
+		return;
+	}
+
+	arg = ri.Cmd_Argv( 1 );
+	if ( !Q_stricmp( arg, "off" ) || !Q_stricmp( arg, "0" ) ) {
+		Com_Memset( &r_dlightTestState, 0, sizeof( r_dlightTestState ) );
+		ri.Printf( PRINT_ALL, "r_dlightTest disabled\n" );
+		return;
+	}
+
+	r_dlightTestState.active = qtrue;
+	r_dlightTestState.count = (int)Com_Clamp( 1.0f, (float)MAX_DLIGHTS, (float)atoi( arg ) );
+	r_dlightTestState.intensity = ( argc > 2 ) ? Q_atof( ri.Cmd_Argv( 2 ) ) : 320.0f;
+	r_dlightTestState.distance = ( argc > 3 ) ? Q_atof( ri.Cmd_Argv( 3 ) ) : 192.0f;
+	r_dlightTestState.height = ( argc > 4 ) ? Q_atof( ri.Cmd_Argv( 4 ) ) : 24.0f;
+	seconds = ( argc > 5 ) ? Q_atof( ri.Cmd_Argv( 5 ) ) : 15.0f;
+
+	r_dlightTestState.intensity = Com_Clamp( 1.0f, 2048.0f, r_dlightTestState.intensity );
+	r_dlightTestState.distance = Com_Clamp( 0.0f, 2048.0f, r_dlightTestState.distance );
+	r_dlightTestState.height = Com_Clamp( -1024.0f, 1024.0f, r_dlightTestState.height );
+	r_dlightTestState.endTime = ( seconds > 0.0f ) ?
+		ri.Milliseconds() + (int)( seconds * 1000.0f ) : 0;
+
+	R_DlightTestStatus();
+}
+
+
+static void R_AddDlightTestLightsToScene( const refdef_t *fd )
+{
+	static const vec3_t colors[] = {
+		{ 1.00f, 0.30f, 0.18f },
+		{ 0.20f, 0.65f, 1.00f },
+		{ 0.35f, 1.00f, 0.35f },
+		{ 1.00f, 0.85f, 0.25f },
+		{ 0.90f, 0.35f, 1.00f },
+		{ 0.35f, 1.00f, 0.95f }
+	};
+	vec3_t base;
+	float phase;
+	int count;
+	int i;
+
+	if ( !r_dlightTestState.active || !fd || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+		return;
+	}
+	if ( r_dlightTestState.endTime && ri.Milliseconds() > r_dlightTestState.endTime ) {
+		Com_Memset( &r_dlightTestState, 0, sizeof( r_dlightTestState ) );
+		ri.Printf( PRINT_ALL, "r_dlightTest finished\n" );
+		return;
+	}
+
+	count = (int)Com_Clamp( 1.0f, (float)MAX_DLIGHTS, (float)r_dlightTestState.count );
+	phase = fd->time * 0.001f;
+	VectorMA( fd->vieworg, r_dlightTestState.distance, fd->viewaxis[0], base );
+
+	for ( i = 0; i < count && r_numdlights < ARRAY_LEN( backEndData->dlights ); i++ ) {
+		const float angle = phase * 0.7f + ( 6.28318530718f * i ) / (float)count;
+		const float side = cosf( angle ) * r_dlightTestState.distance * 0.75f;
+		const float lift = r_dlightTestState.height + sinf( angle ) * r_dlightTestState.distance * 0.35f;
+		const vec_t *color = colors[ i % ARRAY_LEN( colors ) ];
+		vec3_t org;
+
+		VectorMA( base, side, fd->viewaxis[1], org );
+		VectorMA( org, lift, fd->viewaxis[2], org );
+		RE_AddDynamicLightToScene( org, r_dlightTestState.intensity,
+			color[0], color[1], color[2], qfalse );
+	}
+}
+#endif
 
 
 
@@ -633,6 +761,10 @@ void RE_RenderScene( const refdef_t *fd ) {
 			tr.refdef.areamaskModified = qtrue;
 		}
 	}
+
+#ifdef USE_PMLIGHT
+	R_AddDlightTestLightsToScene( fd );
+#endif
 
 
 	// derived info

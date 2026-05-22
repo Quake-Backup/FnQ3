@@ -245,6 +245,7 @@ typedef char GLchar;
 	GLE( void, glPolygonOffset, GLfloat factor, GLfloat units ) \
 	GLE( void, glPopMatrix, void ) \
 	GLE( void, glPushMatrix, void ) \
+	GLE( void, glReadBuffer, GLenum mode ) \
 	GLE( void, glReadPixels, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels ) \
 	GLE( void, glScissor, GLint x, GLint y, GLsizei width, GLsizei height ) \
 	GLE( void, glShadeModel, GLenum mode ) \

@@ -31,6 +31,7 @@ static GLuint current_fp;
 
 static int programCompiled = 0;
 static int programEnabled	= 0;
+static qboolean dlightShadowProgramsCompiled = qfalse;
 
 qboolean fboEnabled = qfalse;
 qboolean fboBloomInited = qfalse;
@@ -73,6 +74,9 @@ typedef struct frameBuffer_s {
 #ifdef USE_FBO
 static GLuint commonDepthStencil;
 static GLuint depthFadeTexture;
+static GLuint dlightShadowAtlasTexture;
+static GLuint dlightShadowAtlasFbo;
+static dlightShadowAtlasLayout_t dlightShadowAtlasLayout;
 static qboolean depthFadeCopied;
 
 static frameBuffer_t frameBufferMS;
@@ -1017,16 +1021,60 @@ static float ARB_ComputeTextureIntensityScale( const image_t *image )
 	return 1.0f;
 }
 
+static qboolean ARB_DlightShadowParams( const dlight_t *dl, vec4_t lightScreen, float *strength )
+{
+#ifdef USE_FBO
+	vec4_t eye, clip, normalized, window;
+	float s;
+
+	if ( !dl || dl->linear || !dl->shadowPlanned || !dlightShadowProgramsCompiled || !FBO_DlightShadowsReady() ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		backEnd.viewParms.zFar <= 0.0f || !r_znear || r_znear->value <= 0.0f ||
+		glConfig.vidWidth <= 0 || glConfig.vidHeight <= 0 ) {
+		return qfalse;
+	}
+
+	R_TransformModelToClip( dl->transformed, backEnd.or.modelMatrix, backEnd.viewParms.projectionMatrix, eye, clip );
+	if ( clip[3] <= 0.0f ) {
+		return qfalse;
+	}
+
+	R_TransformClipToWindow( clip, &backEnd.viewParms, normalized, window );
+	lightScreen[0] = ( backEnd.viewParms.viewportX + window[0] ) / (float)glConfig.vidWidth;
+	lightScreen[1] = ( backEnd.viewParms.viewportY + window[1] ) / (float)glConfig.vidHeight;
+	lightScreen[2] = Com_Clamp( 0.0f, 1.0f, normalized[2] );
+	lightScreen[3] = 1.0f;
+
+	if ( normalized[2] < 0.0f || normalized[2] > 1.0f ) {
+		return qfalse;
+	}
+
+	s = r_dlightShadowStrength ? Com_Clamp( 0.0f, 1.0f, r_dlightShadowStrength->value ) : 0.6f;
+	if ( s <= 0.0f ) {
+		return qfalse;
+	}
+
+	*strength = s;
+	return qtrue;
+#else
+	return qfalse;
+#endif
+}
+
 void ARB_SetupLightParams( const shaderStage_t *pStage )
 {
 	programNum vertexProgram;
 	programNum fragmentProgram;
 	const fogProgramParms_t *fp;
 	qboolean fogPass;
+	qboolean dlightShadow;
 	const dlight_t *dl;
 	vec3_t lightRGB;
+	vec4_t lightScreen = { 0.0f, 0.0f, 0.0f, 0.0f };
 	float radius;
 	float textureScale;
+	float shadowStrength = 0.0f;
+	float zNear;
 
 	tess.dlightUpdateParams = qfalse;
 	tess.cullType = tess.shader->cullType;
@@ -1047,8 +1095,13 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	fp = NULL;
 
 	vertexProgram = DLIGHT_VERTEX;
+	dlightShadow = ARB_DlightShadowParams( dl, lightScreen, &shadowStrength );
 
-	if ( dl->linear ) {
+	if ( dlightShadow && dl->linear ) {
+		fragmentProgram = (tess.shader->cullType == CT_TWO_SIDED) ? DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT : DLIGHT_SHADOW_LINEAR_FRAGMENT;
+	} else if ( dlightShadow ) {
+		fragmentProgram = (tess.shader->cullType == CT_TWO_SIDED) ? DLIGHT_SHADOW_ABS_FRAGMENT : DLIGHT_SHADOW_FRAGMENT;
+	} else if ( dl->linear ) {
 		fragmentProgram = (tess.shader->cullType == CT_TWO_SIDED) ? DLIGHT_LINEAR_ABS_FRAGMENT : DLIGHT_LINEAR_FRAGMENT;
 	} else {
 		fragmentProgram = (tess.shader->cullType == CT_TWO_SIDED) ? DLIGHT_ABS_FRAGMENT : DLIGHT_FRAGMENT;
@@ -1078,6 +1131,23 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	}
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 6,
 		r_dlightFalloff ? r_dlightFalloff->value : 1.0f, 0.0f, 0.0f, 0.0f );
+
+	zNear = ( r_znear && r_znear->value > 0.0f ) ? r_znear->value : 1.0f;
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 7,
+		1.0f / (float)glConfig.vidWidth, 1.0f / (float)glConfig.vidHeight,
+		dlightShadow ? shadowStrength : 0.0f,
+		r_dlightShadowBias ? r_dlightShadowBias->value : 8.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 8,
+		lightScreen[0], lightScreen[1], lightScreen[2], dlightShadow ? 1.0f : 0.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 9,
+		backEnd.viewParms.zFar / zNear, backEnd.viewParms.zFar, 0.0f, 0.0f );
+
+	if ( dlightShadow ) {
+#ifdef USE_FBO
+		FBO_BindDlightShadowTexture( 2 );
+		GL_SelectTexture( 0 );
+#endif
+	}
 
 	if ( dl->linear )
 	{
@@ -1240,6 +1310,7 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	qboolean fog = qfalse;
 	qboolean linear = qfalse;
 	qboolean abslight = qfalse;
+	qboolean shadow = qfalse;
 
 	program[0] = '\0';
 
@@ -1248,6 +1319,10 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 		case DLIGHT_ABS_FRAGMENT_FOG:
 		case DLIGHT_LINEAR_FRAGMENT_FOG:
 		case DLIGHT_LINEAR_ABS_FRAGMENT_FOG:
+		case DLIGHT_SHADOW_FRAGMENT_FOG:
+		case DLIGHT_SHADOW_ABS_FRAGMENT_FOG:
+		case DLIGHT_SHADOW_LINEAR_FRAGMENT_FOG:
+		case DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT_FOG:
 			fog = qtrue;
 			break;
 	}
@@ -1257,6 +1332,10 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 		case DLIGHT_LINEAR_FRAGMENT_FOG:
 		case DLIGHT_LINEAR_ABS_FRAGMENT:
 		case DLIGHT_LINEAR_ABS_FRAGMENT_FOG:
+		case DLIGHT_SHADOW_LINEAR_FRAGMENT:
+		case DLIGHT_SHADOW_LINEAR_FRAGMENT_FOG:
+		case DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT:
+		case DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT_FOG:
 			linear = qtrue;
 			break;
 	}
@@ -1266,9 +1345,16 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 		case DLIGHT_ABS_FRAGMENT_FOG:
 		case DLIGHT_LINEAR_ABS_FRAGMENT:
 		case DLIGHT_LINEAR_ABS_FRAGMENT_FOG:
+		case DLIGHT_SHADOW_ABS_FRAGMENT:
+		case DLIGHT_SHADOW_ABS_FRAGMENT_FOG:
+		case DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT:
+		case DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT_FOG:
 			abslight = qtrue;
 			break;
 	}
+
+	shadow = ( programIndex >= DLIGHT_SHADOW_FRAGMENT && programIndex <= DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT_FOG &&
+		glConfig.numTextureUnits > 2 ) ? qtrue : qfalse;
 
 	strcat( program,
 	"!!ARBfp1.0 \n"
@@ -1325,6 +1411,55 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 	"LRP tmp.x, dlightFactors.x, tmp.y, tmp.x; \n"
 
 	"MUL light, lightRGB, tmp.x; \n" ); // light.rgb
+
+	if ( shadow ) {
+		strcat( program,
+		"PARAM dlightShadow = program.local[7]; \n"
+		"PARAM lightScreen = program.local[8]; \n"
+		"PARAM depthInfo = program.local[9]; \n"
+		"PARAM one = { 1.0, 1.0, 1.0, 1.0 }; \n"
+		"PARAM eps = { 0.00001, 0.0, 0.0, 0.0 }; \n"
+		"PARAM shadowSteps = { 0.5, 0.0, 0.0, 0.0 }; \n"
+		"TEMP screenTC, shadowRay, sampleTC, depthTap, denom, edgeDist, absRay, rayLimit, sampleT; \n"
+		"TEMP sceneLinear, fragLinear, lightLinear, rayLinear, receiverLinear, occ, shadowFactor; \n"
+		"MUL screenTC.xy, fragment.position.xy, dlightShadow.xy; \n"
+		"SUB shadowRay.xy, lightScreen.xy, screenTC.xy; \n"
+		"ABS absRay.xy, shadowRay.xy; \n"
+		"MAX absRay.xy, absRay.xy, eps.x; \n"
+		"SUB edgeDist.xy, one.xy, screenTC.xy; \n"
+		"SGE rayLimit.xy, shadowRay.xy, eps.y; \n"
+		"LRP edgeDist.xy, rayLimit.xy, edgeDist.xy, screenTC.xy; \n"
+		"RCP rayLimit.z, absRay.x; \n"
+		"RCP rayLimit.w, absRay.y; \n"
+		"MUL edgeDist.xy, edgeDist.xy, rayLimit.zw; \n"
+		"MIN rayLimit.x, edgeDist.x, edgeDist.y; \n"
+		"MIN rayLimit.x, rayLimit.x, one.x; \n"
+		"MAX rayLimit.x, rayLimit.x, eps.y; \n"
+		"SUB denom.y, depthInfo.x, one.x; \n"
+		"MAD denom.x, fragment.position.z, denom.y, one.x; \n"
+		"RCP fragLinear.x, denom.x; \n"
+		"MUL fragLinear.x, fragLinear.x, depthInfo.y; \n"
+		"MAD denom.x, lightScreen.z, denom.y, one.x; \n"
+		"RCP lightLinear.x, denom.x; \n"
+		"MUL lightLinear.x, lightLinear.x, depthInfo.y; \n"
+		"MUL sampleT.x, rayLimit.x, shadowSteps.x; \n"
+		"MAD sampleTC.xy, shadowRay.xy, sampleT.x, screenTC.xy; \n"
+		"TEX depthTap, sampleTC, texture[2], 2D; \n"
+		"MAD denom.x, depthTap.x, denom.y, one.x; \n"
+		"RCP sceneLinear.x, denom.x; \n"
+		"MUL sceneLinear.x, sceneLinear.x, depthInfo.y; \n"
+		"SUB rayLinear.x, lightLinear.x, fragLinear.x; \n"
+		"MAD rayLinear.x, rayLinear.x, sampleT.x, fragLinear.x; \n"
+		"SUB rayLinear.x, rayLinear.x, dlightShadow.w; \n"
+		"SUB receiverLinear.x, fragLinear.x, dlightShadow.w; \n"
+		"SLT occ.x, sceneLinear.x, rayLinear.x; \n"
+		"SLT occ.z, sceneLinear.x, receiverLinear.x; \n"
+		"MUL occ.x, occ.x, occ.z; \n"
+		"MUL occ.x, occ.x, dlightShadow.z; \n"
+		"SUB shadowFactor.x, one.x, occ.x; \n"
+		"MAX shadowFactor.x, shadowFactor.x, shadowSteps.w; \n"
+		"MUL light, light, shadowFactor.x; \n" );
+	}
 
 	strcat( program,
 	// normalize eye vector
@@ -2038,10 +2173,11 @@ static void ARB_DeletePrograms( void )
 	qglDeleteProgramsARB( ARRAY_LEN( programs ) - PROGRAM_BASE, programs + PROGRAM_BASE );
 	Com_Memset( programs, 0, sizeof( programs ) );
 	programCompiled = 0;
+	dlightShadowProgramsCompiled = qfalse;
 }
 
 
-qboolean ARB_CompileProgram( programType ptype, const char *text, GLuint program )
+static qboolean ARB_CompileProgramInternal( programType ptype, const char *text, GLuint program, qboolean fatal )
 {
 	GLint errorPos;
 	unsigned int errCode;
@@ -2063,12 +2199,20 @@ qboolean ARB_CompileProgram( programType ptype, const char *text, GLuint program
 			ri.Printf( PRINT_ALL, S_COLOR_YELLOW "%s Compile Error(%i,%i): %s\n" S_COLOR_CYAN "%s\n", (ptype == Fragment) ? "FP" : "VP",
 				errCode, errorPos, qglGetString( GL_PROGRAM_ERROR_STRING_ARB ), text );
 			qglBindProgramARB( kind, 0 );
-			ARB_DeletePrograms();
+			if ( fatal ) {
+				ARB_DeletePrograms();
+			}
 			return qfalse;
 		}
 	}
 
 	return qtrue;
+}
+
+
+qboolean ARB_CompileProgram( programType ptype, const char *text, GLuint program )
+{
+	return ARB_CompileProgramInternal( ptype, text, program, qtrue );
 }
 
 
@@ -2079,7 +2223,7 @@ qboolean ARB_UpdatePrograms( void )
 	int i;
 #endif
 #if defined (USE_FBO) || defined (USE_PMLIGHT)
-	char buf[8192];
+	char buf[16384];
 #endif
 #ifdef USE_FBO
 	char buf2[8192];
@@ -2110,6 +2254,25 @@ qboolean ARB_UpdatePrograms( void )
 		program = ARB_BuildDlightFP( buf, i );
 		if ( !ARB_CompileProgram( Fragment, program, programs[ i ] ) ) {
 			return qfalse;
+		}
+	}
+
+	dlightShadowProgramsCompiled = qfalse;
+	if ( r_dlightShadows && r_dlightShadows->integer && glConfig.numTextureUnits > 2 ) {
+		qboolean shadowProgramsOk = qtrue;
+
+		for ( i = DLIGHT_SHADOW_FRAGMENT; i <= DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT_FOG; i++ ) {
+			program = ARB_BuildDlightFP( buf, i );
+			if ( !ARB_CompileProgramInternal( Fragment, program, programs[ i ], qfalse ) ) {
+				shadowProgramsOk = qfalse;
+				break;
+			}
+		}
+
+		if ( shadowProgramsOk ) {
+			dlightShadowProgramsCompiled = qtrue;
+		} else {
+			ri.Printf( PRINT_ALL, S_COLOR_YELLOW "WARNING: ARB dynamic light shadow programs failed; disabling r_dlightShadows on GLx.\n" );
 		}
 	}
 #endif // USE_PMLIGHT
@@ -2170,6 +2333,7 @@ qboolean ARB_UpdatePrograms( void )
 #ifdef USE_FBO
 
 static void FBO_Bind( GLuint target, GLuint buffer );
+static const char *glDefToStr( GLint define );
 static qboolean FBO_Create( frameBuffer_t *fb, GLsizei width, GLsizei height,
 	qboolean depthStencil, GLint *outFormat, GLint *outType );
 
@@ -2242,8 +2406,28 @@ static void FBO_CleanBloom( void )
 }
 
 
+static void FBO_CleanDlightShadowAtlas( void )
+{
+	if ( dlightShadowAtlasFbo )
+	{
+		FBO_Bind( GL_FRAMEBUFFER, 0 );
+		qglDeleteFramebuffers( 1, &dlightShadowAtlasFbo );
+		dlightShadowAtlasFbo = 0;
+	}
+	if ( dlightShadowAtlasTexture )
+	{
+		GL_BindTexture( 1, 0 );
+		qglDeleteTextures( 1, &dlightShadowAtlasTexture );
+		dlightShadowAtlasTexture = 0;
+	}
+	Com_Memset( &dlightShadowAtlasLayout, 0, sizeof( dlightShadowAtlasLayout ) );
+}
+
+
 static void FBO_CleanDepth( void )
 {
+	FBO_CleanDlightShadowAtlas();
+
 	if ( depthFadeTexture )
 	{
 		GL_BindTexture( 1, 0 );
@@ -2280,6 +2464,72 @@ static GLuint FBO_CreateDepthFadeTexture( GLsizei width, GLsizei height )
 	qglTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL );
 
 	return tex;
+}
+
+
+static qboolean FBO_DlightShadowAtlasWanted( dlightShadowAtlasLayout_t *layout )
+{
+#ifdef USE_PMLIGHT
+	if ( !r_dlightShadows || !r_dlightShadows->integer ||
+		!r_dlightMode || !R_GetDlightMode() ||
+		!r_dlightShadowMaxLights || r_dlightShadowMaxLights->integer <= 0 ) {
+		return qfalse;
+	}
+
+	return R_DlightShadowAtlasLayout( r_dlightShadowMaxLights->integer,
+		r_dlightShadowResolution ? r_dlightShadowResolution->integer : 256,
+		glConfig.maxTextureSize, layout );
+#else
+	return qfalse;
+#endif
+}
+
+
+static qboolean FBO_CreateDlightShadowAtlas( void )
+{
+	dlightShadowAtlasLayout_t layout;
+	int fboStatus;
+
+	if ( !FBO_DlightShadowAtlasWanted( &layout ) ) {
+		return qfalse;
+	}
+
+	qglGenTextures( 1, &dlightShadowAtlasTexture );
+	GL_BindTexture( 1, dlightShadowAtlasTexture );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+	qglTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, layout.width, layout.height, 0,
+		GL_DEPTH_COMPONENT, GL_FLOAT, NULL );
+
+	qglGenFramebuffers( 1, &dlightShadowAtlasFbo );
+	FBO_Bind( GL_FRAMEBUFFER, dlightShadowAtlasFbo );
+	qglFramebufferTexture2D( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, dlightShadowAtlasTexture, 0 );
+	qglDrawBuffer( GL_NONE );
+	qglReadBuffer( GL_NONE );
+
+	fboStatus = qglCheckFramebufferStatus( GL_FRAMEBUFFER );
+	if ( fboStatus != GL_FRAMEBUFFER_COMPLETE )
+	{
+		ri.Printf( PRINT_WARNING, "Failed to create dynamic-light shadow atlas FBO (status %s, error %s)\n",
+			glDefToStr( fboStatus ), glDefToStr( (int)qglGetError() ) );
+		FBO_CleanDlightShadowAtlas();
+		qglDrawBuffer( GL_BACK );
+		qglReadBuffer( GL_BACK );
+		return qfalse;
+	}
+
+	qglClear( GL_DEPTH_BUFFER_BIT );
+	dlightShadowAtlasLayout = layout;
+	FBO_Bind( GL_FRAMEBUFFER, 0 );
+	qglDrawBuffer( GL_BACK );
+	qglReadBuffer( GL_BACK );
+
+	ri.Printf( PRINT_ALL, "...dynamic-light shadow atlas %ix%i (%i px faces, %i lights)\n",
+		layout.width, layout.height, layout.faceSize, layout.maxLights );
+
+	return qtrue;
 }
 
 
@@ -2800,6 +3050,61 @@ qboolean FBO_DepthFadeReady( void )
 	return ( FBO_DepthFadeAvailable() && depthFadeCopied ) ? qtrue : qfalse;
 }
 
+qboolean FBO_DlightShadowsAvailable( void )
+{
+#ifdef USE_PMLIGHT
+	return ( FBO_DepthTextureAvailable() &&
+		dlightShadowProgramsCompiled &&
+		r_dlightMode && r_dlightMode->integer &&
+		r_dlightShadows && r_dlightShadows->integer &&
+		glConfig.numTextureUnits > 2 ) ? qtrue : qfalse;
+#else
+	return qfalse;
+#endif
+}
+
+qboolean FBO_DlightShadowAtlasAvailable( void )
+{
+	return ( fboEnabled && dlightShadowAtlasTexture && dlightShadowAtlasFbo &&
+		dlightShadowAtlasLayout.faceSize > 0 ) ? qtrue : qfalse;
+}
+
+qboolean FBO_BeginDlightShadowAtlas( void )
+{
+	if ( !FBO_DlightShadowAtlasAvailable() ) {
+		return qfalse;
+	}
+
+	FBO_Bind( GL_FRAMEBUFFER, dlightShadowAtlasFbo );
+	qglDrawBuffer( GL_NONE );
+	qglReadBuffer( GL_NONE );
+	qglViewport( 0, 0, dlightShadowAtlasLayout.width, dlightShadowAtlasLayout.height );
+	qglScissor( 0, 0, dlightShadowAtlasLayout.width, dlightShadowAtlasLayout.height );
+	GL_State( GLS_DEFAULT );
+	qglClear( GL_DEPTH_BUFFER_BIT );
+
+	return qtrue;
+}
+
+void FBO_EndDlightShadowAtlas( void )
+{
+	if ( fboEnabled ) {
+		FBO_BindMain();
+		qglDrawBuffer( GL_COLOR_ATTACHMENT0 );
+		qglReadBuffer( GL_COLOR_ATTACHMENT0 );
+	}
+}
+
+int FBO_DlightShadowAtlasHeight( void )
+{
+	return dlightShadowAtlasLayout.height;
+}
+
+qboolean FBO_DlightShadowsReady( void )
+{
+	return ( FBO_DlightShadowsAvailable() && depthFadeCopied ) ? qtrue : qfalse;
+}
+
 void FBO_ResetDepthFade( void )
 {
 	depthFadeCopied = qfalse;
@@ -2833,9 +3138,23 @@ void FBO_CopyDepthFade( void )
 	FBO_CopyDepthTexture();
 }
 
+void FBO_CopyDlightShadowMap( void )
+{
+	if ( !FBO_DlightShadowsAvailable() ) {
+		return;
+	}
+
+	FBO_CopyDepthTexture();
+}
+
 void FBO_BindDepthFadeTexture( int texUnit )
 {
 	GL_BindTexture( texUnit, FBO_DepthFadeReady() ? depthFadeTexture : 0 );
+}
+
+void FBO_BindDlightShadowTexture( int texUnit )
+{
+	GL_BindTexture( texUnit, FBO_DlightShadowsReady() ? depthFadeTexture : 0 );
 }
 
 void FBO_DrawWorldCelOutline( void )
@@ -4036,6 +4355,7 @@ void QGL_InitFBO( void )
 	{
 		fboEnabled = qtrue;
 		depthFadeTexture = FBO_CreateDepthFadeTexture( w, h );
+		FBO_CreateDlightShadowAtlas();
 		FBO_BindMain();
 		ri.Printf( PRINT_ALL, "...using %s (%s:%s) FBO\n", glDefToStr( fboInternalFormat ),
 			glDefToStr( fboTextureFormat ), glDefToStr( fboTextureType ) );

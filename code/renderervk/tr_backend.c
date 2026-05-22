@@ -1216,6 +1216,282 @@ static const void *RB_StretchPic( const void *data ) {
 
 
 #ifdef USE_PMLIGHT
+static qboolean RB_DlightShadowsNeeded( void )
+{
+	int i;
+
+	if ( !r_dlightShadows || !r_dlightShadows->integer ) {
+		return qfalse;
+	}
+
+	for ( i = 0; i < backEnd.viewParms.num_dlights; i++ ) {
+		if ( backEnd.viewParms.dlights[i].shadowPlanned ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static const float rb_dlightShadowFlipMatrix[16] = {
+	0, 0, -1, 0,
+	-1, 0, 0, 0,
+	0, 1, 0, 0,
+	0, 0, 0, 1
+};
+
+static void RB_DlightShadowMultMatrix( const float *a, const float *b, float *out )
+{
+	int i, j;
+
+	for ( i = 0; i < 4; i++ ) {
+		for ( j = 0; j < 4; j++ ) {
+			out[ i * 4 + j ] =
+				a[ i * 4 + 0 ] * b[ 0 * 4 + j ] +
+				a[ i * 4 + 1 ] * b[ 1 * 4 + j ] +
+				a[ i * 4 + 2 ] * b[ 2 * 4 + j ] +
+				a[ i * 4 + 3 ] * b[ 3 * 4 + j ];
+		}
+	}
+}
+
+static void RB_SetDlightShadowFaceAxis( vec3_t baseAxis[3], int faceIndex, vec3_t outAxis[3] )
+{
+	switch ( faceIndex ) {
+		case 0:
+			AxisCopy( baseAxis, outAxis );
+			break;
+		case 1:
+			VectorNegate( baseAxis[0], outAxis[0] );
+			VectorNegate( baseAxis[1], outAxis[1] );
+			VectorCopy( baseAxis[2], outAxis[2] );
+			break;
+		case 2:
+			VectorCopy( baseAxis[1], outAxis[0] );
+			VectorNegate( baseAxis[0], outAxis[1] );
+			VectorCopy( baseAxis[2], outAxis[2] );
+			break;
+		case 3:
+			VectorNegate( baseAxis[1], outAxis[0] );
+			VectorCopy( baseAxis[0], outAxis[1] );
+			VectorCopy( baseAxis[2], outAxis[2] );
+			break;
+		case 4:
+			VectorCopy( baseAxis[2], outAxis[0] );
+			VectorCopy( baseAxis[1], outAxis[1] );
+			VectorNegate( baseAxis[0], outAxis[2] );
+			break;
+		case 5:
+		default:
+			VectorNegate( baseAxis[2], outAxis[0] );
+			VectorCopy( baseAxis[1], outAxis[1] );
+			VectorCopy( baseAxis[0], outAxis[2] );
+			break;
+	}
+}
+
+static void RB_SetDlightShadowProjectionZ( viewParms_t *viewParms, float zNear, float zFar )
+{
+	float depth = zFar - zNear;
+
+	viewParms->projectionMatrix[2] = 0.0f;
+	viewParms->projectionMatrix[6] = 0.0f;
+#ifdef USE_REVERSED_DEPTH
+	viewParms->projectionMatrix[10] = zNear / depth;
+	viewParms->projectionMatrix[14] = zFar * zNear / depth;
+#else
+	viewParms->projectionMatrix[10] = -zFar / depth;
+	viewParms->projectionMatrix[14] = -zFar * zNear / depth;
+#endif
+}
+
+static void RB_SetDlightShadowView( const dlight_t *dl, int face, int atlasHeight )
+{
+	viewParms_t shadowParms;
+	float viewerMatrix[16];
+	float zNear;
+	float zFar;
+	vec3_t baseAxis[3];
+
+	Com_Memset( &shadowParms, 0, sizeof( shadowParms ) );
+	shadowParms.viewportX = dl->shadowAtlasX[face];
+	shadowParms.viewportY = atlasHeight - dl->shadowAtlasY[face] - dl->shadowAtlasFaceSize;
+	shadowParms.viewportWidth = dl->shadowAtlasFaceSize;
+	shadowParms.viewportHeight = dl->shadowAtlasFaceSize;
+	shadowParms.scissorX = shadowParms.viewportX;
+	shadowParms.scissorY = shadowParms.viewportY;
+	shadowParms.scissorWidth = shadowParms.viewportWidth;
+	shadowParms.scissorHeight = shadowParms.viewportHeight;
+	shadowParms.fovX = 90.0f;
+	shadowParms.fovY = 90.0f;
+	shadowParms.zFar = MAX( dl->radius, 64.0f );
+	shadowParms.stereoFrame = STEREO_CENTER;
+	shadowParms.portalView = PV_NONE;
+	VectorCopy( dl->origin, shadowParms.or.origin );
+	VectorCopy( dl->origin, shadowParms.pvsOrigin );
+
+	VectorSet( baseAxis[0], 1.0f, 0.0f, 0.0f );
+	VectorSet( baseAxis[1], 0.0f, 1.0f, 0.0f );
+	VectorSet( baseAxis[2], 0.0f, 0.0f, 1.0f );
+	RB_SetDlightShadowFaceAxis( baseAxis, face, shadowParms.or.axis );
+
+	Com_Memset( &shadowParms.world, 0, sizeof( shadowParms.world ) );
+	shadowParms.world.axis[0][0] = 1.0f;
+	shadowParms.world.axis[1][1] = 1.0f;
+	shadowParms.world.axis[2][2] = 1.0f;
+	VectorCopy( shadowParms.or.origin, shadowParms.world.viewOrigin );
+
+	viewerMatrix[0] = shadowParms.or.axis[0][0];
+	viewerMatrix[4] = shadowParms.or.axis[0][1];
+	viewerMatrix[8] = shadowParms.or.axis[0][2];
+	viewerMatrix[12] = -dl->origin[0] * viewerMatrix[0] + -dl->origin[1] * viewerMatrix[4] + -dl->origin[2] * viewerMatrix[8];
+	viewerMatrix[1] = shadowParms.or.axis[1][0];
+	viewerMatrix[5] = shadowParms.or.axis[1][1];
+	viewerMatrix[9] = shadowParms.or.axis[1][2];
+	viewerMatrix[13] = -dl->origin[0] * viewerMatrix[1] + -dl->origin[1] * viewerMatrix[5] + -dl->origin[2] * viewerMatrix[9];
+	viewerMatrix[2] = shadowParms.or.axis[2][0];
+	viewerMatrix[6] = shadowParms.or.axis[2][1];
+	viewerMatrix[10] = shadowParms.or.axis[2][2];
+	viewerMatrix[14] = -dl->origin[0] * viewerMatrix[2] + -dl->origin[1] * viewerMatrix[6] + -dl->origin[2] * viewerMatrix[10];
+	viewerMatrix[3] = 0.0f;
+	viewerMatrix[7] = 0.0f;
+	viewerMatrix[11] = 0.0f;
+	viewerMatrix[15] = 1.0f;
+
+	RB_DlightShadowMultMatrix( viewerMatrix, rb_dlightShadowFlipMatrix, shadowParms.world.modelMatrix );
+
+	zNear = 1.0f;
+	zFar = MAX( shadowParms.zFar, zNear + 1.0f );
+	R_SetupProjection( &shadowParms, zNear, qfalse );
+	RB_SetDlightShadowProjectionZ( &shadowParms, zNear, zFar );
+
+	backEnd.viewParms = shadowParms;
+	backEnd.or = shadowParms.world;
+	backEnd.currentEntity = &tr.worldEntity;
+	SetViewportAndScissor();
+	Com_Memcpy( vk_world.modelview_transform, backEnd.or.modelMatrix, 64 );
+	tess.depthRange = DEPTH_RANGE_NORMAL;
+	vk_update_mvp( NULL );
+}
+
+static qboolean RB_DlightShadowWorldCasterAllowed( const shader_t *shader, const surfaceType_t *surface )
+{
+	if ( !shader || !surface ) {
+		return qfalse;
+	}
+	if ( shader->sort != SS_OPAQUE || shader->isSky || shader->polygonOffset ||
+		(shader->surfaceFlags & ( SURF_SKY | SURF_NODLIGHT )) ) {
+		return qfalse;
+	}
+	if ( shader->lightingStage < 0 ) {
+		return qfalse;
+	}
+
+	switch ( *surface ) {
+		case SF_FACE:
+		case SF_GRID:
+		case SF_TRIANGLES:
+			return qtrue;
+		default:
+			return qfalse;
+	}
+}
+
+static int RB_RenderDlightShadowWorldCasters( const dlight_t *dl )
+{
+	const litSurf_t *litSurf;
+	shader_t *shader;
+	int entityNum;
+	int fogNum;
+	int surfaces;
+
+	surfaces = 0;
+	RB_BeginSurface( tr.defaultShader, 0 );
+	tess.allowVBO = qfalse;
+
+	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
+		R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
+		if ( entityNum != REFENTITYNUM_WORLD ) {
+			continue;
+		}
+		if ( !RB_DlightShadowWorldCasterAllowed( shader, litSurf->surface ) ) {
+			continue;
+		}
+
+		rb_surfaceTable[ *litSurf->surface ]( litSurf->surface );
+		surfaces++;
+	}
+
+	RB_EndSurface();
+	return surfaces;
+}
+
+static void RB_RenderDlightShadowAtlas( void )
+{
+	dlight_t *dl;
+	trRefdef_t savedRefdef;
+	viewParms_t savedViewParms;
+	orientationr_t savedOr;
+	const trRefEntity_t *savedEntity;
+	qboolean savedProjection2D;
+#ifdef USE_VBO
+	qboolean savedAllowVBO;
+#endif
+	int atlasHeight;
+	int i, face;
+
+	if ( !RB_DlightShadowsNeeded() ) {
+		return;
+	}
+
+	RB_EndSurface();
+	if ( !vk_begin_dlight_shadow_render_pass() ) {
+		return;
+	}
+	savedRefdef = backEnd.refdef;
+	savedViewParms = backEnd.viewParms;
+	savedOr = backEnd.or;
+	savedEntity = backEnd.currentEntity;
+	savedProjection2D = backEnd.projection2D;
+#ifdef USE_VBO
+	savedAllowVBO = tess.allowVBO;
+	tess.allowVBO = qfalse;
+#endif
+	backEnd.projection2D = qfalse;
+	atlasHeight = vk_dlight_shadow_atlas_height();
+
+	for ( i = 0; i < savedViewParms.num_dlights; i++ ) {
+		dl = &savedViewParms.dlights[i];
+		if ( !dl->shadowPlanned || dl->shadowAtlasFaceSize <= 0 ) {
+			continue;
+		}
+
+		backEnd.pc.c_dlightShadowAtlasLights++;
+		for ( face = 0; face < DLIGHT_SHADOW_FACES; face++ ) {
+			int surfaces;
+
+			RB_SetDlightShadowView( dl, face, atlasHeight );
+			surfaces = RB_RenderDlightShadowWorldCasters( dl );
+			backEnd.pc.c_dlightShadowAtlasFaces++;
+			backEnd.pc.c_dlightShadowAtlasSurfaces += surfaces;
+		}
+	}
+
+	backEnd.refdef = savedRefdef;
+	backEnd.viewParms = savedViewParms;
+	backEnd.or = savedOr;
+	backEnd.currentEntity = savedEntity;
+	backEnd.projection2D = savedProjection2D;
+#ifdef USE_VBO
+	tess.allowVBO = savedAllowVBO;
+#endif
+	Com_Memcpy( vk_world.modelview_transform, backEnd.or.modelMatrix, 64 );
+	tess.depthRange = DEPTH_RANGE_NORMAL;
+	vk_update_mvp( NULL );
+	vk_end_dlight_shadow_render_pass();
+}
+
+
 static void RB_LightingPass( void )
 {
 	dlight_t	*dl;
@@ -1224,6 +1500,13 @@ static void RB_LightingPass( void )
 #ifdef USE_VBO
 	//VBO_Flush();
 	//tess.allowVBO = qfalse; // for now
+#endif
+
+#ifdef USE_VULKAN
+	if ( RB_DlightShadowsNeeded() &&
+		vk_depth_fade_available() && !vk_depth_fade_ready() ) {
+		vk_copy_depth_fade();
+	}
 #endif
 
 	tess.dlightPass = qtrue;
@@ -1411,6 +1694,10 @@ static const void *RB_DrawSurfs( const void *data ) {
 
 #ifdef USE_VBO
 	VBO_UnBind();
+#endif
+
+#ifdef USE_PMLIGHT
+	RB_RenderDlightShadowAtlas();
 #endif
 
 	// clear the z buffer, set the modelview, etc

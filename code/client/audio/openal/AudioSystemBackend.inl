@@ -50,6 +50,7 @@ private:
 	StreamPlayer rawPlayer_;
 	std::deque<SoundSample> samples_;
 	std::unordered_map<std::string, sfxHandle_t> sampleLookup_;
+	SoundShaderLibrary weaponSoundShaders_;
 	snd_stream_t *backgroundStream_ = nullptr;
 	std::string backgroundIntro_;
 	std::string backgroundLoop_;
@@ -293,6 +294,7 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 
 	samples_.clear();
 	sampleLookup_.clear();
+	weaponSoundShaders_.Clear();
 	started_ = true;
 	hardMuted_ = true;
 	deviceRecovery_ = {};
@@ -335,6 +337,7 @@ void AudioSystem::Shutdown() {
 	}
 	samples_.clear();
 	sampleLookup_.clear();
+	weaponSoundShaders_.Clear();
 	musicPlayer_.Shutdown();
 	rawPlayer_.Shutdown();
 	device_.Shutdown();
@@ -396,8 +399,10 @@ void AudioSystem::BeginRegistration() {
 		return;
 	}
 
-	samples_.emplace_back( "sound/feedback/hit.wav" );
-	sampleLookup_.emplace( NormalizeSoundName( "sound/feedback/hit.wav" ), 0 );
+	weaponSoundShaders_.EnsureLoaded();
+	const std::string feedbackSample = NormalizeSoundName( "sound/feedback/hit.wav" );
+	samples_.emplace_back( feedbackSample, weaponSoundShaders_.Find( feedbackSample ) );
+	sampleLookup_.emplace( feedbackSample, 0 );
 	samples_[0].EnsureLoaded( device_, true );
 }
 
@@ -433,7 +438,8 @@ sfxHandle_t AudioSystem::RegisterSound( const char *sample, qboolean /*compresse
 		Com_Error( ERR_FATAL, "S_FindName: out of sfx_t" );
 	}
 	const sfxHandle_t handle = static_cast<sfxHandle_t>( samples_.size() );
-	samples_.emplace_back( normalized );
+	weaponSoundShaders_.EnsureLoaded();
+	samples_.emplace_back( normalized, weaponSoundShaders_.Find( normalized ) );
 	sampleLookup_.emplace( normalized, handle );
 	if ( !samples_.back().EnsureLoaded( device_, false ) ) {
 		Com_DPrintf( S_COLOR_YELLOW "WARNING: couldn't load sound: %s\n", sample );
@@ -771,6 +777,8 @@ void AudioSystem::SoundInfo() {
 	Com_Printf( "%5d stream buffers (%d free)\n", device_.BufferPool().TotalCount(), device_.BufferPool().FreeCount() );
 	Com_Printf( "Music stream buffers: %d queued\n", musicPlayer_.QueuedBufferCount() );
 	Com_Printf( "Raw stream buffers: %d queued\n", rawPlayer_.QueuedBufferCount() );
+	weaponSoundShaders_.EnsureLoaded();
+	Com_Printf( "%5d weapon sound shader rules\n", weaponSoundShaders_.Count() );
 	Com_Printf( "%5lu registered samples\n", static_cast<unsigned long>( samples_.size() ) );
 	Com_Printf( "Background track: %s\n", backgroundIntro_.empty() ? "none" : backgroundIntro_.c_str() );
 	if ( !backgroundLoop_.empty() && backgroundLoop_ != backgroundIntro_ ) {

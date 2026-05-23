@@ -22,7 +22,7 @@ from fnq3_meta import (
     normalize_commit,
     normalize_date,
 )
-from changelog import DEFAULT_CHANGELOG, section_text
+from changelog import DEFAULT_CHANGELOG, clean_section_text, clear_unreleased
 
 
 GITHUB_MODELS_ENDPOINT = "https://models.github.ai/inference/chat/completions"
@@ -57,7 +57,17 @@ def parse_args() -> argparse.Namespace:
     notes.add_argument("--to-commit")
     notes.add_argument("--changelog", type=Path, default=DEFAULT_CHANGELOG)
     notes.add_argument("--output", type=Path)
-    notes.add_argument("--no-ai", action="store_true", help="Skip GitHub Models release-note generation")
+    notes.add_argument(
+        "--highlights-file",
+        type=Path,
+        help="Use pre-generated AI release-note highlights instead of generating them here",
+    )
+    notes.add_argument(
+        "--clear-changelog",
+        action="store_true",
+        help="Reset the Unreleased changelog section after release notes are written",
+    )
+    notes.add_argument("--no-ai", action="store_true", help="Skip built-in GitHub Models release-note generation")
     notes.add_argument(
         "--notes-model",
         default=os.environ.get("FNQ3_RELEASE_NOTES_MODEL", DEFAULT_RELEASE_NOTES_MODEL),
@@ -286,14 +296,14 @@ def truncate_context(value: str, max_chars: int = MAX_RELEASE_NOTES_CONTEXT_CHAR
 
 def meaningful_changelog_section(changelog: Path) -> str:
     try:
-        text = section_text(changelog, "Unreleased").strip()
+        text = clean_section_text(changelog, "Unreleased").strip()
     except Exception:
         return ""
 
     has_real_bullet = False
     for line in text.splitlines():
         stripped = line.strip().lower()
-        if stripped.startswith("- ") and "none yet" not in stripped:
+        if stripped.startswith("- ") and "none yet" not in stripped and "no documented changes" not in stripped:
             has_real_bullet = True
             break
     return text if has_real_bullet else ""
@@ -512,7 +522,13 @@ def generated_highlights(
     no_ai: bool,
     notes_model: str,
     ai_timeout: int,
+    highlights_file: Path | None = None,
 ) -> str:
+    if highlights_file is not None and highlights_file.exists():
+        highlights = sanitize_generated_notes(highlights_file.read_text(encoding="utf-8"))
+        if highlights:
+            return highlights
+
     commits = commit_entries(from_commit, target_commit)
     if not no_ai:
         context = release_note_generation_context(
@@ -543,6 +559,7 @@ def render_release_notes(
     no_ai: bool = False,
     notes_model: str = DEFAULT_RELEASE_NOTES_MODEL,
     ai_timeout: int = 45,
+    highlights_file: Path | None = None,
 ) -> str:
     meta = base_metadata()
     target_commit = (to_commit or git("rev-parse", "HEAD")).strip()
@@ -564,6 +581,7 @@ def render_release_notes(
         no_ai=no_ai,
         notes_model=notes_model,
         ai_timeout=ai_timeout,
+        highlights_file=highlights_file,
     )
 
     previous_line: str
@@ -629,12 +647,15 @@ def main() -> int:
         no_ai=args.no_ai,
         notes_model=args.notes_model,
         ai_timeout=args.ai_timeout,
+        highlights_file=args.highlights_file,
     )
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         write_text_lf(args.output, notes)
     else:
         sys.stdout.write(notes)
+    if args.clear_changelog:
+        clear_unreleased(args.changelog)
     return 0
 
 

@@ -96,6 +96,10 @@ jobs:
           meson compile -C meson/build-${{ matrix.arch }}
           meson install -C meson/build-${{ matrix.arch }} --no-rebuild
 
+      - name: Verify release layout
+        shell: msys2 {0}
+        run: python scripts/verify_release_layout.py bin
+
       - uses: actions/upload-artifact@v7
         with:
           name: windows-mingw-${{ matrix.arch }}
@@ -150,6 +154,9 @@ jobs:
           )
           meson compile -C meson\build-${{ matrix.arch }} || exit /b
           meson install -C meson\build-${{ matrix.arch }} --no-rebuild || exit /b
+
+      - name: Verify release layout
+        run: python scripts/verify_release_layout.py bin
 
       - uses: actions/upload-artifact@v7
         with:
@@ -237,6 +244,9 @@ jobs:
       - name: Check glibc baseline
         run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
 
+      - name: Verify release layout
+        run: python3 scripts/verify_release_layout.py bin
+
       - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
@@ -272,6 +282,9 @@ jobs:
 
       - name: Check glibc baseline
         run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
+
+      - name: Verify release layout
+        run: python3 scripts/verify_release_layout.py bin
 
       - uses: actions/upload-artifact@v7
         with:
@@ -326,6 +339,9 @@ jobs:
           VORBIS_LIBS="$(pkg-config --libs vorbisfile)" \
             gmake install -j$(sysctl -n hw.logicalcpu) ARCH=${{ matrix.arch }} CC=clang DESTDIR=bin INSTALL=ginstall USE_LOCAL_HEADERS=0 USE_SYSTEM_JPEG=1 USE_SYSTEM_OGG=1 USE_SYSTEM_VORBIS=1 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1 STRIP=echo
 
+      - name: Verify release layout
+        run: python3 scripts/verify_release_layout.py bin
+
       - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.arch }}
@@ -369,6 +385,9 @@ jobs:
     permissions:
       contents: write
       models: read
+      pull-requests: read
+    env:
+      HAS_COPILOT_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -394,6 +413,25 @@ jobs:
         run: |
           python scripts/release.py --channel manual --artifact-root artifacts --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}"
 
+      - name: Build Copilot changelog cleanup
+        id: copilot_notes
+        if: ${{ env.HAS_COPILOT_TOKEN == 'true' && needs.prepare.outputs.previous_release_commit != '' }}
+        uses: github/copilot-release-notes@v1.0.1
+        with:
+          base-ref: ${{ needs.prepare.outputs.previous_release_commit }}
+          head-ref: ${{ needs.prepare.outputs.head_commit }}
+          instructions: .github/release-notes-instructions.md
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+
+      - name: Save Copilot highlights
+        if: ${{ steps.copilot_notes.outputs.release-notes != '' }}
+        env:
+          COPILOT_RELEASE_NOTES: ${{ steps.copilot_notes.outputs.release-notes }}
+        run: |
+          mkdir -p .tmp
+          printf '%s\n' "$COPILOT_RELEASE_NOTES" > .tmp/copilot-release-notes.md
+
       - name: Build release notes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -402,11 +440,16 @@ jobs:
           if [ -n "${{ needs.prepare.outputs.previous_release_commit }}" ]; then
             FROM_ARGS+=(--from-commit "${{ needs.prepare.outputs.previous_release_commit }}")
           fi
+          HIGHLIGHTS_ARGS=()
+          if [ -s .tmp/copilot-release-notes.md ]; then
+            HIGHLIGHTS_ARGS+=(--highlights-file .tmp/copilot-release-notes.md)
+          fi
           python scripts/manual_release.py release-notes \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
             --build-date "${{ needs.prepare.outputs.build_date }}" \
             --to-commit "${{ needs.prepare.outputs.head_commit }}" \
             "${FROM_ARGS[@]}" \
+            "${HIGHLIGHTS_ARGS[@]}" \
             --output .tmp/release-notes.md
 
       - name: Create release
@@ -420,3 +463,17 @@ jobs:
             --target "${{ needs.prepare.outputs.head_commit }}" \
             --title "${FNQ3_RELEASE_TITLE}" \
             --notes-file .tmp/release-notes.md
+
+      - name: Clear pending changelog
+        if: ${{ github.ref_type == 'branch' }}
+        run: |
+          python scripts/changelog.py clear-unreleased
+          if git diff --quiet -- docs/fnquake3/CHANGELOG.md; then
+            echo "Pending changelog already clean."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/fnquake3/CHANGELOG.md
+          git commit -m "Reset pending changelog after release"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

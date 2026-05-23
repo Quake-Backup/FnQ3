@@ -19,7 +19,9 @@ param(
 	[switch]$SetupOnly,
 	[switch]$RunTests,
 	[switch]$Install,
-	[string]$DestDir = $(if ($env:FNQ3_MESON_DESTDIR) { $env:FNQ3_MESON_DESTDIR } else { '' })
+	[string]$DestDir = $(if ($env:FNQ3_MESON_DESTDIR) { $env:FNQ3_MESON_DESTDIR } else { '' }),
+	[switch]$Archive,
+	[string]$RootArchiveName = $(if ($env:FNQ3_MESON_ROOT_ARCHIVE_NAME) { $env:FNQ3_MESON_ROOT_ARCHIVE_NAME } else { 'FnQuake3-pkg.fnz' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -181,6 +183,28 @@ function Clear-StaleMesonArchive {
 	}
 }
 
+function Invoke-MesonInstall {
+	param(
+		[string]$MesonPath,
+		[string]$BuildPath,
+		[string]$SelectedDestDir,
+		[string]$InstallTags = ''
+	)
+
+	$installArgs = @('install', '-C', $BuildPath, '--no-rebuild')
+	if ($SelectedDestDir) {
+		$installArgs += @('--destdir', $SelectedDestDir)
+	}
+	if ($InstallTags) {
+		$installArgs += @('--tags', $InstallTags)
+	}
+	Write-Host "==> $MesonPath $($installArgs -join ' ')"
+	& $MesonPath @installArgs
+	if ($LASTEXITCODE -ne 0) {
+		throw 'Meson install failed.'
+	}
+}
+
 $workspaceRoot = Split-Path -Parent $PSScriptRoot
 $buildPath = Resolve-BuildPath -WorkspaceRoot $workspaceRoot -SelectedBuildDir $BuildDir
 $buildType = Convert-BuildType -SelectedConfiguration $Configuration
@@ -197,6 +221,9 @@ Write-Host "Target: $Target"
 Write-Host "Build directory: $buildPath"
 Write-Host "Renderer modules: $rendererCsv"
 Write-Host "Renderer default: $RendererDefault"
+if ($Archive) {
+	Write-Host "Root package archive: $(Join-Path $buildPath $RootArchiveName)"
+}
 
 $coreDataPath = Join-Path $buildPath 'meson-private\coredata.dat'
 $setupArgs = @(
@@ -233,6 +260,7 @@ if ($SetupOnly) {
 }
 
 Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName 'libbotlib.a'
+Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName $RootArchiveName
 
 $compileArgs = @('compile', '-C', $buildPath)
 Write-Host "==> $mesonPath $($compileArgs -join ' ')"
@@ -253,15 +281,22 @@ if ($RunTests) {
 }
 
 if ($Install) {
-	$installArgs = @('install', '-C', $buildPath)
-	if ($DestDir) {
-		$installArgs += @('--destdir', $DestDir)
+	Invoke-MesonInstall -MesonPath $mesonPath -BuildPath $buildPath -SelectedDestDir $DestDir
+}
+
+if ($Archive) {
+	$archivePath = Join-Path $buildPath $RootArchiveName
+	if (-not (Test-Path $archivePath)) {
+		throw "Root package archive was not produced: $archivePath"
 	}
-	Write-Host "==> $mesonPath $($installArgs -join ' ')"
-	& $mesonPath @installArgs
+	$verifyScript = Join-Path $workspaceRoot 'scripts\verify_release_layout.py'
+	Write-Host "==> python $verifyScript $archivePath"
+	& python $verifyScript $archivePath
 	if ($LASTEXITCODE -ne 0) {
-		throw 'Meson install failed.'
+		throw 'Root package archive verification failed.'
 	}
+
+	Write-Host "Root package archive ready: $archivePath"
 }
 
 Write-Host 'Meson release build completed.'

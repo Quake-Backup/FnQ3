@@ -7,7 +7,7 @@ FnQuake3 keeps the classic Quake III `640x480` UI and HUD assumptions, then rema
 These settings are split by subsystem, so you can correct the HUD, menus, and cinematics independently instead of forcing one global choice.
 
 - `cl_hudAspect 0`: Stretch legacy HUD output to the framebuffer, matching the original wide-screen stretching behavior.
-- `cl_hudAspect 1`: Keep HUD output in centered 4:3 space. If `fnq3-hud.json` exists in the active game directory, matching rules are applied automatically, including HUD 3D model viewports rendered through cgame.
+- `cl_hudAspect 1`: Keep HUD output in centered 4:3 space. If `fnq3-hud.json` exists in the FnQuake3 package or active game filesystem, matching rules are applied automatically, including HUD 3D model viewports rendered through cgame.
 - `cl_menuAspect 0`: Stretch menu widgets to the framebuffer.
 - `cl_menuAspect 1`: Keep menu widgets in centered 4:3 space, including 3D model preview viewports rendered through the UI VM. Those adjusted UI scenes keep their authored menu FOV instead of taking an extra `r_fovCorrection` pass.
 - `cl_cinematicAspect 0`: Stretch UI and fullscreen cinematics to the framebuffer.
@@ -17,8 +17,8 @@ These settings are split by subsystem, so you can correct the HUD, menus, and ci
 
 When `cl_hudAspect 1` is enabled, FnQuake3 starts from a centered 4:3 HUD layout. If a `fnq3-hud.json` file exists, the engine can then use your rules to realign specific elements or push selected pieces back to stretch mode.
 
-- The script is read from the active game filesystem location first.
-- If no active-game copy is found, FnQuake3 also checks `FnQuake3-pkg.fnz` next to the executable for `fnq3-hud.json`. The archive is just a renamed `.zip` file.
+- FnQuake3 checks `FnQuake3-pkg.fnz` next to the executable first, using game-dir-prefixed entries such as `baseq3/fnq3-hud.json` before the legacy unprefixed `fnq3-hud.json` entry. The archive is just a renamed `.zip` file.
+- If the package does not contain a matching script, the normal active game filesystem search is used.
 - `hud_reload` reparses `fnq3-hud.json` without restarting the game.
 - Missing or invalid scripts fall back to centered uniform HUD placement.
 - HUD `refdef` viewports use the same rect transform path as HUD quads, so score heads and other 3D HUD widgets stay aligned with the corrected HUD layout.

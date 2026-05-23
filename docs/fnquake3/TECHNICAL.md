@@ -47,14 +47,17 @@ Current policy:
 - Tagged releases use semantic version tags in the form `vX.Y.Z`.
 - Manual release runs produce unique version/date/commit tags (e.g. `0.1.0.42-20240403-abc12345`) and matching package prefixes without a channel word.
 - The base version in `fnq3_version.h` should always represent the next intended stable release line.
-- Release-facing change history lives in [`docs/fnquake3/CHANGELOG.md`](./CHANGELOG.md). Keep the `Unreleased` section current as work lands.
-- Use [`scripts/changelog.py`](../../scripts/changelog.py) to extract a section or promote `Unreleased` into a dated release section during tagging.
+- Pending release-note material lives in [`docs/fnquake3/CHANGELOG.md`](./CHANGELOG.md). Keep the `Unreleased` section current as work lands; GitHub release entries are the durable published history.
+- Use [`scripts/changelog.py`](../../scripts/changelog.py) to extract, clean up, promote, or reset the pending changelog section.
 
 Typical changelog helper usage:
 
 ```powershell
 python scripts/changelog.py section --version Unreleased
+python scripts/changelog.py section --version Unreleased --clean
+python scripts/changelog.py cleanup --version Unreleased
 python scripts/changelog.py prepare-release --version 0.1.0 --date 2026-04-25
+python scripts/changelog.py clear-unreleased
 ```
 
 ## Docs Flow
@@ -92,9 +95,12 @@ The script:
 
 1. refreshes generated docs
 2. stages each platform artifact under `.tmp/release/`
-3. injects shared docs into the staged package
-4. writes versioned `.zip` archives into `.install/packages/`
-5. emits `.install/release-manifest.json` and `.install/SHA256SUMS.txt`
+3. filters build-system byproducts, debug symbols, editor files, caches, and temporary files out of the staged package
+4. injects only the shared package docs needed by players and maintainers
+5. writes versioned `.zip` archives into `.install/packages/`
+6. emits `.install/release-manifest.json` and `.install/SHA256SUMS.txt`
+
+Manual release publishing builds GitHub release details from the pending changelog, commits, and changed-file summary. If `COPILOT_GITHUB_TOKEN` is configured, the workflow uses GitHub Copilot release-note cleanup with [`.github/release-notes-instructions.md`](../../.github/release-notes-instructions.md); otherwise it falls back to the repo-local GitHub Models prompt in [`scripts/manual_release.py`](../../scripts/manual_release.py). After a release is created from a branch, CI resets `docs/fnquake3/CHANGELOG.md` back to an empty categorized `Unreleased` template and commits that reset to the release branch.
 
 ## CI Notes
 
@@ -135,6 +141,7 @@ Dry-run renderer gate artifacts are planning evidence only. Blocking release evi
 - Runtime OpenAL device ergonomics are intentionally conservative. The backend polls `ALC_CONNECTED` when `ALC_EXT_disconnect` is available, reports disconnect state in `s_info`, and uses `ALC_SOFT_reopen_device` for `s_alRecoverDevice` and `s_alAutoRecover` live recovery attempts. If live reopen/reset is unsupported or fails, `snd_restart` remains the deterministic full rebuild path. `s_alConfigHints` is a diagnostic command only; it should point users at OpenAL Soft config-file options such as stereo/HRTF mode, resampler, period, limiter, and surround decoder settings without moving those library-global policies into engine cvars.
 - OpenAL enumeration is available through `s_alListDevices` and `s_alListHrtfs`. The HRTF command uses the live OpenAL device when possible and otherwise opens the requested/default device temporarily for diagnostics.
 - Mono world sounds use true OpenAL positional sources driven by Quake listener/source coordinates. They use the active standard OpenAL distance model with reference distance `80`, max distance `1330`, and rolloff `1`. Keep local/UI/announcer, raw/music streams, and authored multi-channel samples non-spatial. Two-channel world samples also stay direct by default and may only enter positional routing through the opt-in `s_alSpatializeStereo` compatibility switch when `AL_SOFT_source_spatialize` is available. Stereo and surround samples/streams should request `AL_DIRECT_CHANNELS_SOFT` when `AL_SOFT_direct_channels` is available, and prefer `AL_REMIX_UNMATCHED_SOFT` when `AL_SOFT_direct_channels_remix` is available so unmatched authored channels are folded into narrower output layouts. `AL_EXT_MCFORMATS` gates native quad/5.1/6.1/7.1 PCM submission; runtimes without it must keep playing authored surround content through the stereo downmix fallback.
+- The OpenAL backend reads `sound/fnq3-weapon-sounds.sndshd` as a small idTech4-style sound shader subset. Supported tuning keys include `minDistance`, `maxDistance`, `volume`, `volumeDb`, `shakes`, `reverb`, `wetLevel`, `frequencyShift`, and raw `sound/...` sample entries. The shipped `baseq3` and `missionpack` files live under `pkg/<game>/sound/`, are packed into `FnQuake3-pkg.fnz`, and cover standard Quake III Arena plus Team Arena weapon samples with slightly stronger gain, longer falloff, and modest wet-send scaling.
 - UHJ and B-Format are an opt-in authoring ceiling, not a reinterpretation of normal assets. Registered WAV samples with delimited filename tags such as `uhj`, `uhj3`, `bformat2d`, `bformat3d`, or `ambisonic` use `AL_SOFT_UHJ` or `AL_EXT_BFORMAT` buffer formats when available. Encoded sound-field samples do not request `AL_DIRECT_CHANNELS_SOFT`, because their channels are encoded sound-field components rather than authored speaker feeds. Unsupported encoded samples fall back to stereo: UHJ keeps the stereo-compatible first two channels, while B-Format uses the W/omni channel.
 - World voice property updates are batched with `AL_SOFT_deferred_updates` when available. Keep streaming queue updates outside that batch so music/raw buffer progress remains straightforward to reason about.
 - `FNQ3_AUDIO_LOOPBACK_TESTS` builds the deterministic audio test targets under [`tests/audio`](../../tests/audio). `fnq3_audio_zone_tests` validates `.azb` runtime parsing, v1/v2 compatibility, zone priority selection, portal blend bounds, and invalid sidecar rejection; CTest registers it as `fnq3_audio_zones`. `fnq3_audio_recovery_tests` validates the device-loss policy without real hardware disconnects: poll cadence, retry suppression, one-shot warnings, reconnect notification, disabled auto-recovery, and force/skip decisions; CTest registers it as `fnq3_audio_recovery`. `fnq3_audio_loopback_tests` is a headless OpenAL Soft loopback harness that dynamically loads OpenAL, skips with exit code `77` when `ALC_SOFT_loopback` is unavailable, and otherwise verifies HRTF status visibility and mode switching, distance attenuation, direct-channel isolation, stereo/quad/5.1/6.1/7.1 speaker-layout routing where supported, UHJ/B-Format buffer acceptance where supported, idle silence, and EFX low-/high-/band-pass filters; CTest registers it as `fnq3_audio_loopback`.
@@ -150,6 +157,7 @@ Audio zones are an optional polishing path, not a map requirement. Missing files
 Runtime behavior:
 
 - Current map `maps/foo.bsp` maps to sidecar `maps/foo.azb`.
+- `FnQuake3-pkg.fnz` next to the executable has priority for packaged FnQ3 data-only sidecars. The loader tries game-dir-prefixed archive entries first, such as `baseq3/maps/foo.azb`, `baseq3/sound/fnq3-weapon-sounds.sndshd`, `missionpack/maps/foo.azb`, or `missionpack/sound/fnq3-weapon-sounds.sndshd`, then falls back to normal filesystem and pak search.
 - `s_alAudioZones 1` enables sidecar loading; `s_alAudioZones 0` forces generic heuristics.
 - The sidecar is rechecked when the active map path or the cvar state changes.
 - Higher `priority` wins for overlapping zones. Equal priorities prefer the smaller AABB so nested rooms override broader area zones naturally.
@@ -160,6 +168,7 @@ Runtime behavior:
 - Generated BSP zones use negative priorities. Hand-authored overrides merged with `fnq3-audiozonesc --from-bsp --merge maps/foo.audiozones maps/foo.bsp` therefore win with their default priority `0`, while still allowing broader generated fallback coverage.
 - `fnq3-audiozonesc --audit --samples 32768 maps/foo.azb` is the maintainer-facing preflight for large generated sidecars. Treat warnings, low confidence, and high anomaly scores as prompts for manual listening, merge overrides, or compiler tuning; `--strict` can make warnings fail in temporary sweep jobs.
 - `python scripts/audio_zone_sweep.py --tool path/to/fnq3-audiozonesc --relative-root baseq3 --override-root baseq3 --output-root .tmp/audio-zone-sweeps/baseq3 --strict baseq3/maps` is the bulk migration path for map estates. It preserves map-relative output names, merges matching `.audiozones` overrides, runs `--audit` on each generated sidecar, and emits JSON/CSV reports for review or CI artifacts. Use `--dry-run` first when validating a new map tree.
+- Standard Quake III Arena `baseq3` arena-map sidecars are tracked under `pkg/baseq3/maps/` and packed into `FnQuake3-pkg.fnz` as `baseq3/maps/` entries for installs/releases. The standard and Team Arena weapon sound shaders are tracked under `pkg/baseq3/sound/` and `pkg/missionpack/sound/`, and packed as `baseq3/sound/fnq3-weapon-sounds.sndshd` and `missionpack/sound/fnq3-weapon-sounds.sndshd`. Regenerate audio zones from a local retail `baseq3` pak directory with `python scripts/generate_standard_audio_zones.py --tool path/to/fnq3-audiozonesc path/to/Quake3/baseq3`; the helper extracts BSPs into `.tmp/` and writes only `.azb` sidecars back to the package source tree.
 - Material maps use one rule per line: `shader/pattern material [preset name] [flag outdoor] [weight N]`. Patterns are case-insensitive substrings unless they contain `*` or `?`, where they become simple wildcards. Use them for custom shader packs whose names do not advertise their acoustic material.
 
 The source format intentionally stays small, but it can express the version 2

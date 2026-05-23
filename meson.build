@@ -795,8 +795,10 @@ if client_asm_src.length() > 0 and cc.get_id() != 'msvc'
   client_c_args += ['-DELF']
 endif
 
+runtime_build_targets = renderer_targets
+
 if get_option('build-client')
-  executable(client_binary_name,
+  client_exe = executable(client_binary_name,
     q3_platform_src + q3_ui_src + qcommon_src + server_src + client_src + platform_asm_src + client_asm_src,
     include_directories: include_dirs,
     dependencies: client_deps,
@@ -808,10 +810,11 @@ if get_option('build-client')
     install: true,
     install_dir: '.',
   )
+  runtime_build_targets += client_exe
 endif
 
 if get_option('build-server')
-  executable(server_binary_name,
+  server_exe = executable(server_binary_name,
     q3_platform_src + qcommon_src + server_src + platform_asm_src,
     include_directories: include_dirs,
     dependencies: server_deps,
@@ -823,6 +826,7 @@ if get_option('build-server')
     install: true,
     install_dir: '.',
   )
+  runtime_build_targets += server_exe
 endif
 
 audiozonesc = executable('fnq3-audiozonesc',
@@ -831,6 +835,74 @@ audiozonesc = executable('fnq3-audiozonesc',
   cpp_args: common_cpp_args,
   install: true,
   install_dir: '.',
+)
+runtime_build_targets += audiozonesc
+
+standard_audio_zone_maps = [
+  'pro-q3dm13',
+  'pro-q3dm6',
+  'pro-q3tourney2',
+  'pro-q3tourney4',
+  'q3ctf1',
+  'q3ctf2',
+  'q3ctf3',
+  'q3ctf4',
+  'q3dm0',
+  'q3dm1',
+  'q3dm10',
+  'q3dm11',
+  'q3dm12',
+  'q3dm13',
+  'q3dm14',
+  'q3dm15',
+  'q3dm16',
+  'q3dm17',
+  'q3dm18',
+  'q3dm19',
+  'q3dm2',
+  'q3dm3',
+  'q3dm4',
+  'q3dm5',
+  'q3dm6',
+  'q3dm7',
+  'q3dm8',
+  'q3dm9',
+  'q3tourney1',
+  'q3tourney2',
+  'q3tourney3',
+  'q3tourney4',
+  'q3tourney5',
+  'q3tourney6',
+  'q3tourney6_ctf',
+]
+standard_audio_zone_sidecars = []
+foreach map_name : standard_audio_zone_maps
+  standard_audio_zone_sidecars += files('pkg/baseq3/maps/' + map_name + '.azb')
+endforeach
+root_package_assets = standard_audio_zone_sidecars + files(
+  'pkg/baseq3/sound/fnq3-weapon-sounds.sndshd',
+  'pkg/missionpack/sound/fnq3-weapon-sounds.sndshd',
+)
+
+custom_target('FnQuake3-pkg.fnz',
+  input: root_package_assets + files(
+    'scripts/build_root_archive.py',
+    'scripts/fnq3_meta.py',
+    'scripts/root_archive.py',
+  ),
+  output: 'FnQuake3-pkg.fnz',
+  command: [
+    python,
+    files('scripts/build_root_archive.py'),
+    '--package-root', join_paths(meson.current_source_dir(), 'pkg'),
+    '--output', '@OUTPUT@',
+  ],
+  depends: runtime_build_targets,
+  build_always_stale: true,
+  build_by_default: true,
+  install: true,
+  install_dir: '.',
+  install_tag: 'runtime',
 )
 
 if get_option('audio-tests')

@@ -139,6 +139,10 @@ ifndef BUILD_DIR
 BUILD_DIR=build
 endif
 
+ifndef PYTHON
+PYTHON=python3
+endif
+
 ifndef GENERATE_DEPENDENCIES
 GENERATE_DEPENDENCIES=1
 endif
@@ -729,6 +733,47 @@ TARGET_RENDV = $(RENDERER_PREFIX)_vulkan_$(SHLIBNAME)
 
 TARGET_SERVER = $(DNAME)$(ARCHEXT)$(BINEXT)
 
+STANDARD_AUDIO_ZONE_MAPS = \
+  pro-q3dm13 \
+  pro-q3dm6 \
+  pro-q3tourney2 \
+  pro-q3tourney4 \
+  q3ctf1 \
+  q3ctf2 \
+  q3ctf3 \
+  q3ctf4 \
+  q3dm0 \
+  q3dm1 \
+  q3dm10 \
+  q3dm11 \
+  q3dm12 \
+  q3dm13 \
+  q3dm14 \
+  q3dm15 \
+  q3dm16 \
+  q3dm17 \
+  q3dm18 \
+  q3dm19 \
+  q3dm2 \
+  q3dm3 \
+  q3dm4 \
+  q3dm5 \
+  q3dm6 \
+  q3dm7 \
+  q3dm8 \
+  q3dm9 \
+  q3tourney1 \
+  q3tourney2 \
+  q3tourney3 \
+  q3tourney4 \
+  q3tourney5 \
+  q3tourney6 \
+  q3tourney6_ctf
+PKG_ROOT = pkg
+STANDARD_AUDIO_ZONE_FILES = $(addprefix $(PKG_ROOT)/baseq3/maps/,$(addsuffix .azb,$(STANDARD_AUDIO_ZONE_MAPS)))
+PKG_FILES = $(shell find $(PKG_ROOT) -type f 2>/dev/null)
+ROOT_ARCHIVE = FnQuake3-pkg.fnz
+
 STRINGIFY = $(B)/rend2/stringify$(BINEXT)
 
 TARGETS =
@@ -921,10 +966,9 @@ endif
 	do \
 		echo "    $$i"; \
 	done
+	@echo "    $(B)/$(ROOT_ARCHIVE)"
 	@echo ""
-ifneq ($(TARGETS),)
-	+@$(RECURSIVE_MAKE) $(TARGETS) V=$(V)
-endif
+	+@$(RECURSIVE_MAKE) $(TARGETS) $(B)/$(ROOT_ARCHIVE) V=$(V)
 
 makedirs:
 	@if [ ! -d $(BUILD_DIR) ];then $(MKDIR) $(BUILD_DIR);fi
@@ -1766,6 +1810,10 @@ $(B)/ded/%.o: $(W32DIR)/%.cpp
 $(B)/ded/%.o: $(W32DIR)/%.rc
 	$(DO_WINDRES)
 
+$(B)/$(ROOT_ARCHIVE): $(TARGETS) $(PKG_FILES) scripts/build_root_archive.py scripts/root_archive.py scripts/fnq3_meta.py
+	$(echo_cmd) "ROOTARCHIVE $@"
+	$(Q)$(PYTHON) scripts/build_root_archive.py --package-root "$(PKG_ROOT)" --output "$@"
+
 #############################################################################
 # MISC
 #############################################################################
@@ -1777,6 +1825,7 @@ install: release
 			$(STRIP) "$(DESTDIR)$$i"; \
 		fi \
 	done
+	$(INSTALL) -D -m 0644 "$(BR)/$(ROOT_ARCHIVE)" "$(DESTDIR)/$(ROOT_ARCHIVE)"
 
 clean: clean-debug clean-release
 

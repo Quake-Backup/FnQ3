@@ -1,10 +1,348 @@
 // Included by AudioSystem.cpp inside its private implementation namespace.
 // Registered samples, voice state, tone shaping, and the spatial sound world.
 
+constexpr char kWeaponSoundShaderFile[] = "sound/fnq3-weapon-sounds.sndshd";
+constexpr int kMaxWeaponSoundShaders = 192;
+constexpr float kMaxSoundShaderVolumeDb = 10.0f;
+
+struct SoundShaderSettings {
+	bool enabled = false;
+	float gainScale = kDefaultSoundShaderScale;
+	float referenceScale = kDefaultSoundShaderScale;
+	float rangeScale = kDefaultSoundShaderScale;
+	float wetScale = kDefaultSoundShaderScale;
+	float pitchScale = kDefaultSoundShaderScale;
+};
+
+struct SoundShaderRule {
+	std::array<char, MAX_QPATH> sample{};
+	SoundShaderSettings settings;
+};
+
+class SoundShaderLibrary {
+public:
+	void Clear();
+	void EnsureLoaded();
+	SoundShaderSettings Find( const std::string &sampleName ) const;
+	int Count() const { return count_; }
+
+private:
+	void AddRule( const std::string &sampleName, const SoundShaderSettings &settings );
+	bool ParseShader( const char *shaderName, const char **text );
+
+	std::array<SoundShaderRule, kMaxWeaponSoundShaders> rules_{};
+	int count_ = 0;
+	bool loaded_ = false;
+	bool warned_ = false;
+};
+
+struct ParsedSoundShader {
+	float volumeScale = kDefaultSoundShaderScale;
+	float minDistance = kOpenALReferenceDistance;
+	float maxDistance = kOpenALMaxDistance;
+	float wetScale = kDefaultSoundShaderScale;
+	float pitchScale = kDefaultSoundShaderScale;
+	float shakes = 0.0f;
+	std::vector<std::string> samples;
+};
+
+static bool SoundShaderTokenIsFlag( const char *token ) {
+	static const char *const flags[] = {
+		"antiPrivate",
+		"causeRumble",
+		"center",
+		"frequentlyUsed",
+		"global",
+		"looping",
+		"mask_backleft",
+		"mask_backright",
+		"mask_center",
+		"mask_left",
+		"mask_lfe",
+		"mask_right",
+		"noRandomStart",
+		"no_dups",
+		"no_flicker",
+		"no_occlusion",
+		"no_shakes",
+		"omnidirectional",
+		"onDemand",
+		"ordered",
+		"plain",
+		"playonce",
+		"private",
+		"unclamped",
+		"useDoppler",
+		"voForPlayer",
+	};
+
+	for ( const char *flag : flags ) {
+		if ( !Q_stricmp( token, flag ) ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool SoundShaderTokenLooksLikeSample( const char *token ) {
+	if ( token == nullptr || token[0] == '\0' ) {
+		return false;
+	}
+	if ( !Q_stricmpn( token, "sound/", 6 ) || std::strchr( token, '\\' ) != nullptr ) {
+		return true;
+	}
+	return COM_CompareExtension( token, ".wav" ) ||
+		COM_CompareExtension( token, ".ogg" ) ||
+		COM_CompareExtension( token, ".flac" );
+}
+
+static bool SoundShaderPathHasExtension( const std::string &path ) {
+	const size_t slash = path.find_last_of( "/\\" );
+	const size_t dot = path.find_last_of( '.' );
+	return dot != std::string::npos && ( slash == std::string::npos || dot > slash );
+}
+
+static std::string NormalizeSoundShaderSampleName( const char *sampleName ) {
+	std::string normalized = NormalizeSoundName( sampleName );
+	if ( !normalized.empty() && !SoundShaderPathHasExtension( normalized ) ) {
+		normalized += ".wav";
+	}
+	return normalized;
+}
+
+static bool SoundShaderParseFloatToken( const char *token, float &value ) {
+	if ( token == nullptr || token[0] == '\0' ) {
+		return false;
+	}
+
+	char *end = nullptr;
+	const float parsed = std::strtof( token, &end );
+	if ( end == token || !std::isfinite( parsed ) ) {
+		return false;
+	}
+
+	value = parsed;
+	return true;
+}
+
+static bool SoundShaderParseFloat( const char **text, float &value, qboolean allowLineBreaks = qtrue ) {
+	const char *token = COM_ParseExt( text, allowLineBreaks );
+	return SoundShaderParseFloatToken( token, value );
+}
+
+static float SoundShaderDbToScale( float db ) {
+	db = ClampFloat( db, -60.0f, kMaxSoundShaderVolumeDb );
+	return std::pow( 10.0f, db / 20.0f );
+}
+
+static SoundShaderSettings SoundShaderSettingsFromDecl( const ParsedSoundShader &decl ) {
+	SoundShaderSettings settings;
+	const float shakePunch = 1.0f + ClampFloat( decl.shakes, 0.0f, 1.0f ) * 0.08f;
+	settings.enabled = true;
+	settings.gainScale = ClampFloat( decl.volumeScale * shakePunch, 0.25f, 2.0f );
+	settings.referenceScale = ClampFloat( decl.minDistance / kOpenALReferenceDistance, 0.5f, 2.0f );
+	settings.rangeScale = ClampFloat( decl.maxDistance / kOpenALMaxDistance, 0.5f, 2.0f );
+	settings.rangeScale = ( std::max )( settings.referenceScale, settings.rangeScale );
+	settings.wetScale = ClampFloat( decl.wetScale, 0.0f, 2.0f );
+	settings.pitchScale = ClampFloat( decl.pitchScale, 0.85f, 1.15f );
+	return settings;
+}
+
+void SoundShaderLibrary::Clear() {
+	count_ = 0;
+	loaded_ = false;
+	warned_ = false;
+	for ( SoundShaderRule &rule : rules_ ) {
+		rule = {};
+	}
+}
+
+void SoundShaderLibrary::AddRule( const std::string &sampleName, const SoundShaderSettings &settings ) {
+	const std::string normalized = NormalizeSoundShaderSampleName( sampleName.c_str() );
+	if ( normalized.empty() ) {
+		return;
+	}
+
+	for ( int i = 0; i < count_; ++i ) {
+		SoundShaderRule &rule = rules_[static_cast<size_t>( i )];
+		if ( !FS_FilenameCompare( rule.sample.data(), normalized.c_str() ) ) {
+			rule.settings = settings;
+			return;
+		}
+	}
+
+	if ( count_ >= kMaxWeaponSoundShaders ) {
+		if ( !warned_ ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s has more than %d sample rules; ignoring the rest\n",
+				kWeaponSoundShaderFile, kMaxWeaponSoundShaders );
+			warned_ = true;
+		}
+		return;
+	}
+
+	SoundShaderRule &rule = rules_[static_cast<size_t>( count_++ )];
+	Q_strncpyz( rule.sample.data(), normalized.c_str(), static_cast<int>( rule.sample.size() ) );
+	rule.settings = settings;
+}
+
+bool SoundShaderLibrary::ParseShader( const char *shaderName, const char **text ) {
+	const char *token = COM_ParseExt( text, qtrue );
+	if ( token[0] != '{' ) {
+		COM_ParseWarning( "sound shader '%s' missing opening brace", shaderName );
+		return false;
+	}
+
+	ParsedSoundShader decl;
+	while ( 1 ) {
+		token = COM_ParseExt( text, qtrue );
+		if ( token[0] == '\0' ) {
+			COM_ParseWarning( "sound shader '%s' reached end of file before closing brace", shaderName );
+			return false;
+		}
+		if ( token[0] == '}' && token[1] == '\0' ) {
+			break;
+		}
+
+		if ( !Q_stricmp( token, "description" ) ) {
+			COM_ParseExt( text, qtrue );
+		} else if ( !Q_stricmp( token, "minDistance" ) ) {
+			SoundShaderParseFloat( text, decl.minDistance );
+		} else if ( !Q_stricmp( token, "maxDistance" ) ) {
+			SoundShaderParseFloat( text, decl.maxDistance );
+		} else if ( !Q_stricmp( token, "volume" ) ) {
+			float value = decl.volumeScale;
+			if ( SoundShaderParseFloat( text, value ) ) {
+				decl.volumeScale = ClampFloat( value, 0.0f, 2.0f );
+			}
+		} else if ( !Q_stricmp( token, "volumeDb" ) ) {
+			float value = 0.0f;
+			if ( SoundShaderParseFloat( text, value ) ) {
+				decl.volumeScale = SoundShaderDbToScale( value );
+			}
+		} else if ( !Q_stricmp( token, "reverb" ) ) {
+			float wetLevel = 0.0f;
+			if ( SoundShaderParseFloat( text, wetLevel ) ) {
+				decl.wetScale = ClampFloat( 1.0f + wetLevel, 0.0f, 2.0f );
+			}
+			float ignoredDryLevel = 0.0f;
+			SoundShaderParseFloat( text, ignoredDryLevel, qfalse );
+		} else if ( !Q_stricmp( token, "wetLevel" ) ) {
+			float value = 0.0f;
+			if ( SoundShaderParseFloat( text, value ) ) {
+				decl.wetScale = ClampFloat( 1.0f + value, 0.0f, 2.0f );
+			}
+		} else if ( !Q_stricmp( token, "dryLevel" ) ||
+			!Q_stricmp( token, "leadinVolume" ) ||
+			!Q_stricmp( token, "soundClass" ) ||
+			!Q_stricmp( token, "minSamples" ) ||
+			!Q_stricmp( token, "altSound" ) ) {
+			COM_ParseExt( text, qtrue );
+		} else if ( !Q_stricmp( token, "frequencyShift" ) ) {
+			float minShift = 1.0f;
+			float maxShift = 1.0f;
+			if ( SoundShaderParseFloat( text, minShift ) ) {
+				if ( SoundShaderParseFloat( text, maxShift, qfalse ) ) {
+					decl.pitchScale = 0.5f * ( minShift + maxShift );
+				} else {
+					decl.pitchScale = minShift;
+				}
+			}
+		} else if ( !Q_stricmp( token, "pitch" ) ) {
+			SoundShaderParseFloat( text, decl.pitchScale );
+		} else if ( !Q_stricmp( token, "shakes" ) ) {
+			float value = 1.0f;
+			const char *maybeValue = COM_ParseExt( text, qfalse );
+			if ( maybeValue[0] == '\0' || !SoundShaderParseFloatToken( maybeValue, value ) ) {
+				value = 1.0f;
+			}
+			decl.shakes = ClampFloat( value, 0.0f, 1.0f );
+		} else if ( !Q_stricmp( token, "shakeData" ) ) {
+			COM_ParseExt( text, qtrue );
+			COM_ParseExt( text, qtrue );
+		} else if ( !Q_stricmp( token, "leadin" ) ||
+			!Q_stricmp( token, "sample" ) ||
+			!Q_stricmp( token, "entry" ) ||
+			!Q_stricmp( token, "soundFile" ) ) {
+			const char *sample = COM_ParseExt( text, qtrue );
+			if ( SoundShaderTokenLooksLikeSample( sample ) ) {
+				decl.samples.emplace_back( sample );
+			}
+		} else if ( SoundShaderTokenIsFlag( token ) ) {
+			continue;
+		} else if ( SoundShaderTokenLooksLikeSample( token ) ) {
+			decl.samples.emplace_back( token );
+		} else {
+			COM_ParseWarning( "sound shader '%s' ignored token '%s'", shaderName, token );
+		}
+	}
+
+	if ( decl.samples.empty() && SoundShaderTokenLooksLikeSample( shaderName ) ) {
+		decl.samples.emplace_back( shaderName );
+	}
+	if ( decl.samples.empty() ) {
+		COM_ParseWarning( "sound shader '%s' has no samples", shaderName );
+		return false;
+	}
+
+	const SoundShaderSettings settings = SoundShaderSettingsFromDecl( decl );
+	for ( const std::string &sample : decl.samples ) {
+		AddRule( sample, settings );
+	}
+	return true;
+}
+
+void SoundShaderLibrary::EnsureLoaded() {
+	if ( loaded_ ) {
+		return;
+	}
+
+	loaded_ = true;
+	count_ = 0;
+
+	fnq3::ScopedReadFile shaderFile = fnq3::ScopedReadFile::Read( kWeaponSoundShaderFile );
+	if ( !shaderFile ) {
+		return;
+	}
+
+	const char *text = shaderFile.as<const char>();
+	COM_BeginParseSession( kWeaponSoundShaderFile );
+	while ( 1 ) {
+		const char *token = COM_ParseExt( &text, qtrue );
+		if ( token[0] == '\0' ) {
+			break;
+		}
+
+		std::string shaderName = token;
+		if ( !Q_stricmp( token, "sound" ) ) {
+			const char *nameToken = COM_ParseExt( &text, qtrue );
+			if ( nameToken[0] == '\0' ) {
+				COM_ParseWarning( "expected sound shader name" );
+				break;
+			}
+			shaderName = nameToken;
+		}
+		ParseShader( shaderName.c_str(), &text );
+	}
+
+	Com_Printf( "Loaded %d weapon sound shader%s from %s\n",
+		count_, count_ == 1 ? "" : "s", kWeaponSoundShaderFile );
+}
+
+SoundShaderSettings SoundShaderLibrary::Find( const std::string &sampleName ) const {
+	for ( int i = 0; i < count_; ++i ) {
+		const SoundShaderRule &rule = rules_[static_cast<size_t>( i )];
+		if ( !FS_FilenameCompare( rule.sample.data(), sampleName.c_str() ) ) {
+			return rule.settings;
+		}
+	}
+	return {};
+}
+
 class SoundSample {
 public:
-	explicit SoundSample( std::string sampleName )
-		: name_( std::move( sampleName ) ) {
+	explicit SoundSample( std::string sampleName, SoundShaderSettings shader = {} )
+		: name_( std::move( sampleName ) ),
+		  shader_( shader ) {
 	}
 
 	bool EnsureLoaded( OpenALDevice &device, bool allowToneFallback );
@@ -21,6 +359,7 @@ public:
 	bool EncodedSoundField() const { return AudioSampleFormatIsEncodedSoundField( format_ ); }
 	int Rate() const { return rate_; }
 	int DurationMs() const { return durationMs_; }
+	const SoundShaderSettings &Shader() const { return shader_; }
 
 private:
 	static std::vector<short> ConvertToPCM16( const snd_info_t &info, const AudioSampleFormat &format, const byte *data );
@@ -37,6 +376,7 @@ private:
 	int channels_ = 0;
 	int rate_ = 0;
 	int durationMs_ = 0;
+	SoundShaderSettings shader_;
 };
 
 std::vector<short> SoundSample::ConvertToPCM16( const snd_info_t &info, const AudioSampleFormat &format, const byte *data ) {
@@ -543,18 +883,22 @@ struct SpatialParams {
 	float pan = 0.0f;
 };
 
-static SpatialParams ComputeSpatialParams( const float *origin, const float *listenerOrigin, const float listenerAxis[3][3], int masterVol ) {
+static SpatialParams ComputeSpatialParams( const float *origin, const float *listenerOrigin, const float listenerAxis[3][3], int masterVol, float referenceScale, float rangeScale ) {
 	float sourceVec[3];
 	float rotated[3];
 
+	referenceScale = ClampFloat( referenceScale, 0.5f, 2.0f );
+	rangeScale = ClampFloat( rangeScale, 0.5f, 2.0f );
 	VectorSubtract( origin, listenerOrigin, sourceVec );
 
 	float dist = VectorNormalize( sourceVec );
-	dist -= kQ3SoundFullVolumeDistance;
+	const float fullVolumeDistance = kQ3SoundFullVolumeDistance * referenceScale;
+	const float maxDistance = ( std::max )( kOpenALMaxDistance * rangeScale, fullVolumeDistance + 1.0f );
+	dist -= fullVolumeDistance;
 	if ( dist < 0.0f ) {
 		dist = 0.0f;
 	}
-	dist *= kQ3SoundAttenuation;
+	dist /= maxDistance - fullVolumeDistance;
 
 	VectorRotate( sourceVec, listenerAxis, rotated );
 
@@ -1122,12 +1466,18 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 	const bool positionalSource = monoWorldSource || spatializedStereoWorldSource;
 	const bool directStereoSource = stereoSample && !encodedSoundField && !spatializedStereoWorldSource;
 	const bool useOpenALDistance = positionalSource && device_->UsesOpenALDistanceAttenuation();
+	const SoundShaderSettings &shader = voice.sample->Shader();
+	const float gainScale = shader.enabled ? shader.gainScale : kDefaultSoundShaderScale;
+	const float referenceScale = shader.enabled ? shader.referenceScale : kDefaultSoundShaderScale;
+	const float rangeScale = shader.enabled ? shader.rangeScale : kDefaultSoundShaderScale;
+	const float wetScale = shader.enabled ? shader.wetScale : kDefaultSoundShaderScale;
+	const float pitchScale = shader.enabled ? shader.pitchScale : kDefaultSoundShaderScale;
 	SpatialParams spatial;
 	if ( listenerAttached || localOnly ) {
 		spatial.gain = 1.0f;
 		spatial.pan = 0.0f;
 	} else {
-		spatial = ComputeSpatialParams( voiceOrigin, listenerOrigin_.Data(), listenerAxis_, 127 );
+		spatial = ComputeSpatialParams( voiceOrigin, listenerOrigin_.Data(), listenerAxis_, 127, referenceScale, rangeScale );
 	}
 
 	float gain = useOpenALDistance ? 1.0f : spatial.gain;
@@ -1155,7 +1505,7 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 		const float distanceMix = ClampFloat( distance / 512.0f, 0.0f, 1.0f );
 		directGain = occ::DirectGain( occlusion );
 		directToneHF = occ::DirectHF( environment_.directHF, occlusion );
-		wetGain = occ::WetGain( environment_.baseWet, distanceMix, occlusion );
+		wetGain = ClampFloat( occ::WetGain( environment_.baseWet, distanceMix, occlusion ) * wetScale, 0.0f, 2.0f );
 		wetGainHF = occ::WetHF( environment_.wetHF, occlusion );
 	} else {
 		ResetVoiceOcclusion( voice, 0.0f, now );
@@ -1167,6 +1517,8 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 	} else if ( voice.doppler ) {
 		pitch = ComputeDopplerPitch( listenerOrigin_.Data(), voiceOrigin, sourceVelocity );
 	}
+	gain = ClampFloat( gain * gainScale, 0.0f, 2.0f );
+	pitch = ClampFloat( pitch * pitchScale, 0.5f, 2.0f );
 
 	const VoiceToneSettings toneSettings = BuildVoiceToneSettings( voice, environment_, listenerAttached, localOnly, stereoSample, positionalSource, occlusion, directToneHF, wetGain, wetGainHF );
 
@@ -1192,14 +1544,14 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 		device_->SetSourceSpatialize( voice.source, true );
 		device_->SetSourceDirectChannels( voice.source, false );
 		device_->AL().alSourcei( voice.source, AL_SOURCE_RELATIVE, AL_FALSE );
-		device_->ConfigureSourceDistance( voice.source, true );
+		device_->ConfigureSourceDistance( voice.source, true, referenceScale, rangeScale );
 		device_->AL().alSource3f( voice.source, AL_POSITION, voiceOrigin[0], voiceOrigin[1], voiceOrigin[2] );
 		device_->AL().alSource3f( voice.source, AL_VELOCITY, sourceVelocity[0], sourceVelocity[1], sourceVelocity[2] );
 	} else {
 		device_->SetSourceSpatialize( voice.source, false );
 		device_->SetSourceDirectChannels( voice.source, directStereoSource );
 		device_->AL().alSourcei( voice.source, AL_SOURCE_RELATIVE, AL_TRUE );
-		device_->ConfigureSourceDistance( voice.source, false );
+		device_->ConfigureSourceDistance( voice.source, false, kDefaultSoundShaderScale, kDefaultSoundShaderScale );
 		device_->AL().alSource3f( voice.source, AL_POSITION, spatial.pan * kPanScale, 0.0f, -1.0f );
 		device_->AL().alSource3f( voice.source, AL_VELOCITY, 0.0f, 0.0f, 0.0f );
 	}

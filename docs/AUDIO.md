@@ -279,8 +279,15 @@ FnQuake3 can read optional compiled audio-zone sidecars named `maps/<mapname>.az
 - `s_alAudioZones 0`: Ignore sidecars and use generic environment heuristics only.
 - `s_info`: Reports whether audio zones are disabled, missing, loaded, and which zone is currently active.
 - `s_alDebugOverlay 2` and `s_alDebugDump`: Include active zone name, material metadata, portal blend target when one is active, plus the zone-adjusted wet, low/high-frequency, occlusion, and transition values.
+- FnQuake3 checks `FnQuake3-pkg.fnz` next to the executable before normal game data for sidecars, using game-dir-prefixed entries such as `baseq3/maps/q3dm1.azb` or `missionpack/maps/<mapname>.azb`.
 
 Sidecars are compiled with the repo tool target `fnq3-audiozonesc`. Maintainers can write `maps/<mapname>.audiozones` by hand or generate a first-pass sidecar from an existing `.bsp`, then layer small overrides on top. Current sidecars can carry material metadata, portal hints, and optional per-portal blend tuning while older version 1 and version 2 sidecars remain readable. The compiler workflow and authoring syntax are documented in the maintainer notes and in `code/tools/audiozones/README.md`.
+
+### Weapon Sound Shaders
+
+The OpenAL backend also reads a small FnQ3 sound shader file, `sound/fnq3-weapon-sounds.sndshd`, from `FnQuake3-pkg.fnz`. The format intentionally follows the idTech4/Quake 4 declaration style: `sound <name> { minDistance ... maxDistance ... volumeDb ... shakes ... sample }`. The shipped `baseq3` shader covers the standard Quake III Arena weapon effects, while the shipped `missionpack` shader covers Team Arena weapon firing and impacts. Both give the original retail samples a little more attack, longer distance throw, and modest reverb send without replacing them.
+
+Like audio zones, the root package stores this with a game-dir prefix, for example `baseq3/sound/fnq3-weapon-sounds.sndshd` or `missionpack/sound/fnq3-weapon-sounds.sndshd`. Mods can ship their own game-dir entry in the root package source tree when they need different tuning.
 
 ### Doppler
 
@@ -346,7 +353,7 @@ snd_restart
 
 FnQuake3 keeps the classic sound commands and adds a few OpenAL-oriented inspection tools.
 
-- `s_info`: Print the current backend, device, EFX support, reverb state, occlusion state, source counts, sample counts, and background-track state.
+- `s_info`: Print the current backend, device, EFX support, reverb state, occlusion state, source counts, weapon sound shader rule count, sample counts, and background-track state.
 - On OpenAL, `s_info` also compares requested and active HRTF, output mode, distance model, mix frequency, refresh rate, source counts, output limiter state, and the stereo-spatialization request. It reports device clock and latency when OpenAL Soft exposes that timing extension.
 - `s_alListDevices`: List OpenAL playback devices. This can still be useful if the legacy backend is active and you are preparing an OpenAL device setting.
 - `s_alListHrtfs`: List HRTFs for the active OpenAL device, or for the requested/default OpenAL device when OpenAL is not active.

@@ -394,7 +394,7 @@ public:
 	void UpdateListener( const float *origin, const float *velocity, const float axis[3][3] ) const;
 	void SetSourceSpatialize( ALuint source, bool spatialize ) const;
 	void SetSourceDirectChannels( ALuint source, bool directChannels ) const;
-	void ConfigureSourceDistance( ALuint source, bool worldDistance ) const;
+	void ConfigureSourceDistance( ALuint source, bool worldDistance, float referenceScale = kDefaultSoundShaderScale, float rangeScale = kDefaultSoundShaderScale ) const;
 	bool UsesOpenALDistanceAttenuation() const;
 	bool BeginDeferredUpdates() const;
 	void EndDeferredUpdates() const;
@@ -1533,20 +1533,23 @@ void OpenALDevice::DestroyVoiceFilters( ALuint &directFilter, ALuint &sendFilter
 }
 
 void OpenALDevice::ApplyVoiceRouting( ALuint source, ALuint directFilter, ALuint sendFilter, float sourceGain, float directGain, const AudioFilterSettings &directTone, const AudioFilterSettings &sendTone ) const {
-	sourceGain = ClampFloat( sourceGain, 0.0f, 1.0f );
+	sourceGain = ClampFloat( sourceGain, 0.0f, 2.0f );
 	directGain = ClampFloat( directGain, 0.0f, 1.0f );
+	const float routedGain = ClampFloat( sourceGain * directGain, 0.0f, 2.0f );
+	const float maxGain = ClampFloat( ( std::max )( routedGain, 1.0f ), 1.0f, 2.0f );
+	loader_.alSourcef( source, AL_MAX_GAIN, maxGain );
 
 	if ( !efxAvailable_ ) {
-		loader_.alSourcef( source, AL_GAIN, sourceGain * directGain );
+		loader_.alSourcef( source, AL_GAIN, routedGain );
 		return;
 	}
 
 	if ( FilterHasAudibleEffect( directTone ) && ConfigureFilter( directFilter, directTone ) ) {
 		loader_.alSourcei( source, AL_DIRECT_FILTER, directFilter );
-		loader_.alSourcef( source, AL_GAIN, sourceGain * directGain );
+		loader_.alSourcef( source, AL_GAIN, routedGain );
 	} else {
 		loader_.alSourcei( source, AL_DIRECT_FILTER, AL_FILTER_NULL );
-		loader_.alSourcef( source, AL_GAIN, sourceGain * directGain );
+		loader_.alSourcef( source, AL_GAIN, routedGain );
 	}
 
 	if ( reverbEnabled_ && sendTone.kind != AudioFilterKind::None && sendTone.gain > 0.001f && auxEffectSlot_ != 0 ) {
@@ -1615,15 +1618,19 @@ void OpenALDevice::SetSourceDirectChannels( ALuint source, bool directChannels )
 	loader_.alGetError();
 }
 
-void OpenALDevice::ConfigureSourceDistance( ALuint source, bool worldDistance ) const {
+void OpenALDevice::ConfigureSourceDistance( ALuint source, bool worldDistance, float referenceScale, float rangeScale ) const {
 	if ( !loader_.Ready() || source == 0 ) {
 		return;
 	}
 
 	if ( worldDistance && UsesOpenALDistanceAttenuation() ) {
-		loader_.alSourcef( source, AL_REFERENCE_DISTANCE, kOpenALReferenceDistance );
-		loader_.alSourcef( source, AL_MAX_DISTANCE, kOpenALMaxDistance );
-		loader_.alSourcef( source, AL_ROLLOFF_FACTOR, kOpenALRolloffFactor );
+		referenceScale = ClampFloat( referenceScale, 0.5f, 2.0f );
+		rangeScale = ClampFloat( rangeScale, 0.5f, 2.0f );
+		const float referenceDistance = kOpenALReferenceDistance * referenceScale;
+		const float maxDistance = ( std::max )( kOpenALMaxDistance * rangeScale, referenceDistance + 1.0f );
+		loader_.alSourcef( source, AL_REFERENCE_DISTANCE, referenceDistance );
+		loader_.alSourcef( source, AL_MAX_DISTANCE, maxDistance );
+		loader_.alSourcef( source, AL_ROLLOFF_FACTOR, kOpenALRolloffFactor / rangeScale );
 	} else {
 		loader_.alSourcef( source, AL_REFERENCE_DISTANCE, 1.0f );
 		loader_.alSourcef( source, AL_MAX_DISTANCE, kOpenALMaxDistance );

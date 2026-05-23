@@ -232,6 +232,9 @@ static const unsigned pak_checksums[] = {
 
 #define FNQ3_ROOT_ARCHIVE_NAME			"FnQuake3-pkg.fnz"
 #define FNQ3_ROOT_ARCHIVE_HUD_SCRIPT	"fnq3-hud.json"
+#define FNQ3_ROOT_ARCHIVE_WEAPON_SOUNDS	"sound/fnq3-weapon-sounds.sndshd"
+#define FNQ3_ROOT_ARCHIVE_MAX_PATHS		8
+#define FNQ3_ROOT_ARCHIVE_MAX_ENTRIES	64
 
 typedef struct fileInPack_s {
 	char					*name;		// name of the file
@@ -2242,22 +2245,185 @@ static pack_t *FS_LoadArchiveFile( const char *archivefile )
 }
 
 
-static qboolean FS_RootArchiveAllowsFile( const char *qpath )
+static qboolean FS_RootArchiveAllowsAudioZoneSidecar( const char *qpath )
 {
-	return qpath != NULL && !FS_FilenameCompare( qpath, FNQ3_ROOT_ARCHIVE_HUD_SCRIPT );
+	static const char mapsPrefix[] = "maps/";
+
+	if ( qpath == NULL ) {
+		return qfalse;
+	}
+
+	if ( Q_stricmpn( qpath, mapsPrefix, (int) sizeof( mapsPrefix ) - 1 ) ) {
+		return qfalse;
+	}
+
+	return COM_CompareExtension( qpath, ".azb" );
 }
 
 
-static const char *FS_RootArchiveBasePath( void )
+static qboolean FS_RootArchiveAllowsFile( const char *qpath )
 {
-#ifdef __APPLE__
-	const char *path = Sys_DefaultAppPath();
-	if ( path != NULL && path[ 0 ] != '\0' ) {
-		return path;
+	return qpath != NULL &&
+		( !FS_FilenameCompare( qpath, FNQ3_ROOT_ARCHIVE_HUD_SCRIPT ) ||
+			!FS_FilenameCompare( qpath, FNQ3_ROOT_ARCHIVE_WEAPON_SOUNDS ) ||
+			FS_RootArchiveAllowsAudioZoneSidecar( qpath ) );
+}
+
+
+static int FS_RootArchiveAddCandidate(
+	char candidates[][ MAX_ZPATH ],
+	int maxCandidates,
+	int candidateCount,
+	const char *candidate )
+{
+	int i;
+
+	if ( candidate == NULL || candidate[ 0 ] == '\0' || candidateCount >= maxCandidates ) {
+		return candidateCount;
 	}
+
+	if ( strlen( candidate ) >= MAX_ZPATH ) {
+		return candidateCount;
+	}
+
+	for ( i = 0; i < candidateCount; i++ ) {
+		if ( !FS_FilenameCompare( candidates[ i ], candidate ) ) {
+			return candidateCount;
+		}
+	}
+
+	Q_strncpyz( candidates[ candidateCount ], candidate, MAX_ZPATH );
+	return candidateCount + 1;
+}
+
+
+static int FS_RootArchiveAddGameCandidate(
+	char candidates[][ MAX_ZPATH ],
+	int maxCandidates,
+	int candidateCount,
+	const char *game,
+	const char *qpath )
+{
+	char candidate[ MAX_ZPATH ];
+
+	if ( game == NULL || game[ 0 ] == '\0' ) {
+		return candidateCount;
+	}
+
+	if ( strlen( game ) + 1 + strlen( qpath ) >= MAX_ZPATH ) {
+		return candidateCount;
+	}
+
+	Com_sprintf( candidate, sizeof( candidate ), "%s/%s", game, qpath );
+	return FS_RootArchiveAddCandidate( candidates, maxCandidates, candidateCount, candidate );
+}
+
+
+static const char *FS_RootArchiveSearchPathGameDir( const searchpath_t *search )
+{
+	if ( search == NULL ) {
+		return NULL;
+	}
+
+	if ( search->pack != NULL && search->pack->pakGamename != NULL && search->pack->pakGamename[ 0 ] != '\0' ) {
+		return search->pack->pakGamename;
+	}
+
+	if ( search->dir != NULL && search->dir->gamedir != NULL && search->dir->gamedir[ 0 ] != '\0' ) {
+		return search->dir->gamedir;
+	}
+
+	return NULL;
+}
+
+
+static int FS_RootArchiveBuildCandidates(
+	const char *qpath,
+	char candidates[][ MAX_ZPATH ],
+	int maxCandidates )
+{
+	const searchpath_t *search;
+	const char *gameDir;
+	int candidateCount;
+
+	candidateCount = 0;
+
+	for ( search = fs_searchpaths; search != NULL; search = search->next ) {
+		gameDir = FS_RootArchiveSearchPathGameDir( search );
+		candidateCount = FS_RootArchiveAddGameCandidate(
+			candidates, maxCandidates, candidateCount, gameDir, qpath );
+	}
+
+	if ( fs_gamedirvar != NULL && fs_gamedirvar->string[ 0 ] != '\0' ) {
+		candidateCount = FS_RootArchiveAddGameCandidate(
+			candidates, maxCandidates, candidateCount, fs_gamedirvar->string, qpath );
+	}
+
+	if ( basegame != NULL && basegame[ 0 ] != '\0' ) {
+		candidateCount = FS_RootArchiveAddGameCandidate(
+			candidates, maxCandidates, candidateCount, basegame, qpath );
+	}
+
+	candidateCount = FS_RootArchiveAddGameCandidate(
+		candidates, maxCandidates, candidateCount, BASEGAME, qpath );
+
+	return FS_RootArchiveAddCandidate( candidates, maxCandidates, candidateCount, qpath );
+}
+
+
+static int FS_RootArchiveAddArchivePath(
+	char archivePaths[][ MAX_OSPATH ],
+	int maxArchivePaths,
+	int archivePathCount,
+	const char *basePath )
+{
+	const char *archivePath;
+	int i;
+
+	if ( basePath == NULL || basePath[ 0 ] == '\0' || archivePathCount >= maxArchivePaths ) {
+		return archivePathCount;
+	}
+
+	archivePath = FS_BuildOSPath( basePath, FNQ3_ROOT_ARCHIVE_NAME, NULL );
+	if ( strlen( archivePath ) >= MAX_OSPATH ) {
+		return archivePathCount;
+	}
+
+	for ( i = 0; i < archivePathCount; i++ ) {
+		if ( !FS_FilenameCompare( archivePaths[ i ], archivePath ) ) {
+			return archivePathCount;
+		}
+	}
+
+	Q_strncpyz( archivePaths[ archivePathCount ], archivePath, MAX_OSPATH );
+	return archivePathCount + 1;
+}
+
+
+static int FS_RootArchiveBuildArchivePaths(
+	char archivePaths[][ MAX_OSPATH ],
+	int maxArchivePaths )
+{
+	int archivePathCount;
+
+	archivePathCount = FS_RootArchiveAddArchivePath( archivePaths, maxArchivePaths, 0, Sys_Pwd() );
+
+	if ( fs_basepath != NULL && fs_basepath->string[ 0 ] != '\0' ) {
+		archivePathCount = FS_RootArchiveAddArchivePath(
+			archivePaths, maxArchivePaths, archivePathCount, fs_basepath->string );
+	}
+
+#ifdef __APPLE__
+	if ( fs_apppath != NULL && fs_apppath->string[ 0 ] != '\0' ) {
+		archivePathCount = FS_RootArchiveAddArchivePath(
+			archivePaths, maxArchivePaths, archivePathCount, fs_apppath->string );
+	}
+
+	archivePathCount = FS_RootArchiveAddArchivePath(
+		archivePaths, maxArchivePaths, archivePathCount, Sys_DefaultAppPath() );
 #endif
 
-	return Sys_Pwd();
+	return archivePathCount;
 }
 
 
@@ -2266,16 +2432,22 @@ static const char *FS_RootArchiveBasePath( void )
 FS_ReadFileFromRootArchive
 
 Read compatibility-safe source-port assets from a fixed archive next to the executable.
-Currently restricted to HUD alignment scripts so it doesn't widen the general data search path.
+Restricted to HUD alignment scripts, audio-zone sidecars, and FnQ3 sound shader overrides so it doesn't widen the general data search path.
 =================
 */
 static int FS_ReadFileFromRootArchive( const char *qpath, void **buffer )
 {
-	const char *basePath;
 	const char *archivePath;
+	const char *archiveEntry;
 	unzFile archive;
 	unz_file_info fileInfo;
 	byte *buf;
+	char archivePaths[ FNQ3_ROOT_ARCHIVE_MAX_PATHS ][ MAX_OSPATH ];
+	char candidates[ FNQ3_ROOT_ARCHIVE_MAX_ENTRIES ][ MAX_ZPATH ];
+	int archivePathCount;
+	int archivePathIndex;
+	int candidateCount;
+	int candidateIndex;
 	int err;
 	int len;
 	int total;
@@ -2284,20 +2456,65 @@ static int FS_ReadFileFromRootArchive( const char *qpath, void **buffer )
 		return -1;
 	}
 
-	basePath = FS_RootArchiveBasePath();
-	if ( basePath == NULL || basePath[ 0 ] == '\0' ) {
+	archivePathCount = FS_RootArchiveBuildArchivePaths( archivePaths, ARRAY_LEN( archivePaths ) );
+	if ( archivePathCount == 0 ) {
+		if ( fs_debug->integer ) {
+			Com_Printf( "FS_ReadFile: %s (%s has no candidate paths)\n", qpath, FNQ3_ROOT_ARCHIVE_NAME );
+		}
 		return -1;
 	}
 
-	archivePath = FS_BuildOSPath( basePath, FNQ3_ROOT_ARCHIVE_NAME, NULL );
-	archive = unzOpen( archivePath );
-	if ( archive == NULL ) {
+	candidateCount = FS_RootArchiveBuildCandidates( qpath, candidates, ARRAY_LEN( candidates ) );
+	if ( candidateCount == 0 ) {
+		if ( fs_debug->integer ) {
+			Com_Printf( "FS_ReadFile: %s (%s has no candidate entries)\n", qpath, FNQ3_ROOT_ARCHIVE_NAME );
+		}
 		return -1;
 	}
 
-	err = unzLocateFile( archive, qpath, 2 );
-	if ( err != UNZ_OK ) {
+	archive = NULL;
+	archivePath = NULL;
+	archiveEntry = NULL;
+	for ( archivePathIndex = 0; archivePathIndex < archivePathCount; archivePathIndex++ ) {
+		archive = unzOpen( archivePaths[ archivePathIndex ] );
+		if ( archive == NULL ) {
+			if ( fs_debug->integer ) {
+				Com_Printf( "FS_ReadFile: %s (%s not opened: '%s')\n",
+					qpath, FNQ3_ROOT_ARCHIVE_NAME, archivePaths[ archivePathIndex ] );
+			}
+			continue;
+		}
+
+		for ( candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++ ) {
+			err = unzGoToFirstFile( archive );
+			if ( err != UNZ_OK ) {
+				break;
+			}
+
+			err = unzLocateFile( archive, candidates[ candidateIndex ], 2 );
+			if ( err == UNZ_OK ) {
+				archivePath = archivePaths[ archivePathIndex ];
+				archiveEntry = candidates[ candidateIndex ];
+				break;
+			}
+		}
+
+		if ( archiveEntry != NULL ) {
+			break;
+		}
+
 		unzClose( archive );
+		archive = NULL;
+	}
+
+	if ( archiveEntry == NULL ) {
+		if ( fs_debug->integer ) {
+			Com_Printf( "FS_ReadFile: %s (not found in %s; tried", qpath, FNQ3_ROOT_ARCHIVE_NAME );
+			for ( candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++ ) {
+				Com_Printf( "%s%s", candidateIndex == 0 ? " " : ", ", candidates[ candidateIndex ] );
+			}
+			Com_Printf( ")\n" );
+		}
 		return -1;
 	}
 
@@ -2309,7 +2526,7 @@ static int FS_ReadFileFromRootArchive( const char *qpath, void **buffer )
 
 	if ( fileInfo.compression_method != 0 && fileInfo.compression_method != 8 /* Z_DEFLATED */ ) {
 		Com_Printf( S_COLOR_YELLOW "%s|%s: unsupported compression method %i\n",
-			FNQ3_ROOT_ARCHIVE_NAME, qpath, (int) fileInfo.compression_method );
+			FNQ3_ROOT_ARCHIVE_NAME, archiveEntry, (int) fileInfo.compression_method );
 		unzClose( archive );
 		return -1;
 	}
@@ -2321,6 +2538,10 @@ static int FS_ReadFileFromRootArchive( const char *qpath, void **buffer )
 
 	len = (int) fileInfo.uncompressed_size;
 	if ( buffer == NULL ) {
+		if ( fs_debug->integer ) {
+			Com_Printf( "FS_ReadFile: %s (found as '%s' in '%s')\n",
+				qpath, archiveEntry, archivePath );
+		}
 		unzClose( archive );
 		return len;
 	}
@@ -2365,7 +2586,8 @@ static int FS_ReadFileFromRootArchive( const char *qpath, void **buffer )
 	fs_loadStack++;
 
 	if ( fs_debug->integer ) {
-		Com_Printf( "FS_ReadFile: %s (found in '%s')\n", qpath, archivePath );
+		Com_Printf( "FS_ReadFile: %s (found as '%s' in '%s')\n",
+			qpath, archiveEntry, archivePath );
 	}
 
 	return len;
@@ -2441,14 +2663,16 @@ int FS_ReadFile( const char *qpath, void **buffer ) {
 		}
 	}
 
+	// FnQ3 source-port package assets are intentionally higher priority than
+	// normal game data while staying limited to the fixed allowlist above.
+	len = FS_ReadFileFromRootArchive( qpath, buffer );
+	if ( len >= 0 ) {
+		return len;
+	}
+
 	// look for it in the filesystem or pack files
 	len = FS_FOpenFileRead( qpath, &h, qfalse );
 	if ( h == FS_INVALID_HANDLE ) {
-		len = FS_ReadFileFromRootArchive( qpath, buffer );
-		if ( len >= 0 ) {
-			return len;
-		}
-
 		if ( buffer ) {
 			*buffer = NULL;
 		}

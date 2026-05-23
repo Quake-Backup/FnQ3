@@ -1221,6 +1221,11 @@ constexpr std::size_t kBspMaxQpath = 64u;
 constexpr float kMinimumLeafExtent = 4.0f;
 constexpr float kPortalAdjacencyEpsilon = 8.0f;
 constexpr float kPortalMinimumOpenness = 0.04f;
+constexpr float kSplitZoneMergeGapEpsilon = 8.0f;
+constexpr float kSplitZoneMergeOverlapEpsilon = 4.0f;
+constexpr float kSplitZoneMergeMinimumFaceCoverage = 0.55f;
+constexpr float kSplitZoneMergeMaxVolumeInflation = 1.18f;
+constexpr std::uint8_t kGeneratedEnvironmentFlags = azfmt::ZoneFlagOutdoor | azfmt::ZoneFlagUnderwater;
 
 enum BspLumpIndex {
 	BspLumpEntities = 0,
@@ -1320,14 +1325,15 @@ struct GeneratedZone {
 	int area = -1;
 	int cluster = -1;
 	float weight = 1.0f;
+	LeafAcoustics acoustics;
 	std::array<double, static_cast<std::size_t>( azfmt::MaterialClass::Count )> materialWeights = {};
 };
 
 struct GeneratedZoneKey {
 	int area = -1;
 	int cluster = -1;
-	std::uint32_t preset = 0;
 	std::uint8_t material = 0;
+	std::uint8_t flags = 0;
 
 	bool operator<( const GeneratedZoneKey &other ) const {
 		if ( area != other.area ) {
@@ -1336,10 +1342,10 @@ struct GeneratedZoneKey {
 		if ( cluster != other.cluster ) {
 			return cluster < other.cluster;
 		}
-		if ( preset != other.preset ) {
-			return preset < other.preset;
+		if ( material != other.material ) {
+			return material < other.material;
 		}
-		return material < other.material;
+		return flags < other.flags;
 	}
 };
 
@@ -1758,6 +1764,21 @@ static void AddMaterialVote( LeafAcoustics &acoustics, std::uint8_t materialClas
 	}
 }
 
+static void MergeLeafAcoustics( LeafAcoustics &target, const LeafAcoustics &source ) {
+	target.contents |= source.contents;
+	target.surfaceFlags |= source.surfaceFlags;
+	target.neutralVotes += source.neutralVotes;
+	target.liquidVotes += source.liquidVotes;
+	target.skyVotes += source.skyVotes;
+	target.stoneVotes += source.stoneVotes;
+	target.metalVotes += source.metalVotes;
+	target.softVotes += source.softVotes;
+	for ( std::size_t i = 0; i < target.presetVotes.size(); ++i ) {
+		target.presetVotes[i] += source.presetVotes[i];
+	}
+	target.flags = static_cast<std::uint8_t>( target.flags | source.flags );
+}
+
 static int DominantPresetOverride( const LeafAcoustics &acoustics ) {
 	int bestPreset = -1;
 	double bestWeight = 0.0;
@@ -1785,6 +1806,9 @@ static void AccumulateShaderAcoustics( const BspShader &shader, const std::vecto
 	const std::string name = LowercasePathToken( shader.name );
 	if ( ContainsAnyToken( name, { "sky", "skies/" } ) ) {
 		acoustics.skyVotes += roleWeight;
+	}
+	if ( ContainsAnyToken( name, { "water", "slime", "lava", "liquid", "pool", "slosh" } ) ) {
+		acoustics.liquidVotes += roleWeight;
 	}
 	if ( ContainsAnyToken( name, { "stone", "rock", "gothic", "brick", "concrete", "cement", "base_wall" } ) ) {
 		acoustics.stoneVotes += roleWeight;
@@ -1883,31 +1907,47 @@ static std::uint8_t MaterialFromAcoustics( const LeafAcoustics &acoustics ) {
 	return static_cast<std::uint8_t>( azfmt::MaterialClass::Soft );
 }
 
-static std::uint32_t PresetFromLeaf( const BspLeaf &leaf, const LeafAcoustics &acoustics, std::uint8_t material ) {
+static std::uint8_t GeneratedFlagsFromAcoustics( const LeafAcoustics &acoustics, std::uint8_t material ) {
+	std::uint8_t flags = static_cast<std::uint8_t>( acoustics.flags & kGeneratedEnvironmentFlags );
+	if ( ( acoustics.contents & ( CONTENTS_WATER | CONTENTS_SLIME | CONTENTS_LAVA ) ) ||
+		material == static_cast<std::uint8_t>( azfmt::MaterialClass::Liquid ) ) {
+		flags = static_cast<std::uint8_t>( flags | azfmt::ZoneFlagUnderwater );
+	}
+	return flags;
+}
+
+static std::uint32_t PresetFromBounds( const Vec3 &mins, const Vec3 &maxs, const LeafAcoustics &acoustics, std::uint8_t material ) {
 	const int overridePreset = DominantPresetOverride( acoustics );
 	if ( overridePreset >= 0 ) {
 		return static_cast<std::uint32_t>( overridePreset );
 	}
-	if ( acoustics.contents & ( CONTENTS_WATER | CONTENTS_SLIME | CONTENTS_LAVA ) ) {
+	if ( ( acoustics.contents & ( CONTENTS_WATER | CONTENTS_SLIME | CONTENTS_LAVA ) ) ||
+		( acoustics.flags & azfmt::ZoneFlagUnderwater ) != 0 ||
+		material == static_cast<std::uint8_t>( azfmt::MaterialClass::Liquid ) ) {
 		return static_cast<std::uint32_t>( azfmt::Preset::Underwater );
 	}
 
-	const float x = ( std::max )( kMinimumLeafExtent, leaf.maxs.x - leaf.mins.x );
-	const float y = ( std::max )( kMinimumLeafExtent, leaf.maxs.y - leaf.mins.y );
-	const float z = ( std::max )( kMinimumLeafExtent, leaf.maxs.z - leaf.mins.z );
+	const float x = ( std::max )( kMinimumLeafExtent, maxs.x - mins.x );
+	const float y = ( std::max )( kMinimumLeafExtent, maxs.y - mins.y );
+	const float z = ( std::max )( kMinimumLeafExtent, maxs.z - mins.z );
 	const float horizontalMin = ( std::min )( x, y );
 	const float horizontalMax = ( std::max )( x, y );
+	const float horizontalRatio = horizontalMax / ( std::max )( kMinimumLeafExtent, horizontalMin );
 	const float volume = x * y * z;
-	const bool skyLike = material == static_cast<std::uint8_t>( azfmt::MaterialClass::Sky ) || acoustics.skyVotes > 0;
+	const bool skyLike = material == static_cast<std::uint8_t>( azfmt::MaterialClass::Sky ) ||
+		( acoustics.surfaceFlags & SURF_SKY ) != 0 ||
+		( acoustics.flags & azfmt::ZoneFlagOutdoor ) != 0 ||
+		acoustics.skyVotes > 0.0;
 
-	if ( skyLike && ( z > 192.0f || horizontalMax > 512.0f ) ) {
+	if ( skyLike && ( ( acoustics.flags & azfmt::ZoneFlagOutdoor ) != 0 ||
+		z > 160.0f || horizontalMax > 384.0f || volume > 4.0f * 1024.0f * 1024.0f ) ) {
 		return static_cast<std::uint32_t>( azfmt::Preset::Outdoors );
-	}
-	if ( horizontalMin > 0.0f && horizontalMax / horizontalMin > 2.6f && horizontalMin < 384.0f ) {
-		return static_cast<std::uint32_t>( azfmt::Preset::Hallway );
 	}
 	if ( volume > 96.0f * 1024.0f * 1024.0f || horizontalMax > 1536.0f || z > 768.0f ) {
 		return static_cast<std::uint32_t>( azfmt::Preset::Hall );
+	}
+	if ( horizontalRatio > 2.8f && horizontalMin < 384.0f && horizontalMax >= 256.0f && z <= 512.0f ) {
+		return static_cast<std::uint32_t>( azfmt::Preset::Hallway );
 	}
 	if ( material == static_cast<std::uint8_t>( azfmt::MaterialClass::Stone ) ||
 		material == static_cast<std::uint8_t>( azfmt::MaterialClass::Metal ) ) {
@@ -2028,24 +2068,243 @@ static std::uint8_t DominantMaterialFromWeights( const std::array<double, static
 	return bestWeight > 0.0 ? best : fallback;
 }
 
+static void FinalizeGeneratedZone( GeneratedZone &generated ) {
+	generated.zone.materialClass = DominantMaterialFromWeights( generated.materialWeights, generated.zone.materialClass );
+	generated.zone.preset = PresetFromBounds( generated.zone.mins, generated.zone.maxs, generated.acoustics, generated.zone.materialClass );
+	generated.zone.flags = static_cast<std::uint8_t>(
+		azfmt::ZoneFlagGenerated | GeneratedFlagsFromAcoustics( generated.acoustics, generated.zone.materialClass ) );
+	ApplyGeneratedTuning( generated.zone );
+}
+
+static float AxisOverlap( float aMin, float aMax, float bMin, float bMax ) {
+	return ( std::min )( aMax, bMax ) - ( std::max )( aMin, bMin );
+}
+
+static float BoundsVolume( const Vec3 &mins, const Vec3 &maxs ) {
+	return ( std::max )( 1.0f, maxs.x - mins.x ) *
+		( std::max )( 1.0f, maxs.y - mins.y ) *
+		( std::max )( 1.0f, maxs.z - mins.z );
+}
+
+static float ZoneOverlapVolume( const Zone &a, const Zone &b ) {
+	const float x = ( std::max )( 0.0f, AxisOverlap( a.mins.x, a.maxs.x, b.mins.x, b.maxs.x ) );
+	const float y = ( std::max )( 0.0f, AxisOverlap( a.mins.y, a.maxs.y, b.mins.y, b.maxs.y ) );
+	const float z = ( std::max )( 0.0f, AxisOverlap( a.mins.z, a.maxs.z, b.mins.z, b.maxs.z ) );
+	return x * y * z;
+}
+
+static float ZoneFaceArea( const Zone &zone, int axis ) {
+	if ( axis == 0 ) {
+		return ( std::max )( 1.0f, ExtentY( zone ) ) * ( std::max )( 1.0f, ExtentZ( zone ) );
+	}
+	if ( axis == 1 ) {
+		return ( std::max )( 1.0f, ExtentX( zone ) ) * ( std::max )( 1.0f, ExtentZ( zone ) );
+	}
+	return ( std::max )( 1.0f, ExtentX( zone ) ) * ( std::max )( 1.0f, ExtentY( zone ) );
+}
+
+struct ZoneAdjacency {
+	int axis = -1;
+	float gap = 0.0f;
+	std::array<float, 3> overlap = {};
+	float overlapArea = 0.0f;
+	float faceAreaA = 1.0f;
+	float faceAreaB = 1.0f;
+	float coverageA = 0.0f;
+	float coverageB = 0.0f;
+};
+
+static bool MeasureZoneAdjacency( const Zone &a, const Zone &b, float maximumGap, float maximumSeparatingOverlap, ZoneAdjacency &best ) {
+	const std::array<float, 3> overlap = {
+		AxisOverlap( a.mins.x, a.maxs.x, b.mins.x, b.maxs.x ),
+		AxisOverlap( a.mins.y, a.maxs.y, b.mins.y, b.maxs.y ),
+		AxisOverlap( a.mins.z, a.maxs.z, b.mins.z, b.maxs.z )
+	};
+
+	bool found = false;
+	float bestCoverage = 0.0f;
+	float bestGap = std::numeric_limits<float>::max();
+	for ( int axis = 0; axis < 3; ++axis ) {
+		const float gap = overlap[axis] < 0.0f ? -overlap[axis] : 0.0f;
+		if ( gap > maximumGap || overlap[axis] > maximumSeparatingOverlap ) {
+			continue;
+		}
+
+		const int axisA = ( axis + 1 ) % 3;
+		const int axisB = ( axis + 2 ) % 3;
+		if ( overlap[axisA] <= 0.0f || overlap[axisB] <= 0.0f ) {
+			continue;
+		}
+
+		const float overlapArea = overlap[axisA] * overlap[axisB];
+		const float faceAreaA = ZoneFaceArea( a, axis );
+		const float faceAreaB = ZoneFaceArea( b, axis );
+		const float coverageA = overlapArea / ( std::max )( 1.0f, faceAreaA );
+		const float coverageB = overlapArea / ( std::max )( 1.0f, faceAreaB );
+		const float coverage = ( std::min )( coverageA, coverageB );
+		if ( !found || coverage > bestCoverage || ( coverage == bestCoverage && gap < bestGap ) ) {
+			found = true;
+			bestCoverage = coverage;
+			bestGap = gap;
+			best.axis = axis;
+			best.gap = gap;
+			best.overlap = overlap;
+			best.overlapArea = overlapArea;
+			best.faceAreaA = faceAreaA;
+			best.faceAreaB = faceAreaB;
+			best.coverageA = coverageA;
+			best.coverageB = coverageB;
+		}
+	}
+	return found;
+}
+
 static void MergeGeneratedZoneInto( GeneratedZone &target, const GeneratedZone &source ) {
 	const float targetWeight = ( std::max )( 1.0f, target.weight );
 	const float sourceWeight = ( std::max )( 1.0f, source.weight );
 	const float totalWeight = targetWeight + sourceWeight;
 	ExpandZoneBounds( target.zone, source.zone.mins, source.zone.maxs );
-	target.zone.reverbGain = ( target.zone.reverbGain * targetWeight + source.zone.reverbGain * sourceWeight ) / totalWeight;
-	target.zone.occlusionMultiplier = ( target.zone.occlusionMultiplier * targetWeight + source.zone.occlusionMultiplier * sourceWeight ) / totalWeight;
-	target.zone.directLF = ( target.zone.directLF * targetWeight + source.zone.directLF * sourceWeight ) / totalWeight;
-	target.zone.directHF = ( target.zone.directHF * targetWeight + source.zone.directHF * sourceWeight ) / totalWeight;
-	target.zone.wetLF = ( target.zone.wetLF * targetWeight + source.zone.wetLF * sourceWeight ) / totalWeight;
-	target.zone.wetHF = ( target.zone.wetHF * targetWeight + source.zone.wetHF * sourceWeight ) / totalWeight;
-	target.zone.transitionMs = ( std::max )( target.zone.transitionMs, source.zone.transitionMs );
-	target.zone.flags |= source.zone.flags;
+	if ( target.area != source.area ) {
+		target.area = -1;
+	}
+	if ( target.cluster != source.cluster ) {
+		target.cluster = -1;
+	}
+	MergeLeafAcoustics( target.acoustics, source.acoustics );
 	for ( std::size_t i = 0; i < target.materialWeights.size(); ++i ) {
 		target.materialWeights[i] += source.materialWeights[i];
 	}
-	target.zone.materialClass = DominantMaterialFromWeights( target.materialWeights, target.zone.materialClass );
 	target.weight = totalWeight;
+	FinalizeGeneratedZone( target );
+}
+
+struct SplitMergeCandidate {
+	std::size_t a = 0;
+	std::size_t b = 0;
+	float score = 0.0f;
+};
+
+static bool GeneratedPresetCanMergeAsSplit( std::uint32_t a, std::uint32_t b ) {
+	if ( a == b ) {
+		return true;
+	}
+	const bool aOutdoor = a == static_cast<std::uint32_t>( azfmt::Preset::Outdoors );
+	const bool bOutdoor = b == static_cast<std::uint32_t>( azfmt::Preset::Outdoors );
+	const bool aUnderwater = a == static_cast<std::uint32_t>( azfmt::Preset::Underwater );
+	const bool bUnderwater = b == static_cast<std::uint32_t>( azfmt::Preset::Underwater );
+	return !aOutdoor && !bOutdoor && !aUnderwater && !bUnderwater;
+}
+
+static bool GeneratedMaterialCanMergeAsSplit( std::uint8_t a, std::uint8_t b ) {
+	if ( a == b ) {
+		return true;
+	}
+	if ( a == static_cast<std::uint8_t>( azfmt::MaterialClass::Liquid ) ||
+		b == static_cast<std::uint8_t>( azfmt::MaterialClass::Liquid ) ) {
+		return false;
+	}
+	return true;
+}
+
+static bool BuildSplitMergeCandidate( const std::vector<GeneratedZone> &zones, std::size_t a, std::size_t b, SplitMergeCandidate &candidate ) {
+	const GeneratedZone &zoneA = zones[a];
+	const GeneratedZone &zoneB = zones[b];
+	if ( zoneA.area != zoneB.area ||
+		!GeneratedMaterialCanMergeAsSplit( zoneA.zone.materialClass, zoneB.zone.materialClass ) ||
+		( zoneA.zone.flags & kGeneratedEnvironmentFlags ) != ( zoneB.zone.flags & kGeneratedEnvironmentFlags ) ||
+		!GeneratedPresetCanMergeAsSplit( zoneA.zone.preset, zoneB.zone.preset ) ) {
+		return false;
+	}
+
+	ZoneAdjacency adjacency;
+	if ( !MeasureZoneAdjacency( zoneA.zone, zoneB.zone, kSplitZoneMergeGapEpsilon, kSplitZoneMergeOverlapEpsilon, adjacency ) ) {
+		return false;
+	}
+
+	const float minimumCoverage = ( std::min )( adjacency.coverageA, adjacency.coverageB );
+	if ( minimumCoverage < kSplitZoneMergeMinimumFaceCoverage ) {
+		return false;
+	}
+
+	const Vec3 combinedMins = {
+		( std::min )( zoneA.zone.mins.x, zoneB.zone.mins.x ),
+		( std::min )( zoneA.zone.mins.y, zoneB.zone.mins.y ),
+		( std::min )( zoneA.zone.mins.z, zoneB.zone.mins.z )
+	};
+	const Vec3 combinedMaxs = {
+		( std::max )( zoneA.zone.maxs.x, zoneB.zone.maxs.x ),
+		( std::max )( zoneA.zone.maxs.y, zoneB.zone.maxs.y ),
+		( std::max )( zoneA.zone.maxs.z, zoneB.zone.maxs.z )
+	};
+	const float combinedVolume = BoundsVolume( combinedMins, combinedMaxs );
+	const float unionVolume = ZoneVolume( zoneA.zone ) + ZoneVolume( zoneB.zone ) - ZoneOverlapVolume( zoneA.zone, zoneB.zone );
+	if ( unionVolume <= 0.0f || combinedVolume > unionVolume * kSplitZoneMergeMaxVolumeInflation ) {
+		return false;
+	}
+
+	candidate.a = a;
+	candidate.b = b;
+	candidate.score = minimumCoverage * 2.0f +
+		( ( adjacency.coverageA + adjacency.coverageB ) * 0.5f ) -
+		( combinedVolume / unionVolume - 1.0f );
+	return true;
+}
+
+static void MergeAdjacentSplitGeneratedZones( std::vector<GeneratedZone> &zones ) {
+	if ( zones.size() < 2u ) {
+		return;
+	}
+
+	for (;;) {
+		std::vector<SplitMergeCandidate> candidates;
+		for ( std::size_t i = 0; i < zones.size(); ++i ) {
+			for ( std::size_t j = i + 1u; j < zones.size(); ++j ) {
+				SplitMergeCandidate candidate;
+				if ( BuildSplitMergeCandidate( zones, i, j, candidate ) ) {
+					candidates.push_back( candidate );
+				}
+			}
+		}
+		if ( candidates.empty() ) {
+			return;
+		}
+
+		std::sort( candidates.begin(), candidates.end(), []( const SplitMergeCandidate &a, const SplitMergeCandidate &b ) {
+			if ( a.score != b.score ) {
+				return a.score > b.score;
+			}
+			if ( a.a != b.a ) {
+				return a.a < b.a;
+			}
+			return a.b < b.b;
+		} );
+
+		std::vector<bool> used( zones.size(), false );
+		std::vector<bool> removed( zones.size(), false );
+		bool mergedAny = false;
+		for ( const SplitMergeCandidate &candidate : candidates ) {
+			if ( used[candidate.a] || used[candidate.b] ) {
+				continue;
+			}
+			MergeGeneratedZoneInto( zones[candidate.a], zones[candidate.b] );
+			used[candidate.a] = true;
+			used[candidate.b] = true;
+			removed[candidate.b] = true;
+			mergedAny = true;
+		}
+		if ( !mergedAny ) {
+			return;
+		}
+
+		std::vector<GeneratedZone> merged;
+		merged.reserve( zones.size() );
+		for ( std::size_t i = 0; i < zones.size(); ++i ) {
+			if ( !removed[i] ) {
+				merged.push_back( zones[i] );
+			}
+		}
+		zones.swap( merged );
+	}
 }
 
 static GeneratedZone CoarsenGroup( const std::vector<GeneratedZone> &zones, const std::vector<std::size_t> &indices ) {
@@ -2141,12 +2400,11 @@ static bool BuildGeneratedZonesFromBsp( const BspMap &map, std::size_t limit, co
 		}
 		const LeafAcoustics acoustics = AnalyzeLeafAcoustics( map, leaf, materialOverrides );
 		const std::uint8_t material = MaterialFromAcoustics( acoustics );
-		const std::uint32_t preset = PresetFromLeaf( leaf, acoustics, material );
 		GeneratedZoneKey key;
 		key.area = leaf.area;
 		key.cluster = leaf.cluster;
-		key.preset = preset;
-		key.material = material;
+		key.flags = GeneratedFlagsFromAcoustics( acoustics, material );
+		key.material = ( key.flags & azfmt::ZoneFlagUnderwater ) != 0 ? material : 0;
 
 		GeneratedZone leafZone;
 		leafZone.area = leaf.area;
@@ -2155,12 +2413,11 @@ static bool BuildGeneratedZonesFromBsp( const BspMap &map, std::size_t limit, co
 		leafZone.zone.haveMaxs = true;
 		leafZone.zone.mins = leaf.mins;
 		leafZone.zone.maxs = leaf.maxs;
-		leafZone.zone.preset = preset;
 		leafZone.zone.materialClass = material;
-		ApplyGeneratedTuning( leafZone.zone );
-		leafZone.zone.flags = static_cast<std::uint8_t>( leafZone.zone.flags | acoustics.flags );
 		leafZone.weight = ZoneVolume( leafZone.zone );
+		leafZone.acoustics = acoustics;
 		leafZone.materialWeights[material] = leafZone.weight;
+		FinalizeGeneratedZone( leafZone );
 
 		auto inserted = accumulators.emplace( key, leafZone );
 		if ( !inserted.second ) {
@@ -2178,41 +2435,16 @@ static bool BuildGeneratedZonesFromBsp( const BspMap &map, std::size_t limit, co
 		return false;
 	}
 
+	MergeAdjacentSplitGeneratedZones( zones );
 	CoarsenGeneratedZonesToLimit( zones, limit );
 	AssignGeneratedZoneNames( zones );
 	return true;
 }
 
-static float AxisOverlap( float aMin, float aMax, float bMin, float bMax ) {
-	return ( std::min )( aMax, bMax ) - ( std::max )( aMin, bMin );
-}
-
 static bool BuildPortalBetweenZones( const Zone &a, const Zone &b, Portal &aToB, Portal &bToA ) {
-	const float gaps[3] = {
-		( a.maxs.x < b.mins.x ) ? b.mins.x - a.maxs.x : ( b.maxs.x < a.mins.x ? a.mins.x - b.maxs.x : 0.0f ),
-		( a.maxs.y < b.mins.y ) ? b.mins.y - a.maxs.y : ( b.maxs.y < a.mins.y ? a.mins.y - b.maxs.y : 0.0f ),
-		( a.maxs.z < b.mins.z ) ? b.mins.z - a.maxs.z : ( b.maxs.z < a.mins.z ? a.mins.z - b.maxs.z : 0.0f )
-	};
-	int portalAxis = 0;
-	if ( gaps[1] < gaps[portalAxis] ) {
-		portalAxis = 1;
-	}
-	if ( gaps[2] < gaps[portalAxis] ) {
-		portalAxis = 2;
-	}
-	if ( gaps[portalAxis] > kPortalAdjacencyEpsilon ) {
+	ZoneAdjacency adjacency;
+	if ( !MeasureZoneAdjacency( a, b, kPortalAdjacencyEpsilon, kPortalAdjacencyEpsilon, adjacency ) ) {
 		return false;
-	}
-
-	float overlap[3] = {
-		AxisOverlap( a.mins.x, a.maxs.x, b.mins.x, b.maxs.x ),
-		AxisOverlap( a.mins.y, a.maxs.y, b.mins.y, b.maxs.y ),
-		AxisOverlap( a.mins.z, a.maxs.z, b.mins.z, b.maxs.z )
-	};
-	for ( int axis = 0; axis < 3; ++axis ) {
-		if ( axis != portalAxis && overlap[axis] <= 0.0f ) {
-			return false;
-		}
 	}
 
 	Vec3 mins;
@@ -2223,29 +2455,25 @@ static bool BuildPortalBetweenZones( const Zone &a, const Zone &b, Portal &aToB,
 	maxs.x = ( std::min )( a.maxs.x, b.maxs.x );
 	maxs.y = ( std::min )( a.maxs.y, b.maxs.y );
 	maxs.z = ( std::min )( a.maxs.z, b.maxs.z );
+	const int portalAxis = adjacency.axis;
 	if ( portalAxis == 0 ) {
-		const float plane = ( a.maxs.x <= b.mins.x ) ? ( a.maxs.x + b.mins.x ) * 0.5f : ( b.maxs.x + a.mins.x ) * 0.5f;
+		const float plane = adjacency.overlap[0] < 0.0f
+			? ( ( a.maxs.x <= b.mins.x ) ? ( a.maxs.x + b.mins.x ) * 0.5f : ( b.maxs.x + a.mins.x ) * 0.5f )
+			: ( ( std::max )( a.mins.x, b.mins.x ) + ( std::min )( a.maxs.x, b.maxs.x ) ) * 0.5f;
 		mins.x = maxs.x = plane;
 	} else if ( portalAxis == 1 ) {
-		const float plane = ( a.maxs.y <= b.mins.y ) ? ( a.maxs.y + b.mins.y ) * 0.5f : ( b.maxs.y + a.mins.y ) * 0.5f;
+		const float plane = adjacency.overlap[1] < 0.0f
+			? ( ( a.maxs.y <= b.mins.y ) ? ( a.maxs.y + b.mins.y ) * 0.5f : ( b.maxs.y + a.mins.y ) * 0.5f )
+			: ( ( std::max )( a.mins.y, b.mins.y ) + ( std::min )( a.maxs.y, b.maxs.y ) ) * 0.5f;
 		mins.y = maxs.y = plane;
 	} else {
-		const float plane = ( a.maxs.z <= b.mins.z ) ? ( a.maxs.z + b.mins.z ) * 0.5f : ( b.maxs.z + a.mins.z ) * 0.5f;
+		const float plane = adjacency.overlap[2] < 0.0f
+			? ( ( a.maxs.z <= b.mins.z ) ? ( a.maxs.z + b.mins.z ) * 0.5f : ( b.maxs.z + a.mins.z ) * 0.5f )
+			: ( ( std::max )( a.mins.z, b.mins.z ) + ( std::min )( a.maxs.z, b.maxs.z ) ) * 0.5f;
 		mins.z = maxs.z = plane;
 	}
 
-	const int axisA = ( portalAxis + 1 ) % 3;
-	const int axisB = ( portalAxis + 2 ) % 3;
-	const float overlapArea = ( std::max )( 1.0f, overlap[axisA] ) * ( std::max )( 1.0f, overlap[axisB] );
-	const float faceAreaA =
-		( portalAxis == 0 ) ? ( std::max )( 1.0f, ExtentY( a ) ) * ( std::max )( 1.0f, ExtentZ( a ) ) :
-		( portalAxis == 1 ) ? ( std::max )( 1.0f, ExtentX( a ) ) * ( std::max )( 1.0f, ExtentZ( a ) ) :
-			( std::max )( 1.0f, ExtentX( a ) ) * ( std::max )( 1.0f, ExtentY( a ) );
-	const float faceAreaB =
-		( portalAxis == 0 ) ? ( std::max )( 1.0f, ExtentY( b ) ) * ( std::max )( 1.0f, ExtentZ( b ) ) :
-		( portalAxis == 1 ) ? ( std::max )( 1.0f, ExtentX( b ) ) * ( std::max )( 1.0f, ExtentZ( b ) ) :
-			( std::max )( 1.0f, ExtentX( b ) ) * ( std::max )( 1.0f, ExtentY( b ) );
-	const float openness = overlapArea / ( std::max )( 1.0f, ( std::min )( faceAreaA, faceAreaB ) );
+	const float openness = adjacency.overlapArea / ( std::max )( 1.0f, ( std::min )( adjacency.faceAreaA, adjacency.faceAreaB ) );
 	if ( openness < kPortalMinimumOpenness ) {
 		return false;
 	}
@@ -2257,28 +2485,68 @@ static bool BuildPortalBetweenZones( const Zone &a, const Zone &b, Portal &aToB,
 	return true;
 }
 
+static float PortalBoundsArea( const Portal &portal ) {
+	const float x = ( std::max )( 0.0f, portal.maxs.x - portal.mins.x );
+	const float y = ( std::max )( 0.0f, portal.maxs.y - portal.mins.y );
+	const float z = ( std::max )( 0.0f, portal.maxs.z - portal.mins.z );
+	if ( x <= 0.0f ) {
+		return ( std::max )( 1.0f, y ) * ( std::max )( 1.0f, z );
+	}
+	if ( y <= 0.0f ) {
+		return ( std::max )( 1.0f, x ) * ( std::max )( 1.0f, z );
+	}
+	return ( std::max )( 1.0f, x ) * ( std::max )( 1.0f, y );
+}
+
+struct GeneratedPortalCandidate {
+	std::size_t a = 0;
+	std::size_t b = 0;
+	Portal aToB;
+	Portal bToA;
+	float score = 0.0f;
+};
+
 static void BuildGeneratedPortals( std::vector<Zone> &zones, std::size_t generatedCount ) {
 	for ( std::size_t i = 0; i < generatedCount; ++i ) {
 		zones[i].portals.clear();
 	}
 
+	std::vector<GeneratedPortalCandidate> candidates;
 	for ( std::size_t i = 0; i < generatedCount; ++i ) {
 		for ( std::size_t j = i + 1u; j < generatedCount; ++j ) {
-			if ( zones[i].preset != zones[j].preset && zones[i].materialClass != zones[j].materialClass ) {
-				continue;
-			}
-			if ( zones[i].portals.size() >= azfmt::kMaxZonePortals || zones[j].portals.size() >= azfmt::kMaxZonePortals ) {
-				continue;
-			}
 			Portal iToJ;
 			Portal jToI;
 			if ( BuildPortalBetweenZones( zones[i], zones[j], iToJ, jToI ) ) {
 				iToJ.targetZone = static_cast<std::uint32_t>( j );
 				jToI.targetZone = static_cast<std::uint32_t>( i );
-				zones[i].portals.push_back( iToJ );
-				zones[j].portals.push_back( jToI );
+				GeneratedPortalCandidate candidate;
+				candidate.a = i;
+				candidate.b = j;
+				candidate.aToB = iToJ;
+				candidate.bToA = jToI;
+				candidate.score = iToJ.openness * PortalBoundsArea( iToJ );
+				candidates.push_back( candidate );
 			}
 		}
+	}
+
+	std::sort( candidates.begin(), candidates.end(), []( const GeneratedPortalCandidate &a, const GeneratedPortalCandidate &b ) {
+		if ( a.score != b.score ) {
+			return a.score > b.score;
+		}
+		if ( a.a != b.a ) {
+			return a.a < b.a;
+		}
+		return a.b < b.b;
+	} );
+
+	for ( const GeneratedPortalCandidate &candidate : candidates ) {
+		if ( zones[candidate.a].portals.size() >= azfmt::kMaxZonePortals ||
+			zones[candidate.b].portals.size() >= azfmt::kMaxZonePortals ) {
+			continue;
+		}
+		zones[candidate.a].portals.push_back( candidate.aToB );
+		zones[candidate.b].portals.push_back( candidate.bToA );
 	}
 }
 

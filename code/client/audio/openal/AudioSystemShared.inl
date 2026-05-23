@@ -27,6 +27,7 @@ constexpr float kQ3SoundAttenuation = 0.0008f;
 constexpr float kOpenALReferenceDistance = kQ3SoundFullVolumeDistance;
 constexpr float kOpenALMaxDistance = kQ3SoundFullVolumeDistance + ( 1.0f / kQ3SoundAttenuation );
 constexpr float kOpenALRolloffFactor = 1.0f;
+constexpr float kDefaultSoundShaderScale = 1.0f;
 constexpr float kOcclusionTargetRiseHysteresis = 0.04f;
 constexpr float kOcclusionTargetFallHysteresis = 0.10f;
 constexpr float kOcclusionAttackPerSecond = 5.5f;

@@ -31,7 +31,8 @@
         "-Target",
         "both",
         "-Renderers",
-        "opengl,glx,vulkan,opengl2"
+        "opengl,glx,vulkan,opengl2",
+        "-Archive"
       ],
       "problemMatcher": [
         "$gcc",

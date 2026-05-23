@@ -1,16 +1,29 @@
 # Changelog
 
-All notable project changes should be documented here for use in release changelogs.
+This is the pending release-note queue for the next FnQuake3 release.
 
-The format follows Keep a Changelog style with an `Unreleased` section that is promoted into a dated release section when cutting a tagged build.
+Keep short user-facing bullets under `Unreleased` as changes land. During release publishing, the workflow asks GitHub Copilot to dedupe and categorize the notes for the GitHub release details, then clears this section for the next cycle.
 
 ## [Unreleased]
 
-### Added
-- Added `r_picmipFilter` to let users restrict picmip to shader path groups such as `textures/*`, `models/*`, `sprites/*`, and UI/HUD paths.
+### Highlights
+- _None yet._
 
-### Changed
+### Compatibility
+- _None yet._
+
+### Rendering and Display
+- Added `r_picmipFilter` to let users restrict picmip to shader path groups such as `textures/*`, `models/*`, `sprites/*`, and UI/HUD paths.
 - Default picmip eligibility now keeps non-`textures/*` shader paths at full resolution unless users opt them back in or select legacy filtering.
 
-### Fixed
+### Audio
+- _None yet._
+
+### Builds and Packaging
+- _None yet._
+
+### Fixes
+- _None yet._
+
+### Documentation and Tooling
 - _None yet._

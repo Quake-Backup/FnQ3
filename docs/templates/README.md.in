@@ -67,7 +67,7 @@ If you want to compile FnQuake3 yourself instead, start with the [Build Guide](B
 - [Audio Guide](docs/AUDIO.md) for backend selection, devices, HRTF, fallback behavior, and troubleshooting.
 - [Console Guide](docs/CONSOLE.md) for console layout, scaling, completion, and interaction.
 - [Screenshot Guide](docs/SCREENSHOTS.md) for capture commands, naming, metadata sidecars, watermarks, and cube-map export.
-- [Changelog](docs/fnquake3/CHANGELOG.md) for release-facing change history.
+- [Release History](https://github.com/themuffinator/FnQ3/releases) for published changelogs and downloads.
 
 ### Technical and build docs
 

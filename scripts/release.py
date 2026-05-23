@@ -2,25 +2,32 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fnq3_meta import ROOT, channel_metadata, package_archive_name
 from glx_runtime_sweep import (
-    GLX_PROOF_CORPUS_DOC,
     release_corpus_manifest,
     validate_release_proof_root,
 )
 from glx_promotion import (
-    PROMOTION_DOC_PATH,
-    ROLLBACK_PACKAGE_DOC_PATH,
     check_rollback_package_metadata,
     promotion_report,
+)
+from root_archive import (
+    DEFAULT_AUDIO_ZONE_ASSETS,
+    ROOT_ARCHIVE_NAME,
+    STANDARD_Q3A_AUDIO_ZONE_MAPS,
+    validate_root_archive,
+    validate_root_archive_names,
+    write_root_archive,
 )
 
 
@@ -28,27 +35,65 @@ DEFAULT_DOCS = [
     (ROOT / "LICENSE", Path("LICENSE")),
     (ROOT / "docs" / "fnquake3" / "TECHNICAL.md", Path("docs") / "fnquake3" / "TECHNICAL.md"),
     (
-        ROOT / GLX_PROOF_CORPUS_DOC,
-        Path(GLX_PROOF_CORPUS_DOC),
-    ),
-    (
-        PROMOTION_DOC_PATH,
-        Path("docs") / "fnquake3" / "GLX_PROMOTION.md",
-    ),
-    (
-        ROLLBACK_PACKAGE_DOC_PATH,
-        Path("docs") / "fnquake3" / "GLX_ROLLBACK_PACKAGE.md",
-    ),
-    (
-        ROOT / "docs" / "fnquake3" / "GLX_VISUAL_DOSSIER.md",
-        Path("docs") / "fnquake3" / "GLX_VISUAL_DOSSIER.md",
-    ),
-    (
         ROOT / "docs" / "GLX.md",
         Path("docs") / "GLX.md",
     ),
     (ROOT / ".install" / "README.html", Path("README.html")),
 ]
+
+SKIP_ARTIFACT_DIR_NAMES = {
+    ".git",
+    ".github",
+    ".pytest_cache",
+    ".tmp",
+    ".vs",
+    ".vscode",
+    "__pycache__",
+    "CMakeFiles",
+    "Debug",
+    "RelWithDebInfo",
+    "Release",
+    "Testing",
+    "build",
+    "meson-info",
+    "meson-logs",
+    "meson-private",
+}
+
+SKIP_ARTIFACT_FILE_NAMES = {
+    ".DS_Store",
+    ".ninja_deps",
+    ".ninja_log",
+    "Thumbs.db",
+    "build.ninja",
+    "cmake_install.cmake",
+    "CMakeCache.txt",
+    "compile_commands.json",
+    "desktop.ini",
+    "install.dat",
+}
+
+SKIP_ARTIFACT_SUFFIXES = {
+    ".a",
+    ".d",
+    ".dSYM",
+    ".exp",
+    ".ilk",
+    ".lastbuildstate",
+    ".lib",
+    ".log",
+    ".obj",
+    ".o",
+    ".pdb",
+    ".pyc",
+    ".pyo",
+    ".tmp",
+    ".tlog",
+}
+
+SKIP_ARTIFACT_DIR_NAMES_LOWER = {name.lower() for name in SKIP_ARTIFACT_DIR_NAMES}
+SKIP_ARTIFACT_FILE_NAMES_LOWER = {name.lower() for name in SKIP_ARTIFACT_FILE_NAMES}
+SKIP_ARTIFACT_SUFFIXES_LOWER = {suffix.lower() for suffix in SKIP_ARTIFACT_SUFFIXES}
 
 
 def parse_args() -> argparse.Namespace:
@@ -88,14 +133,47 @@ def sha256sum(path: Path) -> str:
     return digest.hexdigest()
 
 
-def copy_tree_contents(source: Path, target: Path) -> None:
+def should_skip_artifact_path(relative_path: Path, *, is_dir: bool) -> bool:
+    parts = relative_path.parts
+    if any(
+        part.lower() in SKIP_ARTIFACT_DIR_NAMES_LOWER or part.lower().endswith(".dsym")
+        for part in parts
+    ):
+        return True
+
+    name = relative_path.name
+    if is_dir:
+        return False
+
+    if name.lower() in SKIP_ARTIFACT_FILE_NAMES_LOWER:
+        return True
+
+    suffixes = {suffix.lower() for suffix in relative_path.suffixes}
+    if suffixes.intersection(SKIP_ARTIFACT_SUFFIXES_LOWER):
+        return True
+
+    return False
+
+
+def copy_release_artifact_contents(source: Path, target: Path) -> list[str]:
     target.mkdir(parents=True, exist_ok=True)
-    for item in source.iterdir():
-        destination = target / item.name
+    skipped: list[str] = []
+
+    for item in sorted(source.rglob("*")):
+        relative = item.relative_to(source)
+        if should_skip_artifact_path(relative, is_dir=item.is_dir()):
+            skipped.append(relative.as_posix())
+            if item.is_dir():
+                continue
+            continue
+        destination = target / relative
         if item.is_dir():
-            shutil.copytree(item, destination, dirs_exist_ok=True)
+            destination.mkdir(parents=True, exist_ok=True)
         else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, destination)
+
+    return skipped
 
 
 def copy_docs(stage_root: Path) -> None:
@@ -103,6 +181,50 @@ def copy_docs(stage_root: Path) -> None:
         destination = stage_root / dest_relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+
+
+def copy_standard_audio_zone_assets(stage_root: Path) -> None:
+    for source, dest_relative in DEFAULT_AUDIO_ZONE_ASSETS:
+        destination = stage_root / dest_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
+def build_root_archive(stage_root: Path) -> Path:
+    archive_path = stage_root / ROOT_ARCHIVE_NAME
+    write_root_archive(archive_path)
+    validate_root_archive(archive_path)
+    return archive_path
+
+
+def validate_release_archive_contents(archive_path: Path) -> None:
+    with zipfile.ZipFile(archive_path) as archive:
+        archived_names = set(archive.namelist())
+        if ROOT_ARCHIVE_NAME not in archived_names:
+            raise ValueError(f"{archive_path.name} is missing {ROOT_ARCHIVE_NAME}")
+
+        root_archive_bytes = archive.read(ROOT_ARCHIVE_NAME)
+
+    with zipfile.ZipFile(io.BytesIO(root_archive_bytes)) as root_archive:
+        root_archive_names = {
+            info.filename
+            for info in root_archive.infolist()
+            if not info.is_dir()
+        }
+    validate_root_archive_names(root_archive_names)
+
+
+def validate_stage_tree(stage_root: Path) -> None:
+    offenders: list[str] = []
+    for item in sorted(stage_root.rglob("*")):
+        relative = item.relative_to(stage_root)
+        if should_skip_artifact_path(relative, is_dir=item.is_dir()):
+            offenders.append(relative.as_posix())
+    if offenders:
+        raise ValueError(
+            "release package contains filtered build byproducts: "
+            + ", ".join(offenders[:12])
+        )
 
 
 def resolve_glx_runtime_proof(args: argparse.Namespace) -> dict[str, object]:
@@ -259,10 +381,13 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         if stage_root.exists():
             shutil.rmtree(stage_root)
         stage_root.mkdir(parents=True, exist_ok=True)
-        copy_tree_contents(artifact_dir, stage_root)
+        skipped_files = copy_release_artifact_contents(artifact_dir, stage_root)
         copy_docs(stage_root)
+        build_root_archive(stage_root)
+        validate_stage_tree(stage_root)
 
         archive_path = Path(shutil.make_archive(str(archive_base), "zip", root_dir=stage_root))
+        validate_release_archive_contents(archive_path)
         checksum = sha256sum(archive_path)
         archives.append(
             {
@@ -270,6 +395,8 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
                 "archive": archive_path.name,
                 "path": archive_path.relative_to(ROOT).as_posix(),
                 "sha256": checksum,
+                "skipped_artifact_file_count": len(skipped_files),
+                "skipped_artifact_file_examples": skipped_files[:12],
             }
         )
         print(archive_path.relative_to(ROOT).as_posix())

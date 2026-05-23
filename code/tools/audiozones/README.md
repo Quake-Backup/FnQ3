@@ -154,3 +154,25 @@ touching generated sidecars. `--samples N` controls the per-map audit grid, and
 `--max-zones N` is forwarded to BSP generation for conservative fallback passes
 on unusually fragmented legacy maps. The default reports are
 `audio-zone-sweep.json` and `audio-zone-sweep.csv` under the output root.
+
+## Standard Q3A sidecars
+
+FnQuake3 ships generated `.azb` sidecars for the standard Quake III Arena
+`baseq3` arena maps. The tracked package source sidecars live under
+`pkg/baseq3/maps/`, and release/install builds pack them into
+`FnQuake3-pkg.fnz` under `baseq3/maps/` archive paths. The same package source
+tree also carries other data-only OpenAL tuning files, such as the standard
+weapon sound shaders under `pkg/baseq3/sound/` and `pkg/missionpack/sound/`.
+Regenerate the sidecars from a local retail `baseq3` install with:
+
+```powershell
+python scripts/generate_standard_audio_zones.py `
+  --tool meson/build/fnq3-audiozonesc.exe `
+  "C:/Program Files (x86)/Steam/steamapps/common/Quake 3 Arena/baseq3"
+```
+
+The helper reads only official `pak0.pk3` through `pak8.pk3` style archives,
+derives the map set from shipped arena metadata, extracts BSPs into `.tmp/`,
+and writes the compiled sidecars back to `pkg/baseq3/maps/`. Its default
+`--max-zones 512` keeps generated lookup cost bounded while preserving detailed
+coverage for maps that stay below the cap.

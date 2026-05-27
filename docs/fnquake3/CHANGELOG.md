@@ -13,8 +13,7 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - _None yet._
 
 ### Rendering and Display
-- Added `r_picmipFilter` to let users restrict picmip to shader path groups such as `textures/*`, `models/*`, `sprites/*`, and UI/HUD paths.
-- Default picmip eligibility now keeps non-`textures/*` shader paths at full resolution unless users opt them back in or select legacy filtering.
+- _None yet._
 
 ### Audio
 - _None yet._

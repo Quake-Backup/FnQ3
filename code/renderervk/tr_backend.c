@@ -583,6 +583,7 @@ static void RB_BeginDrawingView( void ) {
 
 #ifdef USE_PMLIGHT
 static void RB_LightingPass( void );
+static void RB_CSMShadowReceiverPass( drawSurf_t *drawSurfs, int numDrawSurfs );
 #endif
 
 /*
@@ -604,6 +605,7 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 	unsigned int	oldSort;
 #ifdef USE_PMLIGHT
 	float			oldShaderSort;
+	qboolean		csmReceiverDrawn;
 #endif
 #ifdef USE_VULKAN
 	qboolean		depthFadeSnapshot;
@@ -625,6 +627,7 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 	oldSort = MAX_UINT;
 #ifdef USE_PMLIGHT
 	oldShaderSort = -1;
+	csmReceiverDrawn = qfalse;
 #endif
 #ifdef USE_VULKAN
 	depthFadeSnapshot = qfalse;
@@ -669,6 +672,11 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 			#define INSERT_POINT SS_FOG
 			if ( backEnd.refdef.numLitSurfs && oldShaderSort < INSERT_POINT && shader->sort >= INSERT_POINT ) {
 				//RB_BeginDrawingLitSurfs(); // no need, already setup in RB_BeginDrawingView()
+				if ( !csmReceiverDrawn ) {
+					RB_CSMShadowReceiverPass( drawSurfs, numDrawSurfs );
+					csmReceiverDrawn = qtrue;
+					oldEntityNum = -1;
+				}
 #ifdef USE_VULKAN
 				RB_LightingPass();
 #else
@@ -814,6 +822,12 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 	if ( oldShader != NULL ) {
 		RB_EndSurface();
 	}
+
+#ifdef USE_PMLIGHT
+	if ( !csmReceiverDrawn ) {
+		RB_CSMShadowReceiverPass( drawSurfs, numDrawSurfs );
+	}
+#endif
 
 	backEnd.refdef.floatTime = originalTime;
 
@@ -1865,6 +1879,621 @@ static void RB_DlightShadowCacheInvalidate( const dlight_t *dl, int face )
 	}
 }
 
+typedef struct {
+	qboolean valid;
+	unsigned int generation;
+	unsigned int signature;
+} csmShadowCache_t;
+
+static csmShadowCache_t rb_csmShadowCache;
+
+static qboolean RB_CSMShadowEntityAllowed( int entityNum )
+{
+	const trRefEntity_t *ent;
+	const model_t *model;
+
+	if ( entityNum == REFENTITYNUM_WORLD ) {
+		return qtrue;
+	}
+	if ( entityNum < 0 || entityNum >= backEnd.refdef.num_entities ) {
+		return qfalse;
+	}
+
+	ent = &backEnd.refdef.entities[entityNum];
+	if ( ent->e.reType != RT_MODEL ||
+		(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK )) ) {
+		return qfalse;
+	}
+
+	model = R_GetModelByHandle( ent->e.hModel );
+	if ( !model ) {
+		return qfalse;
+	}
+
+	switch ( model->type ) {
+		case MOD_BRUSH:
+		case MOD_MESH:
+		case MOD_MDR:
+		case MOD_IQM:
+			return qtrue;
+		default:
+			return qfalse;
+	}
+}
+
+static qboolean RB_CSMShadowSurfaceAllowed( const shader_t *shader, const surfaceType_t *surface )
+{
+	if ( !shader || !surface ) {
+		return qfalse;
+	}
+	if ( shader->sort != SS_OPAQUE || shader->isSky || shader->polygonOffset ||
+		(shader->surfaceFlags & ( SURF_SKY | SURF_NODLIGHT )) ) {
+		return qfalse;
+	}
+
+	switch ( *surface ) {
+		case SF_FACE:
+		case SF_GRID:
+		case SF_TRIANGLES:
+		case SF_MD3:
+		case SF_MDR:
+		case SF_IQM:
+			return qtrue;
+		default:
+			return qfalse;
+	}
+}
+
+static qboolean RB_CSMShadowSurfaceCulledForCascade( const surfaceType_t *surface,
+	const orientationr_t *or, const csmCascadePlan_t *cascade )
+{
+	vec3_t mins, maxs;
+	vec3_t local;
+	vec3_t transformed[8];
+	int axis, side;
+	int i;
+
+	if ( r_nocull->integer || !or || !cascade ||
+		!RB_DlightShadowSurfaceBounds( surface, mins, maxs ) ) {
+		return qfalse;
+	}
+
+	for ( i = 0; i < 8; i++ ) {
+		local[0] = ( i & 1 ) ? maxs[0] : mins[0];
+		local[1] = ( i & 2 ) ? maxs[1] : mins[1];
+		local[2] = ( i & 4 ) ? maxs[2] : mins[2];
+
+		VectorCopy( or->origin, transformed[i] );
+		VectorMA( transformed[i], local[0], or->axis[0], transformed[i] );
+		VectorMA( transformed[i], local[1], or->axis[1], transformed[i] );
+		VectorMA( transformed[i], local[2], or->axis[2], transformed[i] );
+	}
+
+	for ( axis = 0; axis < 3; axis++ ) {
+		for ( side = 0; side < 2; side++ ) {
+			qboolean outside = qtrue;
+			float bound = cascade->bounds[side][axis];
+
+			for ( i = 0; i < 8; i++ ) {
+				float d = DotProduct( transformed[i], cascade->axis[axis] );
+				if ( side == 0 ) {
+					if ( d >= bound ) {
+						outside = qfalse;
+						break;
+					}
+				} else if ( d <= bound ) {
+					outside = qfalse;
+					break;
+				}
+			}
+			if ( outside ) {
+				return qtrue;
+			}
+		}
+	}
+
+	return qfalse;
+}
+
+static qboolean RB_CSMShadowDrawSurfAllowed( const drawSurf_t *drawSurf, int *entityNum )
+{
+	shader_t *shader;
+	int fogNum;
+	int dlighted;
+
+	if ( !drawSurf || !drawSurf->surface ) {
+		return qfalse;
+	}
+
+	R_DecomposeSort( drawSurf->sort, entityNum, &shader, &fogNum, &dlighted );
+	return ( RB_CSMShadowEntityAllowed( *entityNum ) &&
+		RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ) ? qtrue : qfalse;
+}
+
+static int RB_CSMShadowCountDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs )
+{
+	int count = 0;
+	int entityNum;
+	int i;
+
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		if ( RB_CSMShadowDrawSurfAllowed( &drawSurfs[i], &entityNum ) ) {
+			count++;
+		}
+	}
+	return count;
+}
+
+static qboolean RB_CSMShadowCacheSignature( drawSurf_t *drawSurfs, int numDrawSurfs,
+	unsigned int *signature )
+{
+	unsigned int hash;
+	int i, j;
+
+	if ( !signature || !tr.csm.enabled ) {
+		return qfalse;
+	}
+
+	hash = 2166136261U;
+	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)tr.csm.cascadeCount );
+	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)tr.csm.resolution );
+	for ( i = 0; i < tr.csm.cascadeCount; i++ ) {
+		const csmCascadePlan_t *cascade = &tr.csm.cascades[i];
+		for ( j = 0; j < 3; j++ ) {
+			hash = RB_DlightShadowCacheHashFloat( hash, cascade->bounds[0][j] );
+			hash = RB_DlightShadowCacheHashFloat( hash, cascade->bounds[1][j] );
+			hash = RB_DlightShadowCacheHashFloat( hash, cascade->axis[0][j] );
+			hash = RB_DlightShadowCacheHashFloat( hash, cascade->axis[1][j] );
+			hash = RB_DlightShadowCacheHashFloat( hash, cascade->axis[2][j] );
+		}
+	}
+
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		const drawSurf_t *drawSurf = &drawSurfs[i];
+		const trRefEntity_t *ent;
+		shader_t *shader;
+		int entityNum;
+		int fogNum;
+		int dlighted;
+		int axis;
+
+		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+		if ( !RB_CSMShadowEntityAllowed( entityNum ) ||
+			!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ) {
+			continue;
+		}
+		if ( shader->numDeforms > 0 ) {
+			return qfalse;
+		}
+
+		hash = RB_DlightShadowCacheHashUInt( hash, drawSurf->sort );
+		hash = RB_DlightShadowCacheHashPtr( hash, drawSurf->surface );
+		hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)entityNum );
+		if ( entityNum != REFENTITYNUM_WORLD ) {
+			ent = &backEnd.refdef.entities[entityNum];
+			hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)ent->e.hModel );
+			hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)ent->e.frame );
+			hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)ent->e.oldframe );
+			hash = RB_DlightShadowCacheHashFloat( hash, ent->e.backlerp );
+			for ( axis = 0; axis < 3; axis++ ) {
+				hash = RB_DlightShadowCacheHashFloat( hash, ent->e.origin[axis] );
+				hash = RB_DlightShadowCacheHashFloat( hash, ent->e.axis[0][axis] );
+				hash = RB_DlightShadowCacheHashFloat( hash, ent->e.axis[1][axis] );
+				hash = RB_DlightShadowCacheHashFloat( hash, ent->e.axis[2][axis] );
+			}
+		}
+	}
+
+	*signature = hash;
+	return qtrue;
+}
+
+static void RB_SetCSMShadowProjection( const csmCascadePlan_t *cascade, viewParms_t *shadowParms )
+{
+	float extentX = MAX( cascade->bounds[1][0] - cascade->bounds[0][0], 1.0f );
+	float extentY = MAX( cascade->bounds[1][1] - cascade->bounds[0][1], 1.0f );
+	float extentZ = MAX( cascade->bounds[1][2] - cascade->bounds[0][2], 1.0f );
+
+	Com_Memset( shadowParms->projectionMatrix, 0, sizeof( shadowParms->projectionMatrix ) );
+	shadowParms->projectionMatrix[0] = 2.0f / extentY;
+	shadowParms->projectionMatrix[5] = 2.0f / extentZ;
+	shadowParms->projectionMatrix[10] = -1.0f / extentX;
+	shadowParms->projectionMatrix[14] = -cascade->bounds[0][0] / extentX;
+	shadowParms->projectionMatrix[12] = -( cascade->bounds[1][1] + cascade->bounds[0][1] ) / extentY;
+	shadowParms->projectionMatrix[13] = -( cascade->bounds[1][2] + cascade->bounds[0][2] ) / extentZ;
+	shadowParms->projectionMatrix[15] = 1.0f;
+}
+
+static void RB_BuildCSMShadowView( int cascadeIndex, viewParms_t *shadowParms )
+{
+	const csmCascadePlan_t *cascade = &tr.csm.cascades[cascadeIndex];
+	int cascadeSize = vk_csm_shadow_cascade_size();
+
+	Com_Memset( shadowParms, 0, sizeof( *shadowParms ) );
+	shadowParms->viewportX = cascadeIndex * cascadeSize;
+	shadowParms->viewportY = 0;
+	shadowParms->viewportWidth = cascadeSize;
+	shadowParms->viewportHeight = cascadeSize;
+	shadowParms->scissorX = shadowParms->viewportX;
+	shadowParms->scissorY = shadowParms->viewportY;
+	shadowParms->scissorWidth = shadowParms->viewportWidth;
+	shadowParms->scissorHeight = shadowParms->viewportHeight;
+	shadowParms->zFar = cascade->bounds[1][0] - cascade->bounds[0][0];
+	shadowParms->stereoFrame = STEREO_CENTER;
+	shadowParms->portalView = PV_NONE;
+	shadowParms->passFlags = VPF_DLIGHT_SHADOW;
+
+	Com_Memset( &shadowParms->world, 0, sizeof( shadowParms->world ) );
+	shadowParms->world.axis[0][0] = 1.0f;
+	shadowParms->world.axis[1][1] = 1.0f;
+	shadowParms->world.axis[2][2] = 1.0f;
+
+	shadowParms->world.modelMatrix[0] = cascade->axis[1][0];
+	shadowParms->world.modelMatrix[4] = cascade->axis[1][1];
+	shadowParms->world.modelMatrix[8] = cascade->axis[1][2];
+	shadowParms->world.modelMatrix[12] = 0.0f;
+	shadowParms->world.modelMatrix[1] = cascade->axis[2][0];
+	shadowParms->world.modelMatrix[5] = cascade->axis[2][1];
+	shadowParms->world.modelMatrix[9] = cascade->axis[2][2];
+	shadowParms->world.modelMatrix[13] = 0.0f;
+	shadowParms->world.modelMatrix[2] = -cascade->axis[0][0];
+	shadowParms->world.modelMatrix[6] = -cascade->axis[0][1];
+	shadowParms->world.modelMatrix[10] = -cascade->axis[0][2];
+	shadowParms->world.modelMatrix[14] = 0.0f;
+	shadowParms->world.modelMatrix[3] = 0.0f;
+	shadowParms->world.modelMatrix[7] = 0.0f;
+	shadowParms->world.modelMatrix[11] = 0.0f;
+	shadowParms->world.modelMatrix[15] = 1.0f;
+
+	RB_SetCSMShadowProjection( cascade, shadowParms );
+}
+
+static void RB_SetCSMShadowView( const viewParms_t *shadowParms )
+{
+	backEnd.viewParms = *shadowParms;
+	backEnd.or = shadowParms->world;
+	backEnd.currentEntity = &tr.worldEntity;
+
+	SetViewportAndScissor();
+	Com_Memcpy( vk_world.modelview_transform, backEnd.or.modelMatrix, 64 );
+	tess.depthRange = DEPTH_RANGE_NORMAL;
+	vk_update_mvp( NULL );
+}
+
+static void RB_SetCSMShadowEntity( int entityNum, const viewParms_t *viewParms, double originalTime )
+{
+	if ( entityNum == REFENTITYNUM_WORLD ) {
+		backEnd.currentEntity = &tr.worldEntity;
+		backEnd.refdef.floatTime = originalTime;
+		backEnd.or = viewParms->world;
+		Com_Memcpy( vk_world.modelview_transform, backEnd.or.modelMatrix, 64 );
+		tess.depthRange = DEPTH_RANGE_NORMAL;
+		vk_update_mvp( NULL );
+		return;
+	}
+
+	backEnd.currentEntity = &backEnd.refdef.entities[entityNum];
+
+	if ( backEnd.currentEntity->intShaderTime ) {
+		backEnd.refdef.floatTime = originalTime - (double)(backEnd.currentEntity->e.shaderTime.i) * 0.001;
+	} else {
+		backEnd.refdef.floatTime = originalTime - (double)backEnd.currentEntity->e.shaderTime.f;
+	}
+
+	R_RotateForEntity( backEnd.currentEntity, viewParms, &backEnd.or );
+	Com_Memcpy( vk_world.modelview_transform, backEnd.or.modelMatrix, 64 );
+	tess.depthRange = DEPTH_RANGE_NORMAL;
+	vk_update_mvp( NULL );
+}
+
+static int RB_RenderCSMShadowEntityCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
+	int targetEntityNum, const csmCascadePlan_t *cascade, double originalTime )
+{
+	orientationr_t casterOr;
+	int surfaces = 0;
+	int i;
+	qboolean surfaceActive = qfalse;
+
+	RB_SetCSMShadowEntity( targetEntityNum, &backEnd.viewParms, originalTime );
+	casterOr = backEnd.or;
+
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		drawSurf_t *drawSurf = &drawSurfs[i];
+		shader_t *shader;
+		int entityNum;
+		int fogNum;
+		int dlighted;
+
+		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+		if ( entityNum != targetEntityNum ||
+			!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ||
+			RB_CSMShadowSurfaceCulledForCascade( drawSurf->surface, &casterOr, cascade ) ) {
+			continue;
+		}
+
+		if ( !surfaceActive ) {
+			RB_BeginSurface( tr.defaultShader, 0 );
+			tess.allowVBO = qfalse;
+			tess.csmCasterPass = qtrue;
+			surfaceActive = qtrue;
+		}
+
+		rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
+		surfaces++;
+	}
+
+	if ( surfaceActive ) {
+		RB_EndSurface();
+		tess.csmCasterPass = qfalse;
+		backEnd.pc.c_csmShadowAtlasSurfaces += surfaces;
+	}
+
+	return surfaces;
+}
+
+static int RB_RenderCSMShadowCascade( drawSurf_t *drawSurfs, int numDrawSurfs,
+	const csmCascadePlan_t *cascade, double originalTime )
+{
+	byte entityQueued[MAX_REFENTITIES];
+	int entityNums[MAX_REFENTITIES];
+	int entityCount = 0;
+	int surfaces = 0;
+	int i;
+
+	surfaces += RB_RenderCSMShadowEntityCasters( drawSurfs, numDrawSurfs,
+		REFENTITYNUM_WORLD, cascade, originalTime );
+
+	Com_Memset( entityQueued, 0, sizeof( entityQueued ) );
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		int entityNum;
+
+		if ( !RB_CSMShadowDrawSurfAllowed( &drawSurfs[i], &entityNum ) ||
+			entityNum == REFENTITYNUM_WORLD ||
+			entityQueued[entityNum] ) {
+			continue;
+		}
+
+		entityQueued[entityNum] = qtrue;
+		entityNums[entityCount++] = entityNum;
+	}
+
+	for ( i = 0; i < entityCount; i++ ) {
+		surfaces += RB_RenderCSMShadowEntityCasters( drawSurfs, numDrawSurfs,
+			entityNums[i], cascade, originalTime );
+	}
+
+	return surfaces;
+}
+
+static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
+{
+	trRefdef_t savedRefdef;
+	viewParms_t savedViewParms;
+	orientationr_t savedOr;
+	const trRefEntity_t *savedEntity;
+	qboolean savedProjection2D;
+#ifdef USE_VBO
+	qboolean savedAllowVBO;
+#endif
+	unsigned int signature = 0;
+	unsigned int generation;
+	qboolean cacheable;
+	int cascadeIndex;
+	int surfaces;
+	double originalTime;
+
+	if ( !tr.csm.enabled || !vk_csm_shadow_atlas_available() ||
+		RB_CSMShadowCountDrawSurfs( drawSurfs, numDrawSurfs ) <= 0 ) {
+		return;
+	}
+
+	generation = vk_csm_shadow_atlas_generation();
+	cacheable = RB_CSMShadowCacheSignature( drawSurfs, numDrawSurfs, &signature );
+	if ( cacheable && rb_csmShadowCache.valid &&
+		rb_csmShadowCache.generation == generation &&
+		rb_csmShadowCache.signature == signature ) {
+		vk_mark_csm_shadow_atlas_rendered();
+		return;
+	}
+
+	RB_EndSurface();
+	if ( !vk_begin_csm_shadow_render_pass() ) {
+		return;
+	}
+
+	savedRefdef = backEnd.refdef;
+	savedViewParms = backEnd.viewParms;
+	savedOr = backEnd.or;
+	savedEntity = backEnd.currentEntity;
+	savedProjection2D = backEnd.projection2D;
+#ifdef USE_VBO
+	savedAllowVBO = tess.allowVBO;
+	tess.allowVBO = qfalse;
+#endif
+	backEnd.projection2D = qtrue;
+	vk_clear_depth_force( qfalse );
+	backEnd.projection2D = qfalse;
+	originalTime = backEnd.refdef.floatTime;
+	surfaces = 0;
+
+	for ( cascadeIndex = 0; cascadeIndex < tr.csm.cascadeCount; cascadeIndex++ ) {
+		viewParms_t shadowParms;
+
+		RB_BuildCSMShadowView( cascadeIndex, &shadowParms );
+		RB_SetCSMShadowView( &shadowParms );
+		surfaces += RB_RenderCSMShadowCascade( drawSurfs, numDrawSurfs,
+			&tr.csm.cascades[cascadeIndex], originalTime );
+	}
+
+	backEnd.refdef = savedRefdef;
+	backEnd.viewParms = savedViewParms;
+	backEnd.or = savedOr;
+	backEnd.currentEntity = savedEntity;
+	backEnd.projection2D = savedProjection2D;
+#ifdef USE_VBO
+	tess.allowVBO = savedAllowVBO;
+#endif
+	Com_Memcpy( vk_world.modelview_transform, backEnd.or.modelMatrix, 64 );
+	tess.depthRange = DEPTH_RANGE_NORMAL;
+	vk_update_mvp( NULL );
+	vk_end_csm_shadow_render_pass();
+
+	if ( cacheable && surfaces > 0 ) {
+		rb_csmShadowCache.valid = qtrue;
+		rb_csmShadowCache.generation = generation;
+		rb_csmShadowCache.signature = signature;
+	} else {
+		rb_csmShadowCache.valid = qfalse;
+	}
+}
+
+static int RB_RenderCSMShadowEntityReceivers( drawSurf_t *drawSurfs, int numDrawSurfs,
+	int targetEntityNum, int cascadeIndex, const viewParms_t *viewParms, double originalTime )
+{
+	int surfaces = 0;
+	int i;
+	qboolean surfaceActive = qfalse;
+
+	RB_SetCSMShadowEntity( targetEntityNum, viewParms, originalTime );
+
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		drawSurf_t *drawSurf = &drawSurfs[i];
+		shader_t *shader;
+		int entityNum;
+		int fogNum;
+		int dlighted;
+
+		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+		if ( entityNum != targetEntityNum ||
+			!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ) {
+			continue;
+		}
+
+		if ( !surfaceActive ) {
+			RB_BeginSurface( tr.whiteShader, 0 );
+			tess.allowVBO = qfalse;
+			tess.csmShadowPass = qtrue;
+			tess.csmCascade = cascadeIndex;
+			surfaceActive = qtrue;
+		}
+
+		rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
+		surfaces++;
+	}
+
+	if ( surfaceActive ) {
+		RB_EndSurface();
+		backEnd.pc.c_csmShadowReceiverEntitySurfaces += surfaces;
+	}
+
+	return surfaces;
+}
+
+static int RB_RenderCSMShadowWorldReceivers( drawSurf_t *drawSurfs, int numDrawSurfs,
+	int cascadeIndex, const viewParms_t *viewParms, double originalTime )
+{
+	const csmCascadePlan_t *cascade;
+	int surfaces = 0;
+	int i;
+	qboolean surfaceActive = qfalse;
+
+	cascade = &tr.csm.cascades[cascadeIndex];
+	backEnd.currentEntity = &tr.worldEntity;
+	backEnd.refdef.floatTime = originalTime;
+	backEnd.or = viewParms->world;
+	Com_Memcpy( vk_world.modelview_transform, backEnd.or.modelMatrix, 64 );
+	tess.depthRange = DEPTH_RANGE_NORMAL;
+	vk_update_mvp( NULL );
+
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		drawSurf_t *drawSurf = &drawSurfs[i];
+		shader_t *shader;
+		int entityNum;
+		int fogNum;
+		int dlighted;
+
+		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+		if ( entityNum != REFENTITYNUM_WORLD ||
+			!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ||
+			RB_CSMShadowSurfaceCulledForCascade( drawSurf->surface, &backEnd.or, cascade ) ) {
+			continue;
+		}
+
+		if ( !surfaceActive ) {
+			RB_BeginSurface( tr.whiteShader, 0 );
+			tess.allowVBO = qfalse;
+			tess.csmShadowPass = qtrue;
+			tess.csmCascade = cascadeIndex;
+			surfaceActive = qtrue;
+		}
+
+		rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
+		surfaces++;
+	}
+
+	if ( surfaceActive ) {
+		RB_EndSurface();
+		backEnd.pc.c_csmShadowReceiverWorldSurfaces += surfaces;
+	}
+
+	return surfaces;
+}
+
+static void RB_CSMShadowReceiverPass( drawSurf_t *drawSurfs, int numDrawSurfs )
+{
+	viewParms_t savedViewParms;
+	orientationr_t savedOr;
+	const trRefEntity_t *savedEntity;
+	double originalTime;
+	int cascadeIndex;
+
+	if ( !tr.csm.enabled || !vk_csm_shadow_atlas_ready() ||
+		RB_CSMShadowCountDrawSurfs( drawSurfs, numDrawSurfs ) <= 0 ) {
+		return;
+	}
+
+	savedViewParms = backEnd.viewParms;
+	savedOr = backEnd.or;
+	savedEntity = backEnd.currentEntity;
+	originalTime = backEnd.refdef.floatTime;
+
+	for ( cascadeIndex = 0; cascadeIndex < tr.csm.cascadeCount; cascadeIndex++ ) {
+		byte entityQueued[MAX_REFENTITIES];
+		int entityNums[MAX_REFENTITIES];
+		int entityCount = 0;
+		int i;
+
+		RB_RenderCSMShadowWorldReceivers( drawSurfs, numDrawSurfs,
+			cascadeIndex, &savedViewParms, originalTime );
+
+		Com_Memset( entityQueued, 0, sizeof( entityQueued ) );
+		for ( i = 0; i < numDrawSurfs; i++ ) {
+			int entityNum;
+
+			if ( !RB_CSMShadowDrawSurfAllowed( &drawSurfs[i], &entityNum ) ||
+				entityNum == REFENTITYNUM_WORLD ||
+				entityQueued[entityNum] ) {
+				continue;
+			}
+			entityQueued[entityNum] = qtrue;
+			entityNums[entityCount++] = entityNum;
+		}
+
+		for ( i = 0; i < entityCount; i++ ) {
+			RB_RenderCSMShadowEntityReceivers( drawSurfs, numDrawSurfs,
+				entityNums[i], cascadeIndex, &savedViewParms, originalTime );
+		}
+	}
+
+	backEnd.viewParms = savedViewParms;
+	backEnd.or = savedOr;
+	backEnd.currentEntity = savedEntity;
+	backEnd.refdef.floatTime = originalTime;
+	Com_Memcpy( vk_world.modelview_transform, backEnd.or.modelMatrix, 64 );
+	tess.depthRange = DEPTH_RANGE_NORMAL;
+	vk_update_mvp( NULL );
+}
+
 static void RB_SetDlightShadowCasterEntity( int entityNum, double originalTime )
 {
 	if ( entityNum != REFENTITYNUM_WORLD ) {
@@ -2291,12 +2920,16 @@ static const void *RB_DrawSurfs( const void *data ) {
 
 	backEnd.refdef = cmd->refdef;
 	backEnd.viewParms = cmd->viewParms;
+#ifdef USE_PMLIGHT
+	tr.csm = cmd->csm;
+#endif
 
 #ifdef USE_VBO
 	VBO_UnBind();
 #endif
 
 #ifdef USE_PMLIGHT
+	RB_RenderCSMShadowAtlas( cmd->drawSurfs, cmd->numDrawSurfs );
 	RB_RenderDlightShadowAtlas();
 #endif
 

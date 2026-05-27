@@ -1842,6 +1842,72 @@ static void FinishStage( shaderStage_t *stage )
 }
 
 
+static qboolean ParseSkySunParms( const char **text, vec3_t sunColor,
+	vec3_t sunDirection, vec3_t sunLight, float *sunIntensity )
+{
+	const char *token;
+	vec3_t color;
+	float intensity;
+	float yaw;
+	float elevation;
+	float yawRadians;
+	float elevationRadians;
+	float maxColor;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	color[0] = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	color[1] = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	color[2] = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	intensity = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	yaw = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	elevation = Q_atof( token );
+
+	maxColor = MAX( color[0], MAX( color[1], color[2] ) );
+	if ( maxColor <= 0.0f || intensity <= 0.0f ) {
+		return qfalse;
+	}
+	VectorScale( color, 1.0f / maxColor, color );
+	color[0] = Com_Clamp( 0.0f, 1.0f, color[0] );
+	color[1] = Com_Clamp( 0.0f, 1.0f, color[1] );
+	color[2] = Com_Clamp( 0.0f, 1.0f, color[2] );
+
+	VectorCopy( color, sunColor );
+	*sunIntensity = intensity;
+	VectorScale( color, intensity, sunLight );
+
+	yawRadians = yaw / 180.0f * M_PI;
+	elevationRadians = elevation / 180.0f * M_PI;
+	sunDirection[0] = cos( yawRadians ) * cos( elevationRadians );
+	sunDirection[1] = sin( yawRadians ) * cos( elevationRadians );
+	sunDirection[2] = sin( elevationRadians );
+	VectorNormalize( sunDirection );
+	return qtrue;
+}
+
+
 /*
 =================
 ParseShader
@@ -1857,8 +1923,15 @@ static qboolean ParseShader( const char **text )
 	branchType branch;
 	const char *token;
 	int numStages;
+	qboolean skySunValid;
+	vec3_t skySunColor;
+	vec3_t skySunDirection;
+	vec3_t skySunLight;
+	float skySunIntensity;
 
 	numStages = 0;
+	skySunValid = qfalse;
+	skySunIntensity = 0.0f;
 
 	s_extendedShader = (*text >= s_extensionOffset);
 
@@ -1908,34 +1981,13 @@ static qboolean ParseShader( const char **text )
 			continue;
 		}
 		// sun parms
-		else if ( !Q_stricmp( token, "q3map_sun" ) || !Q_stricmp( token, "q3map_sunExt" ) ) {
-			float	a, b;
-
-			token = COM_ParseExt( text, qfalse );
-			tr.sunLight[0] = Q_atof( token );
-			token = COM_ParseExt( text, qfalse );
-			tr.sunLight[1] = Q_atof( token );
-			token = COM_ParseExt( text, qfalse );
-			tr.sunLight[2] = Q_atof( token );
-
-			VectorNormalize( tr.sunLight );
-
-			token = COM_ParseExt( text, qfalse );
-			a = Q_atof( token );
-			VectorScale( tr.sunLight, a, tr.sunLight );
-
-			token = COM_ParseExt( text, qfalse );
-			a = Q_atof( token );
-			a = a / 180 * M_PI;
-
-			token = COM_ParseExt( text, qfalse );
-			b = Q_atof( token );
-			b = b / 180 * M_PI;
-
-			tr.sunDirection[0] = cos( a ) * cos( b );
-			tr.sunDirection[1] = sin( a ) * cos( b );
-			tr.sunDirection[2] = sin( b );
-
+		else if ( !Q_stricmp( token, "q3map_sun" ) ||
+			!Q_stricmp( token, "q3map_sunExt" ) ||
+			!Q_stricmp( token, "q3map_sunExt2" ) ) {
+			if ( ParseSkySunParms( text, skySunColor,
+				skySunDirection, skySunLight, &skySunIntensity ) ) {
+				skySunValid = qtrue;
+			}
 			SkipRestOfLine( text );
 			continue;
 		}
@@ -2133,6 +2185,14 @@ static qboolean ParseShader( const char **text )
 	}
 
 	shader.explicitlyDefined = qtrue;
+
+	if ( shader.isSky && skySunValid ) {
+		shader.skySunValid = qtrue;
+		VectorCopy( skySunColor, shader.skySunColor );
+		VectorCopy( skySunDirection, shader.skySunDirection );
+		VectorCopy( skySunLight, shader.skySunLight );
+		shader.skySunIntensity = skySunIntensity;
+	}
 
 	return qtrue;
 }

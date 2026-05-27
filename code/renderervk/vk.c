@@ -1536,7 +1536,8 @@ static void vk_create_dlight_shadow_render_pass( VkFormat depth_format )
 	VkSubpassDependency deps[2];
 	VkRenderPassCreateInfo desc;
 
-	if ( vk.dlight_shadow_image_view == VK_NULL_HANDLE ) {
+	if ( vk.dlight_shadow_image_view == VK_NULL_HANDLE &&
+		vk.csm_shadow_image_view == VK_NULL_HANDLE ) {
 		return;
 	}
 
@@ -1585,7 +1586,7 @@ static void vk_create_dlight_shadow_render_pass( VkFormat depth_format )
 	desc.dependencyCount = 2;
 
 	VK_CHECK( qvkCreateRenderPass( vk.device, &desc, NULL, &vk.render_pass.dlight_shadow ) );
-	SET_OBJECT_NAME( vk.render_pass.dlight_shadow, "render pass - dlight shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
+	SET_OBJECT_NAME( vk.render_pass.dlight_shadow, "render pass - sampled shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
 }
 
 static void vk_attachment_reference2_from_legacy( VkAttachmentReference2 *dst, const VkAttachmentReference *src )
@@ -4014,6 +4015,36 @@ void vk_update_attachment_descriptors( void ) {
 
 		vk_update_descriptor_sets( 1, &desc );
 	}
+
+	if ( vk.csm_shadow_image_view && vk.csm_shadow_descriptor )
+	{
+		VkDescriptorImageInfo info;
+		VkWriteDescriptorSet desc;
+		Vk_Sampler_Def sd;
+
+		Com_Memset( &sd, 0, sizeof( sd ) );
+		sd.gl_mag_filter = sd.gl_min_filter = GL_NEAREST;
+		sd.address_mode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sd.max_lod_1_0 = qtrue;
+		sd.noAnisotropy = qtrue;
+
+		info.sampler = vk_find_sampler( &sd );
+		info.imageView = vk.csm_shadow_image_view;
+		info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		desc.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		desc.dstSet = vk.csm_shadow_descriptor;
+		desc.dstBinding = 0;
+		desc.dstArrayElement = 0;
+		desc.descriptorCount = 1;
+		desc.pNext = NULL;
+		desc.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		desc.pImageInfo = &info;
+		desc.pBufferInfo = NULL;
+		desc.pTexelBufferView = NULL;
+
+		vk_update_descriptor_sets( 1, &desc );
+	}
 }
 
 
@@ -4113,6 +4144,20 @@ void vk_init_descriptors( void )
 
 		VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.dlight_shadow_descriptor ) );
 		SET_OBJECT_NAME( vk.dlight_shadow_descriptor, "dlight shadow atlas descriptor", VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
+
+		vk_update_attachment_descriptors();
+	}
+
+	if ( vk.csm_shadow_image_view )
+	{
+		alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		alloc.pNext = NULL;
+		alloc.descriptorPool = vk.descriptor_pool;
+		alloc.descriptorSetCount = 1;
+		alloc.pSetLayouts = &vk.set_layout_sampler;
+
+		VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.csm_shadow_descriptor ) );
+		SET_OBJECT_NAME( vk.csm_shadow_descriptor, "csm shadow atlas descriptor", VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
 
 		vk_update_attachment_descriptors();
 	}
@@ -4469,6 +4514,11 @@ static void vk_create_shader_modules( void )
 	SET_OBJECT_NAME( vk.modules.frag.light[1][0], "linear light fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.frag.light[1][1], "linear light fog fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 
+	vk.modules.vert.csm_shadow = SHADER_MODULE( csm_shadow_vert_spv );
+	vk.modules.frag.csm_shadow = SHADER_MODULE( csm_shadow_frag_spv );
+	SET_OBJECT_NAME( vk.modules.vert.csm_shadow, "csm shadow vertex module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+	SET_OBJECT_NAME( vk.modules.frag.csm_shadow, "csm shadow fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+
 	vk.modules.color_fs = SHADER_MODULE( color_frag_spv );
 	vk.modules.color_vs = SHADER_MODULE( color_vert_spv );
 
@@ -4626,6 +4676,16 @@ static void vk_alloc_persistent_pipelines( void )
 				}
 			}
 		}
+
+		Com_Memset( &def, 0, sizeof( def ) );
+		def.state_bits = GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO | GLS_DEPTHFUNC_EQUAL;
+		def.shader_type = TYPE_CSM_SHADOW;
+		def.face_culling = CT_TWO_SIDED;
+		def.polygon_offset = qfalse;
+		def.mirror = qfalse;
+		vk.csm_shadow_pipeline = vk_find_pipeline_ext( 0, &def,
+			( r_csmShadows && r_csmShadows->integer &&
+			vk_csm_shadow_atlas_available() ) ? qtrue : qfalse );
 #endif // USE_PMLIGHT
 	}
 
@@ -5473,6 +5533,15 @@ static void vk_invalidate_dlight_shadow_atlas_generation( void )
 }
 
 
+static void vk_invalidate_csm_shadow_atlas_generation( void )
+{
+	vk.csm_shadow_generation++;
+	if ( !vk.csm_shadow_generation ) {
+		vk.csm_shadow_generation++;
+	}
+}
+
+
 static void vk_clear_dlight_shadow_atlas_layout( void )
 {
 	vk.dlight_shadow_atlas_width = 0;
@@ -5483,6 +5552,17 @@ static void vk_clear_dlight_shadow_atlas_layout( void )
 	vk.dlight_shadow_max_lights = 0;
 	vk.dlight_shadow_rendered = qfalse;
 	vk_invalidate_dlight_shadow_atlas_generation();
+}
+
+
+static void vk_clear_csm_shadow_atlas_layout( void )
+{
+	vk.csm_shadow_atlas_width = 0;
+	vk.csm_shadow_atlas_height = 0;
+	vk.csm_shadow_cascade_size = 0;
+	vk.csm_shadow_cascade_count = 0;
+	vk.csm_shadow_rendered = qfalse;
+	vk_invalidate_csm_shadow_atlas_generation();
 }
 
 
@@ -5505,6 +5585,24 @@ static qboolean vk_dlight_shadow_atlas_layout( dlightShadowAtlasLayout_t *layout
 }
 
 
+static qboolean vk_csm_shadow_atlas_layout( csmShadowAtlasLayout_t *layout )
+{
+#ifdef USE_PMLIGHT
+	if ( !r_csmShadows || !r_csmShadows->integer ||
+		!vk_depth_format_sampled_supported() ) {
+		return qfalse;
+	}
+
+	return R_CSMShadowAtlasLayout(
+		r_csmCascadeCount ? r_csmCascadeCount->integer : CSM_MAX_CASCADES,
+		r_csmResolution ? r_csmResolution->integer : 1024,
+		glConfig.maxTextureSize, layout );
+#else
+	return qfalse;
+#endif
+}
+
+
 static void vk_store_dlight_shadow_atlas_layout( const dlightShadowAtlasLayout_t *layout )
 {
 	vk.dlight_shadow_atlas_width = layout->width;
@@ -5514,6 +5612,16 @@ static void vk_store_dlight_shadow_atlas_layout( const dlightShadowAtlasLayout_t
 	vk.dlight_shadow_atlas_rows = layout->rows;
 	vk.dlight_shadow_max_lights = layout->maxLights;
 	vk_invalidate_dlight_shadow_atlas_generation();
+}
+
+
+static void vk_store_csm_shadow_atlas_layout( const csmShadowAtlasLayout_t *layout )
+{
+	vk.csm_shadow_atlas_width = layout->width;
+	vk.csm_shadow_atlas_height = layout->height;
+	vk.csm_shadow_cascade_size = layout->cascadeSize;
+	vk.csm_shadow_cascade_count = layout->cascadeCount;
+	vk_invalidate_csm_shadow_atlas_generation();
 }
 
 
@@ -5552,10 +5660,12 @@ static void create_dlight_shadow_attachment( uint32_t width, uint32_t height, Vk
 static void vk_create_attachments( void )
 {
 	dlightShadowAtlasLayout_t shadowLayout;
+	csmShadowAtlasLayout_t csmShadowLayout;
 	uint32_t i;
 
 	vk_clear_attachment_pool();
 	vk_clear_dlight_shadow_atlas_layout();
+	vk_clear_csm_shadow_atlas_layout();
 
 	// It looks like resulting performance depends from order you're creating/allocating
 	// memory for attachments in vulkan i.e. similar images grouped together will provide best results
@@ -5633,6 +5743,15 @@ static void vk_create_attachments( void )
 			shadowLayout.width, shadowLayout.height, shadowLayout.faceSize, shadowLayout.maxLights );
 	}
 
+	if ( vk_csm_shadow_atlas_layout( &csmShadowLayout ) ) {
+		create_dlight_shadow_attachment( csmShadowLayout.width, csmShadowLayout.height,
+			&vk.csm_shadow_image, &vk.csm_shadow_image_view );
+		vk_store_csm_shadow_atlas_layout( &csmShadowLayout );
+		ri.Printf( PRINT_ALL, "...sky-sun shadow atlas %ix%i (%i px cascades, %i cascades)\n",
+			csmShadowLayout.width, csmShadowLayout.height,
+			csmShadowLayout.cascadeSize, csmShadowLayout.cascadeCount );
+	}
+
 	vk_alloc_attachments();
 
 	for ( i = 0; i < vk.image_memory_count; i++ )
@@ -5646,6 +5765,8 @@ static void vk_create_attachments( void )
 	SET_OBJECT_NAME( vk.depth_fade_image_view, "depth fade attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
 	SET_OBJECT_NAME( vk.dlight_shadow_image, "dlight shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT );
 	SET_OBJECT_NAME( vk.dlight_shadow_image_view, "dlight shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
+	SET_OBJECT_NAME( vk.csm_shadow_image, "csm shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT );
+	SET_OBJECT_NAME( vk.csm_shadow_image_view, "csm shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
 
 	SET_OBJECT_NAME( vk.color_image, "color attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT );
 	SET_OBJECT_NAME( vk.color_image_view, "color attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
@@ -5747,6 +5868,17 @@ static void vk_create_framebuffers( void )
 		attachments[0] = vk.dlight_shadow_image_view;
 		VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.dlight_shadow ) );
 		SET_OBJECT_NAME( vk.framebuffers.dlight_shadow, "framebuffer - dlight shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
+	}
+
+	if ( vk.render_pass.dlight_shadow != VK_NULL_HANDLE && vk.csm_shadow_image_view != VK_NULL_HANDLE )
+	{
+		desc.renderPass = vk.render_pass.dlight_shadow;
+		desc.attachmentCount = 1;
+		desc.width = vk.csm_shadow_atlas_width;
+		desc.height = vk.csm_shadow_atlas_height;
+		attachments[0] = vk.csm_shadow_image_view;
+		VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.csm_shadow ) );
+		SET_OBJECT_NAME( vk.framebuffers.csm_shadow, "framebuffer - csm shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
 	}
 
 	if ( vk.fboActive )
@@ -5991,6 +6123,11 @@ static void vk_destroy_framebuffers( void ) {
 	if ( vk.framebuffers.dlight_shadow != VK_NULL_HANDLE ) {
 		qvkDestroyFramebuffer( vk.device, vk.framebuffers.dlight_shadow, NULL );
 		vk.framebuffers.dlight_shadow = VK_NULL_HANDLE;
+	}
+
+	if ( vk.framebuffers.csm_shadow != VK_NULL_HANDLE ) {
+		qvkDestroyFramebuffer( vk.device, vk.framebuffers.csm_shadow, NULL );
+		vk.framebuffers.csm_shadow = VK_NULL_HANDLE;
 	}
 
 	for ( n = 0; n < ARRAY_LEN( vk.framebuffers.blur ); n++ ) {
@@ -6385,7 +6522,7 @@ void vk_initialize( void )
 		uint32_t i, maxSets;
 
 		pool_size[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		pool_size[0].descriptorCount = MAX_DRAWIMAGES + 1 + 1 + 1 + 1 + 1 + VK_NUM_BLOOM_PASSES * 2; // color, screenmap, depth fade, dlight shadow atlas, bloom descriptors
+		pool_size[0].descriptorCount = MAX_DRAWIMAGES + 1 + 1 + 1 + 1 + 1 + 1 + VK_NUM_BLOOM_PASSES * 2; // color, screenmap, depth fade, dlight/csm shadow atlases, bloom descriptors
 
 		pool_size[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
 		pool_size[1].descriptorCount = NUM_COMMAND_BUFFERS;
@@ -6603,11 +6740,13 @@ static void vk_destroy_attachments( void )
 	vk_destroy_image_and_view( &vk.depth_image, &vk.depth_image_view );
 	vk_destroy_image_and_view( &vk.depth_fade_image, &vk.depth_fade_image_view );
 	vk_destroy_image_and_view( &vk.dlight_shadow_image, &vk.dlight_shadow_image_view );
+	vk_destroy_image_and_view( &vk.csm_shadow_image, &vk.csm_shadow_image_view );
 	vk_destroy_image_and_view( &vk.screenMap.color_image, &vk.screenMap.color_image_view );
 	vk_destroy_image_and_view( &vk.screenMap.color_image_msaa, &vk.screenMap.color_image_view_msaa );
 	vk_destroy_image_and_view( &vk.screenMap.depth_image, &vk.screenMap.depth_image_view );
 	vk_destroy_image_and_view( &vk.capture.image, &vk.capture.image_view );
 	vk_clear_dlight_shadow_atlas_layout();
+	vk_clear_csm_shadow_atlas_layout();
 
 	for ( i = 0; i < vk.image_memory_count; i++ ) {
 		vk_free_memory_allocation( &vk.image_memory[i] );
@@ -6815,6 +6954,15 @@ void vk_shutdown( refShutdownCode_t code )
 				vk.modules.frag.light[i][j] = VK_NULL_HANDLE;
 			}
 		}
+	}
+
+	if ( vk.modules.vert.csm_shadow != VK_NULL_HANDLE ) {
+		qvkDestroyShaderModule( vk.device, vk.modules.vert.csm_shadow, NULL );
+		vk.modules.vert.csm_shadow = VK_NULL_HANDLE;
+	}
+	if ( vk.modules.frag.csm_shadow != VK_NULL_HANDLE ) {
+		qvkDestroyShaderModule( vk.device, vk.modules.frag.csm_shadow, NULL );
+		vk.modules.frag.csm_shadow = VK_NULL_HANDLE;
 	}
 
 	for ( i = 0; i < 2; i++ ) {
@@ -8257,6 +8405,11 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 			fs_module = &vk.modules.dot_fs;
 			break;
 
+		case TYPE_CSM_SHADOW:
+			vs_module = &vk.modules.vert.csm_shadow;
+			fs_module = &vk.modules.frag.csm_shadow;
+			break;
+
 		default:
 			ri.Error(ERR_DROP, "create_pipeline: unknown shader type %i\n", def->shader_type);
 			return 0;
@@ -8513,6 +8666,11 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 		case TYPE_COLOR_WHITE:
 		case TYPE_COLOR_GREEN:
 		case TYPE_COLOR_RED:
+			push_bind( 0, sizeof( vec4_t ) );					// xyz array
+			push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
+			break;
+
+		case TYPE_CSM_SHADOW:
 			push_bind( 0, sizeof( vec4_t ) );					// xyz array
 			push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
 			break;
@@ -8809,7 +8967,8 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	rasterization_state.frontFace = VK_FRONT_FACE_CLOCKWISE; // Q3 defaults to clockwise vertex order
 
 	 // depth bias state
-	if ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ) {
+	if ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ||
+		renderPassIndex == RENDER_PASS_CSM_SHADOW ) {
 		rasterization_state.depthBiasEnable = VK_TRUE;
 		rasterization_state.depthBiasClamp = 0.0f;
 		rasterization_state.depthBiasConstantFactor = 0.0f;
@@ -8840,7 +8999,8 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	multisample_state.pNext = NULL;
 	multisample_state.flags = 0;
 
-	if ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ) {
+	if ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ||
+		renderPassIndex == RENDER_PASS_CSM_SHADOW ) {
 		multisample_state.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 	} else {
 		multisample_state.rasterizationSamples = (renderPassIndex == RENDER_PASS_SCREENMAP) ? vk.screenMapSamples : vkSamples;
@@ -8859,11 +9019,15 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	depth_stencil_state.flags = 0;
 	depth_stencil_state.depthTestEnable = (state_bits & GLS_DEPTHTEST_DISABLE) ? VK_FALSE : VK_TRUE;
 	depth_stencil_state.depthWriteEnable = (state_bits & GLS_DEPTHMASK_TRUE) ? VK_TRUE : VK_FALSE;
+	if ( renderPassIndex == RENDER_PASS_CSM_SHADOW ) {
+		depth_stencil_state.depthCompareOp = (state_bits & GLS_DEPTHFUNC_EQUAL) ? VK_COMPARE_OP_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL;
+	} else {
 #ifdef USE_REVERSED_DEPTH
-	depth_stencil_state.depthCompareOp = (state_bits & GLS_DEPTHFUNC_EQUAL) ? VK_COMPARE_OP_EQUAL : VK_COMPARE_OP_GREATER_OR_EQUAL;
+		depth_stencil_state.depthCompareOp = (state_bits & GLS_DEPTHFUNC_EQUAL) ? VK_COMPARE_OP_EQUAL : VK_COMPARE_OP_GREATER_OR_EQUAL;
 #else
-	depth_stencil_state.depthCompareOp = (state_bits & GLS_DEPTHFUNC_EQUAL) ? VK_COMPARE_OP_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL;
+		depth_stencil_state.depthCompareOp = (state_bits & GLS_DEPTHFUNC_EQUAL) ? VK_COMPARE_OP_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL;
 #endif
+	}
 	depth_stencil_state.depthBoundsTestEnable = VK_FALSE;
 	depth_stencil_state.stencilTestEnable = (def->shadow_phase != SHADOW_DISABLED) ? VK_TRUE : VK_FALSE;
 
@@ -9015,7 +9179,8 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	blend_state.flags = 0;
 	blend_state.logicOpEnable = VK_FALSE;
 	blend_state.logicOp = VK_LOGIC_OP_COPY;
-	if ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ) {
+	if ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ||
+		renderPassIndex == RENDER_PASS_CSM_SHADOW ) {
 		blend_state.attachmentCount = 0;
 		blend_state.pAttachments = NULL;
 	} else {
@@ -9030,7 +9195,8 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
 	dynamic_state.pNext = NULL;
 	dynamic_state.flags = 0;
-	dynamic_state.dynamicStateCount = ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ) ? ARRAY_LEN( dynamic_state_array ) : 2;
+	dynamic_state.dynamicStateCount = ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ||
+		renderPassIndex == RENDER_PASS_CSM_SHADOW ) ? ARRAY_LEN( dynamic_state_array ) : 2;
 	dynamic_state.pDynamicStates = dynamic_state_array;
 
 	create_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -9053,7 +9219,8 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	else
 		create_info.layout = vk.pipeline_layout;
 
-	if ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW )
+	if ( renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ||
+		renderPassIndex == RENDER_PASS_CSM_SHADOW )
 		create_info.renderPass = vk.render_pass.dlight_shadow;
 	else if ( renderPassIndex == RENDER_PASS_SCREENMAP )
 		create_info.renderPass = vk.render_pass.screenmap;
@@ -9299,11 +9466,15 @@ static void vk_clear_depth_internal( qboolean clear_stencil, qboolean force )
 		return;
 
 	attachment.colorAttachment = 0;
+	if ( vk.renderPassIndex == RENDER_PASS_CSM_SHADOW ) {
+		attachment.clearValue.depthStencil.depth = 1.0f;
+	} else {
 #ifdef USE_REVERSED_DEPTH
-	attachment.clearValue.depthStencil.depth = 0.0f;
+		attachment.clearValue.depthStencil.depth = 0.0f;
 #else
-	attachment.clearValue.depthStencil.depth = 1.0f;
+		attachment.clearValue.depthStencil.depth = 1.0f;
 #endif
+	}
 	attachment.clearValue.depthStencil.stencil = 0;
 	if ( clear_stencil && glConfig.stencilBits > 0 ) {
 		attachment.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
@@ -9726,6 +9897,24 @@ static void vk_set_dlight_shadow_depth_bias( void )
 }
 
 
+static void vk_set_csm_shadow_depth_bias( void )
+{
+	float depthBias;
+	float slopeBias;
+
+	if ( !qvkCmdSetDepthBias ) {
+		return;
+	}
+
+	depthBias = r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.0f;
+	slopeBias = r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.0f;
+	depthBias = R_ShadowClampCasterDepthBias( depthBias );
+	slopeBias = R_ShadowClampCasterSlopeBias( slopeBias );
+
+	qvkCmdSetDepthBias( vk.cmd->command_buffer, depthBias, 0.0f, slopeBias );
+}
+
+
 void vk_bind_pipeline( uint32_t pipeline ) {
 	VkPipeline vkpipe;
 
@@ -9738,6 +9927,8 @@ void vk_bind_pipeline( uint32_t pipeline ) {
 
 	if ( vk.renderPassIndex == RENDER_PASS_DLIGHT_SHADOW ) {
 		vk_set_dlight_shadow_depth_bias();
+	} else if ( vk.renderPassIndex == RENDER_PASS_CSM_SHADOW ) {
+		vk_set_csm_shadow_depth_bias();
 	}
 
 	vk_world.dirty_depth_attachment |= ( vk.pipelines[ pipeline ].def.state_bits & GLS_DEPTHMASK_TRUE );
@@ -9832,6 +10023,9 @@ static const char *vk_render_pass_label( VkRenderPass renderPass )
 		return "post-bloom render pass";
 	}
 	if ( renderPass == vk.render_pass.dlight_shadow ) {
+		if ( vk.renderPassIndex == RENDER_PASS_CSM_SHADOW ) {
+			return "csm shadow atlas render pass";
+		}
 		return "dlight shadow atlas render pass";
 	}
 
@@ -9869,9 +10063,13 @@ static void vk_begin_render_pass( VkRenderPass renderPass, VkFramebuffer frameBu
 		// [2] - multisampled color, optional
 		Com_Memset( clear_values, 0, sizeof( clear_values ) );
 		if ( renderPass == vk.render_pass.dlight_shadow ) {
+			if ( vk.renderPassIndex == RENDER_PASS_CSM_SHADOW ) {
+				clear_values[0].depthStencil.depth = 1.0f;
+			} else {
 #ifndef USE_REVERSED_DEPTH
-			clear_values[0].depthStencil.depth = 1.0;
+				clear_values[0].depthStencil.depth = 1.0f;
 #endif
+			}
 			render_pass_begin_info.clearValueCount = 1;
 			render_pass_begin_info.pClearValues = clear_values;
 			vk_world.dirty_depth_attachment = 0;
@@ -9908,6 +10106,7 @@ void vk_begin_main_render_pass( void )
 	vk.renderPassIndex = RENDER_PASS_MAIN;
 	vk.depth_fade_copied = qfalse;
 	vk.dlight_shadow_rendered = qfalse;
+	vk.csm_shadow_rendered = qfalse;
 
 	vk.renderWidth = glConfig.vidWidth;
 	vk.renderHeight = glConfig.vidHeight;
@@ -10129,6 +10328,87 @@ int vk_dlight_shadow_atlas_columns( void )
 uint32_t vk_dlight_shadow_atlas_generation( void )
 {
 	return vk.dlight_shadow_generation;
+}
+
+
+qboolean vk_csm_shadow_atlas_available( void )
+{
+	return ( vk.csm_shadow_image != VK_NULL_HANDLE &&
+		vk.csm_shadow_image_view != VK_NULL_HANDLE &&
+		vk.csm_shadow_descriptor != VK_NULL_HANDLE &&
+		vk.csm_shadow_cascade_size > 0 &&
+		vk.csm_shadow_cascade_count > 0 ) ? qtrue : qfalse;
+}
+
+qboolean vk_csm_shadow_atlas_ready( void )
+{
+	return ( vk_csm_shadow_atlas_available() && vk.csm_shadow_rendered ) ? qtrue : qfalse;
+}
+
+qboolean vk_begin_csm_shadow_render_pass( void )
+{
+	vk.csm_shadow_rendered = qfalse;
+
+	if ( !vk_csm_shadow_atlas_available() ||
+		vk.render_pass.dlight_shadow == VK_NULL_HANDLE ||
+		vk.framebuffers.csm_shadow == VK_NULL_HANDLE ||
+		vk.renderPassIndex != RENDER_PASS_MAIN ) {
+		return qfalse;
+	}
+
+	vk_end_render_pass();
+	vk.renderPassIndex = RENDER_PASS_CSM_SHADOW;
+	vk.renderWidth = vk.csm_shadow_atlas_width;
+	vk.renderHeight = vk.csm_shadow_atlas_height;
+	vk.renderScaleX = 1.0f;
+	vk.renderScaleY = 1.0f;
+	vk_begin_render_pass( vk.render_pass.dlight_shadow, vk.framebuffers.csm_shadow, qfalse,
+		vk.renderWidth, vk.renderHeight );
+
+	return qtrue;
+}
+
+void vk_end_csm_shadow_render_pass( void )
+{
+	if ( vk.renderPassIndex != RENDER_PASS_CSM_SHADOW ) {
+		return;
+	}
+
+	vk_end_render_pass();
+	vk_begin_main_render_pass_load();
+	vk.csm_shadow_rendered = qtrue;
+}
+
+void vk_mark_csm_shadow_atlas_rendered( void )
+{
+	if ( vk_csm_shadow_atlas_available() ) {
+		vk.csm_shadow_rendered = qtrue;
+	}
+}
+
+int vk_csm_shadow_atlas_width( void )
+{
+	return (int)vk.csm_shadow_atlas_width;
+}
+
+int vk_csm_shadow_atlas_height( void )
+{
+	return (int)vk.csm_shadow_atlas_height;
+}
+
+int vk_csm_shadow_cascade_size( void )
+{
+	return (int)vk.csm_shadow_cascade_size;
+}
+
+uint32_t vk_csm_shadow_atlas_generation( void )
+{
+	return vk.csm_shadow_generation;
+}
+
+VkDescriptorSet vk_csm_shadow_descriptor( void )
+{
+	return vk.csm_shadow_descriptor;
 }
 
 

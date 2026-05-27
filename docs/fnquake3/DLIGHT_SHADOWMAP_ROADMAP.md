@@ -67,8 +67,8 @@ As of May 22, 2026:
   texel-scaled receiver bias during atlas sampling so wall-contact shadows do
   not detach at corners.
 - `[x]` Basic 2x2 PCF filtering has been upgraded to selectable GLx and Vulkan
-  dlight shadow-map filters: hard shadows, 2x2 PCF, and default four-tap
-  poisson-style PCF. CSM work remains a follow-up task.
+  dlight and sky-sun CSM shadow-map filters: hard shadows, 2x2 PCF, and
+  default four-tap poisson-style PCF.
 - `[x]` GLx and Vulkan cache atlas tiles for static world-only dlight shadow
   casters when the light parameters, receiver count, lit-surface set, atlas
   face size, and atlas resource generation match. Non-cacheable entity,
@@ -84,16 +84,16 @@ As of May 22, 2026:
   counts, and pass timing. GLx exposes a `dlight-shadow-atlas` GPU pass timer
   through `r_speeds 7`/`r_glxGpuPassTiming`; Vulkan exposes the dlight atlas
   render-pass timestamp span through `r_speeds 7`.
-- `[x]` Directional CSM planning is defined as a separate, disabled-by-default
-  feature path with `r_csm*` cvars. GLx and Vulkan compute deterministic
+- `[x]` Directional CSM is defined as a separate, disabled-by-default feature
+  path with `r_csm*` cvars. GLx and Vulkan compute deterministic
   practical-split cascades, stable sphere-derived light-space bounds, texel
-  snapping from the planned cascade resolution, and `r_csmDebug`/`r_speeds 4`
-  planning output without allocating CSM shadow resources yet.
+  snapping from the planned cascade resolution, allocate sampled shadow atlases,
+  and render sky-sun shadows for opaque BSP world geometry, entity models, and
+  brush models.
 - `[x]` GLx and Vulkan share shadow filter and bias utility policy between
-  dlight shadows and the CSM planner where practical. Dlight sampling and atlas
-  rendering use the common filter/bias clamps, while CSM records separate
-  planned filter, receiver-bias, and caster-bias settings in debug output for
-  future sampling/rendering and RenderDoc inspection.
+  dlight shadows and CSM where practical. Dlight and CSM sampling/atlas
+  rendering use the common filter/bias clamps, while CSM keeps separate
+  receiver-bias, caster-bias, and strength settings in cvars and debug output.
 - `[x]` GLx `rc-parity` and Vulkan `vk-modern` runtime gates plan dedicated
   `dlight-shadow-scenes` runs. These runs launch with latched dlight shadow
   cvars, load retail maps with `devmap`, inject persistent `r_dlightTest`
@@ -184,6 +184,9 @@ reviewed evidence makes the default-enable release gate ready.
 - `[x]` Treat cascaded shadow maps as a separate directional-light feature.
 - `[x]` Define cascade split policy, texel snapping, and stable light-space
   bounds.
+- `[x]` Render sky-sun CSM atlases and receiver passes on GLx and Vulkan for
+  opaque BSP world geometry, entity models, and brush models, sourced from
+  parsed sky shader sun parms.
 - `[x]` Share filtering, bias, visualization, and RenderDoc validation utilities
   with dlight shadows where practical.
 - `[x]` Keep CSM cvars and defaults separate from dlight shadow cvars.

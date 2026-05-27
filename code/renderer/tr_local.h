@@ -101,6 +101,13 @@ typedef struct {
 	int width;
 	int height;
 } dlightShadowAtlasLayout_t;
+
+typedef struct {
+	int cascadeCount;
+	int cascadeSize;
+	int width;
+	int height;
+} csmShadowAtlasLayout_t;
 #endif
 
 
@@ -433,6 +440,11 @@ typedef struct shader_s {
 
 	qboolean	isSky;
 	skyParms_t	sky;
+	qboolean	skySunValid;
+	vec3_t		skySunColor;
+	vec3_t		skySunDirection;
+	vec3_t		skySunLight;
+	float		skySunIntensity;
 	fogParms_t	fogParms;
 
 	float		portalRange;			// distance to fog out at
@@ -697,6 +709,7 @@ typedef struct {
 
 typedef struct {
 	qboolean	enabled;
+	qboolean	skySun;
 	int			cascadeCount;
 	int			resolution;
 	float		maxDistance;
@@ -706,7 +719,9 @@ typedef struct {
 	float		casterDepthBias;
 	float		casterSlopeBias;
 	float		casterNormalBias;
+	float		shadowStrength;
 	vec3_t		lightDirection;
+	vec3_t		lightColor;
 	csmCascadePlan_t cascades[CSM_MAX_CASCADES];
 } csmPlan_t;
 
@@ -1149,6 +1164,12 @@ typedef struct {
 	int		c_dlightShadowAtlasHeight;
 	int		c_dlightShadowAtlasFaceSize;
 	int		c_dlightShadowAtlasFill;
+	int		c_csmSkippedDisabled;
+	int		c_csmSkippedNoWorldRef;
+	int		c_csmSkippedNoSun;
+	int		c_csmSkippedProjection;
+	int		c_csmSkippedAtlas;
+	int		c_csmSkippedStrength;
 #endif
 } frontEndCounters_t;
 
@@ -1204,6 +1225,9 @@ typedef struct {
 	int		c_dlightShadowAtlasDraws;
 	int		c_dlightShadowAtlasSurfaces;
 	int		c_dlightShadowAtlasMsec;
+	int		c_csmShadowAtlasSurfaces;
+	int		c_csmShadowReceiverWorldSurfaces;
+	int		c_csmShadowReceiverEntitySurfaces;
 #endif
 } backEndCounters_t;
 
@@ -1346,8 +1370,12 @@ typedef struct {
 	dlight_t				*light;				// current light during R_RecursiveLightNode
 #endif
 	vec3_t					sunLight;			// from the sky shader for this level
+	vec3_t					sunColor;
+	float					sunIntensity;
+	qboolean				sunParmsValid;
 	vec3_t					sunDirection;
 	csmPlan_t				csm;
+	csmPlan_t				csmDebugPlan;
 
 	frontEndCounters_t		pc;
 	int						frontEndMsec;		// not in pc due to clearing issue
@@ -1466,6 +1494,7 @@ extern cvar_t	*r_csmCascadeCount;		// 1 - CSM_MAX_CASCADES
 extern cvar_t	*r_csmMaxDistance;		// maximum shadowed camera distance
 extern cvar_t	*r_csmSplitLambda;		// 0.0 - 1.0
 extern cvar_t	*r_csmResolution;		// nominal per-cascade shadow-map resolution
+extern cvar_t	*r_csmShadowStrength;	// 0.0 - 1.0
 extern cvar_t	*r_csmShadowFilter;		// 0 - 2
 extern cvar_t	*r_csmShadowBias;		// 0.0 - 64.0
 extern cvar_t	*r_csmCasterDepthBias;	// 0.0 - 64.0
@@ -1792,6 +1821,9 @@ typedef struct shaderCommands_s
 	const dlight_t* light;
 	qboolean	dlightPass;
 	qboolean	dlightUpdateParams;
+	qboolean	csmCasterPass;
+	qboolean	csmShadowPass;
+	int			csmCascade;
 	cullType_t	cullType;
 #endif
 
@@ -1867,8 +1899,10 @@ int R_LightForPoint( vec3_t point, vec3_t ambientLight, vec3_t directedLight, ve
 #ifdef USE_PMLIGHT
 void ARB_SetupLightParams( const shaderStage_t *pStage );
 void ARB_LightingPass( void );
+void ARB_CSMShadowPass( void );
 qboolean R_LightCullBounds( const dlight_t* dl, const vec3_t mins, const vec3_t maxs );
 qboolean R_DlightShadowAtlasLayout( int maxLights, int requestedFaceSize, int maxTextureSize, dlightShadowAtlasLayout_t *layout );
+qboolean R_CSMShadowAtlasLayout( int cascadeCount, int requestedCascadeSize, int maxTextureSize, csmShadowAtlasLayout_t *layout );
 #endif // USE_PMLIGHT
 
 void R_BindAnimatedImage( const textureBundle_t *bundle );
@@ -1916,6 +1950,17 @@ int FBO_DlightShadowAtlasWidth( void );
 int FBO_DlightShadowAtlasHeight( void );
 unsigned int FBO_DlightShadowAtlasGeneration( void );
 void FBO_BindDlightShadowTexture( int texUnit );
+qboolean FBO_CSMShadowsAvailable( void );
+qboolean FBO_CSMShadowsReady( void );
+qboolean FBO_CSMShadowAtlasAvailable( void );
+qboolean FBO_BeginCSMShadowAtlas( void );
+void FBO_EndCSMShadowAtlas( void );
+void FBO_MarkCSMShadowAtlasRendered( void );
+int FBO_CSMShadowAtlasWidth( void );
+int FBO_CSMShadowAtlasHeight( void );
+int FBO_CSMShadowCascadeSize( void );
+unsigned int FBO_CSMShadowAtlasGeneration( void );
+void FBO_BindCSMShadowTexture( int texUnit );
 void FBO_DrawWorldCelOutline( void );
 #endif //  USE_FBO
 
@@ -2134,6 +2179,7 @@ typedef struct {
 	int		commandId;
 	trRefdef_t	refdef;
 	viewParms_t	viewParms;
+	csmPlan_t	csm;
 	drawSurf_t *drawSurfs;
 	int		numDrawSurfs;
 } drawSurfsCommand_t;
@@ -2328,6 +2374,9 @@ typedef enum {
 
 	DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT,
 	DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT_FOG,
+
+	CSM_SHADOW_VERTEX,
+	CSM_SHADOW_FRAGMENT,
 #endif
 	SPRITE_FRAGMENT,
 	DEPTH_FADE_FRAGMENT,

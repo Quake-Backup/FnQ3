@@ -237,7 +237,7 @@ vid_restart
 
 If the debug output reports a smaller face size than requested, reduce `r_dlightShadowMaxLights` before increasing any bias values. Bias tuning is mainly for fixing acne, shimmering, or detached-looking shadows; the defaults are the best first pass for normal play.
 
-Directional cascaded shadow-map cvars such as `r_csmShadows` currently expose planning diagnostics only. They are useful for renderer validation, but they are not a visible player-facing directional shadow feature yet.
+Directional cascaded shadow maps are available with `r_csmShadows 1` on GLx and Vulkan. They use parsed `q3map_sun`/`q3map_sunExt`/`q3map_sunExt2` sky shader parameters for the sun direction, color, and strength, and shadow opaque BSP world geometry, entity models, and brush models.
 
 ## Texture Picmip
 

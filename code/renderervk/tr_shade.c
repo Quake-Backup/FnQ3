@@ -370,8 +370,12 @@ static void RB_ApplyDlightShadowCasterNormalBias( void )
 		return;
 	}
 
-	normalBias = r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.25f;
-	normalBias = Com_Clamp( 0.0f, 8.0f, normalBias );
+	if ( tess.csmCasterPass ) {
+		normalBias = r_csmCasterNormalBias ? r_csmCasterNormalBias->value : 0.5f;
+	} else {
+		normalBias = r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.25f;
+	}
+	normalBias = R_ShadowClampCasterNormalBias( normalBias );
 	if ( normalBias <= 0.0f ) {
 		return;
 	}
@@ -400,22 +404,26 @@ static void RB_ApplyDlightShadowCasterNormalBias( void )
 			continue;
 		}
 
-		world[0] = backEnd.or.origin[0] +
-			tess.xyz[i][0] * backEnd.or.axis[0][0] +
-			tess.xyz[i][1] * backEnd.or.axis[1][0] +
-			tess.xyz[i][2] * backEnd.or.axis[2][0];
-		world[1] = backEnd.or.origin[1] +
-			tess.xyz[i][0] * backEnd.or.axis[0][1] +
-			tess.xyz[i][1] * backEnd.or.axis[1][1] +
-			tess.xyz[i][2] * backEnd.or.axis[2][1];
-		world[2] = backEnd.or.origin[2] +
-			tess.xyz[i][0] * backEnd.or.axis[0][2] +
-			tess.xyz[i][1] * backEnd.or.axis[1][2] +
-			tess.xyz[i][2] * backEnd.or.axis[2][2];
+		if ( tess.csmCasterPass ) {
+			VectorScale( tr.csm.lightDirection, -1.0f, lightToVertex );
+		} else {
+			world[0] = backEnd.or.origin[0] +
+				tess.xyz[i][0] * backEnd.or.axis[0][0] +
+				tess.xyz[i][1] * backEnd.or.axis[1][0] +
+				tess.xyz[i][2] * backEnd.or.axis[2][0];
+			world[1] = backEnd.or.origin[1] +
+				tess.xyz[i][0] * backEnd.or.axis[0][1] +
+				tess.xyz[i][1] * backEnd.or.axis[1][1] +
+				tess.xyz[i][2] * backEnd.or.axis[2][1];
+			world[2] = backEnd.or.origin[2] +
+				tess.xyz[i][0] * backEnd.or.axis[0][2] +
+				tess.xyz[i][1] * backEnd.or.axis[1][2] +
+				tess.xyz[i][2] * backEnd.or.axis[2][2];
 
-		VectorSubtract( world, backEnd.viewParms.or.origin, lightToVertex );
-		if ( VectorNormalize( lightToVertex ) <= 0.0f ) {
-			continue;
+			VectorSubtract( world, backEnd.viewParms.or.origin, lightToVertex );
+			if ( VectorNormalize( lightToVertex ) <= 0.0f ) {
+				continue;
+			}
 		}
 		lightSide = DotProduct( normalWorld, lightToVertex );
 		normalScale = 0.25f + 0.50f * ( 1.0f - Com_Clamp( 0.0f, 1.0f, fabsf( lightSide ) ) );
@@ -1166,6 +1174,21 @@ static void RB_SetDepthFade( const shaderStage_t *pStage, vk_material_t *materia
 
 
 #ifdef USE_VULKAN
+#ifdef USE_PMLIGHT
+static uint32_t VK_CSMCasterPipeline( uint32_t pipeline )
+{
+	Vk_Pipeline_Def def;
+
+	if ( !tess.csmCasterPass ) {
+		return pipeline;
+	}
+
+	vk_get_pipeline_def( pipeline, &def );
+	def.face_culling = CT_TWO_SIDED;
+	return vk_find_pipeline_ext( 0, &def, qfalse );
+}
+#endif
+
 static void RB_IterateStagesGeneric( const shaderCommands_t *input, qboolean fogCollapse )
 #else
 static void RB_IterateStagesGeneric( const shaderCommands_t *input )
@@ -1267,6 +1290,9 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 			} else {
 				pipeline = pStage->vk_pipeline[fog_stage];
 			}
+#ifdef USE_PMLIGHT
+			pipeline = VK_CSMCasterPipeline( pipeline );
+#endif
 
 			vk_bind_pipeline( pipeline );
 			vk_bind_geometry( tess_flags );
@@ -1505,6 +1531,115 @@ uint32_t VK_PushUniform( const vkUniform_t *uniform ) {
 
 
 #ifdef USE_PMLIGHT
+static void VK_CSMShadowFilterOffsets( float *inner, float *outer )
+{
+	int filter = r_csmShadowFilter ? r_csmShadowFilter->integer : SHADOW_FILTER_POISSON_4;
+
+	filter = R_ShadowClampFilterMode( filter );
+	switch ( filter ) {
+		case SHADOW_FILTER_HARD:
+			*inner = 0.0f;
+			*outer = 0.0f;
+			break;
+		case SHADOW_FILTER_PCF_2X2:
+			*inner = 0.5f;
+			*outer = 0.5f;
+			break;
+		default:
+			*inner = 0.25f;
+			*outer = 0.75f;
+			break;
+	}
+}
+
+void VK_CSMShadowPass( void )
+{
+	const csmCascadePlan_t *cascade;
+	float filterInner, filterOuter;
+	float extentX, extentY, extentZ;
+	int cascadeIndex;
+	int cascadeSize;
+	int atlasWidth;
+	int atlasHeight;
+	vk_material_t material;
+
+	if ( !vk_csm_shadow_atlas_ready() ||
+		!tr.csm.enabled || tess.csmCascade < 0 ||
+		tess.csmCascade >= tr.csm.cascadeCount ) {
+		return;
+	}
+
+	cascadeIndex = tess.csmCascade;
+	cascade = &tr.csm.cascades[cascadeIndex];
+	cascadeSize = vk_csm_shadow_cascade_size();
+	atlasWidth = vk_csm_shadow_atlas_width();
+	atlasHeight = vk_csm_shadow_atlas_height();
+	if ( cascadeSize <= 0 || atlasWidth <= 0 || atlasHeight <= 0 ) {
+		return;
+	}
+
+	extentX = MAX( cascade->bounds[1][0] - cascade->bounds[0][0], 1.0f );
+	extentY = MAX( cascade->bounds[1][1] - cascade->bounds[0][1], 1.0f );
+	extentZ = MAX( cascade->bounds[1][2] - cascade->bounds[0][2], 1.0f );
+
+	Com_Memset( &uniform, 0, sizeof( uniform ) );
+
+	uniform.csmModelX[0] = backEnd.or.axis[0][0];
+	uniform.csmModelX[1] = backEnd.or.axis[1][0];
+	uniform.csmModelX[2] = backEnd.or.axis[2][0];
+	uniform.csmModelX[3] = backEnd.or.origin[0];
+	uniform.csmModelY[0] = backEnd.or.axis[0][1];
+	uniform.csmModelY[1] = backEnd.or.axis[1][1];
+	uniform.csmModelY[2] = backEnd.or.axis[2][1];
+	uniform.csmModelY[3] = backEnd.or.origin[1];
+	uniform.csmModelZ[0] = backEnd.or.axis[0][2];
+	uniform.csmModelZ[1] = backEnd.or.axis[1][2];
+	uniform.csmModelZ[2] = backEnd.or.axis[2][2];
+	uniform.csmModelZ[3] = backEnd.or.origin[2];
+
+	VectorCopy( cascade->axis[0], uniform.csmAxisX );
+	uniform.csmAxisX[3] = cascade->bounds[0][0];
+	VectorCopy( cascade->axis[1], uniform.csmAxisY );
+	uniform.csmAxisY[3] = cascade->bounds[0][1];
+	VectorCopy( cascade->axis[2], uniform.csmAxisZ );
+	uniform.csmAxisZ[3] = cascade->bounds[0][2];
+
+	uniform.csmInvExtents[0] = 1.0f / extentX;
+	uniform.csmInvExtents[1] = 1.0f / extentY;
+	uniform.csmInvExtents[2] = 1.0f / extentZ;
+	uniform.csmInvExtents[3] = R_ShadowClampReceiverBias( tr.csm.receiverBias ) / extentX;
+
+	uniform.csmSplitAtlas[0] = cascade->splitNear;
+	uniform.csmSplitAtlas[1] = cascade->splitFar;
+	uniform.csmSplitAtlas[2] = (float)( cascadeIndex * cascadeSize ) / (float)atlasWidth;
+	uniform.csmSplitAtlas[3] = (float)cascadeSize / (float)atlasWidth;
+
+	uniform.csmShadowColor[0] = tr.csm.lightColor[0] * tr.csm.shadowStrength;
+	uniform.csmShadowColor[1] = tr.csm.lightColor[1] * tr.csm.shadowStrength;
+	uniform.csmShadowColor[2] = tr.csm.lightColor[2] * tr.csm.shadowStrength;
+	uniform.csmShadowColor[3] = 0.0f;
+
+	VectorCopy( backEnd.viewParms.or.axis[0], uniform.csmView );
+	uniform.csmView[3] = -DotProduct( backEnd.viewParms.or.origin, backEnd.viewParms.or.axis[0] );
+
+	VK_CSMShadowFilterOffsets( &filterInner, &filterOuter );
+	uniform.texFactors[2] = filterInner;
+	uniform.texFactors[3] = filterOuter;
+
+	if ( VK_PushUniform( &uniform ) == ~0U ) {
+		return;
+	}
+
+	vk_material_init( &material );
+	vk_material_set_descriptor( &material, VK_DESC_TEXTURE0, vk_csm_shadow_descriptor() );
+	vk_bind_material( &material );
+
+	vk_bind_pipeline( vk.csm_shadow_pipeline );
+	vk_bind_index();
+	vk_bind_geometry( TESS_XYZ );
+	vk_draw_geometry( tess.depthRange, qtrue );
+}
+
 void VK_LightingPass( void )
 {
 	static uint32_t uniform_offset;
@@ -1788,6 +1923,19 @@ void RB_EndSurface( void ) {
 		RB_EnemyOutlineTessEnd();
 		return;
 	}
+
+#ifdef USE_PMLIGHT
+	if ( tess.csmShadowPass ) {
+		VK_CSMShadowPass();
+		tess.csmShadowPass = qfalse;
+		tess.numIndexes = 0;
+		tess.numVertexes = 0;
+#ifdef USE_VBO
+		tess.vboIndex = 0;
+#endif
+		return;
+	}
+#endif
 
 	// for debugging of sort order issues, stop rendering after a given sort value
 	if ( r_debugSort->integer && r_debugSort->integer < tess.shader->sort && !backEnd.doneSurfaces ) {

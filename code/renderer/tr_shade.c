@@ -743,8 +743,12 @@ static void RB_ApplyDlightShadowCasterNormalBias( void )
 		return;
 	}
 
-	normalBias = r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.25f;
-	normalBias = Com_Clamp( 0.0f, 8.0f, normalBias );
+	if ( tess.csmCasterPass ) {
+		normalBias = r_csmCasterNormalBias ? r_csmCasterNormalBias->value : 0.5f;
+	} else {
+		normalBias = r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.25f;
+	}
+	normalBias = R_ShadowClampCasterNormalBias( normalBias );
 	if ( normalBias <= 0.0f ) {
 		return;
 	}
@@ -773,22 +777,26 @@ static void RB_ApplyDlightShadowCasterNormalBias( void )
 			continue;
 		}
 
-		world[0] = backEnd.or.origin[0] +
-			tess.xyz[i][0] * backEnd.or.axis[0][0] +
-			tess.xyz[i][1] * backEnd.or.axis[1][0] +
-			tess.xyz[i][2] * backEnd.or.axis[2][0];
-		world[1] = backEnd.or.origin[1] +
-			tess.xyz[i][0] * backEnd.or.axis[0][1] +
-			tess.xyz[i][1] * backEnd.or.axis[1][1] +
-			tess.xyz[i][2] * backEnd.or.axis[2][1];
-		world[2] = backEnd.or.origin[2] +
-			tess.xyz[i][0] * backEnd.or.axis[0][2] +
-			tess.xyz[i][1] * backEnd.or.axis[1][2] +
-			tess.xyz[i][2] * backEnd.or.axis[2][2];
+		if ( tess.csmCasterPass ) {
+			VectorScale( tr.csm.lightDirection, -1.0f, lightToVertex );
+		} else {
+			world[0] = backEnd.or.origin[0] +
+				tess.xyz[i][0] * backEnd.or.axis[0][0] +
+				tess.xyz[i][1] * backEnd.or.axis[1][0] +
+				tess.xyz[i][2] * backEnd.or.axis[2][0];
+			world[1] = backEnd.or.origin[1] +
+				tess.xyz[i][0] * backEnd.or.axis[0][1] +
+				tess.xyz[i][1] * backEnd.or.axis[1][1] +
+				tess.xyz[i][2] * backEnd.or.axis[2][1];
+			world[2] = backEnd.or.origin[2] +
+				tess.xyz[i][0] * backEnd.or.axis[0][2] +
+				tess.xyz[i][1] * backEnd.or.axis[1][2] +
+				tess.xyz[i][2] * backEnd.or.axis[2][2];
 
-		VectorSubtract( world, backEnd.viewParms.or.origin, lightToVertex );
-		if ( VectorNormalize( lightToVertex ) <= 0.0f ) {
-			continue;
+			VectorSubtract( world, backEnd.viewParms.or.origin, lightToVertex );
+			if ( VectorNormalize( lightToVertex ) <= 0.0f ) {
+				continue;
+			}
 		}
 		lightSide = DotProduct( normalWorld, lightToVertex );
 		normalScale = 0.25f + 0.50f * ( 1.0f - Com_Clamp( 0.0f, 1.0f, fabsf( lightSide ) ) );
@@ -1525,7 +1533,11 @@ void RB_StageIteratorGeneric( void )
 	//
 	// set face culling appropriately
 	//
+#ifdef USE_PMLIGHT
+	GL_Cull( tess.csmCasterPass ? CT_TWO_SIDED : shader->cullType );
+#else
 	GL_Cull( shader->cullType );
+#endif
 
 	// set polygon offset if necessary
 	if ( shader->polygonOffset )
@@ -1672,6 +1684,16 @@ void RB_EndSurface( void ) {
 		RB_EnemyOutlineTessEnd();
 		return;
 	}
+
+#ifdef USE_PMLIGHT
+	if ( tess.csmShadowPass ) {
+		ARB_CSMShadowPass();
+		tess.csmShadowPass = qfalse;
+		tess.numIndexes = 0;
+		tess.numVertexes = 0;
+		return;
+	}
+#endif
 
 	// for debugging of sort order issues, stop rendering after a given sort value
 	if ( r_debugSort->integer && r_debugSort->integer < tess.shader->sort && !backEnd.doneSurfaces ) {

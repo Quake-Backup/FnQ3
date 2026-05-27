@@ -548,6 +548,14 @@ static shader_t *ShaderForShaderNum( const int shaderNum, int lightmapNum ) {
 		return tr.defaultShader;
 	}
 
+	if ( shader->skySunValid ) {
+		VectorCopy( shader->skySunColor, tr.sunColor );
+		VectorCopy( shader->skySunDirection, tr.sunDirection );
+		VectorCopy( shader->skySunLight, tr.sunLight );
+		tr.sunIntensity = shader->skySunIntensity;
+		tr.sunParmsValid = qtrue;
+	}
+
 	if ( r_singleShader->integer && !shader->isSky ) {
 		return tr.defaultShader;
 	}
@@ -2233,6 +2241,10 @@ void RE_LoadWorldMap( const char *name ) {
 	tr.sunDirection[0] = 0.45f;
 	tr.sunDirection[1] = 0.3f;
 	tr.sunDirection[2] = 0.9f;
+	VectorClear( tr.sunLight );
+	VectorSet( tr.sunColor, 1.0f, 1.0f, 1.0f );
+	tr.sunIntensity = 0.0f;
+	tr.sunParmsValid = qfalse;
 
 	VectorNormalize( tr.sunDirection );
 

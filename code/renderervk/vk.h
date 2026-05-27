@@ -33,7 +33,7 @@
 #define USE_DEDICATED_ALLOCATION
 #endif
 //#define MIN_IMAGE_ALIGN (128*1024)
-#define MAX_ATTACHMENTS_IN_POOL (10+VK_NUM_BLOOM_PASSES*2) // depth + depth fade + dlight shadow atlas + msaa + msaa-resolve + depth-resolve + screenmap.msaa + screenmap.resolve + screenmap.depth + bloom_extract + blur pairs
+#define MAX_ATTACHMENTS_IN_POOL (11+VK_NUM_BLOOM_PASSES*2) // depth + depth fade + dlight/csm shadow atlases + msaa + msaa-resolve + depth-resolve + screenmap.msaa + screenmap.resolve + screenmap.depth + bloom_extract + blur pairs
 #define VK_MAX_FRAME_TIMESTAMPS 64
 #define VK_PIPELINE_CACHE_MAX_BYTES (32 * 1024 * 1024)
 
@@ -135,7 +135,9 @@ typedef enum {
 	TYPE_BLEND3_DST_COLOR_SRC_ALPHA,
 	TYPE_BLEND3_DST_COLOR_SRC_ALPHA_ENV,
 
-	TYPE_GENERIC_END = TYPE_BLEND3_MIX_ONE_MINUS_ALPHA_ENV
+	TYPE_GENERIC_END = TYPE_BLEND3_MIX_ONE_MINUS_ALPHA_ENV,
+
+	TYPE_CSM_SHADOW = TYPE_BLEND3_DST_COLOR_SRC_ALPHA_ENV + 1
 
 } Vk_Shader_Type;
 
@@ -178,6 +180,7 @@ typedef enum {
 	RENDER_PASS_SCREENMAP,
 	RENDER_PASS_POST_BLOOM,
 	RENDER_PASS_DLIGHT_SHADOW,
+	RENDER_PASS_CSM_SHADOW,
 	RENDER_PASS_COUNT
 } renderPass_t;
 
@@ -255,6 +258,16 @@ typedef struct vkUniform_s {
 	vec4_t depthFadeScale;		// fragment
 	vec4_t depthFadeBias;		// fragment
 	vec4_t dlightFactors;		// fragment: dynamic light falloff controls
+	vec4_t csmModelX;			// vertex: local-to-world rows
+	vec4_t csmModelY;
+	vec4_t csmModelZ;
+	vec4_t csmAxisX;			// fragment: light-space axes + min bounds
+	vec4_t csmAxisY;
+	vec4_t csmAxisZ;
+	vec4_t csmInvExtents;		// fragment: xyz inverse light extents, w receiver bias
+	vec4_t csmSplitAtlas;		// fragment: split near/far, atlas u offset/scale
+	vec4_t csmShadowColor;		// fragment: rgb strength, w reversed-depth flag
+	vec4_t csmView;				// vertex: view forward + distance offset
 } vkUniform_t;
 
 #define TESS_XYZ   (1)
@@ -331,6 +344,16 @@ void vk_end_dlight_shadow_render_pass( void );
 int vk_dlight_shadow_atlas_height( void );
 int vk_dlight_shadow_atlas_columns( void );
 uint32_t vk_dlight_shadow_atlas_generation( void );
+qboolean vk_csm_shadow_atlas_available( void );
+qboolean vk_csm_shadow_atlas_ready( void );
+qboolean vk_begin_csm_shadow_render_pass( void );
+void vk_end_csm_shadow_render_pass( void );
+void vk_mark_csm_shadow_atlas_rendered( void );
+int vk_csm_shadow_atlas_width( void );
+int vk_csm_shadow_atlas_height( void );
+int vk_csm_shadow_cascade_size( void );
+uint32_t vk_csm_shadow_atlas_generation( void );
+VkDescriptorSet vk_csm_shadow_descriptor( void );
 void vk_present_frame( void );
 
 void vk_end_render_pass( void );
@@ -516,6 +539,15 @@ typedef struct {
 	uint32_t dlight_shadow_atlas_rows;
 	uint32_t dlight_shadow_max_lights;
 	uint32_t dlight_shadow_generation;
+	VkImage csm_shadow_image;
+	VkImageView csm_shadow_image_view;
+	VkDescriptorSet csm_shadow_descriptor;
+	qboolean csm_shadow_rendered;
+	uint32_t csm_shadow_atlas_width;
+	uint32_t csm_shadow_atlas_height;
+	uint32_t csm_shadow_cascade_size;
+	uint32_t csm_shadow_cascade_count;
+	uint32_t csm_shadow_generation;
 
 	VkImage msaa_image;
 	VkImageView msaa_image_view;
@@ -548,6 +580,7 @@ typedef struct {
 		VkFramebuffer screenmap;
 		VkFramebuffer capture;
 		VkFramebuffer dlight_shadow;
+		VkFramebuffer csm_shadow;
 	} framebuffers;
 
 #ifdef USE_UPLOAD_QUEUE
@@ -611,6 +644,7 @@ typedef struct {
 			VkShaderModule ident1[2][2][2]; // tx[0,1], env0[0,1] fog[0,1]
 			VkShaderModule fixed[2][2][2];  // tx[0,1], env0[0,1] fog[0,1]
 			VkShaderModule light[2];        // fog[0,1]
+			VkShaderModule csm_shadow;
 		} vert;
 		struct {
 			VkShaderModule gen0_df;
@@ -619,6 +653,7 @@ typedef struct {
 			VkShaderModule fixed[2][2];  // tx[0,1], fog[0,1]
 			VkShaderModule ent[1][2];    // tx[0], fog[0,1]
 			VkShaderModule light[2][2];  // linear[0,1] fog[0,1]
+			VkShaderModule csm_shadow;
 		} frag;
 
 		VkShaderModule color_fs;
@@ -679,6 +714,7 @@ typedef struct {
 #ifdef USE_PMLIGHT
 	uint32_t dlight_pipelines_x[3][2][2][2];
 	uint32_t dlight1_pipelines_x[3][2][2][2];
+	uint32_t csm_shadow_pipeline;
 #endif
 
 	// debug visualization pipelines

@@ -774,6 +774,48 @@ static void R_CSMBuildLightAxis( const vec3_t lightDirection, vec3_t axis[3] )
 	VectorNormalize( axis[2] );
 }
 
+static int R_ShadowFloorPowerOfTwo( int value )
+{
+	int result = 1;
+
+	while ( result <= value / 2 ) {
+		result <<= 1;
+	}
+
+	return result;
+}
+
+qboolean R_CSMShadowAtlasLayout( int cascadeCount, int requestedCascadeSize, int maxTextureSize,
+	csmShadowAtlasLayout_t *layout )
+{
+	int cascadeSize;
+
+	if ( !layout || cascadeCount <= 0 || requestedCascadeSize <= 0 || maxTextureSize < 128 ) {
+		return qfalse;
+	}
+
+	Com_Memset( layout, 0, sizeof( *layout ) );
+	cascadeCount = (int)Com_Clamp( 1, CSM_MAX_CASCADES, cascadeCount );
+	cascadeSize = R_ShadowFloorPowerOfTwo( requestedCascadeSize );
+	cascadeSize = (int)Com_Clamp( 128, 4096, cascadeSize );
+
+	while ( cascadeCount > 1 && cascadeSize * cascadeCount > maxTextureSize ) {
+		cascadeSize >>= 1;
+	}
+	while ( cascadeSize * cascadeCount > maxTextureSize && cascadeSize > 128 ) {
+		cascadeSize >>= 1;
+	}
+	if ( cascadeSize < 128 || cascadeSize * cascadeCount > maxTextureSize ) {
+		return qfalse;
+	}
+
+	layout->cascadeCount = cascadeCount;
+	layout->cascadeSize = cascadeSize;
+	layout->width = cascadeSize * cascadeCount;
+	layout->height = cascadeSize;
+	return qtrue;
+}
+
 static void R_CSMBuildFrustumSliceCorners( float splitNear, float splitFar, vec3_t corners[8] )
 {
 	const viewParms_t *view;
@@ -868,8 +910,10 @@ static void R_CSMPlanCascade( int cascadeIndex, float splitNear, float splitFar,
 
 static void R_PlanCascadedShadows( void )
 {
+	csmShadowAtlasLayout_t atlasLayout;
 	vec3_t lightDirection;
 	vec3_t lightAxis[3];
+	vec3_t lightColor;
 	float zNear;
 	float maxDistance;
 	float splitLambda;
@@ -877,6 +921,7 @@ static void R_PlanCascadedShadows( void )
 	float casterDepthBias;
 	float casterSlopeBias;
 	float casterNormalBias;
+	float shadowStrength;
 	float splitNear;
 	int filterMode;
 	int cascadeCount;
@@ -885,13 +930,27 @@ static void R_PlanCascadedShadows( void )
 
 	R_ClearCSMPlan();
 
-	if ( !r_csmShadows || !r_csmShadows->integer ||
-		( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+	if ( !r_csmShadows || !r_csmShadows->integer ) {
+		tr.pc.c_csmSkippedDisabled++;
+		return;
+	}
+
+	if ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) {
+		tr.pc.c_csmSkippedNoWorldRef++;
+		return;
+	}
+
+	if ( !tr.sunParmsValid || tr.sunIntensity <= 0.0f ) {
+		tr.pc.c_csmSkippedNoSun++;
 		return;
 	}
 
 	if ( VectorNormalize2( tr.sunDirection, lightDirection ) <= 0.0f ) {
+		tr.pc.c_csmSkippedNoSun++;
 		return;
+	}
+	if ( VectorNormalize2( tr.sunColor, lightColor ) <= 0.0f ) {
+		VectorSet( lightColor, 1.0f, 1.0f, 1.0f );
 	}
 
 	zNear = MAX( r_znear->value, 1.0f );
@@ -900,21 +959,34 @@ static void R_PlanCascadedShadows( void )
 		maxDistance = MIN( maxDistance, tr.viewParms.zFar );
 	}
 	if ( maxDistance <= zNear + 1.0f ) {
+		tr.pc.c_csmSkippedProjection++;
 		return;
 	}
 
 	cascadeCount = r_csmCascadeCount ? (int)Com_Clamp( 1, CSM_MAX_CASCADES, r_csmCascadeCount->integer ) : CSM_MAX_CASCADES;
 	resolution = r_csmResolution ? (int)Com_Clamp( 128, 4096, r_csmResolution->integer ) : 1024;
+	if ( !R_CSMShadowAtlasLayout( cascadeCount, resolution, glConfig.maxTextureSize, &atlasLayout ) ) {
+		tr.pc.c_csmSkippedAtlas++;
+		return;
+	}
+	cascadeCount = atlasLayout.cascadeCount;
+	resolution = atlasLayout.cascadeSize;
 	splitLambda = r_csmSplitLambda ? Com_Clamp( 0.0f, 1.0f, r_csmSplitLambda->value ) : 0.65f;
 	filterMode = R_ShadowClampFilterMode( r_csmShadowFilter ? r_csmShadowFilter->integer : SHADOW_FILTER_POISSON_4 );
 	receiverBias = R_ShadowClampReceiverBias( r_csmShadowBias ? r_csmShadowBias->value : 8.0f );
 	casterDepthBias = R_ShadowClampCasterDepthBias( r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f );
 	casterSlopeBias = R_ShadowClampCasterSlopeBias( r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f );
 	casterNormalBias = R_ShadowClampCasterNormalBias( r_csmCasterNormalBias ? r_csmCasterNormalBias->value : 0.5f );
+	shadowStrength = r_csmShadowStrength ? Com_Clamp( 0.0f, 1.0f, r_csmShadowStrength->value ) : 1.0f;
+	if ( shadowStrength <= 0.0f ) {
+		tr.pc.c_csmSkippedStrength++;
+		return;
+	}
 
 	R_CSMBuildLightAxis( lightDirection, lightAxis );
 
 	tr.csm.enabled = qtrue;
+	tr.csm.skySun = qtrue;
 	tr.csm.cascadeCount = cascadeCount;
 	tr.csm.resolution = resolution;
 	tr.csm.maxDistance = maxDistance;
@@ -924,7 +996,9 @@ static void R_PlanCascadedShadows( void )
 	tr.csm.casterDepthBias = casterDepthBias;
 	tr.csm.casterSlopeBias = casterSlopeBias;
 	tr.csm.casterNormalBias = casterNormalBias;
+	tr.csm.shadowStrength = shadowStrength;
 	VectorCopy( lightDirection, tr.csm.lightDirection );
+	VectorCopy( lightColor, tr.csm.lightColor );
 
 	splitNear = zNear;
 	for ( i = 0; i < cascadeCount; i++ ) {
@@ -948,6 +1022,7 @@ static void R_PlanCascadedShadows( void )
 	tr.pc.c_csmCascades = cascadeCount;
 	tr.pc.c_csmResolution = resolution;
 	tr.pc.c_csmMaxDistance = (int)maxDistance;
+	tr.csmDebugPlan = tr.csm;
 }
 
 
@@ -1780,9 +1855,10 @@ static void R_GenerateDrawSurfs( void ) {
 
 	// we know the size of the clipping volume. Now set the rest of the projection matrix.
 	R_SetupProjectionZ( &tr.viewParms );
-	R_PlanCascadedShadows();
 
 	R_AddEntitySurfaces();
+
+	R_PlanCascadedShadows();
 
 #ifdef USE_PMLIGHT
 	R_PlanDlightShadows();

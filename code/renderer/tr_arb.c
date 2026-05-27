@@ -32,6 +32,11 @@ static GLuint current_fp;
 static int programCompiled = 0;
 static int programEnabled	= 0;
 static qboolean dlightShadowProgramsCompiled = qfalse;
+static qboolean csmShadowProgramsCompiled = qfalse;
+#ifdef RENDERER_GLX
+typedef void (APIENTRY *PFNGLXCSMUSEPROGRAMPROC)( GLuint program );
+static PFNGLXCSMUSEPROGRAMPROC glxCsmUseProgram;
+#endif
 
 qboolean fboEnabled = qfalse;
 qboolean fboBloomInited = qfalse;
@@ -78,9 +83,15 @@ static qboolean depthFadeTextureShared;
 static GLuint dlightShadowAtlasTexture;
 static GLuint dlightShadowAtlasFbo;
 static dlightShadowAtlasLayout_t dlightShadowAtlasLayout;
+static GLuint csmShadowAtlasTexture;
+static GLuint csmShadowAtlasFbo;
+static csmShadowAtlasLayout_t csmShadowAtlasLayout;
+static qboolean csmShadowAtlasCreateFailed;
 static qboolean depthFadeCopied;
 static qboolean dlightShadowAtlasRendered;
 static unsigned int dlightShadowAtlasGeneration;
+static qboolean csmShadowAtlasRendered;
+static unsigned int csmShadowAtlasGeneration;
 
 static frameBuffer_t frameBufferMS;
 static frameBuffer_t frameBuffers[ FBO_COUNT ];
@@ -1101,6 +1112,148 @@ static void ARB_DlightShadowFilterOffsets( float *inner, float *outer )
 	}
 }
 
+static void ARB_CSMShadowFilterOffsets( float *inner, float *outer )
+{
+	int filter = r_csmShadowFilter ? r_csmShadowFilter->integer : SHADOW_FILTER_POISSON_4;
+
+	filter = R_ShadowClampFilterMode( filter );
+	switch ( filter ) {
+		case SHADOW_FILTER_HARD:
+			*inner = 0.0f;
+			*outer = 0.0f;
+			break;
+		case SHADOW_FILTER_PCF_2X2:
+			*inner = 0.5f;
+			*outer = 0.5f;
+			break;
+		default:
+			*inner = 0.25f;
+			*outer = 0.75f;
+			break;
+	}
+}
+
+void ARB_CSMShadowPass( void )
+{
+#ifdef USE_FBO
+	const csmCascadePlan_t *cascade;
+	vec4_t modelX, modelY, modelZ;
+	vec4_t axisX, axisY, axisZ;
+	vec4_t invExtents;
+	vec4_t splitAtlas;
+	vec4_t shadowColor;
+	float filterInner, filterOuter;
+	float extentX, extentY, extentZ;
+	int cascadeIndex;
+	int cascadeSize;
+	int atlasWidth;
+	int atlasHeight;
+
+	if ( !programCompiled || !FBO_CSMShadowsReady() ||
+		!tr.csm.enabled || tess.csmCascade < 0 ||
+		tess.csmCascade >= tr.csm.cascadeCount ) {
+		return;
+	}
+
+	cascadeIndex = tess.csmCascade;
+	cascade = &tr.csm.cascades[cascadeIndex];
+	cascadeSize = FBO_CSMShadowCascadeSize();
+	atlasWidth = FBO_CSMShadowAtlasWidth();
+	atlasHeight = FBO_CSMShadowAtlasHeight();
+	if ( cascadeSize <= 0 || atlasWidth <= 0 || atlasHeight <= 0 ) {
+		return;
+	}
+
+	extentX = MAX( cascade->bounds[1][0] - cascade->bounds[0][0], 1.0f );
+	extentY = MAX( cascade->bounds[1][1] - cascade->bounds[0][1], 1.0f );
+	extentZ = MAX( cascade->bounds[1][2] - cascade->bounds[0][2], 1.0f );
+
+	modelX[0] = backEnd.or.axis[0][0];
+	modelX[1] = backEnd.or.axis[1][0];
+	modelX[2] = backEnd.or.axis[2][0];
+	modelX[3] = backEnd.or.origin[0];
+	modelY[0] = backEnd.or.axis[0][1];
+	modelY[1] = backEnd.or.axis[1][1];
+	modelY[2] = backEnd.or.axis[2][1];
+	modelY[3] = backEnd.or.origin[1];
+	modelZ[0] = backEnd.or.axis[0][2];
+	modelZ[1] = backEnd.or.axis[1][2];
+	modelZ[2] = backEnd.or.axis[2][2];
+	modelZ[3] = backEnd.or.origin[2];
+
+	VectorCopy( cascade->axis[0], axisX );
+	axisX[3] = cascade->bounds[0][0];
+	VectorCopy( cascade->axis[1], axisY );
+	axisY[3] = cascade->bounds[0][1];
+	VectorCopy( cascade->axis[2], axisZ );
+	axisZ[3] = cascade->bounds[0][2];
+
+	invExtents[0] = 1.0f / extentX;
+	invExtents[1] = 1.0f / extentY;
+	invExtents[2] = 1.0f / extentZ;
+	invExtents[3] = R_ShadowClampReceiverBias( tr.csm.receiverBias ) / extentX;
+
+	splitAtlas[0] = cascade->splitNear;
+	splitAtlas[1] = cascade->splitFar;
+	splitAtlas[2] = (float)( cascadeIndex * cascadeSize ) / (float)atlasWidth;
+	splitAtlas[3] = (float)cascadeSize / (float)atlasWidth;
+
+	shadowColor[0] = tr.csm.lightColor[0] * tr.csm.shadowStrength;
+	shadowColor[1] = tr.csm.lightColor[1] * tr.csm.shadowStrength;
+	shadowColor[2] = tr.csm.lightColor[2] * tr.csm.shadowStrength;
+	shadowColor[3] = 0.0f;
+
+	ARB_CSMShadowFilterOffsets( &filterInner, &filterOuter );
+
+#ifdef RENDERER_GLX
+	GLX_CompatUnbindMaterial();
+	if ( !glxCsmUseProgram && ri.GL_GetProcAddress ) {
+		glxCsmUseProgram = (PFNGLXCSMUSEPROGRAMPROC)ri.GL_GetProcAddress( "glUseProgram" );
+	}
+	if ( glxCsmUseProgram ) {
+		glxCsmUseProgram( 0 );
+	}
+#endif
+	ARB_ProgramEnable( CSM_SHADOW_VERTEX, CSM_SHADOW_FRAGMENT );
+	qglProgramLocalParameter4fvARB( GL_VERTEX_PROGRAM_ARB, 0, modelX );
+	qglProgramLocalParameter4fvARB( GL_VERTEX_PROGRAM_ARB, 1, modelY );
+	qglProgramLocalParameter4fvARB( GL_VERTEX_PROGRAM_ARB, 2, modelZ );
+	qglProgramLocalParameter4fARB( GL_VERTEX_PROGRAM_ARB, 3,
+		backEnd.viewParms.or.axis[0][0], backEnd.viewParms.or.axis[0][1],
+		backEnd.viewParms.or.axis[0][2],
+		-DotProduct( backEnd.viewParms.or.origin, backEnd.viewParms.or.axis[0] ) );
+
+	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 0, axisX );
+	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 1, axisY );
+	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 2, axisZ );
+	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 3, invExtents );
+	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 4, splitAtlas );
+	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 5, shadowColor );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 6,
+		1.0f / (float)atlasWidth, 1.0f / (float)atlasHeight, filterInner, filterOuter );
+
+	FBO_BindCSMShadowTexture( 1 );
+	qglDisable( GL_TEXTURE_2D );
+	GL_SelectTexture( 0 );
+	qglDisable( GL_TEXTURE_2D );
+
+	GL_State( GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO | GLS_DEPTHFUNC_EQUAL );
+	GL_Cull( CT_TWO_SIDED );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_NONE );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
+#ifdef RENDERER_GLX
+	qglDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE, tess.indexes );
+#else
+	R_DrawElements( tess.numIndexes, tess.indexes );
+#endif
+	GL_SelectTexture( 1 );
+	qglDisable( GL_TEXTURE_2D );
+	GL_SelectTexture( 0 );
+	qglEnable( GL_TEXTURE_2D );
+#endif
+}
+
 void ARB_SetupLightParams( const shaderStage_t *pStage )
 {
 	programNum vertexProgram;
@@ -1351,6 +1504,127 @@ static const char *dlightVP = {
 	"SUB ev, posEye, vertex.position; \n"
 	"MOV n, vertex.normal; \n"
 	"%s" // fog shader if needed
+	"END \n"
+};
+
+static const char *csmShadowVP = {
+	"!!ARBvp1.0 \n"
+	"OPTION ARB_position_invariant; \n"
+	"PARAM modelX = program.local[0]; \n"
+	"PARAM modelY = program.local[1]; \n"
+	"PARAM modelZ = program.local[2]; \n"
+	"PARAM viewForward = program.local[3]; \n"
+	"TEMP localPos; \n"
+	"TEMP worldPos; \n"
+	"OUTPUT world = result.texcoord[0]; \n"
+	"OUTPUT viewDist = result.texcoord[1]; \n"
+	"MOV localPos, vertex.position; \n"
+	"MOV localPos.w, 1.0; \n"
+	"DP4 worldPos.x, modelX, localPos; \n"
+	"DP4 worldPos.y, modelY, localPos; \n"
+	"DP4 worldPos.z, modelZ, localPos; \n"
+	"MOV worldPos.w, 1.0; \n"
+	"MOV world, worldPos; \n"
+	"DP4 viewDist.x, viewForward, worldPos; \n"
+	"END \n"
+};
+
+static const char *csmShadowFP = {
+	"!!ARBfp1.0 \n"
+	"PARAM axisX = program.local[0]; \n"
+	"PARAM axisY = program.local[1]; \n"
+	"PARAM axisZ = program.local[2]; \n"
+	"PARAM invExtents = program.local[3]; \n"
+	"PARAM splitAtlas = program.local[4]; \n"
+	"PARAM shadowColor = program.local[5]; \n"
+	"PARAM atlas = program.local[6]; \n"
+	"PARAM one = { 1.0, 1.0, 1.0, 1.0 }; \n"
+	"PARAM zero = { 0.0, 0.0, 0.0, 0.0 }; \n"
+	"PARAM half = { 0.5, 0.5, 0.5, 0.5 }; \n"
+	"PARAM off0 = { -1.0, -1.0, 0.0, 0.0 }; \n"
+	"PARAM off1 = { 1.0, -1.0, 0.0, 0.0 }; \n"
+	"PARAM off2 = { -1.0, 1.0, 0.0, 0.0 }; \n"
+	"PARAM off3 = { 1.0, 1.0, 0.0, 0.0 }; \n"
+	"TEMP world; \n"
+	"TEMP lightCoord; \n"
+	"TEMP uv; \n"
+	"TEMP mask; \n"
+	"TEMP kill; \n"
+	"TEMP receiver; \n"
+	"TEMP sample; \n"
+	"TEMP occ; \n"
+	"TEMP offset; \n"
+	"TEMP factor; \n"
+	"MOV world, fragment.texcoord[0]; \n"
+	"DP3 lightCoord.x, world, axisX; \n"
+	"SUB lightCoord.x, lightCoord.x, axisX.w; \n"
+	"MUL lightCoord.x, lightCoord.x, invExtents.x; \n"
+	"DP3 lightCoord.y, world, axisY; \n"
+	"SUB lightCoord.y, lightCoord.y, axisY.w; \n"
+	"MUL lightCoord.y, lightCoord.y, invExtents.y; \n"
+	"DP3 lightCoord.z, world, axisZ; \n"
+	"SUB lightCoord.z, lightCoord.z, axisZ.w; \n"
+	"MUL lightCoord.z, lightCoord.z, invExtents.z; \n"
+	"SGE mask.x, lightCoord.y, zero.x; \n"
+	"SGE mask.y, one.x, lightCoord.y; \n"
+	"MUL mask.x, mask.x, mask.y; \n"
+	"SGE mask.y, lightCoord.z, zero.x; \n"
+	"MUL mask.x, mask.x, mask.y; \n"
+	"SGE mask.y, one.x, lightCoord.z; \n"
+	"MUL mask.x, mask.x, mask.y; \n"
+	"SGE mask.y, lightCoord.x, zero.x; \n"
+	"MUL mask.x, mask.x, mask.y; \n"
+	"SGE mask.y, one.x, lightCoord.x; \n"
+	"MUL mask.x, mask.x, mask.y; \n"
+	"SGE mask.y, fragment.texcoord[1].x, splitAtlas.x; \n"
+	"MUL mask.x, mask.x, mask.y; \n"
+	"SGE mask.y, splitAtlas.y, fragment.texcoord[1].x; \n"
+	"MUL mask.x, mask.x, mask.y; \n"
+	"SUB kill.x, mask.x, half.x; \n"
+	"KIL kill.x; \n"
+	"MAD uv.x, lightCoord.y, splitAtlas.w, splitAtlas.z; \n"
+	"MOV uv.y, lightCoord.z; \n"
+	"SUB receiver.x, lightCoord.x, invExtents.w; \n"
+	"MOV offset, off0; \n"
+	"MUL offset.x, offset.x, atlas.w; \n"
+	"MUL offset.y, offset.y, atlas.z; \n"
+	"MUL offset.x, offset.x, atlas.x; \n"
+	"MUL offset.y, offset.y, atlas.y; \n"
+	"ADD offset.x, offset.x, uv.x; \n"
+	"ADD offset.y, offset.y, uv.y; \n"
+	"TEX sample, offset, texture[1], 2D; \n"
+	"SLT occ.x, sample.x, receiver.x; \n"
+	"MOV offset, off1; \n"
+	"MUL offset.x, offset.x, atlas.z; \n"
+	"MUL offset.y, offset.y, atlas.w; \n"
+	"MUL offset.x, offset.x, atlas.x; \n"
+	"MUL offset.y, offset.y, atlas.y; \n"
+	"ADD offset.x, offset.x, uv.x; \n"
+	"ADD offset.y, offset.y, uv.y; \n"
+	"TEX sample, offset, texture[1], 2D; \n"
+	"SLT occ.y, sample.x, receiver.x; \n"
+	"MOV offset, off2; \n"
+	"MUL offset.x, offset.x, atlas.z; \n"
+	"MUL offset.y, offset.y, atlas.w; \n"
+	"MUL offset.x, offset.x, atlas.x; \n"
+	"MUL offset.y, offset.y, atlas.y; \n"
+	"ADD offset.x, offset.x, uv.x; \n"
+	"ADD offset.y, offset.y, uv.y; \n"
+	"TEX sample, offset, texture[1], 2D; \n"
+	"SLT occ.z, sample.x, receiver.x; \n"
+	"MOV offset, off3; \n"
+	"MUL offset.x, offset.x, atlas.w; \n"
+	"MUL offset.y, offset.y, atlas.z; \n"
+	"MUL offset.x, offset.x, atlas.x; \n"
+	"MUL offset.y, offset.y, atlas.y; \n"
+	"ADD offset.x, offset.x, uv.x; \n"
+	"ADD offset.y, offset.y, uv.y; \n"
+	"TEX sample, offset, texture[1], 2D; \n"
+	"SLT occ.w, sample.x, receiver.x; \n"
+	"DP4 occ.x, occ, { 0.25, 0.25, 0.25, 0.25 }; \n"
+	"MAD factor.xyz, -occ.x, shadowColor, one; \n"
+	"MOV factor.w, one.x; \n"
+	"MOV result.color, factor; \n"
 	"END \n"
 };
 
@@ -2293,6 +2567,7 @@ static void ARB_DeletePrograms( void )
 	Com_Memset( programs, 0, sizeof( programs ) );
 	programCompiled = 0;
 	dlightShadowProgramsCompiled = qfalse;
+	csmShadowProgramsCompiled = qfalse;
 }
 
 
@@ -2392,6 +2667,16 @@ qboolean ARB_UpdatePrograms( void )
 			dlightShadowProgramsCompiled = qtrue;
 		} else {
 			ri.Printf( PRINT_ALL, S_COLOR_YELLOW "WARNING: ARB dynamic light shadow programs failed; disabling r_dlightShadows on GLx.\n" );
+		}
+	}
+
+	csmShadowProgramsCompiled = qfalse;
+	if ( glConfig.numTextureUnits > 1 ) {
+		if ( ARB_CompileProgramInternal( Vertex, csmShadowVP, programs[ CSM_SHADOW_VERTEX ], qfalse ) &&
+			ARB_CompileProgramInternal( Fragment, csmShadowFP, programs[ CSM_SHADOW_FRAGMENT ], qfalse ) ) {
+			csmShadowProgramsCompiled = qtrue;
+		} else if ( r_csmShadows && r_csmShadows->integer ) {
+			ri.Printf( PRINT_ALL, S_COLOR_YELLOW "WARNING: ARB sky-sun shadow programs failed; disabling r_csmShadows on GLx for this session.\n" );
 		}
 	}
 #endif // USE_PMLIGHT
@@ -2533,6 +2818,14 @@ static void FBO_InvalidateDlightShadowAtlasGeneration( void )
 	}
 }
 
+static void FBO_InvalidateCSMShadowAtlasGeneration( void )
+{
+	csmShadowAtlasGeneration++;
+	if ( !csmShadowAtlasGeneration ) {
+		csmShadowAtlasGeneration++;
+	}
+}
+
 
 static void FBO_CleanDlightShadowAtlas( void )
 {
@@ -2553,10 +2846,31 @@ static void FBO_CleanDlightShadowAtlas( void )
 	FBO_InvalidateDlightShadowAtlasGeneration();
 }
 
+static void FBO_CleanCSMShadowAtlas( void )
+{
+	if ( csmShadowAtlasFbo )
+	{
+		FBO_Bind( GL_FRAMEBUFFER, 0 );
+		qglDeleteFramebuffers( 1, &csmShadowAtlasFbo );
+		csmShadowAtlasFbo = 0;
+	}
+	if ( csmShadowAtlasTexture )
+	{
+		GL_BindTexture( 1, 0 );
+		GL_SelectTexture( 0 );
+		qglDeleteTextures( 1, &csmShadowAtlasTexture );
+		csmShadowAtlasTexture = 0;
+	}
+	Com_Memset( &csmShadowAtlasLayout, 0, sizeof( csmShadowAtlasLayout ) );
+	csmShadowAtlasRendered = qfalse;
+	FBO_InvalidateCSMShadowAtlasGeneration();
+}
+
 
 static void FBO_CleanDepth( void )
 {
 	FBO_CleanDlightShadowAtlas();
+	FBO_CleanCSMShadowAtlas();
 
 	if ( depthFadeTexture )
 	{
@@ -2672,6 +2986,77 @@ static qboolean FBO_CreateDlightShadowAtlas( void )
 
 	ri.Printf( PRINT_ALL, "...dynamic-light shadow atlas %ix%i (%i px faces, %i lights)\n",
 		layout.width, layout.height, layout.faceSize, layout.maxLights );
+
+	return qtrue;
+}
+
+static qboolean FBO_CSMShadowAtlasWanted( csmShadowAtlasLayout_t *layout )
+{
+#ifdef USE_PMLIGHT
+	if ( !r_csmShadows || !r_csmShadows->integer ) {
+		return qfalse;
+	}
+
+	return R_CSMShadowAtlasLayout(
+		r_csmCascadeCount ? r_csmCascadeCount->integer : CSM_MAX_CASCADES,
+		r_csmResolution ? r_csmResolution->integer : 1024,
+		glConfig.maxTextureSize, layout );
+#else
+	return qfalse;
+#endif
+}
+
+static qboolean FBO_CreateCSMShadowAtlas( void )
+{
+	csmShadowAtlasLayout_t layout;
+	int fboStatus;
+
+	if ( !FBO_CSMShadowAtlasWanted( &layout ) ) {
+		return qfalse;
+	}
+	if ( csmShadowAtlasCreateFailed ) {
+		return qfalse;
+	}
+
+	qglGenTextures( 1, &csmShadowAtlasTexture );
+	GL_BindTexture( 1, csmShadowAtlasTexture );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+	qglTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, layout.width, layout.height, 0,
+		GL_DEPTH_COMPONENT, GL_FLOAT, NULL );
+
+	qglGenFramebuffers( 1, &csmShadowAtlasFbo );
+	FBO_Bind( GL_FRAMEBUFFER, csmShadowAtlasFbo );
+	qglFramebufferTexture2D( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, csmShadowAtlasTexture, 0 );
+	qglDrawBuffer( GL_NONE );
+	qglReadBuffer( GL_NONE );
+
+	fboStatus = qglCheckFramebufferStatus( GL_FRAMEBUFFER );
+	if ( fboStatus != GL_FRAMEBUFFER_COMPLETE )
+	{
+		ri.Printf( PRINT_WARNING, "Failed to create sky-sun shadow atlas FBO (status %s, error %s)\n",
+			glDefToStr( fboStatus ), glDefToStr( (int)qglGetError() ) );
+		FBO_CleanCSMShadowAtlas();
+		csmShadowAtlasCreateFailed = qtrue;
+		qglDrawBuffer( GL_BACK );
+		qglReadBuffer( GL_BACK );
+		GL_SelectTexture( 0 );
+		return qfalse;
+	}
+
+	qglClear( GL_DEPTH_BUFFER_BIT );
+	csmShadowAtlasLayout = layout;
+	FBO_InvalidateCSMShadowAtlasGeneration();
+	FBO_Bind( GL_FRAMEBUFFER, 0 );
+	qglDrawBuffer( GL_BACK );
+	qglReadBuffer( GL_BACK );
+	GL_SelectTexture( 0 );
+	csmShadowAtlasCreateFailed = qfalse;
+
+	ri.Printf( PRINT_ALL, "...sky-sun shadow atlas %ix%i (%i px cascades, %i cascades)\n",
+		layout.width, layout.height, layout.cascadeSize, layout.cascadeCount );
 
 	return qtrue;
 }
@@ -3271,6 +3656,94 @@ qboolean FBO_DlightShadowsReady( void )
 	return ( FBO_DlightShadowsAvailable() && dlightShadowAtlasRendered ) ? qtrue : qfalse;
 }
 
+qboolean FBO_CSMShadowsAvailable( void )
+{
+#ifdef USE_PMLIGHT
+	if ( !csmShadowProgramsCompiled ||
+		!r_csmShadows || !r_csmShadows->integer ||
+		glConfig.numTextureUnits <= 1 || !qglGenFramebuffers ) {
+		return qfalse;
+	}
+	if ( !FBO_CSMShadowAtlasAvailable() ) {
+		FBO_CreateCSMShadowAtlas();
+	}
+	return FBO_CSMShadowAtlasAvailable();
+#else
+	return qfalse;
+#endif
+}
+
+qboolean FBO_CSMShadowAtlasAvailable( void )
+{
+	return ( qglGenFramebuffers && csmShadowAtlasTexture && csmShadowAtlasFbo &&
+		csmShadowAtlasLayout.cascadeSize > 0 ) ? qtrue : qfalse;
+}
+
+qboolean FBO_BeginCSMShadowAtlas( void )
+{
+	csmShadowAtlasRendered = qfalse;
+
+	if ( !FBO_CSMShadowAtlasAvailable() ) {
+		return qfalse;
+	}
+
+	FBO_Bind( GL_FRAMEBUFFER, csmShadowAtlasFbo );
+	qglDrawBuffer( GL_NONE );
+	qglReadBuffer( GL_NONE );
+	qglViewport( 0, 0, csmShadowAtlasLayout.width, csmShadowAtlasLayout.height );
+	qglScissor( 0, 0, csmShadowAtlasLayout.width, csmShadowAtlasLayout.height );
+	GL_State( GLS_DEFAULT );
+	qglClear( GL_DEPTH_BUFFER_BIT );
+
+	return qtrue;
+}
+
+void FBO_EndCSMShadowAtlas( void )
+{
+	if ( fboEnabled ) {
+		FBO_BindMain();
+		qglDrawBuffer( GL_COLOR_ATTACHMENT0 );
+		qglReadBuffer( GL_COLOR_ATTACHMENT0 );
+	} else {
+		FBO_Bind( GL_FRAMEBUFFER, 0 );
+		qglDrawBuffer( GL_BACK );
+		qglReadBuffer( GL_BACK );
+	}
+	csmShadowAtlasRendered = qtrue;
+}
+
+void FBO_MarkCSMShadowAtlasRendered( void )
+{
+	if ( FBO_CSMShadowAtlasAvailable() ) {
+		csmShadowAtlasRendered = qtrue;
+	}
+}
+
+int FBO_CSMShadowAtlasWidth( void )
+{
+	return csmShadowAtlasLayout.width;
+}
+
+int FBO_CSMShadowAtlasHeight( void )
+{
+	return csmShadowAtlasLayout.height;
+}
+
+int FBO_CSMShadowCascadeSize( void )
+{
+	return csmShadowAtlasLayout.cascadeSize;
+}
+
+unsigned int FBO_CSMShadowAtlasGeneration( void )
+{
+	return csmShadowAtlasGeneration;
+}
+
+qboolean FBO_CSMShadowsReady( void )
+{
+	return ( FBO_CSMShadowsAvailable() && csmShadowAtlasRendered ) ? qtrue : qfalse;
+}
+
 void FBO_ResetDepthFade( void )
 {
 	depthFadeCopied = qfalse;
@@ -3317,6 +3790,15 @@ void FBO_BindDepthFadeTexture( int texUnit )
 void FBO_BindDlightShadowTexture( int texUnit )
 {
 	GL_BindTexture( texUnit, FBO_DlightShadowsReady() ? dlightShadowAtlasTexture : 0 );
+}
+
+void FBO_BindCSMShadowTexture( int texUnit )
+{
+	GLuint texnum = FBO_CSMShadowsReady() ? csmShadowAtlasTexture : 0;
+
+	GL_SelectTexture( texUnit );
+	glState.currenttextures[ texUnit ] = texnum;
+	qglBindTexture( GL_TEXTURE_2D, texnum );
 }
 
 void FBO_DrawWorldCelOutline( void )
@@ -4461,16 +4943,28 @@ void QGL_InitFBO( void )
 	fboInternalFormat = FBO_MainInternalFormat();
 	fboTextureFormat = 0;
 	fboTextureType = 0;
+	csmShadowAtlasCreateFailed = qfalse;
 	programReady = ( qglGenProgramsARB && GL_ProgramAvailable() ) ? qtrue : qfalse;
 
 	if ( r_fbo->integer && ( !programReady || !qglGenFramebuffers ) )
 		ri.Printf( PRINT_WARNING, "...FBO is not available\n" );
 
-	if ( !r_fbo->integer || !programReady || !qglGenFramebuffers )
+	if ( !programReady || !qglGenFramebuffers )
 	{
 #ifdef RENDERER_GLX
 		GLX_RecordFboInitState( r_fbo->integer ? qtrue : qfalse, qfalse,
 			programReady, qglGenFramebuffers ? qtrue : qfalse );
+#endif
+		return;
+	}
+
+	if ( !r_fbo->integer )
+	{
+		if ( csmShadowProgramsCompiled ) {
+			FBO_CreateCSMShadowAtlas();
+		}
+#ifdef RENDERER_GLX
+		GLX_RecordFboInitState( qfalse, qfalse, qtrue, qtrue );
 #endif
 		return;
 	}
@@ -4524,6 +5018,7 @@ void QGL_InitFBO( void )
 		if ( !depthFadeTexture )
 			depthFadeTexture = FBO_CreateDepthFadeTexture( w, h, qfalse );
 		FBO_CreateDlightShadowAtlas();
+		FBO_CreateCSMShadowAtlas();
 		FBO_BindMain();
 		ri.Printf( PRINT_ALL, "...using %s (%s:%s) FBO\n", glDefToStr( fboInternalFormat ),
 			glDefToStr( fboTextureFormat ), glDefToStr( fboTextureType ) );

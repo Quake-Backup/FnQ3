@@ -4,10 +4,11 @@
 ### Fappin' and Fraggin'
 
 <p>
-  <a href="https://github.com/themuffinator/FnQ3/releases/latest"><img alt="Latest Release" src="https://img.shields.io/badge/Latest-Release-2563eb?style=for-the-badge"></a>
-  <a href="#3-getting-started"><img alt="Getting Started" src="https://img.shields.io/badge/Getting-Started-16a34a?style=for-the-badge"></a>
-  <a href="#4-documentation"><img alt="Documentation" src="https://img.shields.io/badge/Documentation-7c3aed?style=for-the-badge"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-GPL--2.0-c2410c?style=for-the-badge"></a>
+  <a href="https://github.com/themuffinator/FnQ3/releases/latest"><img alt="Download Latest Release" src="https://img.shields.io/badge/Download-Latest-2563eb?style=for-the-badge&logo=github&logoColor=white"></a>
+  <a href="#3-getting-started"><img alt="Quick Start" src="https://img.shields.io/badge/Quick-Start-16a34a?style=for-the-badge"></a>
+  <a href="#4-documentation"><img alt="Player Documentation" src="https://img.shields.io/badge/Player-Docs-7c3aed?style=for-the-badge"></a>
+  <a href="BUILD.md"><img alt="Build Guide" src="https://img.shields.io/badge/Build-Guide-f59e0b?style=for-the-badge"></a>
+  <a href="LICENSE"><img alt="GPL-2.0 License" src="https://img.shields.io/badge/License-GPL--2.0-c2410c?style=for-the-badge"></a>
 </p>
 
 *Compatibility target: ${compatibility_target} · Base version: `${base_version}` · Current build: `${version}`*

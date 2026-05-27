@@ -37,6 +37,7 @@ static void R_PerformanceCounters( void ) {
 	if ( !r_speeds->integer && !shadowDebug && !csmDebug ) {
 		// clear the counters even if we aren't printing
 		Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
+		Com_Memset( &tr.csmDebugPlan, 0, sizeof( tr.csmDebugPlan ) );
 		Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
 		return;
 	}
@@ -100,32 +101,45 @@ static void R_PerformanceCounters( void ) {
 #endif
 
 	if ( ( r_speeds->integer == 4 || csmDebug ) &&
-		( tr.csm.enabled || ( csmDebug && r_csmShadows && r_csmShadows->integer ) ) ) {
-		if ( tr.csm.enabled && tr.csm.cascadeCount > 0 ) {
+		( tr.csmDebugPlan.enabled || ( csmDebug && r_csmShadows && r_csmShadows->integer ) ) ) {
+		if ( tr.csmDebugPlan.enabled && tr.csmDebugPlan.cascadeCount > 0 ) {
+			const csmPlan_t *csm = &tr.csmDebugPlan;
 			float splitFar[CSM_MAX_CASCADES] = { 0.0f };
 			float texelSize[CSM_MAX_CASCADES] = { 0.0f };
 			int i;
 
-			for ( i = 0; i < tr.csm.cascadeCount && i < CSM_MAX_CASCADES; i++ ) {
-				splitFar[i] = tr.csm.cascades[i].splitFar;
-				texelSize[i] = tr.csm.cascades[i].texelSize;
+			for ( i = 0; i < csm->cascadeCount && i < CSM_MAX_CASCADES; i++ ) {
+				splitFar[i] = csm->cascades[i].splitFar;
+				texelSize[i] = csm->cascades[i].texelSize;
 			}
 
 			ri.Printf( PRINT_ALL,
-				"csm plan cascades:%i res:%i max:%i lambda:%.2f filter:%s rbias:%.2f cbias:%.2f/%.2f/%.2f dir:%.2f %.2f %.2f split far:%.0f %.0f %.0f %.0f texel:%.2f %.2f %.2f %.2f rdoc:plan-only\n",
+				"csm shadows cascades:%i res:%i max:%i lambda:%.2f filter:%s strength:%.2f rbias:%.2f cbias:%.2f/%.2f/%.2f dir:%.2f %.2f %.2f split far:%.0f %.0f %.0f %.0f texel:%.2f %.2f %.2f %.2f caster:%i recv world:%i ent:%i\n",
 				tr.pc.c_csmCascades, tr.pc.c_csmResolution, tr.pc.c_csmMaxDistance,
-				tr.csm.splitLambda, R_ShadowFilterModeName( tr.csm.filterMode ),
-				tr.csm.receiverBias, tr.csm.casterDepthBias, tr.csm.casterSlopeBias,
-				tr.csm.casterNormalBias,
-				tr.csm.lightDirection[0], tr.csm.lightDirection[1], tr.csm.lightDirection[2],
+				csm->splitLambda, R_ShadowFilterModeName( csm->filterMode ),
+				csm->shadowStrength, csm->receiverBias, csm->casterDepthBias, csm->casterSlopeBias,
+				csm->casterNormalBias,
+				csm->lightDirection[0], csm->lightDirection[1], csm->lightDirection[2],
 				splitFar[0], splitFar[1], splitFar[2], splitFar[3],
-				texelSize[0], texelSize[1], texelSize[2], texelSize[3] );
-		} else {
-			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip no-world-or-sun\n" );
+				texelSize[0], texelSize[1], texelSize[2], texelSize[3],
+				backEnd.pc.c_csmShadowAtlasSurfaces,
+				backEnd.pc.c_csmShadowReceiverWorldSurfaces,
+				backEnd.pc.c_csmShadowReceiverEntitySurfaces );
+		} else if ( tr.pc.c_csmSkippedNoSun ) {
+			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip no-sky-sun\n" );
+		} else if ( tr.pc.c_csmSkippedProjection ) {
+			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip projection\n" );
+		} else if ( tr.pc.c_csmSkippedAtlas ) {
+			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip atlas\n" );
+		} else if ( tr.pc.c_csmSkippedStrength ) {
+			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip strength\n" );
+		} else if ( tr.pc.c_csmSkippedDisabled && !tr.pc.c_csmSkippedNoWorldRef ) {
+			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip disabled\n" );
 		}
 	}
 
 	Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
+	Com_Memset( &tr.csmDebugPlan, 0, sizeof( tr.csmDebugPlan ) );
 	Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
 }
 
@@ -237,6 +251,7 @@ void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 	cmd->refdef = tr.refdef;
 	cmd->viewParms = tr.viewParms;
+	cmd->csm = tr.csm;
 }
 
 void R_AddScreenshotCmd( int x, int y, int width, int height, int format, const char *fileName, qboolean silent, qboolean allowWatermark ) {
@@ -542,7 +557,8 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 			r_hdrBloomFormat->modified ||
 			r_fbo->modified || r_ext_supersample->modified || r_renderWidth->modified ||
 			r_renderHeight->modified || r_renderScale->modified || r_flares->modified ||
-			r_bloom_passes->modified ) {
+			r_bloom_passes->modified || r_csmShadows->modified ||
+			r_csmCascadeCount->modified || r_csmResolution->modified ) {
 			QGL_InitFBO();
 			updateColorMappings = qtrue;
 		}

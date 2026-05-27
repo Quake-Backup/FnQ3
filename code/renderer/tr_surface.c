@@ -41,17 +41,60 @@ use the shader system.
 //============================================================================
 
 
+typedef struct {
+	qboolean allowVBO;
+#ifdef USE_PMLIGHT
+	qboolean csmCasterPass;
+	qboolean csmShadowPass;
+	int csmCascade;
+#endif
+} rbSurfaceRestartState_t;
+
+static void RB_SaveSurfaceRestartState( rbSurfaceRestartState_t *state ) {
+	state->allowVBO = tess.allowVBO;
+#ifdef USE_PMLIGHT
+	state->csmCasterPass = tess.csmCasterPass;
+	state->csmShadowPass = tess.csmShadowPass;
+	state->csmCascade = tess.csmCascade;
+#endif
+}
+
+static void RB_RestoreSurfaceRestartState( const rbSurfaceRestartState_t *state ) {
+	tess.allowVBO = state->allowVBO;
+#ifdef USE_PMLIGHT
+	tess.csmCasterPass = state->csmCasterPass;
+	tess.csmShadowPass = state->csmShadowPass;
+	tess.csmCascade = state->csmCascade;
+#endif
+}
+
+static void RB_RestartSurface( void ) {
+	rbSurfaceRestartState_t state;
+	shader_t *shader = tess.shader;
+	int fogNum = tess.fogNum;
+
+	RB_SaveSurfaceRestartState( &state );
+	RB_EndSurface();
+	RB_BeginSurface( shader, fogNum );
+	RB_RestoreSurfaceRestartState( &state );
+}
+
 /*
 ==============
 RB_CheckOverflow
 ==============
 */
 void RB_CheckOverflow( int verts, int indexes ) {
+	rbSurfaceRestartState_t state;
+	shader_t *shader = tess.shader;
+	int fogNum = tess.fogNum;
+
 	if (tess.numVertexes + verts < SHADER_MAX_VERTEXES
 		&& tess.numIndexes + indexes < SHADER_MAX_INDEXES) {
 		return;
 	}
 
+	RB_SaveSurfaceRestartState( &state );
 	RB_EndSurface();
 
 	if ( verts >= SHADER_MAX_VERTEXES ) {
@@ -62,7 +105,8 @@ void RB_CheckOverflow( int verts, int indexes ) {
 		ri.Error( ERR_DROP, "RB_CheckOverflow: indices > MAX (%d > %d)", indexes, SHADER_MAX_INDEXES );
 	}
 
-	RB_BeginSurface( tess.shader, tess.fogNum );
+	RB_BeginSurface( shader, fogNum );
+	RB_RestoreSurfaceRestartState( &state );
 }
 
 
@@ -314,8 +358,7 @@ static void RB_SurfaceTriangles( const srfTriangles_t *srf ) {
 #endif
 		// transition to vbo render list
 		if ( tess.vboIndex == 0 ) {
-			RB_EndSurface();
-			RB_BeginSurface( tess.shader, tess.fogNum );
+			RB_RestartSurface();
 			// set some dummy parameters for RB_EndSurface
 			tess.numIndexes = 1;
 			tess.numVertexes = 0;
@@ -885,8 +928,7 @@ static void RB_SurfaceFace( const srfSurfaceFace_t *surf ) {
 #endif
 		// transition to vbo render list
 		if ( tess.vboIndex == 0 ) {
-			RB_EndSurface();
-			RB_BeginSurface( tess.shader, tess.fogNum );
+			RB_RestartSurface();
 			// set some dummy parameters for RB_EndSurface
 			tess.numIndexes = 1;
 			tess.numVertexes = 0;
@@ -1089,8 +1131,7 @@ static void RB_SurfaceGrid( srfGridMesh_t *cv ) {
 #endif
 		// transition to vbo render list
 		if ( tess.vboIndex == 0 ) {
-			RB_EndSurface();
-			RB_BeginSurface( tess.shader, tess.fogNum );
+			RB_RestartSurface();
 			// set some dummy parameters for RB_EndSurface
 			tess.numIndexes = 1;
 			tess.numVertexes = 0;
@@ -1173,8 +1214,7 @@ static void RB_SurfaceGrid( srfGridMesh_t *cv ) {
 #endif
 					ri.Error( ERR_DROP, "Unexpected grid flush during map loading!\n" );
 				} else {
-					RB_EndSurface();
-					RB_BeginSurface( tess.shader, tess.fogNum );
+					RB_RestartSurface();
 				}
 			} else {
 				break;

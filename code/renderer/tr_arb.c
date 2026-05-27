@@ -1242,11 +1242,7 @@ void ARB_CSMShadowPass( void )
 	GL_ClientState( 1, CLS_NONE );
 	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
-#ifdef RENDERER_GLX
-	qglDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE, tess.indexes );
-#else
 	R_DrawElements( tess.numIndexes, tess.indexes );
-#endif
 	GL_SelectTexture( 1 );
 	qglDisable( GL_TEXTURE_2D );
 	GL_SelectTexture( 0 );

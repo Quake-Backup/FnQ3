@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fnq3_meta import ROOT, channel_metadata, package_archive_name
 from glx_runtime_sweep import (
+    GLX_VISUAL_DOSSIER_VERSION,
     release_corpus_manifest,
     validate_release_proof_root,
 )
@@ -40,6 +41,13 @@ DEFAULT_DOCS = [
     ),
     (ROOT / ".install" / "README.html", Path("README.html")),
 ]
+
+GLX_RELEASE_EVIDENCE_DOCS = {
+    "visualDossier": {
+        "path": "docs/fnquake3/GLX_VISUAL_DOSSIER.md",
+        "version": GLX_VISUAL_DOSSIER_VERSION,
+    },
+}
 
 SKIP_ARTIFACT_DIR_NAMES = {
     ".git",
@@ -414,6 +422,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         "build_date": meta["build_date"],
         "commit": meta["commit"],
         "glx_proof_corpus": release_corpus_manifest(),
+        "glx_release_evidence_docs": GLX_RELEASE_EVIDENCE_DOCS,
         "glx_runtime_proof": glx_runtime_proof,
         "glx_promotion": glx_promotion,
         "glx_rollback_package": glx_rollback_package,

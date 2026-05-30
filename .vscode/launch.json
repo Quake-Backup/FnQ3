@@ -2,21 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "OpenGL",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
-      "args": [
-        "+set",
-        "cl_renderer",
-        "opengl"
-      ],
-      "cwd": "${workspaceFolder}\\meson\\build",
-      "stopAtEntry": false,
-      "console": "internalConsole"
-    },
-    {
-      "name": "GLx",
+      "name": "OpenGLx",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
@@ -24,20 +10,6 @@
         "+set",
         "cl_renderer",
         "glx"
-      ],
-      "cwd": "${workspaceFolder}\\meson\\build",
-      "stopAtEntry": false,
-      "console": "internalConsole"
-    },
-    {
-      "name": "Renderer2",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
-      "args": [
-        "+set",
-        "cl_renderer",
-        "opengl2"
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,

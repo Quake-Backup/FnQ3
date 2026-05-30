@@ -192,6 +192,68 @@ static qboolean GLX_StaticWorld_ResolveMultiDrawIndirectFn()
 	return s_fns.MultiDrawElementsIndirect ? qtrue : qfalse;
 }
 
+// GLx static-world code is the only in-repo owner of GL_DRAW_INDIRECT_BUFFER,
+// so shadow the binding locally instead of querying it around every indirect draw.
+static GLuint GLX_StaticWorld_CurrentIndirectBufferBinding( StaticWorldStats *stats )
+{
+	GLint current = 0;
+
+	if ( !stats ) {
+		return 0;
+	}
+
+	if ( stats->indirectBufferBindingKnown ) {
+		stats->indirectBufferBindingCacheHits++;
+		return stats->indirectBufferBinding;
+	}
+
+	if ( s_fns.GetIntegerv ) {
+		s_fns.GetIntegerv( GL_DRAW_INDIRECT_BUFFER_BINDING, &current );
+		stats->indirectBufferBindingQueries++;
+	}
+	stats->indirectBufferBinding = static_cast<GLuint>( current );
+	stats->indirectBufferBindingKnown = qtrue;
+	return stats->indirectBufferBinding;
+}
+
+static void GLX_StaticWorld_BindIndirectBufferTracked( StaticWorldStats *stats, GLuint buffer )
+{
+	if ( s_fns.BindBuffer ) {
+		s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, buffer );
+	}
+	if ( stats ) {
+		stats->indirectBufferBinding = buffer;
+		stats->indirectBufferBindingKnown = qtrue;
+	}
+}
+
+static void GLX_StaticWorld_RestoreIndirectBufferBinding( StaticWorldStats *stats, GLuint buffer )
+{
+	if ( !s_fns.BindBuffer ) {
+		return;
+	}
+
+	if ( !stats ) {
+		s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, buffer );
+		return;
+	}
+
+	if ( !stats->indirectBufferBindingKnown || stats->indirectBufferBinding != buffer ) {
+		GLX_StaticWorld_BindIndirectBufferTracked( stats, buffer );
+	}
+	stats->indirectBufferBindingRestores++;
+}
+
+static void GLX_StaticWorld_InvalidateIndirectBufferBinding( StaticWorldStats *stats )
+{
+	if ( !stats ) {
+		return;
+	}
+
+	stats->indirectBufferBinding = 0;
+	stats->indirectBufferBindingKnown = qfalse;
+}
+
 static void GLX_StaticWorld_ClearPacket( StaticWorldPacketStats *packet )
 {
 	if ( !packet ) {
@@ -316,6 +378,7 @@ static void GLX_StaticWorld_ClearIndirectBufferStats( StaticWorldStats *stats )
 		return;
 	}
 
+	stats->indirectBufferBinding = 0;
 	stats->indirectBufferBuilds = 0;
 	stats->indirectBufferSkips = 0;
 	stats->indirectBufferUnsupported = 0;
@@ -325,6 +388,10 @@ static void GLX_StaticWorld_ClearIndirectBufferStats( StaticWorldStats *stats )
 	stats->indirectCompactBufferBytes = 0;
 	stats->indirectCompactBufferCapacityBytes = 0;
 	stats->indirectBufferReady = qfalse;
+	stats->indirectBufferBindingKnown = qfalse;
+	stats->indirectBufferBindingQueries = 0;
+	stats->indirectBufferBindingCacheHits = 0;
+	stats->indirectBufferBindingRestores = 0;
 }
 
 static void GLX_StaticWorld_ClearIndirectDrawStats( StaticWorldStats *stats )
@@ -1039,7 +1106,8 @@ static void GLX_StaticWorld_DeleteArena( StaticWorldStats *stats )
 
 static void GLX_StaticWorld_DeleteIndirectCommandBuffer( StaticWorldStats *stats )
 {
-	GLint oldDrawIndirectBuffer = 0;
+	GLuint oldDrawIndirectBuffer = 0;
+	GLuint restoreDrawIndirectBuffer = 0;
 	qboolean restoreBinding = qfalse;
 
 	if ( !stats ) {
@@ -1047,6 +1115,7 @@ static void GLX_StaticWorld_DeleteIndirectCommandBuffer( StaticWorldStats *stats
 	}
 
 	if ( !GLX_StaticWorld_ResolveFns() ) {
+		GLX_StaticWorld_InvalidateIndirectBufferBinding( stats );
 		stats->indirectCommandBuffer = 0;
 		stats->indirectCompactCommandBuffer = 0;
 		stats->indirectBufferCommands = 0;
@@ -1058,10 +1127,13 @@ static void GLX_StaticWorld_DeleteIndirectCommandBuffer( StaticWorldStats *stats
 	}
 
 	if ( stats->indirectCommandBuffer || stats->indirectCompactCommandBuffer ) {
-		if ( stats->indirectBufferBytes > 0 || stats->indirectCompactBufferBytes > 0 ) {
-			s_fns.GetIntegerv( GL_DRAW_INDIRECT_BUFFER_BINDING, &oldDrawIndirectBuffer );
-			restoreBinding = qtrue;
+		oldDrawIndirectBuffer = GLX_StaticWorld_CurrentIndirectBufferBinding( stats );
+		restoreDrawIndirectBuffer = oldDrawIndirectBuffer;
+		if ( restoreDrawIndirectBuffer == stats->indirectCommandBuffer ||
+			restoreDrawIndirectBuffer == stats->indirectCompactCommandBuffer ) {
+			restoreDrawIndirectBuffer = 0;
 		}
+		restoreBinding = qtrue;
 	}
 	if ( stats->indirectCommandBuffer ) {
 		s_fns.DeleteBuffers( 1, &stats->indirectCommandBuffer );
@@ -1073,7 +1145,7 @@ static void GLX_StaticWorld_DeleteIndirectCommandBuffer( StaticWorldStats *stats
 	}
 
 	if ( restoreBinding ) {
-		s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, static_cast<GLuint>( oldDrawIndirectBuffer ) );
+		GLX_StaticWorld_RestoreIndirectBufferBinding( stats, restoreDrawIndirectBuffer );
 	}
 
 	stats->indirectBufferCommands = 0;
@@ -1455,7 +1527,7 @@ restore_bindings:
 void GLX_StaticWorld_UploadIndirectCommands( StaticWorldStats *stats, qboolean drawIndirectAvailable )
 {
 	StaticWorldIndirectCommandStats uploadCommands[GLX_STATIC_WORLD_PACKET_LIMIT];
-	GLint oldDrawIndirectBuffer = 0;
+	GLuint oldDrawIndirectBuffer = 0;
 	GLenum err;
 	int uploadCount = 0;
 	int uploadBytes = 0;
@@ -1507,7 +1579,7 @@ void GLX_StaticWorld_UploadIndirectCommands( StaticWorldStats *stats, qboolean d
 
 	uploadBytes = uploadCount * static_cast<int>( sizeof( uploadCommands[0] ) );
 
-	s_fns.GetIntegerv( GL_DRAW_INDIRECT_BUFFER_BINDING, &oldDrawIndirectBuffer );
+	oldDrawIndirectBuffer = GLX_StaticWorld_CurrentIndirectBufferBinding( stats );
 	s_fns.GetError();
 
 	s_fns.GenBuffers( 1, &stats->indirectCommandBuffer );
@@ -1541,7 +1613,7 @@ fail_delete:
 	stats->indirectBufferReady = qfalse;
 
 restore_binding:
-	s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, static_cast<GLuint>( oldDrawIndirectBuffer ) );
+	GLX_StaticWorld_RestoreIndirectBufferBinding( stats, oldDrawIndirectBuffer );
 }
 
 static qboolean GLX_StaticWorld_DrawPacketIndirect( StaticWorldStats *stats,
@@ -1549,7 +1621,7 @@ static qboolean GLX_StaticWorld_DrawPacketIndirect( StaticWorldStats *stats,
 {
 	const StaticWorldIndirectCommandStats *command;
 	const GLvoid *commandOffset;
-	GLint oldDrawIndirectBuffer = 0;
+	GLuint oldDrawIndirectBuffer = 0;
 	GLenum err;
 	int commandIndex;
 
@@ -1588,12 +1660,12 @@ static qboolean GLX_StaticWorld_DrawPacketIndirect( StaticWorldStats *stats,
 	commandOffset = reinterpret_cast<const GLvoid *>(
 		static_cast<std::intptr_t>( commandIndex * static_cast<int>( sizeof( *command ) ) ) );
 
-	s_fns.GetIntegerv( GL_DRAW_INDIRECT_BUFFER_BINDING, &oldDrawIndirectBuffer );
+	oldDrawIndirectBuffer = GLX_StaticWorld_CurrentIndirectBufferBinding( stats );
 	s_fns.GetError();
-	s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, stats->indirectCommandBuffer );
+	GLX_StaticWorld_BindIndirectBufferTracked( stats, stats->indirectCommandBuffer );
 	s_fns.DrawElementsIndirect( GL_TRIANGLES, indexType, commandOffset );
 	err = s_fns.GetError();
-	s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, static_cast<GLuint>( oldDrawIndirectBuffer ) );
+	GLX_StaticWorld_RestoreIndirectBufferBinding( stats, oldDrawIndirectBuffer );
 
 	if ( err != GL_NO_ERROR ) {
 		stats->indirectDrawErrors++;
@@ -1916,7 +1988,7 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 	GLenum indexType, qboolean arenaBound )
 {
 	StaticWorldIndirectCommandStats compactCommands[GLX_STATIC_WORLD_MULTIDRAW_LIMIT];
-	GLint oldDrawIndirectBuffer = 0;
+	GLuint oldDrawIndirectBuffer = 0;
 	GLenum err;
 	const GLvoid *commandOffset = nullptr;
 	unsigned int totalIndexes = 0;
@@ -2020,7 +2092,7 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 		uploadBytes = runCount * static_cast<int>( sizeof( compactCommands[0] ) );
 	}
 
-	s_fns.GetIntegerv( GL_DRAW_INDIRECT_BUFFER_BINDING, &oldDrawIndirectBuffer );
+	oldDrawIndirectBuffer = GLX_StaticWorld_CurrentIndirectBufferBinding( stats );
 	s_fns.GetError();
 
 	if ( useCompactBuffer ) {
@@ -2033,12 +2105,12 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 				stats->multiDrawIndirectCompactFailures++;
 				GLX_StaticWorld_RecordMdiReject( stats, GLX_STATIC_WORLD_MDI_REJECT_COMPACT_BUFFER,
 					runs, runCount, -1 );
-				s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, static_cast<GLuint>( oldDrawIndirectBuffer ) );
+				GLX_StaticWorld_RestoreIndirectBufferBinding( stats, oldDrawIndirectBuffer );
 				return qfalse;
 			}
 		}
 
-		s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, stats->indirectCompactCommandBuffer );
+		GLX_StaticWorld_BindIndirectBufferTracked( stats, stats->indirectCompactCommandBuffer );
 		if ( s_fns.BufferSubData &&
 			stats->indirectCompactBufferCapacityBytes >= static_cast<unsigned int>( uploadBytes ) ) {
 			s_fns.BufferSubData( GL_DRAW_INDIRECT_BUFFER, 0, uploadBytes, compactCommands );
@@ -2061,7 +2133,7 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 			stats->indirectCompactBufferBytes = 0;
 			GLX_StaticWorld_RecordMdiReject( stats, GLX_STATIC_WORLD_MDI_REJECT_COMPACT_UPLOAD,
 				runs, runCount, -1 );
-			s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, static_cast<GLuint>( oldDrawIndirectBuffer ) );
+			GLX_StaticWorld_RestoreIndirectBufferBinding( stats, oldDrawIndirectBuffer );
 			return qfalse;
 		}
 
@@ -2070,13 +2142,13 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 		GLX_StaticWorld_AddCounter( &stats->multiDrawIndirectCompactBytes,
 			static_cast<unsigned int>( uploadBytes ) );
 	} else {
-		s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, stats->indirectCommandBuffer );
+		GLX_StaticWorld_BindIndirectBufferTracked( stats, stats->indirectCommandBuffer );
 	}
 
 	s_fns.MultiDrawElementsIndirect( GL_TRIANGLES, indexType, commandOffset,
 		static_cast<GLsizei>( runCount ), 0 );
 	err = s_fns.GetError();
-	s_fns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, static_cast<GLuint>( oldDrawIndirectBuffer ) );
+	GLX_StaticWorld_RestoreIndirectBufferBinding( stats, oldDrawIndirectBuffer );
 
 	if ( err != GL_NO_ERROR ) {
 		stats->multiDrawIndirectErrors++;

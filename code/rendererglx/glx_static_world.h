@@ -143,6 +143,7 @@ struct StaticWorldStats {
 	int indirectCommandToPacket[GLX_STATIC_WORLD_PACKET_LIMIT];
 	GLuint indirectCommandBuffer;
 	GLuint indirectCompactCommandBuffer;
+	GLuint indirectBufferBinding;
 	unsigned int indirectBufferBuilds;
 	unsigned int indirectBufferSkips;
 	unsigned int indirectBufferUnsupported;
@@ -152,6 +153,10 @@ struct StaticWorldStats {
 	unsigned int indirectCompactBufferBytes;
 	unsigned int indirectCompactBufferCapacityBytes;
 	qboolean indirectBufferReady;
+	qboolean indirectBufferBindingKnown;
+	unsigned int indirectBufferBindingQueries;
+	unsigned int indirectBufferBindingCacheHits;
+	unsigned int indirectBufferBindingRestores;
 	unsigned int indirectDrawAttempts;
 	unsigned int indirectDrawCalls;
 	unsigned int indirectDrawIndexes;

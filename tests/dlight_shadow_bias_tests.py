@@ -78,6 +78,35 @@ class DlightShadowBiasTests(unittest.TestCase):
         self.assertIn("r_dlightShadowCasterDepthBias->value : 1.0f", vk_backend)
         self.assertIn("r_dlightShadowCasterSlopeBias->value : 1.0f", vk_backend)
 
+    def test_glx_shadow_atlas_avoids_duplicate_caster_probe(self):
+        source = read_text("code/renderer/tr_backend.c")
+
+        self.assertNotIn("RB_DlightShadowFaceHasCasters", source)
+        self.assertIn("surfaces = RB_RenderDlightShadowCasters( dl );", source)
+
+    def test_glx_shadow_passes_avoid_per_entity_rescans(self):
+        source = read_text("code/renderer/tr_backend.c")
+
+        dlight_start = source.index("static int RB_RenderDlightShadowCasters(")
+        dlight_end = source.index("static void RB_RenderDlightShadowAtlas(", dlight_start)
+        dlight_block = source[dlight_start:dlight_end]
+        self.assertNotIn("RB_CollectDlightShadowCasterEntities", dlight_block)
+        self.assertIn("if ( entityNum != currentEntityNum )", dlight_block)
+
+        csm_cascade_start = source.index("static int RB_RenderCSMShadowCascade(")
+        csm_cascade_end = source.index("static void RB_RenderCSMShadowAtlas(", csm_cascade_start)
+        csm_cascade_block = source[csm_cascade_start:csm_cascade_end]
+        self.assertNotIn("entityQueued[MAX_REFENTITIES]", csm_cascade_block)
+        self.assertNotIn("RB_RenderCSMShadowEntityCasters", csm_cascade_block)
+        self.assertIn("RB_SetCSMShadowEntity( entityNum, &backEnd.viewParms, originalTime );", csm_cascade_block)
+
+        csm_receiver_start = source.index("static void RB_CSMShadowReceiverPass(")
+        csm_receiver_end = source.index("static void RB_SetDlightShadowCasterEntity(", csm_receiver_start)
+        csm_receiver_block = source[csm_receiver_start:csm_receiver_end]
+        self.assertNotIn("entityQueued[MAX_REFENTITIES]", csm_receiver_block)
+        self.assertNotIn("RB_RenderCSMShadowEntityReceivers", csm_receiver_block)
+        self.assertNotIn("RB_RenderCSMShadowWorldReceivers", csm_receiver_block)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2194,6 +2194,8 @@ static void GL_SetDefaultState( void )
 	glState.faceCulling = -1;
 
 	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	glState.colorMaskValid = qfalse;
+	GL_ColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
 
 	// initialize downstream texture unit if we're running
 	// in a multitexture environment

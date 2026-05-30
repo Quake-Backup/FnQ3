@@ -3071,9 +3071,9 @@ static GLuint FBO_CreateDepthTextureOrBuffer( GLsizei width, GLsizei height )
 	return buffer;
 #else
 	GLuint tex;
-	// Let the MSAA depth resolve write directly into the texture sampled by
-	// depth-fade and world-outline shaders.
-	if ( frameBufferMultiSampling && !depthFadeTexture &&
+	// Let the main scene depth attachment double as the sampled depth texture
+	// for depth-fade and world-outline shaders.
+	if ( !depthFadeTexture &&
 		width == glConfig.vidWidth && height == glConfig.vidHeight )
 	{
 		depthFadeTexture = FBO_CreateDepthFadeTexture( width, height,
@@ -3751,13 +3751,13 @@ static void FBO_CopyDepthTexture( void )
 		return;
 	}
 
-	if ( frameBufferMultiSampling ) {
-		FBO_BlitMS( qtrue );
-		if ( depthFadeTextureShared ) {
-			depthFadeCopied = qtrue;
-			FBO_BindMain();
-			return;
+	if ( depthFadeTextureShared ) {
+		if ( frameBufferMultiSampling ) {
+			FBO_BlitMS( qtrue );
 		}
+		depthFadeCopied = qtrue;
+		FBO_BindMain();
+		return;
 	}
 
 	FBO_Bind( GL_READ_FRAMEBUFFER, frameBuffers[ 0 ].fbo );
@@ -4693,7 +4693,7 @@ void FBO_PostProcess( void )
 	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
 	GL_Cull( CT_TWO_SIDED );
 	if ( r_anaglyphMode->integer )
-		qglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+		GL_ColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
 
 	minimized = ri.CL_IsMinimized();
 #ifdef RENDERER_GLX

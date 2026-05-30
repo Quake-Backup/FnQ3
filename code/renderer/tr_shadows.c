@@ -422,8 +422,8 @@ void RB_EnemyOutlineTessEnd( void ) {
 	qglEnable( GL_STENCIL_TEST );
 	qglStencilMask( 255 );
 
-	qglGetBooleanv( GL_COLOR_WRITEMASK, rgba );
-	qglColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+	GL_GetColorMask( rgba );
+	GL_ColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
 	qglStencilFunc( GL_ALWAYS, 1, 255 );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_REPLACE );
 	GL_Cull( CT_FRONT_SIDED );
@@ -432,7 +432,7 @@ void RB_EnemyOutlineTessEnd( void ) {
 
 	R_EnemyHighlightExpand( originalXYZ, offset );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
-	qglColorMask( rgba[0], rgba[1], rgba[2], rgba[3] );
+	GL_ColorMask( rgba[0], rgba[1], rgba[2], rgba[3] );
 	qglStencilFunc( GL_NOTEQUAL, 1, 255 );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_KEEP );
 	GL_Cull( CT_BACK_SIDED );
@@ -444,7 +444,7 @@ void RB_EnemyOutlineTessEnd( void ) {
 
 	R_EnemyHighlightRestore( originalXYZ );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
-	qglColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+	GL_ColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
 	qglStencilFunc( GL_ALWAYS, 0, 255 );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_ZERO );
 	GL_Cull( CT_FRONT_SIDED );
@@ -452,7 +452,7 @@ void RB_EnemyOutlineTessEnd( void ) {
 	GL_ClientState( 0, CLS_NONE );
 	R_DrawElements( tess.numIndexes, tess.indexes );
 
-	qglColorMask( rgba[0], rgba[1], rgba[2], rgba[3] );
+	GL_ColorMask( rgba[0], rgba[1], rgba[2], rgba[3] );
 	qglDisable( GL_STENCIL_TEST );
 	qglColor4f( 1, 1, 1, 1 );
 	qglEnable( GL_TEXTURE_2D );
@@ -484,8 +484,8 @@ void RB_CelOutlineTessEnd( void ) {
 	qglEnable( GL_STENCIL_TEST );
 	qglStencilMask( 255 );
 
-	qglGetBooleanv( GL_COLOR_WRITEMASK, rgba );
-	qglColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+	GL_GetColorMask( rgba );
+	GL_ColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
 	qglStencilFunc( GL_ALWAYS, 1, 255 );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_REPLACE );
 	GL_Cull( CT_FRONT_SIDED );
@@ -494,7 +494,7 @@ void RB_CelOutlineTessEnd( void ) {
 
 	R_EnemyHighlightExpand( originalXYZ, offset );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
-	qglColorMask( rgba[0], rgba[1], rgba[2], rgba[3] );
+	GL_ColorMask( rgba[0], rgba[1], rgba[2], rgba[3] );
 	qglStencilFunc( GL_NOTEQUAL, 1, 255 );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_KEEP );
 	GL_Cull( CT_BACK_SIDED );
@@ -506,7 +506,7 @@ void RB_CelOutlineTessEnd( void ) {
 
 	R_EnemyHighlightRestore( originalXYZ );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( tess.xyz[0] ), tess.xyz );
-	qglColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+	GL_ColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
 	qglStencilFunc( GL_ALWAYS, 0, 255 );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_ZERO );
 	GL_Cull( CT_FRONT_SIDED );
@@ -514,7 +514,7 @@ void RB_CelOutlineTessEnd( void ) {
 	GL_ClientState( 0, CLS_NONE );
 	R_DrawElements( tess.numIndexes, tess.indexes );
 
-	qglColorMask( rgba[0], rgba[1], rgba[2], rgba[3] );
+	GL_ColorMask( rgba[0], rgba[1], rgba[2], rgba[3] );
 	qglDisable( GL_STENCIL_TEST );
 	qglColor4f( 1, 1, 1, 1 );
 	qglEnable( GL_TEXTURE_2D );
@@ -765,8 +765,8 @@ void RB_ShadowTessEnd( void ) {
 	qglColor4f( 0.2f, 0.2f, 0.2f, 1.0f );
 
 	// don't write to the color buffer
-	qglGetBooleanv( GL_COLOR_WRITEMASK, rgba );
-	qglColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+	GL_GetColorMask( rgba );
+	GL_ColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
 
 	qglEnable( GL_STENCIL_TEST );
 	qglStencilFunc( GL_ALWAYS, 1, 255 );
@@ -793,7 +793,7 @@ void RB_ShadowTessEnd( void ) {
 	}
 
 	// re-enable writing to the color buffer
-	qglColorMask(rgba[0], rgba[1], rgba[2], rgba[3]);
+	GL_ColorMask( rgba[0], rgba[1], rgba[2], rgba[3] );
 
 	qglEnable( GL_TEXTURE_2D );
 

@@ -140,6 +140,44 @@ void GL_BindTexture( int unit, GLuint texnum )
 }
 
 
+void GL_ColorMask( GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha )
+{
+	if ( glState.colorMaskValid &&
+		glState.colorMask[0] == red && glState.colorMask[1] == green &&
+		glState.colorMask[2] == blue && glState.colorMask[3] == alpha ) {
+		return;
+	}
+
+	glState.colorMask[0] = red;
+	glState.colorMask[1] = green;
+	glState.colorMask[2] = blue;
+	glState.colorMask[3] = alpha;
+	glState.colorMaskValid = qtrue;
+	qglColorMask( red, green, blue, alpha );
+}
+
+
+void GL_GetColorMask( GLboolean rgba[4] )
+{
+	if ( !rgba ) {
+		return;
+	}
+
+	if ( !glState.colorMaskValid ) {
+		rgba[0] = GL_TRUE;
+		rgba[1] = GL_TRUE;
+		rgba[2] = GL_TRUE;
+		rgba[3] = GL_TRUE;
+		return;
+	}
+
+	rgba[0] = glState.colorMask[0];
+	rgba[1] = glState.colorMask[1];
+	rgba[2] = glState.colorMask[2];
+	rgba[3] = glState.colorMask[3];
+}
+
+
 /*
 ** GL_Cull
 */
@@ -1702,53 +1740,12 @@ static qboolean RB_DlightShadowEntityCasterAllowed( int entityNum )
 	}
 }
 
-static void RB_DlightShadowCasterEntityOrientation( int entityNum, orientationr_t *or )
-{
-	if ( entityNum != REFENTITYNUM_WORLD ) {
-		backEnd.currentEntity = &backEnd.refdef.entities[entityNum];
-		R_RotateForEntity( backEnd.currentEntity, &backEnd.viewParms, or );
-	} else {
-		backEnd.currentEntity = &tr.worldEntity;
-		*or = backEnd.viewParms.world;
-	}
-}
-
-static qboolean RB_DlightShadowFaceHasCasters( const dlight_t *dl )
-{
-	const litSurf_t *litSurf;
-	shader_t *shader;
-	int entityNum, oldEntityNum;
-	int fogNum;
-	orientationr_t casterOr;
-
-	oldEntityNum = -1;
-	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
-		R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
-		if ( !RB_DlightShadowEntityCasterAllowed( entityNum ) ) {
-			continue;
-		}
-		if ( !RB_DlightShadowCasterAllowed( shader, litSurf->surface ) ) {
-			continue;
-		}
-		if ( entityNum != oldEntityNum ) {
-			RB_DlightShadowCasterEntityOrientation( entityNum, &casterOr );
-			oldEntityNum = entityNum;
-		}
-		if ( !RB_DlightShadowSurfaceCulledForOrientation( litSurf->surface, &casterOr ) ) {
-			return qtrue;
-		}
-	}
-
-	return qfalse;
-}
-
 #define RB_DLIGHT_SHADOW_CACHE_SLOTS ( MAX_DLIGHTS * DLIGHT_SHADOW_FACES )
 
 typedef struct {
 	qboolean valid;
 	unsigned int generation;
 	unsigned int signature;
-	qboolean hasCasters;
 } dlightShadowCacheSlot_t;
 
 static dlightShadowCacheSlot_t rb_dlightShadowCache[RB_DLIGHT_SHADOW_CACHE_SLOTS];
@@ -1840,7 +1837,7 @@ static int RB_DlightShadowCacheSlot( const dlight_t *dl, int face )
 }
 
 static qboolean RB_DlightShadowCacheLookup( const dlight_t *dl, int face, unsigned int signature,
-	unsigned int generation, qboolean *hasCasters )
+	unsigned int generation )
 {
 	int slot;
 	const dlightShadowCacheSlot_t *entry;
@@ -1855,12 +1852,11 @@ static qboolean RB_DlightShadowCacheLookup( const dlight_t *dl, int face, unsign
 		return qfalse;
 	}
 
-	*hasCasters = entry->hasCasters;
 	return qtrue;
 }
 
 static void RB_DlightShadowCacheStore( const dlight_t *dl, int face, unsigned int signature,
-	unsigned int generation, qboolean hasCasters )
+	unsigned int generation )
 {
 	int slot;
 	dlightShadowCacheSlot_t *entry;
@@ -1874,7 +1870,6 @@ static void RB_DlightShadowCacheStore( const dlight_t *dl, int face, unsigned in
 	entry->valid = qtrue;
 	entry->generation = generation;
 	entry->signature = signature;
-	entry->hasCasters = hasCasters;
 }
 
 static void RB_DlightShadowCacheInvalidate( const dlight_t *dl, int face )
@@ -2206,17 +2201,16 @@ static void RB_SetCSMShadowEntity( int entityNum, const viewParms_t *viewParms, 
 	qglLoadMatrixf( backEnd.or.modelMatrix );
 }
 
-static int RB_RenderCSMShadowEntityCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
-	int targetEntityNum, const csmCascadePlan_t *cascade, double originalTime )
+static int RB_RenderCSMShadowCascade( drawSurf_t *drawSurfs, int numDrawSurfs,
+	const csmCascadePlan_t *cascade, double originalTime )
 {
 	orientationr_t casterOr;
+	int currentEntityNum;
 	int surfaces = 0;
 	int i;
 	qboolean surfaceActive = qfalse;
 
-	RB_SetCSMShadowEntity( targetEntityNum, &backEnd.viewParms, originalTime );
-	casterOr = backEnd.or;
-
+	currentEntityNum = -1;
 	for ( i = 0; i < numDrawSurfs; i++ ) {
 		drawSurf_t *drawSurf = &drawSurfs[i];
 		shader_t *shader;
@@ -2225,9 +2219,24 @@ static int RB_RenderCSMShadowEntityCasters( drawSurf_t *drawSurfs, int numDrawSu
 		int dlighted;
 
 		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
-		if ( entityNum != targetEntityNum ||
-			!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ||
-			RB_CSMShadowSurfaceCulledForCascade( drawSurf->surface, &casterOr, cascade ) ) {
+		if ( !RB_CSMShadowEntityAllowed( entityNum ) ||
+			!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ) {
+			continue;
+		}
+
+		if ( entityNum != currentEntityNum ) {
+			if ( surfaceActive ) {
+				RB_EndSurface();
+				tess.csmCasterPass = qfalse;
+				surfaceActive = qfalse;
+			}
+
+			RB_SetCSMShadowEntity( entityNum, &backEnd.viewParms, originalTime );
+			casterOr = backEnd.or;
+			currentEntityNum = entityNum;
+		}
+
+		if ( RB_CSMShadowSurfaceCulledForCascade( drawSurf->surface, &casterOr, cascade ) ) {
 			continue;
 		}
 
@@ -2245,43 +2254,9 @@ static int RB_RenderCSMShadowEntityCasters( drawSurf_t *drawSurfs, int numDrawSu
 	if ( surfaceActive ) {
 		RB_EndSurface();
 		tess.csmCasterPass = qfalse;
-		backEnd.pc.c_csmShadowAtlasSurfaces += surfaces;
 	}
 
-	return surfaces;
-}
-
-static int RB_RenderCSMShadowCascade( drawSurf_t *drawSurfs, int numDrawSurfs,
-	const csmCascadePlan_t *cascade, double originalTime )
-{
-	byte entityQueued[MAX_REFENTITIES];
-	int entityNums[MAX_REFENTITIES];
-	int entityCount = 0;
-	int surfaces = 0;
-	int i;
-
-	surfaces += RB_RenderCSMShadowEntityCasters( drawSurfs, numDrawSurfs,
-		REFENTITYNUM_WORLD, cascade, originalTime );
-
-	Com_Memset( entityQueued, 0, sizeof( entityQueued ) );
-	for ( i = 0; i < numDrawSurfs; i++ ) {
-		int entityNum;
-
-		if ( !RB_CSMShadowDrawSurfAllowed( &drawSurfs[i], &entityNum ) ||
-			entityNum == REFENTITYNUM_WORLD ||
-			entityQueued[entityNum] ) {
-			continue;
-		}
-
-		entityQueued[entityNum] = qtrue;
-		entityNums[entityCount++] = entityNum;
-	}
-
-	for ( i = 0; i < entityCount; i++ ) {
-		surfaces += RB_RenderCSMShadowEntityCasters( drawSurfs, numDrawSurfs,
-			entityNums[i], cascade, originalTime );
-	}
-
+	backEnd.pc.c_csmShadowAtlasSurfaces += surfaces;
 	return surfaces;
 }
 
@@ -2371,98 +2346,9 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 #endif
 }
 
-static int RB_RenderCSMShadowEntityReceivers( drawSurf_t *drawSurfs, int numDrawSurfs,
-	int targetEntityNum, int cascadeIndex, const viewParms_t *viewParms, double originalTime )
-{
-	int surfaces = 0;
-	int i;
-	qboolean surfaceActive = qfalse;
-
-	RB_SetCSMShadowEntity( targetEntityNum, viewParms, originalTime );
-
-	for ( i = 0; i < numDrawSurfs; i++ ) {
-		drawSurf_t *drawSurf = &drawSurfs[i];
-		shader_t *shader;
-		int entityNum;
-		int fogNum;
-		int dlighted;
-
-		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
-		if ( entityNum != targetEntityNum ||
-			!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ) {
-			continue;
-		}
-
-		if ( !surfaceActive ) {
-			RB_BeginSurface( tr.whiteShader, 0 );
-			tess.allowVBO = qfalse;
-			tess.csmShadowPass = qtrue;
-			tess.csmCascade = cascadeIndex;
-			surfaceActive = qtrue;
-		}
-
-		rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
-		surfaces++;
-	}
-
-	if ( surfaceActive ) {
-		RB_EndSurface();
-		backEnd.pc.c_csmShadowReceiverEntitySurfaces += surfaces;
-	}
-
-	return surfaces;
-}
-
-static int RB_RenderCSMShadowWorldReceivers( drawSurf_t *drawSurfs, int numDrawSurfs,
-	int cascadeIndex, const viewParms_t *viewParms, double originalTime )
-{
-	const csmCascadePlan_t *cascade;
-	int surfaces = 0;
-	int i;
-	qboolean surfaceActive = qfalse;
-
-	cascade = &tr.csm.cascades[cascadeIndex];
-	backEnd.currentEntity = &tr.worldEntity;
-	backEnd.refdef.floatTime = originalTime;
-	backEnd.or = viewParms->world;
-	qglLoadMatrixf( backEnd.or.modelMatrix );
-
-	for ( i = 0; i < numDrawSurfs; i++ ) {
-		drawSurf_t *drawSurf = &drawSurfs[i];
-		shader_t *shader;
-		int entityNum;
-		int fogNum;
-		int dlighted;
-
-		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
-		if ( entityNum != REFENTITYNUM_WORLD ||
-			!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ||
-			RB_CSMShadowSurfaceCulledForCascade( drawSurf->surface, &backEnd.or, cascade ) ) {
-			continue;
-		}
-
-		if ( !surfaceActive ) {
-			RB_BeginSurface( tr.whiteShader, 0 );
-			tess.allowVBO = qfalse;
-			tess.csmShadowPass = qtrue;
-			tess.csmCascade = cascadeIndex;
-			surfaceActive = qtrue;
-		}
-
-		rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
-		surfaces++;
-	}
-
-	if ( surfaceActive ) {
-		RB_EndSurface();
-		backEnd.pc.c_csmShadowReceiverWorldSurfaces += surfaces;
-	}
-
-	return surfaces;
-}
-
 static void RB_CSMShadowReceiverPass( drawSurf_t *drawSurfs, int numDrawSurfs )
 {
+	const csmCascadePlan_t *cascade;
 	viewParms_t savedViewParms;
 	orientationr_t savedOr;
 	const trRefEntity_t *savedEntity;
@@ -2481,31 +2367,66 @@ static void RB_CSMShadowReceiverPass( drawSurf_t *drawSurfs, int numDrawSurfs )
 	qglDepthRange( 0, 1 );
 
 	for ( cascadeIndex = 0; cascadeIndex < tr.csm.cascadeCount; cascadeIndex++ ) {
-		byte entityQueued[MAX_REFENTITIES];
-		int entityNums[MAX_REFENTITIES];
-		int entityCount = 0;
+		int currentEntityNum;
+		int entitySurfaces = 0;
+		int worldSurfaces = 0;
 		int i;
+		qboolean surfaceActive = qfalse;
 
-		RB_RenderCSMShadowWorldReceivers( drawSurfs, numDrawSurfs,
-			cascadeIndex, &savedViewParms, originalTime );
-
-		Com_Memset( entityQueued, 0, sizeof( entityQueued ) );
+		cascade = &tr.csm.cascades[cascadeIndex];
+		currentEntityNum = -1;
 		for ( i = 0; i < numDrawSurfs; i++ ) {
+			drawSurf_t *drawSurf = &drawSurfs[i];
+			shader_t *shader;
 			int entityNum;
+			int fogNum;
+			int dlighted;
 
-			if ( !RB_CSMShadowDrawSurfAllowed( &drawSurfs[i], &entityNum ) ||
-				entityNum == REFENTITYNUM_WORLD ||
-				entityQueued[entityNum] ) {
+			R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+			if ( !RB_CSMShadowEntityAllowed( entityNum ) ||
+				!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ) {
 				continue;
 			}
-			entityQueued[entityNum] = qtrue;
-			entityNums[entityCount++] = entityNum;
+
+			if ( entityNum != currentEntityNum ) {
+				if ( surfaceActive ) {
+					RB_EndSurface();
+					tess.csmShadowPass = qfalse;
+					surfaceActive = qfalse;
+				}
+
+				RB_SetCSMShadowEntity( entityNum, &savedViewParms, originalTime );
+				currentEntityNum = entityNum;
+			}
+
+			if ( entityNum == REFENTITYNUM_WORLD &&
+				RB_CSMShadowSurfaceCulledForCascade( drawSurf->surface, &backEnd.or, cascade ) ) {
+				continue;
+			}
+
+			if ( !surfaceActive ) {
+				RB_BeginSurface( tr.whiteShader, 0 );
+				tess.allowVBO = qfalse;
+				tess.csmShadowPass = qtrue;
+				tess.csmCascade = cascadeIndex;
+				surfaceActive = qtrue;
+			}
+
+			rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
+			if ( entityNum == REFENTITYNUM_WORLD ) {
+				worldSurfaces++;
+			} else {
+				entitySurfaces++;
+			}
 		}
 
-		for ( i = 0; i < entityCount; i++ ) {
-			RB_RenderCSMShadowEntityReceivers( drawSurfs, numDrawSurfs,
-				entityNums[i], cascadeIndex, &savedViewParms, originalTime );
+		if ( surfaceActive ) {
+			RB_EndSurface();
+			tess.csmShadowPass = qfalse;
 		}
+
+		backEnd.pc.c_csmShadowReceiverWorldSurfaces += worldSurfaces;
+		backEnd.pc.c_csmShadowReceiverEntitySurfaces += entitySurfaces;
 	}
 
 	backEnd.viewParms = savedViewParms;
@@ -2537,17 +2458,21 @@ static void RB_SetDlightShadowCasterEntity( int entityNum, double originalTime )
 	qglLoadMatrixf( backEnd.or.modelMatrix );
 }
 
-static int RB_CollectDlightShadowCasterEntities( const dlight_t *dl, int *entityNums, int maxEntityNums )
+static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 {
 	const litSurf_t *litSurf;
 	shader_t *shader;
-	byte entityQueued[MAX_REFENTITIES + 1];
+	int currentEntityNum;
 	int entityNum;
 	int fogNum;
-	int entityCount;
+	int surfaces;
+	double originalTime;
+	qboolean surfaceActive;
 
-	Com_Memset( entityQueued, 0, sizeof( entityQueued ) );
-	entityCount = 0;
+	originalTime = backEnd.refdef.floatTime;
+	surfaces = 0;
+	surfaceActive = qfalse;
+	currentEntityNum = -1;
 
 	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
 		R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
@@ -2557,41 +2482,19 @@ static int RB_CollectDlightShadowCasterEntities( const dlight_t *dl, int *entity
 		if ( !RB_DlightShadowCasterAllowed( shader, litSurf->surface ) ) {
 			continue;
 		}
-		if ( entityQueued[entityNum] ) {
-			continue;
+
+		if ( entityNum != currentEntityNum ) {
+			if ( surfaceActive ) {
+				RB_EndSurface();
+				backEnd.pc.c_dlightShadowAtlasBatches++;
+				backEnd.pc.c_dlightShadowAtlasDraws++;
+				surfaceActive = qfalse;
+			}
+
+			RB_SetDlightShadowCasterEntity( entityNum, originalTime );
+			currentEntityNum = entityNum;
 		}
-		if ( entityCount >= maxEntityNums ) {
-			break;
-		}
 
-		entityQueued[entityNum] = qtrue;
-		entityNums[entityCount++] = entityNum;
-	}
-
-	return entityCount;
-}
-
-static int RB_RenderDlightShadowEntityCasters( const dlight_t *dl, int targetEntityNum, double originalTime )
-{
-	const litSurf_t *litSurf;
-	shader_t *shader;
-	int entityNum;
-	int fogNum;
-	int surfaces;
-	qboolean surfaceActive;
-
-	surfaces = 0;
-	surfaceActive = qfalse;
-	RB_SetDlightShadowCasterEntity( targetEntityNum, originalTime );
-
-	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
-		R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
-		if ( entityNum != targetEntityNum ) {
-			continue;
-		}
-		if ( !RB_DlightShadowCasterAllowed( shader, litSurf->surface ) ) {
-			continue;
-		}
 		if ( RB_DlightShadowSurfaceCulled( litSurf->surface ) ) {
 			continue;
 		}
@@ -2610,25 +2513,6 @@ static int RB_RenderDlightShadowEntityCasters( const dlight_t *dl, int targetEnt
 		RB_EndSurface();
 		backEnd.pc.c_dlightShadowAtlasBatches++;
 		backEnd.pc.c_dlightShadowAtlasDraws++;
-	}
-
-	return surfaces;
-}
-
-static int RB_RenderDlightShadowCasters( const dlight_t *dl )
-{
-	int entityNums[MAX_REFENTITIES + 1];
-	int entityCount;
-	int entityIndex;
-	int surfaces;
-	double originalTime;
-
-	originalTime = backEnd.refdef.floatTime;
-	surfaces = 0;
-	entityCount = RB_CollectDlightShadowCasterEntities( dl, entityNums, ARRAY_LEN( entityNums ) );
-
-	for ( entityIndex = 0; entityIndex < entityCount; entityIndex++ ) {
-		surfaces += RB_RenderDlightShadowEntityCasters( dl, entityNums[entityIndex], originalTime );
 	}
 
 	RB_SetDlightShadowCasterEntity( REFENTITYNUM_WORLD, originalTime );
@@ -2691,11 +2575,9 @@ static void RB_RenderDlightShadowAtlas( void )
 		lightRendered = qfalse;
 		for ( face = 0; face < DLIGHT_SHADOW_FACES; face++ ) {
 			viewParms_t shadowParms;
-			qboolean cachedHasCasters;
-			qboolean faceHasCasters;
 			int surfaces;
 
-			if ( cacheable && RB_DlightShadowCacheLookup( dl, face, cacheSignature, atlasGeneration, &cachedHasCasters ) ) {
+			if ( cacheable && RB_DlightShadowCacheLookup( dl, face, cacheSignature, atlasGeneration ) ) {
 				continue;
 			}
 
@@ -2704,20 +2586,11 @@ static void RB_RenderDlightShadowAtlas( void )
 			GL_State( GLS_DEFAULT );
 			qglClear( GL_DEPTH_BUFFER_BIT );
 
-			faceHasCasters = RB_DlightShadowFaceHasCasters( dl );
-			if ( !faceHasCasters ) {
-				if ( cacheable ) {
-					RB_DlightShadowCacheStore( dl, face, cacheSignature, atlasGeneration, qfalse );
-				} else {
-					RB_DlightShadowCacheInvalidate( dl, face );
-				}
-				continue;
-			}
-
+			// The render pass itself establishes whether the face has any visible casters,
+			// which avoids a second full lit-surface walk before drawing the face.
 			surfaces = RB_RenderDlightShadowCasters( dl );
 			if ( cacheable ) {
-				RB_DlightShadowCacheStore( dl, face, cacheSignature, atlasGeneration,
-					surfaces > 0 ? qtrue : qfalse );
+				RB_DlightShadowCacheStore( dl, face, cacheSignature, atlasGeneration );
 			} else {
 				RB_DlightShadowCacheInvalidate( dl, face );
 			}
@@ -3125,7 +2998,7 @@ static const void *RB_ColorMask( const void *data )
 {
 	const colorMaskCommand_t *cmd = data;
 
-	qglColorMask( cmd->rgba[0], cmd->rgba[1], cmd->rgba[2], cmd->rgba[3] );
+	GL_ColorMask( cmd->rgba[0], cmd->rgba[1], cmd->rgba[2], cmd->rgba[3] );
 
 	return (const void *)(cmd + 1);
 }
@@ -3165,7 +3038,7 @@ static const void *RB_ClearColor( const void *data )
 
 	if ( cmd->colorMask )
 	{
-		qglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+		GL_ColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
 	}
 
 	qglClearColor( 0.0f, 0.0f, 0.0f, 1.0f );

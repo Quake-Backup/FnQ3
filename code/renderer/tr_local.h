@@ -1183,6 +1183,8 @@ typedef struct {
 	GLuint		currenttextures[ MAX_TEXTURE_UNITS ];
 	int			currenttmu;
 	qboolean	finishCalled;
+	GLboolean	colorMask[4];
+	qboolean	colorMaskValid;
 	GLint		texEnv[2];
 	cullType_t	faceCulling;
 	unsigned	glStateBits;
@@ -1665,6 +1667,8 @@ void	GL_Bind( image_t *image );
 void	GL_BindTexNum( GLuint texnum );
 void	GL_SelectTexture( int unit );
 void	GL_BindTexture( int unit, GLuint texnum );
+void	GL_ColorMask( GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha );
+void	GL_GetColorMask( GLboolean rgba[4] );
 void	GL_TextureMode( const char *string );
 void	GL_CheckErrors( void );
 void	GL_State( unsigned stateVector );

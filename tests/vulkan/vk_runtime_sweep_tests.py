@@ -335,6 +335,12 @@ class VkRendererSourceTests(unittest.TestCase):
         self.assertIn("#define USE_DEPTH_FADE", gen_frag)
         self.assertIn("layout(set = 2, binding = 0) uniform sampler2D depth_texture", gen_frag)
 
+    def test_vulkan_world_cel_outline_uses_opaque_cutoff(self) -> None:
+        backend = (ROOT / "code" / "renderervk" / "tr_backend.c").read_text(encoding="utf-8")
+
+        self.assertIn("if ( shader->sort > SS_OPAQUE ) {", backend)
+        self.assertNotIn("if ( shader->sort >= SS_BLEND0 ) {", backend)
+
 
 if __name__ == "__main__":
     unittest.main()

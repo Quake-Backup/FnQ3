@@ -743,8 +743,9 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 			oldShaderSort = shader->sort;
 #endif
 #ifdef USE_FBO
-			// Keep sprite/effect sorts above the screen-space world outline.
-			if ( shader->sort >= SS_BLEND0 ) {
+			// Limit the world outline depth snapshot to opaque world geometry so
+			// view-facing see-through/autosprite passes stay above it.
+			if ( shader->sort > SS_OPAQUE ) {
 				RB_DrawWorldCelOutlineForScene( &worldCelOutlineDrawn );
 			}
 #endif

@@ -1584,6 +1584,12 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0", depth_snapshot)
         self.assertIn("( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0", depth_active)
 
+    def test_glx_world_cel_outline_uses_opaque_cutoff(self) -> None:
+        backend = (ROOT / "code" / "renderer" / "tr_backend.c").read_text(encoding="utf-8")
+
+        self.assertIn("if ( shader->sort > SS_OPAQUE ) {", backend)
+        self.assertNotIn("if ( shader->sort >= SS_BLEND0 ) {", backend)
+
     def test_hdr_screenshot_capture_policy_stays_sdr_by_default(self) -> None:
         renderer_init = (ROOT / "code" / "renderer" / "tr_init.c").read_text(encoding="utf-8")
         glx_render_ir = (ROOT / "code" / "rendererglx" / "glx_render_ir.h").read_text(encoding="utf-8")

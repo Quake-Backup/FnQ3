@@ -2735,7 +2735,9 @@ static void RB_LightingPass( void )
 #ifdef USE_VBO
 	VBO_Flush();
 
+#ifndef RENDERER_GLX
 	tess.allowVBO = qfalse; // for now
+#endif
 #endif
 
 	tess.dlightPass = qtrue;

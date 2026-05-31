@@ -800,9 +800,9 @@ void GLX_Stream_RegisterCvars( StreamState *state )
 	RI().Cvar_SetDescription( state->r_glxStreamDrawEnvironment,
 		"Allow GLx streamed draws for stages using legacy CPU-computed environment texture coordinates." );
 
-	state->r_glxStreamDrawDynamicLights = RI().Cvar_Get( "r_glxStreamDrawDynamicLights", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	state->r_glxStreamDrawDynamicLights = RI().Cvar_Get( "r_glxStreamDrawDynamicLights", "1", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawDynamicLights,
-		"Allow GLx streamed draws for dynamic-light map stages. Experimental and off by default." );
+		"Allow GLx streamed draws for dynamic-light map stages when GLx stream drawing is enabled." );
 
 	state->r_glxStreamDrawScreenMaps = RI().Cvar_Get( "r_glxStreamDrawScreenMaps", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawScreenMaps,

@@ -1905,6 +1905,11 @@ int R_LightForPoint( vec3_t point, vec3_t ambientLight, vec3_t directedLight, ve
 void ARB_SetupLightParams( const shaderStage_t *pStage );
 void ARB_LightingPass( void );
 void ARB_CSMShadowPass( void );
+#ifdef RENDERER_GLX
+qboolean GLX_LightingProgramEligible( const shader_t *shader, int fogNum );
+qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage );
+void GLX_LightingProgramUnbind( void );
+#endif
 qboolean R_LightCullBounds( const dlight_t* dl, const vec3_t mins, const vec3_t maxs );
 qboolean R_DlightCullEntityBounds( const dlight_t *dl, const trRefEntity_t *ent, const vec3_t mins, const vec3_t maxs );
 qboolean R_DlightShadowAtlasLayout( int maxLights, int requestedFaceSize, int maxTextureSize, dlightShadowAtlasLayout_t *layout );
@@ -2323,6 +2328,9 @@ void R_BloomScreen( void );
 // VBO functions
 #ifdef USE_VBO
 extern void RB_StageIteratorVBO( void );
+#if defined( USE_PMLIGHT ) && defined( RENDERER_GLX )
+extern qboolean RB_StageIteratorVBODlight( void );
+#endif
 extern void R_BuildWorldVBO( msurface_t *surf, int surfCount );
 
 extern void VBO_PushData( int itemIndex, shaderCommands_t *input );

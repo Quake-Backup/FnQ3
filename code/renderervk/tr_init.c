@@ -2480,7 +2480,7 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_znear, "Viewport distance from view origin (how close objects can be to the player before they're clipped out of the scene)." );
 	r_zproj = ri.Cvar_Get( "r_zproj", "64", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_zproj, "Projected viewport frustum." );
-	r_fovCorrection = ri.Cvar_Get( "r_fovCorrection", "0", CVAR_ARCHIVE_ND );
+	r_fovCorrection = ri.Cvar_Get( "r_fovCorrection", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_fovCorrection, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_fovCorrection, "Auto-correct 4:3-authored scene FOV for the current viewport aspect. Disable this if game code already supplies aspect-correct FOV values." );
 	r_stereoSeparation = ri.Cvar_Get( "r_stereoSeparation", "64", CVAR_ARCHIVE_ND );
@@ -2562,11 +2562,11 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_dlightFalloff, "0", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightFalloff, "Blends PMLIGHT dynamic light attenuation from the original curve at 0 to a smooth edge falloff at 1." );
 	ri.Cvar_SetGroup( r_dlightFalloff, CVG_RENDERER );
-	r_dlightShadows = ri.Cvar_Get( "r_dlightShadows", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_dlightShadows = ri.Cvar_Get( "r_dlightShadows", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_dlightShadows, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_dlightShadows, "Enables dynamic-light shadow planning, atlas rendering, and filtered shadow-map sampling." );
 	ri.Cvar_SetGroup( r_dlightShadows, CVG_RENDERER );
-	r_dlightShadowStrength = ri.Cvar_Get( "r_dlightShadowStrength", "0.6", CVAR_ARCHIVE_ND );
+	r_dlightShadowStrength = ri.Cvar_Get( "r_dlightShadowStrength", "0.95", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightShadowStrength, "0", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightShadowStrength, "Controls how strongly dynamic-light shadow-map occlusion dims the light." );
 	ri.Cvar_SetGroup( r_dlightShadowStrength, CVG_RENDERER );

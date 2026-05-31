@@ -679,20 +679,33 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 
 	shader_t *state;
 
-#ifdef USE_PMLIGHT
-	if ( !tess.dlightPass && shader->isStaticShader && !shader->remappedShader )
-#else
-	if ( shader->isStaticShader )
-#endif
-		tess.allowVBO = qtrue;
-	else
-		tess.allowVBO = qfalse;
-
 	if ( shader->remappedShader ) {
 		state = shader->remappedShader;
 	} else {
 		state = shader;
 	}
+
+#ifdef USE_PMLIGHT
+#ifdef RENDERER_GLX
+	if ( tess.dlightPass && shader->isStaticShader && !shader->remappedShader &&
+		GLX_LightingProgramEligible( state, fogNum ) )
+		tess.allowVBO = qtrue;
+	else if ( !tess.dlightPass && shader->isStaticShader && !shader->remappedShader )
+		tess.allowVBO = qtrue;
+	else
+		tess.allowVBO = qfalse;
+#else
+	if ( !tess.dlightPass && shader->isStaticShader && !shader->remappedShader )
+		tess.allowVBO = qtrue;
+	else
+		tess.allowVBO = qfalse;
+#endif
+#else
+	if ( shader->isStaticShader )
+		tess.allowVBO = qtrue;
+	else
+		tess.allowVBO = qfalse;
+#endif
 
 #ifdef USE_PMLIGHT
 	if ( tess.fogNum != fogNum || tess.cullType != state->cullType ) {
@@ -1505,6 +1518,11 @@ void RB_StageIteratorGeneric( void )
 #ifdef USE_PMLIGHT
 	if ( tess.dlightPass )
 	{
+#if defined( USE_VBO ) && defined( RENDERER_GLX )
+		if ( tess.vboIndex && RB_StageIteratorVBODlight() ) {
+			return;
+		}
+#endif
 		ARB_LightingPass();
 		return;
 	}

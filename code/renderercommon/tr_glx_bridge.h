@@ -224,6 +224,61 @@ static ID_INLINE qboolean GLX_CompatMaterialRendererActive( void )
 #endif
 }
 
+static ID_INLINE qboolean GLX_CompatDlightProgramAvailable( qboolean linear,
+	int fogMode, qboolean absLight, qboolean shadow )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_DlightProgramAvailable( linear, fogMode, absLight, shadow );
+#else
+	(void)linear;
+	(void)fogMode;
+	(void)absLight;
+	(void)shadow;
+	return qfalse;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatBindDlightProgram( qboolean linear,
+	int fogMode, qboolean absLight, qboolean shadow, const float *eyePos, const float *lightPos,
+	const float *lightColor, const float *lightVector, const float *texFactors,
+	const float *dlightFactors, const float *fogDistanceVector,
+	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
+	const float *shadowAtlas, const float *shadowDepth, const float *shadowFilter )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_BindDlightProgram( linear, fogMode, absLight, shadow,
+		eyePos, lightPos, lightColor, lightVector, texFactors, dlightFactors,
+		fogDistanceVector, fogDepthVector, fogEyeT,
+		dlightShadow, shadowAtlas, shadowDepth, shadowFilter );
+#else
+	(void)linear;
+	(void)fogMode;
+	(void)absLight;
+	(void)shadow;
+	(void)eyePos;
+	(void)lightPos;
+	(void)lightColor;
+	(void)lightVector;
+	(void)texFactors;
+	(void)dlightFactors;
+	(void)fogDistanceVector;
+	(void)fogDepthVector;
+	(void)fogEyeT;
+	(void)dlightShadow;
+	(void)shadowAtlas;
+	(void)shadowDepth;
+	(void)shadowFilter;
+	return qfalse;
+#endif
+}
+
+static ID_INLINE void GLX_CompatUnbindDlightProgram( void )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_UnbindDlightProgram();
+#endif
+}
+
 static ID_INLINE qboolean GLX_CompatStreamDrawEnabled( void )
 {
 #ifdef RENDERER_GLX

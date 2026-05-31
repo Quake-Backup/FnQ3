@@ -4190,7 +4190,7 @@ void CL_Init( void ) {
 		"Cinematic aspect correction:\n"
 		" 0 - stretch UI and fullscreen cinematics to the framebuffer\n"
 		" 1 - keep UI and fullscreen cinematics in centered 4:3 space" );
-	cl_hudAspect = Cvar_Get( "cl_hudAspect", "0", CVAR_ARCHIVE );
+	cl_hudAspect = Cvar_Get( "cl_hudAspect", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_hudAspect, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( cl_hudAspect,
 		"HUD aspect correction mode:\n"

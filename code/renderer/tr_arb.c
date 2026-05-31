@@ -777,6 +777,8 @@ void GL_ProgramEnable( void )
 
 #ifdef USE_PMLIGHT
 #ifdef RENDERER_GLX
+static qboolean glxDlightProgramActive = qfalse;
+
 static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *indexes )
 {
 	const shaderCommands_t *input;
@@ -817,7 +819,7 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 
 	materialFlags = GLX_STAGE_DLIGHT_MAP | GLX_STAGE_ST0;
 	categoryMask = GLX_CompatDynamicCategoryMaskForTess( input, materialFlags );
-	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0,
+	if ( !glxDlightProgramActive && !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0,
 		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
 		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
 		0, 0, 0, 0, 0, 0,
@@ -1112,6 +1114,204 @@ static void ARB_DlightShadowFilterOffsets( float *inner, float *outer )
 	}
 }
 
+#ifdef RENDERER_GLX
+static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShadow,
+	vec4_t shadowAtlas, vec4_t shadowDepth, vec4_t shadowFilter )
+{
+	float shadowStrength = 0.0f;
+	float shadowReceiverBiasScale = 0.0f;
+
+	dlightShadow[0] = dlightShadow[1] = dlightShadow[2] = dlightShadow[3] = 0.0f;
+	shadowAtlas[0] = shadowAtlas[1] = shadowAtlas[2] = shadowAtlas[3] = 0.0f;
+	shadowDepth[0] = shadowDepth[1] = shadowDepth[2] = shadowDepth[3] = 0.0f;
+	shadowFilter[0] = shadowFilter[1] = shadowFilter[2] = shadowFilter[3] = 0.0f;
+
+	if ( glConfig.numTextureUnits <= 2 ||
+		!ARB_DlightShadowParams( dl, shadowAtlas, shadowDepth, &shadowStrength ) ) {
+		return qfalse;
+	}
+	if ( shadowAtlas[0] > 0.0f ) {
+		shadowReceiverBiasScale =
+			R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0];
+	}
+
+	dlightShadow[0] = FBO_DlightShadowAtlasWidth() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasWidth() : 0.0f;
+	dlightShadow[1] = FBO_DlightShadowAtlasHeight() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasHeight() : 0.0f;
+	dlightShadow[2] = shadowStrength;
+	dlightShadow[3] = shadowReceiverBiasScale;
+	ARB_DlightShadowFilterOffsets( &shadowFilter[0], &shadowFilter[1] );
+
+	return dlightShadow[0] > 0.0f && dlightShadow[1] > 0.0f && shadowStrength > 0.0f ? qtrue : qfalse;
+}
+
+static qboolean GLX_LightingLinearVector( const dlight_t *dl, vec4_t lightVector )
+{
+	vec3_t ab;
+	float lengthSq;
+
+	lightVector[0] = lightVector[1] = lightVector[2] = lightVector[3] = 0.0f;
+	if ( !dl || !dl->linear ) {
+		return qtrue;
+	}
+
+	VectorSubtract( dl->transformed2, dl->transformed, ab );
+	lengthSq = DotProduct( ab, ab );
+	if ( lengthSq <= 0.0001f ) {
+		return qfalse;
+	}
+
+	lightVector[0] = ab[0];
+	lightVector[1] = ab[1];
+	lightVector[2] = ab[2];
+	lightVector[3] = 1.0f / lengthSq;
+	return qtrue;
+}
+
+qboolean GLX_LightingProgramEligible( const shader_t *shader, int fogNum )
+{
+	qboolean linear;
+	qboolean absLight;
+	qboolean fogPass;
+	qboolean shadow;
+	vec4_t lightVector;
+	vec4_t dlightShadow;
+	vec4_t shadowAtlas;
+	vec4_t shadowDepth;
+	vec4_t shadowFilter;
+
+	if ( !shader || !tess.light || shader->lightingStage < 0 ) {
+		return qfalse;
+	}
+	if ( !GLX_LightingLinearVector( tess.light, lightVector ) ) {
+		return qfalse;
+	}
+	shadow = GLX_LightingShadowParams( tess.light, dlightShadow, shadowAtlas,
+		shadowDepth, shadowFilter );
+
+	linear = tess.light->linear ? qtrue : qfalse;
+	absLight = shader->cullType == CT_TWO_SIDED ? qtrue : qfalse;
+	fogPass = ( fogNum && shader->fogPass ) ? qtrue : qfalse;
+	if ( !fogPass ) {
+		return GLX_CompatDlightProgramAvailable( linear, 0, absLight, shadow );
+	}
+
+	return GLX_CompatDlightProgramAvailable( linear, 1, absLight, shadow ) &&
+		GLX_CompatDlightProgramAvailable( linear, 2, absLight, shadow );
+}
+
+qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage )
+{
+	const fogProgramParms_t *fp = NULL;
+	const dlight_t *dl;
+	qboolean fogPass;
+	qboolean linear;
+	qboolean absLight;
+	qboolean dlightShadowEnabled;
+	int fogMode = 0;
+	vec3_t lightRGB;
+	vec4_t eyePos;
+	vec4_t lightPos;
+	vec4_t lightColor;
+	vec4_t lightVector;
+	vec4_t texFactors;
+	vec4_t dlightFactors;
+	vec4_t dlightShadow;
+	vec4_t shadowAtlas;
+	vec4_t shadowDepth;
+	vec4_t shadowFilter;
+	float radius;
+	float textureScale;
+
+	glxDlightProgramActive = qfalse;
+	tess.dlightUpdateParams = qfalse;
+	tess.cullType = tess.shader->cullType;
+
+	if ( !pStage || !tess.light ) {
+		return qfalse;
+	}
+
+	dl = tess.light;
+	if ( !GLX_LightingLinearVector( dl, lightVector ) ) {
+		return qfalse;
+	}
+	dlightShadowEnabled = GLX_LightingShadowParams( dl, dlightShadow, shadowAtlas,
+		shadowDepth, shadowFilter );
+
+	if ( !glConfig.deviceSupportsGamma && !fboEnabled )
+		VectorScale( dl->color, 2 * powf( r_intensity->value, r_gamma->value ), lightRGB );
+	else
+		VectorCopy( dl->color, lightRGB );
+
+	radius = MAX( dl->radius, 1.0f );
+	linear = dl->linear ? qtrue : qfalse;
+	absLight = tess.shader->cullType == CT_TWO_SIDED ? qtrue : qfalse;
+	fogPass = ( tess.fogNum && tess.shader->fogPass ) ? qtrue : qfalse;
+	if ( fogPass ) {
+		fp = RB_CalcFogProgramParms();
+		fogMode = fp && fp->eyeOutside ? 1 : 2;
+		GL_BindTexture( 1, tr.fogImage->texnum );
+		GL_SelectTexture( 0 );
+	}
+	if ( dlightShadowEnabled ) {
+#ifdef USE_FBO
+		FBO_BindDlightShadowTexture( 2 );
+		GL_SelectTexture( 0 );
+#endif
+	}
+
+	textureScale = ARB_ComputeTextureIntensityScale( pStage->bundle[ tess.shader->lightingBundle ].image[0] );
+	eyePos[0] = backEnd.or.viewOrigin[0];
+	eyePos[1] = backEnd.or.viewOrigin[1];
+	eyePos[2] = backEnd.or.viewOrigin[2];
+	eyePos[3] = 0.0f;
+	lightPos[0] = dl->transformed[0];
+	lightPos[1] = dl->transformed[1];
+	lightPos[2] = dl->transformed[2];
+	lightPos[3] = 0.0f;
+	lightColor[0] = lightRGB[0];
+	lightColor[1] = lightRGB[1];
+	lightColor[2] = lightRGB[2];
+	lightColor[3] = 1.0f / Square( radius );
+	if ( r_dlightSpecColor->value > 0.0f ) {
+		texFactors[0] = textureScale;
+		texFactors[1] = r_dlightSpecPower->value;
+		texFactors[2] = 0.0f;
+		texFactors[3] = r_dlightSpecColor->value;
+	} else {
+		texFactors[0] = textureScale;
+		texFactors[1] = r_dlightSpecPower->value;
+		texFactors[2] = -r_dlightSpecColor->value;
+		texFactors[3] = 0.0f;
+	}
+	dlightFactors[0] = r_dlightFalloff ? r_dlightFalloff->value : 1.0f;
+	dlightFactors[1] = 0.0f;
+	dlightFactors[2] = 0.0f;
+	dlightFactors[3] = 0.0f;
+
+	GL_ProgramDisable();
+	if ( !GLX_CompatBindDlightProgram( linear, fogMode, absLight, dlightShadowEnabled,
+		eyePos, lightPos, lightColor, lightVector, texFactors, dlightFactors,
+		fp ? fp->fogDistanceVector : NULL,
+		fp ? fp->fogDepthVector : NULL,
+		fp ? fp->eyeT : 0.0f,
+		dlightShadowEnabled ? dlightShadow : NULL,
+		dlightShadowEnabled ? shadowAtlas : NULL,
+		dlightShadowEnabled ? shadowDepth : NULL,
+		dlightShadowEnabled ? shadowFilter : NULL ) ) {
+		return qfalse;
+	}
+
+	glxDlightProgramActive = qtrue;
+	return qtrue;
+}
+
+void GLX_LightingProgramUnbind( void )
+{
+	glxDlightProgramActive = qfalse;
+	GLX_CompatUnbindDlightProgram();
+}
+#endif
+
 static void ARB_CSMShadowFilterOffsets( float *inner, float *outer )
 {
 	int filter = r_csmShadowFilter ? r_csmShadowFilter->integer : SHADOW_FILTER_POISSON_4;
@@ -1375,6 +1575,9 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 void ARB_LightingPass( void )
 {
 	const shaderStage_t* pStage;
+#ifdef RENDERER_GLX
+	qboolean glxLightingProgram = qfalse;
+#endif
 
 	if ( tess.shader->lightingStage < 0 )
 		return;
@@ -1383,7 +1586,11 @@ void ARB_LightingPass( void )
 	// Keep parity with VK_LightingPass: fog, light, and texture scale are
 	// resolved per lit batch because fogNum and the selected surface texture
 	// can change without an entity/light transform change.
-	ARB_SetupLightParams( pStage );
+#ifdef RENDERER_GLX
+	glxLightingProgram = GLX_LightingSetupProgram( pStage );
+	if ( !glxLightingProgram )
+#endif
+		ARB_SetupLightParams( pStage );
 
 	RB_DeformTessGeometry();
 
@@ -1423,6 +1630,11 @@ void ARB_LightingPass( void )
 	{
 		qglDisable( GL_POLYGON_OFFSET_FILL );
 	}
+#ifdef RENDERER_GLX
+	if ( glxLightingProgram ) {
+		GLX_LightingProgramUnbind();
+	}
+#endif
 }
 #endif // USE_PMLIGHT
 

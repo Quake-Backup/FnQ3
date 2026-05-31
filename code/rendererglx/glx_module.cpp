@@ -13,9 +13,25 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 
 #ifndef GL_BUFFER
 #define GL_BUFFER 0x82E0
+#endif
+#ifndef GL_VERTEX_SHADER
+#define GL_VERTEX_SHADER 0x8B31
+#endif
+#ifndef GL_FRAGMENT_SHADER
+#define GL_FRAGMENT_SHADER 0x8B30
+#endif
+#ifndef GL_COMPILE_STATUS
+#define GL_COMPILE_STATUS 0x8B81
+#endif
+#ifndef GL_LINK_STATUS
+#define GL_LINK_STATUS 0x8B82
+#endif
+#ifndef GL_INFO_LOG_LENGTH
+#define GL_INFO_LOG_LENGTH 0x8B84
 #endif
 
 namespace glx {
@@ -107,7 +123,7 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxStreamDrawDepthFragment", "0", "1", "1" },
 	{ "r_glxStreamDrawTexMods", "0", "1", "1" },
 	{ "r_glxStreamDrawEnvironment", "0", "1", "1" },
-	{ "r_glxStreamDrawDynamicLights", "0", "0", "0" },
+	{ "r_glxStreamDrawDynamicLights", "0", "1", "1" },
 	{ "r_glxStreamDrawScreenMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawVideoMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawShadows", "0", "1", "1" },
@@ -130,6 +146,626 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxStaticWorldMultiDrawIndirectCompact", "0", "0", "1" },
 	{ "r_glxStaticWorldMultiDrawIndirectSpans", "0", "1", "1" },
 };
+
+typedef void ( APIENTRY *PFNGLXUNIFORM1FPROC )( GLint location, GLfloat v0 );
+typedef void ( APIENTRY *PFNGLXUNIFORM4FVPROC )( GLint location, GLsizei count, const GLfloat *value );
+
+struct DlightFns {
+	PFNGLXCREATESHADERPROC CreateShader;
+	PFNGLXSHADERSOURCEPROC ShaderSource;
+	PFNGLXCOMPILESHADERPROC CompileShader;
+	PFNGLXGETSHADERIVPROC GetShaderiv;
+	PFNGLXGETSHADERINFOLOGPROC GetShaderInfoLog;
+	PFNGLXCREATEPROGRAMPROC CreateProgram;
+	PFNGLXATTACHSHADERPROC AttachShader;
+	PFNGLXLINKPROGRAMPROC LinkProgram;
+	PFNGLXGETPROGRAMIVPROC GetProgramiv;
+	PFNGLXGETPROGRAMINFOLOGPROC GetProgramInfoLog;
+	PFNGLXUSEPROGRAMPROC UseProgram;
+	PFNGLXGETUNIFORMLOCATIONPROC GetUniformLocation;
+	PFNGLXUNIFORM1IPROC Uniform1i;
+	PFNGLXUNIFORM1FPROC Uniform1f;
+	PFNGLXUNIFORM4FVPROC Uniform4fv;
+	PFNGLXDELETEPROGRAMPROC DeleteProgram;
+	PFNGLXDELETESHADERPROC DeleteShader;
+};
+
+struct DlightProgramKey {
+	qboolean linear;
+	int fogMode;
+	qboolean absLight;
+	qboolean shadow;
+};
+
+struct DlightProgram {
+	DlightProgramKey key;
+	GLuint program;
+	GLint texture0Uniform;
+	GLint fogTextureUniform;
+	GLint shadowTextureUniform;
+	GLint eyePosUniform;
+	GLint lightPosUniform;
+	GLint lightColorUniform;
+	GLint lightVectorUniform;
+	GLint texFactorsUniform;
+	GLint dlightFactorsUniform;
+	GLint fogDistanceVectorUniform;
+	GLint fogDepthVectorUniform;
+	GLint fogEyeTUniform;
+	GLint dlightShadowUniform;
+	GLint shadowAtlasUniform;
+	GLint shadowDepthUniform;
+	GLint shadowFilterUniform;
+};
+
+static constexpr int GLX_DLIGHT_PROGRAM_LIMIT = 24;
+
+struct DlightState {
+	cvar_t *enabled;
+	DlightFns fns;
+	DlightProgram programs[GLX_DLIGHT_PROGRAM_LIMIT];
+	int programCount;
+	GLuint currentProgram;
+	qboolean ready;
+	char reason[96];
+};
+
+static int GLX_Dlight_ClampFogMode( int fogMode )
+{
+	if ( fogMode < 0 ) {
+		return 0;
+	}
+	if ( fogMode > 2 ) {
+		return 2;
+	}
+	return fogMode;
+}
+
+static qboolean GLX_Dlight_KeyEquals( const DlightProgramKey &lhs,
+	const DlightProgramKey &rhs )
+{
+	return lhs.linear == rhs.linear &&
+		lhs.fogMode == rhs.fogMode &&
+		lhs.absLight == rhs.absLight &&
+		lhs.shadow == rhs.shadow ? qtrue : qfalse;
+}
+
+static void GLX_Dlight_SetReason( DlightState *state, const char *reason )
+{
+	if ( !state ) {
+		return;
+	}
+	std::snprintf( state->reason, sizeof( state->reason ), "%s",
+		reason ? reason : "" );
+}
+
+static void *GLX_Dlight_GetProc( const char *name )
+{
+	return RI().GL_GetProcAddress ? RI().GL_GetProcAddress( name ) : nullptr;
+}
+
+static void GLX_Dlight_LoadFunctions( DlightState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->fns.CreateShader = reinterpret_cast<PFNGLXCREATESHADERPROC>( GLX_Dlight_GetProc( "glCreateShader" ) );
+	state->fns.ShaderSource = reinterpret_cast<PFNGLXSHADERSOURCEPROC>( GLX_Dlight_GetProc( "glShaderSource" ) );
+	state->fns.CompileShader = reinterpret_cast<PFNGLXCOMPILESHADERPROC>( GLX_Dlight_GetProc( "glCompileShader" ) );
+	state->fns.GetShaderiv = reinterpret_cast<PFNGLXGETSHADERIVPROC>( GLX_Dlight_GetProc( "glGetShaderiv" ) );
+	state->fns.GetShaderInfoLog = reinterpret_cast<PFNGLXGETSHADERINFOLOGPROC>( GLX_Dlight_GetProc( "glGetShaderInfoLog" ) );
+	state->fns.CreateProgram = reinterpret_cast<PFNGLXCREATEPROGRAMPROC>( GLX_Dlight_GetProc( "glCreateProgram" ) );
+	state->fns.AttachShader = reinterpret_cast<PFNGLXATTACHSHADERPROC>( GLX_Dlight_GetProc( "glAttachShader" ) );
+	state->fns.LinkProgram = reinterpret_cast<PFNGLXLINKPROGRAMPROC>( GLX_Dlight_GetProc( "glLinkProgram" ) );
+	state->fns.GetProgramiv = reinterpret_cast<PFNGLXGETPROGRAMIVPROC>( GLX_Dlight_GetProc( "glGetProgramiv" ) );
+	state->fns.GetProgramInfoLog = reinterpret_cast<PFNGLXGETPROGRAMINFOLOGPROC>( GLX_Dlight_GetProc( "glGetProgramInfoLog" ) );
+	state->fns.UseProgram = reinterpret_cast<PFNGLXUSEPROGRAMPROC>( GLX_Dlight_GetProc( "glUseProgram" ) );
+	state->fns.GetUniformLocation = reinterpret_cast<PFNGLXGETUNIFORMLOCATIONPROC>( GLX_Dlight_GetProc( "glGetUniformLocation" ) );
+	state->fns.Uniform1i = reinterpret_cast<PFNGLXUNIFORM1IPROC>( GLX_Dlight_GetProc( "glUniform1i" ) );
+	state->fns.Uniform1f = reinterpret_cast<PFNGLXUNIFORM1FPROC>( GLX_Dlight_GetProc( "glUniform1f" ) );
+	state->fns.Uniform4fv = reinterpret_cast<PFNGLXUNIFORM4FVPROC>( GLX_Dlight_GetProc( "glUniform4fv" ) );
+	state->fns.DeleteProgram = reinterpret_cast<PFNGLXDELETEPROGRAMPROC>( GLX_Dlight_GetProc( "glDeleteProgram" ) );
+	state->fns.DeleteShader = reinterpret_cast<PFNGLXDELETESHADERPROC>( GLX_Dlight_GetProc( "glDeleteShader" ) );
+}
+
+static qboolean GLX_Dlight_FunctionsReady( const DlightState &state )
+{
+	return state.fns.CreateShader &&
+		state.fns.ShaderSource &&
+		state.fns.CompileShader &&
+		state.fns.GetShaderiv &&
+		state.fns.GetShaderInfoLog &&
+		state.fns.CreateProgram &&
+		state.fns.AttachShader &&
+		state.fns.LinkProgram &&
+		state.fns.GetProgramiv &&
+		state.fns.GetProgramInfoLog &&
+		state.fns.UseProgram &&
+		state.fns.GetUniformLocation &&
+		state.fns.Uniform1i &&
+		state.fns.Uniform1f &&
+		state.fns.Uniform4fv &&
+		state.fns.DeleteProgram &&
+		state.fns.DeleteShader ? qtrue : qfalse;
+}
+
+static qboolean GLX_Dlight_SourceFits( int written, size_t capacity )
+{
+	return written > 0 && static_cast<size_t>( written ) < capacity ? qtrue : qfalse;
+}
+
+static qboolean GLX_Dlight_VertexSource( const DlightProgramKey &key,
+	char *out, size_t outSize )
+{
+	const int written = std::snprintf( out, outSize,
+		"#version 120\n"
+		"#define GLX_DLIGHT_FOG %i\n"
+		"#define GLX_DLIGHT_FOG_OUTSIDE %i\n"
+		"uniform vec4 u_EyePos;\n"
+		"uniform vec4 u_LightPos;\n"
+		"uniform vec4 u_FogDistanceVector;\n"
+		"uniform vec4 u_FogDepthVector;\n"
+		"uniform float u_FogEyeT;\n"
+		"varying vec2 v_TexCoord;\n"
+		"varying vec3 v_LightVector;\n"
+		"varying vec3 v_ViewVector;\n"
+		"varying vec3 v_Normal;\n"
+		"#if GLX_DLIGHT_FOG\n"
+		"varying vec2 v_FogTexCoord;\n"
+		"#endif\n"
+		"void main(void) {\n"
+		"    vec4 pos = gl_Vertex;\n"
+		"    gl_Position = ftransform();\n"
+		"    v_TexCoord = gl_MultiTexCoord0.xy;\n"
+		"    v_LightVector = u_LightPos.xyz - pos.xyz;\n"
+		"    v_ViewVector = u_EyePos.xyz - pos.xyz;\n"
+		"    v_Normal = gl_Normal.xyz;\n"
+		"#if GLX_DLIGHT_FOG\n"
+		"    float s = dot(pos.xyz, u_FogDistanceVector.xyz) + u_FogDistanceVector.w;\n"
+		"    float t = dot(pos.xyz, u_FogDepthVector.xyz) + u_FogDepthVector.w;\n"
+		"#if GLX_DLIGHT_FOG_OUTSIDE\n"
+		"    if (t < 1.0) {\n"
+		"        t = 0.03125;\n"
+		"    } else {\n"
+		"        t = 0.03125 + 0.9375 * t / (t - u_FogEyeT);\n"
+		"    }\n"
+		"#else\n"
+		"    t = t < 0.0 ? 0.03125 : 0.96875;\n"
+		"#endif\n"
+		"    v_FogTexCoord = vec2(s, t);\n"
+		"#endif\n"
+		"}\n",
+		key.fogMode != 0 ? 1 : 0,
+		key.fogMode == 1 ? 1 : 0 );
+	return GLX_Dlight_SourceFits( written, outSize );
+}
+
+static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
+	char *out, size_t outSize )
+{
+	const int written = std::snprintf( out, outSize,
+		"#version 120\n"
+		"#define GLX_DLIGHT_LINEAR %i\n"
+		"#define GLX_DLIGHT_FOG %i\n"
+		"#define GLX_DLIGHT_ABS_LIGHT %i\n"
+		"#define GLX_DLIGHT_SHADOW %i\n"
+		"uniform sampler2D u_Texture0;\n"
+		"uniform sampler2D u_FogTexture;\n"
+		"uniform sampler2D u_ShadowTexture;\n"
+		"uniform vec4 u_LightColor;\n"
+		"uniform vec4 u_LightVector;\n"
+		"uniform vec4 u_TexFactors;\n"
+		"uniform vec4 u_DlightFactors;\n"
+		"uniform vec4 u_DlightShadow;\n"
+		"uniform vec4 u_ShadowAtlas;\n"
+		"uniform vec4 u_ShadowDepth;\n"
+		"uniform vec4 u_ShadowFilter;\n"
+		"varying vec2 v_TexCoord;\n"
+		"varying vec3 v_LightVector;\n"
+		"varying vec3 v_ViewVector;\n"
+		"varying vec3 v_Normal;\n"
+		"#if GLX_DLIGHT_FOG\n"
+		"varying vec2 v_FogTexCoord;\n"
+		"#endif\n"
+		"vec3 safeNormalize(vec3 value) {\n"
+		"    return value * inversesqrt(max(dot(value, value), 0.00000001));\n"
+		"}\n"
+		"#if GLX_DLIGHT_SHADOW\n"
+		"float dlightShadowFactor(vec3 dnLV, vec3 nn, vec3 lv) {\n"
+		"    if (u_DlightShadow.z <= 0.0 || u_ShadowAtlas.x <= 0.0 || u_ShadowAtlas.z <= 0.0) {\n"
+		"        return 1.0;\n"
+		"    }\n"
+		"    vec3 shadowVec = -dnLV;\n"
+		"    vec3 absVec = abs(shadowVec);\n"
+		"    float major = max(max(absVec.x, absVec.y), max(absVec.z, 0.0001));\n"
+		"    float bias = (1.0 - abs(dot(nn, lv)) * 0.5) * 0.5 * u_DlightShadow.w * major;\n"
+		"    float receiver = max(major - bias, u_ShadowDepth.z);\n"
+		"    float receiverDepth = u_ShadowDepth.x - u_ShadowDepth.y / receiver;\n"
+		"    float face;\n"
+		"    vec2 uv;\n"
+		"    if (absVec.x >= absVec.y && absVec.x >= absVec.z) {\n"
+		"        face = shadowVec.x >= 0.0 ? 0.0 : 1.0;\n"
+		"        uv.x = ((shadowVec.x >= 0.0 ? -shadowVec.y : shadowVec.y) / major + 1.0) * 0.5;\n"
+		"        uv.y = (shadowVec.z / major + 1.0) * 0.5;\n"
+		"    } else if (absVec.y >= absVec.z) {\n"
+		"        face = shadowVec.y >= 0.0 ? 2.0 : 3.0;\n"
+		"        uv.x = ((shadowVec.y >= 0.0 ? shadowVec.x : -shadowVec.x) / major + 1.0) * 0.5;\n"
+		"        uv.y = (shadowVec.z / major + 1.0) * 0.5;\n"
+		"    } else {\n"
+		"        face = shadowVec.z >= 0.0 ? 4.0 : 5.0;\n"
+		"        uv.x = (-shadowVec.y / major + 1.0) * 0.5;\n"
+		"        uv.y = ((shadowVec.z >= 0.0 ? -shadowVec.x : shadowVec.x) / major + 1.0) * 0.5;\n"
+		"    }\n"
+		"    float inset = 1.0 / u_ShadowAtlas.x;\n"
+		"    uv = clamp(uv, vec2(inset), vec2(1.0 - inset));\n"
+		"    float faceIndex = face + u_ShadowAtlas.y;\n"
+		"    float row = floor(faceIndex / u_ShadowAtlas.z);\n"
+		"    float column = faceIndex - row * u_ShadowAtlas.z;\n"
+		"    vec2 atlasPx;\n"
+		"    atlasPx.x = column * u_ShadowAtlas.x + uv.x * u_ShadowAtlas.x;\n"
+		"    atlasPx.y = u_ShadowAtlas.w - (row + 1.0) * u_ShadowAtlas.x + uv.y * u_ShadowAtlas.x;\n"
+		"    vec2 tc = atlasPx * u_DlightShadow.xy;\n"
+		"    vec2 inner = u_DlightShadow.xy * u_ShadowFilter.x;\n"
+		"    vec2 outer = u_DlightShadow.xy * u_ShadowFilter.y;\n"
+		"    float occ = 0.0;\n"
+		"    occ += texture2D(u_ShadowTexture, tc + vec2(-outer.x, -inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"    occ += texture2D(u_ShadowTexture, tc + vec2( inner.x, -outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"    occ += texture2D(u_ShadowTexture, tc + vec2(-inner.x,  outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"    occ += texture2D(u_ShadowTexture, tc + vec2( outer.x,  inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"    return 1.0 - occ * 0.25 * u_DlightShadow.z;\n"
+		"}\n"
+		"#endif\n"
+		"void main(void) {\n"
+		"    vec4 base = texture2D(u_Texture0, v_TexCoord);\n"
+		"    base.rgb *= u_TexFactors.x;\n"
+		"    vec3 dnLV = v_LightVector;\n"
+		"#if GLX_DLIGHT_LINEAR\n"
+		"    float along = clamp(dot(-v_LightVector, u_LightVector.xyz) * u_LightVector.w, 0.0, 1.0);\n"
+		"    dnLV = u_LightVector.xyz * along + v_LightVector;\n"
+		"#endif\n"
+		"    vec3 nn = safeNormalize(v_Normal);\n"
+		"    float dist2 = dot(dnLV, dnLV);\n"
+		"    float intensity = 1.0 - dist2 * u_LightColor.a;\n"
+		"    if (intensity <= 0.0) {\n"
+		"        discard;\n"
+		"    }\n"
+		"    float smoothIntensity = (3.0 - 2.0 * intensity) * intensity * intensity;\n"
+		"    intensity = mix(intensity, smoothIntensity, u_DlightFactors.x);\n"
+		"    vec3 lv = safeNormalize(dnLV);\n"
+		"    float shadowFactor = 1.0;\n"
+		"#if GLX_DLIGHT_SHADOW\n"
+		"    shadowFactor = dlightShadowFactor(dnLV, nn, lv);\n"
+		"#endif\n"
+		"    vec3 ev = safeNormalize(v_ViewVector);\n"
+		"    vec3 halfVector = safeNormalize(lv + ev);\n"
+		"#if GLX_DLIGHT_ABS_LIGHT\n"
+		"    float specDot = abs(dot(nn, halfVector));\n"
+		"#else\n"
+		"    float specDot = max(dot(nn, halfVector), 0.0);\n"
+		"#endif\n"
+		"    float specTerm = pow(specDot, max(u_TexFactors.y, 1.0));\n"
+		"    vec4 spec = (base * u_TexFactors.z + vec4(u_TexFactors.w)) * specTerm;\n"
+		"    float diffuse;\n"
+		"#if GLX_DLIGHT_ABS_LIGHT\n"
+		"    diffuse = dot(nn, lv);\n"
+		"    if (diffuse * dot(nn, ev) < 0.0) {\n"
+		"        discard;\n"
+		"    }\n"
+		"    diffuse = abs(diffuse);\n"
+		"#else\n"
+		"    diffuse = max(dot(nn, lv), 0.0);\n"
+		"#endif\n"
+		"    vec4 lit = base * diffuse + spec;\n"
+		"#if GLX_DLIGHT_FOG\n"
+		"    vec4 fog = texture2D(u_FogTexture, v_FogTexCoord);\n"
+		"    lit *= 1.0 - fog.a;\n"
+		"#endif\n"
+		"    gl_FragColor = lit * vec4(u_LightColor.rgb * intensity * shadowFactor, intensity * shadowFactor);\n"
+		"}\n",
+		key.linear ? 1 : 0,
+		key.fogMode != 0 ? 1 : 0,
+		key.absLight ? 1 : 0,
+		key.shadow ? 1 : 0 );
+	return GLX_Dlight_SourceFits( written, outSize );
+}
+
+static void GLX_Dlight_PrintObjectLog( const DlightState &state, GLuint object,
+	qboolean program, printParm_t printLevel )
+{
+	GLint length = 0;
+	GLsizei written = 0;
+	char log[2048];
+
+	if ( program ) {
+		state.fns.GetProgramiv( object, GL_INFO_LOG_LENGTH, &length );
+	} else {
+		state.fns.GetShaderiv( object, GL_INFO_LOG_LENGTH, &length );
+	}
+	if ( length <= 1 ) {
+		return;
+	}
+
+	if ( program ) {
+		state.fns.GetProgramInfoLog( object, sizeof( log ), &written, log );
+	} else {
+		state.fns.GetShaderInfoLog( object, sizeof( log ), &written, log );
+	}
+	if ( written > 0 ) {
+		log[sizeof( log ) - 1] = '\0';
+		RI().Printf( printLevel, "GLx dlight program log: %s\n", log );
+	}
+}
+
+static GLuint GLX_Dlight_CompileShader( DlightState *state, GLenum shaderType,
+	const char *source )
+{
+	GLuint shader;
+	GLint ok = 0;
+
+	shader = state->fns.CreateShader( shaderType );
+	if ( !shader ) {
+		GLX_Dlight_SetReason( state, "glCreateShader failed" );
+		return 0;
+	}
+
+	state->fns.ShaderSource( shader, 1, &source, nullptr );
+	state->fns.CompileShader( shader );
+	state->fns.GetShaderiv( shader, GL_COMPILE_STATUS, &ok );
+	if ( !ok ) {
+		GLX_Dlight_SetReason( state,
+			shaderType == GL_VERTEX_SHADER ? "dlight vertex compile failed" : "dlight fragment compile failed" );
+		GLX_Dlight_PrintObjectLog( *state, shader, qfalse, PRINT_WARNING );
+		state->fns.DeleteShader( shader );
+		return 0;
+	}
+
+	return shader;
+}
+
+static DlightProgram *GLX_Dlight_CreateProgram( DlightState *state,
+	const DlightProgramKey &key )
+{
+	DlightProgram *program;
+	char vertexSource[4096];
+	char fragmentSource[16384];
+	GLuint vertexShader;
+	GLuint fragmentShader;
+	GLint ok = 0;
+
+	if ( state->programCount >= GLX_DLIGHT_PROGRAM_LIMIT ) {
+		GLX_Dlight_SetReason( state, "dlight program cache full" );
+		return nullptr;
+	}
+	if ( !GLX_Dlight_VertexSource( key, vertexSource, sizeof( vertexSource ) ) ||
+		!GLX_Dlight_FragmentSource( key, fragmentSource, sizeof( fragmentSource ) ) ) {
+		GLX_Dlight_SetReason( state, "dlight shader source overflow" );
+		return nullptr;
+	}
+
+	vertexShader = GLX_Dlight_CompileShader( state, GL_VERTEX_SHADER, vertexSource );
+	if ( !vertexShader ) {
+		return nullptr;
+	}
+	fragmentShader = GLX_Dlight_CompileShader( state, GL_FRAGMENT_SHADER, fragmentSource );
+	if ( !fragmentShader ) {
+		state->fns.DeleteShader( vertexShader );
+		return nullptr;
+	}
+
+	program = &state->programs[state->programCount];
+	std::memset( program, 0, sizeof( *program ) );
+	program->key = key;
+	program->program = state->fns.CreateProgram();
+	if ( !program->program ) {
+		GLX_Dlight_SetReason( state, "glCreateProgram failed" );
+		state->fns.DeleteShader( vertexShader );
+		state->fns.DeleteShader( fragmentShader );
+		return nullptr;
+	}
+
+	state->fns.AttachShader( program->program, vertexShader );
+	state->fns.AttachShader( program->program, fragmentShader );
+	state->fns.LinkProgram( program->program );
+	state->fns.GetProgramiv( program->program, GL_LINK_STATUS, &ok );
+	state->fns.DeleteShader( vertexShader );
+	state->fns.DeleteShader( fragmentShader );
+	if ( !ok ) {
+		GLX_Dlight_SetReason( state, "dlight program link failed" );
+		GLX_Dlight_PrintObjectLog( *state, program->program, qtrue, PRINT_WARNING );
+		state->fns.DeleteProgram( program->program );
+		program->program = 0;
+		return nullptr;
+	}
+
+	program->texture0Uniform = state->fns.GetUniformLocation( program->program, "u_Texture0" );
+	program->fogTextureUniform = state->fns.GetUniformLocation( program->program, "u_FogTexture" );
+	program->shadowTextureUniform = state->fns.GetUniformLocation( program->program, "u_ShadowTexture" );
+	program->eyePosUniform = state->fns.GetUniformLocation( program->program, "u_EyePos" );
+	program->lightPosUniform = state->fns.GetUniformLocation( program->program, "u_LightPos" );
+	program->lightColorUniform = state->fns.GetUniformLocation( program->program, "u_LightColor" );
+	program->lightVectorUniform = state->fns.GetUniformLocation( program->program, "u_LightVector" );
+	program->texFactorsUniform = state->fns.GetUniformLocation( program->program, "u_TexFactors" );
+	program->dlightFactorsUniform = state->fns.GetUniformLocation( program->program, "u_DlightFactors" );
+	program->fogDistanceVectorUniform = state->fns.GetUniformLocation( program->program, "u_FogDistanceVector" );
+	program->fogDepthVectorUniform = state->fns.GetUniformLocation( program->program, "u_FogDepthVector" );
+	program->fogEyeTUniform = state->fns.GetUniformLocation( program->program, "u_FogEyeT" );
+	program->dlightShadowUniform = state->fns.GetUniformLocation( program->program, "u_DlightShadow" );
+	program->shadowAtlasUniform = state->fns.GetUniformLocation( program->program, "u_ShadowAtlas" );
+	program->shadowDepthUniform = state->fns.GetUniformLocation( program->program, "u_ShadowDepth" );
+	program->shadowFilterUniform = state->fns.GetUniformLocation( program->program, "u_ShadowFilter" );
+
+	state->programCount++;
+	GLX_Dlight_SetReason( state, "" );
+	return program;
+}
+
+static DlightProgram *GLX_Dlight_FindProgram( DlightState *state,
+	const DlightProgramKey &key )
+{
+	for ( int i = 0; i < state->programCount; i++ ) {
+		if ( GLX_Dlight_KeyEquals( state->programs[i].key, key ) ) {
+			return &state->programs[i];
+		}
+	}
+	return nullptr;
+}
+
+static qboolean GLX_Dlight_Active( const DlightState &state )
+{
+	if ( !state.enabled || !state.enabled->integer ) {
+		return qfalse;
+	}
+	return state.ready;
+}
+
+static DlightProgram *GLX_Dlight_FindOrCreateProgram( DlightState *state,
+	qboolean linear, int fogMode, qboolean absLight, qboolean shadow )
+{
+	DlightProgramKey key;
+	DlightProgram *program;
+
+	if ( !state || !GLX_Dlight_Active( *state ) ) {
+		return nullptr;
+	}
+
+	key.linear = linear;
+	key.fogMode = GLX_Dlight_ClampFogMode( fogMode );
+	key.absLight = absLight;
+	key.shadow = shadow;
+
+	program = GLX_Dlight_FindProgram( state, key );
+	if ( program ) {
+		return program;
+	}
+	return GLX_Dlight_CreateProgram( state, key );
+}
+
+static void GLX_Dlight_SetUniform4fv( DlightState *state, GLint location,
+	const float *value )
+{
+	if ( location >= 0 && value ) {
+		state->fns.Uniform4fv( location, 1, value );
+	}
+}
+
+static void GLX_Dlight_RegisterCvars( DlightState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->enabled = RI().Cvar_Get( "r_glxDlightProgram", "1", CVAR_ARCHIVE_ND );
+	RI().Cvar_SetDescription( state->enabled,
+		"Use a GLx-native GLSL dynamic-light program for r_dlightMode 1/2, falling back to the ARB path when unsupported." );
+}
+
+static void GLX_Dlight_Shutdown( DlightState *state, qboolean deletePrograms )
+{
+	if ( !state ) {
+		return;
+	}
+
+	if ( state->currentProgram && state->fns.UseProgram ) {
+		state->fns.UseProgram( 0 );
+	}
+	if ( deletePrograms && state->fns.DeleteProgram ) {
+		for ( int i = 0; i < state->programCount; i++ ) {
+			if ( state->programs[i].program ) {
+				state->fns.DeleteProgram( state->programs[i].program );
+			}
+		}
+	}
+
+	std::memset( state->programs, 0, sizeof( state->programs ) );
+	state->programCount = 0;
+	state->currentProgram = 0;
+	state->ready = qfalse;
+	GLX_Dlight_SetReason( state, "not initialized" );
+}
+
+static void GLX_Dlight_OnOpenGLReady( DlightState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	GLX_Dlight_Shutdown( state, qtrue );
+	GLX_Dlight_LoadFunctions( state );
+	state->ready = GLX_Dlight_FunctionsReady( *state );
+	GLX_Dlight_SetReason( state, state->ready ? "" : "missing GLSL program functions" );
+}
+
+static qboolean GLX_Dlight_ProgramAvailable( DlightState *state, qboolean linear,
+	int fogMode, qboolean absLight, qboolean shadow )
+{
+	return GLX_Dlight_FindOrCreateProgram( state, linear, fogMode, absLight, shadow ) ? qtrue : qfalse;
+}
+
+static qboolean GLX_Dlight_BindProgram( DlightState *state, qboolean linear,
+	int fogMode, qboolean absLight, qboolean shadow, const float *eyePos, const float *lightPos,
+	const float *lightColor, const float *lightVector, const float *texFactors,
+	const float *dlightFactors, const float *fogDistanceVector,
+	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
+	const float *shadowAtlas, const float *shadowDepth, const float *shadowFilter )
+{
+	DlightProgram *program;
+
+	fogMode = GLX_Dlight_ClampFogMode( fogMode );
+	if ( fogMode && ( !fogDistanceVector || !fogDepthVector ) ) {
+		return qfalse;
+	}
+	if ( !eyePos || !lightPos || !lightColor || !lightVector || !texFactors ||
+		!dlightFactors ) {
+		return qfalse;
+	}
+	if ( shadow && ( !dlightShadow || !shadowAtlas || !shadowDepth || !shadowFilter ) ) {
+		return qfalse;
+	}
+
+	program = GLX_Dlight_FindOrCreateProgram( state, linear, fogMode, absLight, shadow );
+	if ( !program ) {
+		return qfalse;
+	}
+
+	state->fns.UseProgram( program->program );
+	state->currentProgram = program->program;
+	if ( program->texture0Uniform >= 0 ) {
+		state->fns.Uniform1i( program->texture0Uniform, 0 );
+	}
+	if ( program->fogTextureUniform >= 0 ) {
+		state->fns.Uniform1i( program->fogTextureUniform, 1 );
+	}
+	if ( program->shadowTextureUniform >= 0 ) {
+		state->fns.Uniform1i( program->shadowTextureUniform, 2 );
+	}
+	GLX_Dlight_SetUniform4fv( state, program->eyePosUniform, eyePos );
+	GLX_Dlight_SetUniform4fv( state, program->lightPosUniform, lightPos );
+	GLX_Dlight_SetUniform4fv( state, program->lightColorUniform, lightColor );
+	GLX_Dlight_SetUniform4fv( state, program->lightVectorUniform, lightVector );
+	GLX_Dlight_SetUniform4fv( state, program->texFactorsUniform, texFactors );
+	GLX_Dlight_SetUniform4fv( state, program->dlightFactorsUniform, dlightFactors );
+	GLX_Dlight_SetUniform4fv( state, program->fogDistanceVectorUniform, fogDistanceVector );
+	GLX_Dlight_SetUniform4fv( state, program->fogDepthVectorUniform, fogDepthVector );
+	GLX_Dlight_SetUniform4fv( state, program->dlightShadowUniform, dlightShadow );
+	GLX_Dlight_SetUniform4fv( state, program->shadowAtlasUniform, shadowAtlas );
+	GLX_Dlight_SetUniform4fv( state, program->shadowDepthUniform, shadowDepth );
+	GLX_Dlight_SetUniform4fv( state, program->shadowFilterUniform, shadowFilter );
+	if ( program->fogEyeTUniform >= 0 ) {
+		state->fns.Uniform1f( program->fogEyeTUniform, fogEyeT );
+	}
+	return qtrue;
+}
+
+static void GLX_Dlight_Unbind( DlightState *state )
+{
+	if ( !state || !state->currentProgram || !state->fns.UseProgram ) {
+		return;
+	}
+
+	state->fns.UseProgram( 0 );
+	state->currentProgram = 0;
+}
 
 static const char *GLX_Module_ProfileName( GlxProfile profile )
 {
@@ -484,6 +1120,16 @@ public:
 		int materialCombine, qboolean fogPass );
 	qboolean BindFogMaterial();
 	void UnbindMaterial();
+	qboolean DlightProgramAvailable( qboolean linear, int fogMode, qboolean absLight,
+		qboolean shadow );
+	qboolean BindDlightProgram( qboolean linear, int fogMode, qboolean absLight,
+		qboolean shadow,
+		const float *eyePos, const float *lightPos, const float *lightColor,
+		const float *lightVector, const float *texFactors, const float *dlightFactors,
+		const float *fogDistanceVector, const float *fogDepthVector, float fogEyeT,
+		const float *dlightShadow, const float *shadowAtlas,
+		const float *shadowDepth, const float *shadowFilter );
+	void UnbindDlightProgram();
 	qboolean StreamDrawEnabled() const;
 	qboolean StreamDrawMultitextureEnabled() const;
 	qboolean StreamDrawFogEnabled() const;
@@ -577,6 +1223,7 @@ private:
 	DebugState debug_ {};
 	ExecutorState executor_ {};
 	MaterialState material_ {};
+	DlightState dlight_ {};
 	PostProcessState postprocess_ {};
 	PostShaderState postShader_ {};
 	unsigned int postShaderBindBaseline_ {};
@@ -609,6 +1256,7 @@ void RendererModule::RegisterCommands()
 
 	GLX_Debug_RegisterCvars( &debug_ );
 	GLX_Material_RegisterCvars( &material_ );
+	GLX_Dlight_RegisterCvars( &dlight_ );
 	GLX_PostProcess_RegisterCvars( &postprocess_ );
 	GLX_PostShader_RegisterCvars( &postShader_ );
 	GLX_Profiler_RegisterCvars( &profiler_ );
@@ -642,6 +1290,7 @@ void RendererModule::OnOpenGLReady( const glconfig_t *config, const char *extens
 	}
 	GLX_Debug_OnOpenGLReady( &debug_, caps_ );
 	GLX_Material_OnOpenGLReady( &material_, caps_ );
+	GLX_Dlight_OnOpenGLReady( &dlight_ );
 	GLX_PostProcess_OnOpenGLReady( &postprocess_, caps_ );
 	GLX_PostShader_OnOpenGLReady( &postShader_, caps_ );
 	GLX_Stream_OnOpenGLReady( &stream_, caps_ );
@@ -649,11 +1298,12 @@ void RendererModule::OnOpenGLReady( const glconfig_t *config, const char *extens
 	GLX_Debug_LabelObject( debug_, GL_BUFFER, stream_.buffer, "GLx dynamic stream ring" );
 	GLX_Profiler_OnOpenGLReady( &profiler_, caps_ );
 
-	RI().Printf( PRINT_ALL, "GLx renderer bootstrap: product tier %s, hint %s, executor %s/%s, GL %i.%i, material %s, post-shader %s, stream %s, timer query %s, debug output %s\n",
+	RI().Printf( PRINT_ALL, "GLx renderer bootstrap: product tier %s, hint %s, executor %s/%s, GL %i.%i, material %s, dlight %s, post-shader %s, stream %s, timer query %s, debug output %s\n",
 		GLX_Caps_TierName( caps_.tier ), GLX_Caps_HintName( caps_.hint ),
 		GLX_Executor_TierName( executor_ ), GLX_Executor_ModeName( executor_ ),
 		caps_.major, caps_.minor,
 		BoolName( GLX_Material_Active( material_ ) ),
+		BoolName( GLX_Dlight_Active( dlight_ ) ),
 		BoolName( GLX_PostShader_Ready( postShader_ ) ),
 		GLX_Stream_StrategyName( stream_.strategy ),
 		BoolName( GLX_Profiler_TimerReady( profiler_ ) ),
@@ -669,6 +1319,7 @@ void RendererModule::Shutdown( int code )
 {
 	(void)code;
 
+	GLX_Dlight_Shutdown( &dlight_, qtrue );
 	GLX_Material_Shutdown( &material_, qtrue );
 	GLX_PostShader_Shutdown( &postShader_, qtrue );
 	if ( code == REF_KEEP_CONTEXT ) {
@@ -1824,6 +2475,31 @@ void RendererModule::UnbindMaterial()
 	GLX_Material_Unbind( &material_ );
 }
 
+qboolean RendererModule::DlightProgramAvailable( qboolean linear, int fogMode,
+	qboolean absLight, qboolean shadow )
+{
+	return GLX_Dlight_ProgramAvailable( &dlight_, linear, fogMode, absLight, shadow );
+}
+
+qboolean RendererModule::BindDlightProgram( qboolean linear, int fogMode,
+	qboolean absLight, qboolean shadow, const float *eyePos, const float *lightPos,
+	const float *lightColor, const float *lightVector, const float *texFactors,
+	const float *dlightFactors, const float *fogDistanceVector,
+	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
+	const float *shadowAtlas, const float *shadowDepth, const float *shadowFilter )
+{
+	GLX_Material_Unbind( &material_ );
+	return GLX_Dlight_BindProgram( &dlight_, linear, fogMode, absLight, shadow,
+		eyePos, lightPos, lightColor, lightVector, texFactors, dlightFactors,
+		fogDistanceVector, fogDepthVector, fogEyeT,
+		dlightShadow, shadowAtlas, shadowDepth, shadowFilter );
+}
+
+void RendererModule::UnbindDlightProgram()
+{
+	GLX_Dlight_Unbind( &dlight_ );
+}
+
 qboolean RendererModule::StreamDrawEnabled() const
 {
 	return GLX_Stream_DrawEnabled( stream_ );
@@ -2475,6 +3151,30 @@ extern "C" qboolean GLX_Renderer_BindFogMaterial( void )
 extern "C" void GLX_Renderer_UnbindMaterial( void )
 {
 	glx::g_module.UnbindMaterial();
+}
+
+extern "C" qboolean GLX_Renderer_DlightProgramAvailable( qboolean linear,
+	int fogMode, qboolean absLight, qboolean shadow )
+{
+	return glx::g_module.DlightProgramAvailable( linear, fogMode, absLight, shadow );
+}
+
+extern "C" qboolean GLX_Renderer_BindDlightProgram( qboolean linear,
+	int fogMode, qboolean absLight, qboolean shadow, const float *eyePos, const float *lightPos,
+	const float *lightColor, const float *lightVector, const float *texFactors,
+	const float *dlightFactors, const float *fogDistanceVector,
+	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
+	const float *shadowAtlas, const float *shadowDepth, const float *shadowFilter )
+{
+	return glx::g_module.BindDlightProgram( linear, fogMode, absLight, shadow,
+		eyePos, lightPos, lightColor, lightVector, texFactors, dlightFactors,
+		fogDistanceVector, fogDepthVector, fogEyeT,
+		dlightShadow, shadowAtlas, shadowDepth, shadowFilter );
+}
+
+extern "C" void GLX_Renderer_UnbindDlightProgram( void )
+{
+	glx::g_module.UnbindDlightProgram();
 }
 
 extern "C" qboolean GLX_Renderer_StreamDrawEnabled( void )

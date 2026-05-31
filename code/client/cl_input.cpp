@@ -998,7 +998,8 @@ void CL_InitInput( void ) {
 
 	cl_run = Cvar_Get( "cl_run", "1", CVAR_ARCHIVE_ND );
 	Cvar_SetDescription( cl_run, "Persistent player running movement." );
-	cl_sensitivity = Cvar_Get( "sensitivity", "5", CVAR_ARCHIVE );
+	cl_sensitivity = Cvar_Get( "sensitivity", "2", CVAR_ARCHIVE );
+	Cvar_CheckRange( cl_sensitivity, "0.1", "10", CV_FLOAT );
 	Cvar_SetDescription( cl_sensitivity, "Sets base mouse sensitivity (mouse speed)." );
 	cl_mouseAccel = Cvar_Get( "cl_mouseAccel", "0", CVAR_ARCHIVE_ND );
 	Cvar_SetDescription( cl_mouseAccel, "Toggle the use of mouse acceleration the mouse speeds up or becomes more sensitive as it continues in one direction." );

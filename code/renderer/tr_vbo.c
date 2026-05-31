@@ -1877,6 +1877,77 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 }
 
 
+#if defined( USE_PMLIGHT ) && defined( RENDERER_GLX )
+qboolean RB_StageIteratorVBODlight( void )
+{
+	const shaderStage_t *pStage;
+	shader_t *shader;
+	GLbitfield stateBits;
+	const int texBundle = tess.shader ? tess.shader->lightingBundle : 0;
+
+	if ( !tess.shader || tess.shader->lightingStage < 0 ) {
+		tess.vboIndex = 0;
+		VBO_ClearQueue();
+		return qtrue;
+	}
+
+	shader = tess.shader;
+	pStage = tess.xstages[ shader->lightingStage ];
+	if ( !pStage || !GLX_LightingSetupProgram( pStage ) ) {
+		tess.vboIndex = 0;
+		VBO_ClearQueue();
+		return qtrue;
+	}
+
+	GL_Cull( shader->cullType );
+	if ( shader->polygonOffset )
+	{
+		qglEnable( GL_POLYGON_OFFSET_FILL );
+		qglPolygonOffset( r_offsetFactor->value, r_offsetUnits->value );
+	}
+
+	if ( shader->sort < SS_OPAQUE ) {
+		stateBits = GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
+	} else {
+		stateBits = GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
+	}
+	GL_State( stateBits );
+
+	VBO_PrepareQueues();
+	VBO_BindData();
+
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_NORMAL_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, 16, (const GLvoid *)(intptr_t)shader->vboOffset );
+	qglNormalPointer( GL_FLOAT, 16, (const GLvoid *)(intptr_t)shader->normalOffset );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)pStage->tex_offset[texBundle] );
+
+	GL_SelectTexture( 0 );
+	R_BindAnimatedImage( &pStage->bundle[ texBundle ] );
+
+	VBO_RenderIndexes();
+
+	if ( shader->polygonOffset )
+	{
+		qglDisable( GL_POLYGON_OFFSET_FILL );
+	}
+
+	if ( r_speeds->integer == 1 ) {
+		backEnd.pc.c_totalIndexes += world_vbo.items_queue_indexes;
+		backEnd.pc.c_indexes += world_vbo.items_queue_indexes;
+		backEnd.pc.c_vertexes += world_vbo.items_queue_vertexes;
+		backEnd.pc.c_shaders++;
+	}
+
+	GLX_LightingProgramUnbind();
+	tess.vboIndex = 0;
+	VBO_ClearQueue();
+
+	return qtrue;
+}
+#endif
+
+
 void RB_StageIteratorVBO( void )
 {
 	const shaderCommands_t *input;

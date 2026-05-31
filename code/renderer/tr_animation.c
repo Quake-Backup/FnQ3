@@ -270,9 +270,12 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 	numDlights = 0;
 	if ( R_GetDlightMode() >= 2 && ( !personalModel || R_ViewPassIsPortal( &tr.viewParms ) ) ) {
 		R_MDRModelBounds( header, ent, bounds[0], bounds[1] );
-		R_TransformDlights( tr.viewParms.num_dlights, tr.viewParms.dlights, &tr.or );
 		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
 			dl = &tr.viewParms.dlights[ n ];
+			if ( R_DlightCullEntityBounds( dl, ent, bounds[0], bounds[1] ) ) {
+				continue;
+			}
+			R_TransformDlights( 1, dl, &tr.or );
 			if ( !R_LightCullBounds( dl, bounds[0], bounds[1] ) )
 				dlights[ numDlights++ ] = dl;
 		}

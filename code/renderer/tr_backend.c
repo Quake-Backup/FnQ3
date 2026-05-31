@@ -2623,6 +2623,110 @@ static void RB_RenderDlightShadowAtlas( void )
 }
 
 
+static qboolean RB_ProjectDlightScissorPoint( const vec3_t point, float *minX, float *minY,
+	float *maxX, float *maxY )
+{
+	const float *model = backEnd.viewParms.world.modelMatrix;
+	const float *projection = backEnd.viewParms.projectionMatrix;
+	float eye[4], clip[4], invW, x, y;
+
+	eye[0] = model[0] * point[0] + model[4] * point[1] + model[8]  * point[2] + model[12];
+	eye[1] = model[1] * point[0] + model[5] * point[1] + model[9]  * point[2] + model[13];
+	eye[2] = model[2] * point[0] + model[6] * point[1] + model[10] * point[2] + model[14];
+	eye[3] = model[3] * point[0] + model[7] * point[1] + model[11] * point[2] + model[15];
+
+	clip[0] = projection[0] * eye[0] + projection[4] * eye[1] + projection[8]  * eye[2] + projection[12] * eye[3];
+	clip[1] = projection[1] * eye[0] + projection[5] * eye[1] + projection[9]  * eye[2] + projection[13] * eye[3];
+	clip[2] = projection[2] * eye[0] + projection[6] * eye[1] + projection[10] * eye[2] + projection[14] * eye[3];
+	clip[3] = projection[3] * eye[0] + projection[7] * eye[1] + projection[11] * eye[2] + projection[15] * eye[3];
+
+	if ( clip[3] <= 0.001f ) {
+		return qfalse;
+	}
+
+	invW = 1.0f / clip[3];
+	x = backEnd.viewParms.viewportX + ( clip[0] * invW * 0.5f + 0.5f ) * backEnd.viewParms.viewportWidth;
+	y = backEnd.viewParms.viewportY + ( clip[1] * invW * 0.5f + 0.5f ) * backEnd.viewParms.viewportHeight;
+
+	if ( x < *minX ) {
+		*minX = x;
+	}
+	if ( y < *minY ) {
+		*minY = y;
+	}
+	if ( x > *maxX ) {
+		*maxX = x;
+	}
+	if ( y > *maxY ) {
+		*maxY = y;
+	}
+
+	return qtrue;
+}
+
+
+static qboolean RB_SetDlightScissor( const dlight_t *dl )
+{
+	vec3_t mins, maxs, point;
+	float minX, minY, maxX, maxY;
+	int ix, iy, iw, ih;
+	int axis, xSide, ySide, zSide;
+
+	if ( !dl || backEnd.viewParms.viewportWidth <= 0 || backEnd.viewParms.viewportHeight <= 0 ) {
+		return qtrue;
+	}
+
+	if ( dl->linear ) {
+		for ( axis = 0; axis < 3; axis++ ) {
+			mins[axis] = MIN( dl->origin[axis], dl->origin2[axis] ) - dl->radius;
+			maxs[axis] = MAX( dl->origin[axis], dl->origin2[axis] ) + dl->radius;
+		}
+	} else {
+		for ( axis = 0; axis < 3; axis++ ) {
+			mins[axis] = dl->origin[axis] - dl->radius;
+			maxs[axis] = dl->origin[axis] + dl->radius;
+		}
+	}
+
+	minX = (float)( backEnd.viewParms.viewportX + backEnd.viewParms.viewportWidth );
+	minY = (float)( backEnd.viewParms.viewportY + backEnd.viewParms.viewportHeight );
+	maxX = (float)backEnd.viewParms.viewportX;
+	maxY = (float)backEnd.viewParms.viewportY;
+
+	for ( xSide = 0; xSide < 2; xSide++ ) {
+		point[0] = xSide ? maxs[0] : mins[0];
+		for ( ySide = 0; ySide < 2; ySide++ ) {
+			point[1] = ySide ? maxs[1] : mins[1];
+			for ( zSide = 0; zSide < 2; zSide++ ) {
+				point[2] = zSide ? maxs[2] : mins[2];
+				if ( !RB_ProjectDlightScissorPoint( point, &minX, &minY, &maxX, &maxY ) ) {
+					SetViewportAndScissor();
+					return qtrue;
+				}
+			}
+		}
+	}
+
+	if ( maxX < backEnd.viewParms.viewportX || maxY < backEnd.viewParms.viewportY ||
+		minX > backEnd.viewParms.viewportX + backEnd.viewParms.viewportWidth ||
+		minY > backEnd.viewParms.viewportY + backEnd.viewParms.viewportHeight ) {
+		return qfalse;
+	}
+
+	ix = (int)MAX( minX, (float)backEnd.viewParms.viewportX );
+	iy = (int)MAX( minY, (float)backEnd.viewParms.viewportY );
+	iw = (int)( MIN( maxX, (float)( backEnd.viewParms.viewportX + backEnd.viewParms.viewportWidth ) ) + 0.999f ) - ix;
+	ih = (int)( MIN( maxY, (float)( backEnd.viewParms.viewportY + backEnd.viewParms.viewportHeight ) ) + 0.999f ) - iy;
+
+	if ( iw <= 0 || ih <= 0 ) {
+		return qfalse;
+	}
+
+	qglScissor( ix, iy, iw, ih );
+	return qtrue;
+}
+
+
 static void RB_LightingPass( void )
 {
 	dlight_t	*dl;
@@ -2641,11 +2745,15 @@ static void RB_LightingPass( void )
 		dl = &backEnd.viewParms.dlights[i];
 		if ( dl->head )
 		{
+			if ( !RB_SetDlightScissor( dl ) ) {
+				continue;
+			}
 			tess.light = dl;
 			RB_RenderLitSurfList( dl );
 		}
 	}
 
+	SetViewportAndScissor();
 	tess.dlightPass = qfalse;
 
 	backEnd.viewParms.num_dlights = 0;

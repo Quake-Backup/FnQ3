@@ -57,6 +57,66 @@ void R_TransformDlights( int count, dlight_t *dl, orientationr_t *or) {
 	}
 }
 
+#ifdef USE_PMLIGHT
+/*
+=============
+R_DlightCullEntityBounds
+
+Cheap world-space dynamic-light rejection for entity model bounds. The precise
+local-space R_LightCullBounds test still runs for survivors, but this avoids
+transforming every light for every model when r_dlightMode 2 is active.
+=============
+*/
+qboolean R_DlightCullEntityBounds( const dlight_t *dl, const trRefEntity_t *ent,
+	const vec3_t mins, const vec3_t maxs )
+{
+	vec3_t center, worldCenter, delta, segment, closest;
+	float radius, influence, dist2;
+
+	if ( !dl || !ent ) {
+		return qtrue;
+	}
+
+	VectorAdd( mins, maxs, center );
+	VectorScale( center, 0.5f, center );
+	VectorCopy( ent->e.origin, worldCenter );
+	VectorMA( worldCenter, center[0], ent->e.axis[0], worldCenter );
+	VectorMA( worldCenter, center[1], ent->e.axis[1], worldCenter );
+	VectorMA( worldCenter, center[2], ent->e.axis[2], worldCenter );
+
+	radius = RadiusFromBounds( mins, maxs );
+	influence = dl->radius + radius;
+	if ( influence <= 0.0f ) {
+		return qtrue;
+	}
+
+	if ( dl->linear ) {
+		float segmentLen2, t;
+
+		VectorSubtract( dl->origin2, dl->origin, segment );
+		segmentLen2 = DotProduct( segment, segment );
+		if ( segmentLen2 > 0.0001f ) {
+			VectorSubtract( worldCenter, dl->origin, delta );
+			t = DotProduct( delta, segment ) / segmentLen2;
+			if ( t < 0.0f ) {
+				t = 0.0f;
+			} else if ( t > 1.0f ) {
+				t = 1.0f;
+			}
+			VectorMA( dl->origin, t, segment, closest );
+		} else {
+			VectorCopy( dl->origin, closest );
+		}
+		VectorSubtract( worldCenter, closest, delta );
+	} else {
+		VectorSubtract( worldCenter, dl->origin, delta );
+	}
+
+	dist2 = DotProduct( delta, delta );
+	return dist2 > Square( influence ) ? qtrue : qfalse;
+}
+#endif // USE_PMLIGHT
+
 
 #ifdef USE_LEGACY_DLIGHTS
 /*

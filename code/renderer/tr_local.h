@@ -859,6 +859,7 @@ typedef struct {
 	// dynamic lighting information
 #ifdef USE_LEGACY_DLIGHTS
 	int			dlightBits;
+	vec3_t		bounds[2];
 #endif
 	int			vboItemIndex;
 	float		*normals;
@@ -1905,6 +1906,7 @@ void ARB_SetupLightParams( const shaderStage_t *pStage );
 void ARB_LightingPass( void );
 void ARB_CSMShadowPass( void );
 qboolean R_LightCullBounds( const dlight_t* dl, const vec3_t mins, const vec3_t maxs );
+qboolean R_DlightCullEntityBounds( const dlight_t *dl, const trRefEntity_t *ent, const vec3_t mins, const vec3_t maxs );
 qboolean R_DlightShadowAtlasLayout( int maxLights, int requestedFaceSize, int maxTextureSize, dlightShadowAtlasLayout_t *layout );
 qboolean R_CSMShadowAtlasLayout( int cascadeCount, int requestedCascadeSize, int maxTextureSize, csmShadowAtlasLayout_t *layout );
 #endif // USE_PMLIGHT

@@ -777,8 +777,6 @@ void GL_ProgramEnable( void )
 
 #ifdef USE_PMLIGHT
 #ifdef RENDERER_GLX
-static qboolean glxDlightProgramActive = qfalse;
-
 static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *indexes )
 {
 	const shaderCommands_t *input;
@@ -819,7 +817,7 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 
 	materialFlags = GLX_STAGE_DLIGHT_MAP | GLX_STAGE_ST0;
 	categoryMask = GLX_CompatDynamicCategoryMaskForTess( input, materialFlags );
-	if ( !glxDlightProgramActive && !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0,
+	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0,
 		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
 		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
 		0, 0, 0, 0, 0, 0,
@@ -1222,7 +1220,6 @@ qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage )
 	float radius;
 	float textureScale;
 
-	glxDlightProgramActive = qfalse;
 	tess.dlightUpdateParams = qfalse;
 	tess.cullType = tess.shader->cullType;
 
@@ -1301,13 +1298,11 @@ qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage )
 		return qfalse;
 	}
 
-	glxDlightProgramActive = qtrue;
 	return qtrue;
 }
 
 void GLX_LightingProgramUnbind( void )
 {
-	glxDlightProgramActive = qfalse;
 	GLX_CompatUnbindDlightProgram();
 }
 #endif

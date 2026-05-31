@@ -93,6 +93,64 @@ extern	int		s_rawend;
 static void RoQ_init( void );
 static void CIN_SetLooping (int handle, qboolean loop);
 
+static const char *CL_CinematicBasename( const char *path )
+{
+	const char *slash;
+	const char *backslash;
+
+	if ( !path ) {
+		return "";
+	}
+
+	slash = strrchr( path, '/' );
+	backslash = strrchr( path, '\\' );
+
+	if ( slash && ( !backslash || slash > backslash ) ) {
+		return slash + 1;
+	}
+	if ( backslash ) {
+		return backslash + 1;
+	}
+
+	return path;
+}
+
+static qboolean CL_ShouldSkipIdLogoCinematic( const char *arg )
+{
+	const char *base;
+	const char *dot;
+	size_t len;
+
+	if ( !Cvar_VariableIntegerValue( "com_skipIdLogo" ) ) {
+		return qfalse;
+	}
+
+	base = CL_CinematicBasename( arg );
+	dot = strrchr( base, '.' );
+	len = dot ? (size_t)( dot - base ) : strlen( base );
+
+	if ( len != 6 || Q_stricmpn( base, "idlogo", 6 ) != 0 ) {
+		return qfalse;
+	}
+
+	if ( dot && Q_stricmp( dot, ".roq" ) != 0 ) {
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static void CL_RunCinematicNextmap( void )
+{
+	const char *s;
+
+	s = Cvar_VariableString( "nextmap" );
+	if ( s[0] ) {
+		Cbuf_ExecuteText( EXEC_APPEND, va("%s\n", s) );
+		Cvar_Set( "nextmap", "" );
+	}
+}
+
 /******************************************************************************
 *
 * Class:		trFMV
@@ -1329,8 +1387,6 @@ static void RoQ_init( void )
 ******************************************************************************/
 
 static void RoQShutdown( void ) {
-	const char *s;
-
 	if (!cinTable[currentHandle].buf) {
 		return;
 	}
@@ -1349,11 +1405,7 @@ static void RoQShutdown( void ) {
 		// if we are aborting the intro cinematic with
 		// a devmap command, nextmap would be valid by
 		// the time it was referenced
-		s = Cvar_VariableString( "nextmap" );
-		if ( s[0] ) {
-			Cbuf_ExecuteText( EXEC_APPEND, va("%s\n", s) );
-			Cvar_Set( "nextmap", "" );
-		}
+		CL_RunCinematicNextmap();
 		CL_handle = -1;
 	}
 	cinTable[currentHandle].fileName[0] = '\0';
@@ -1471,6 +1523,14 @@ int CIN_PlayCinematic( const char *arg, int x, int y, int w, int h, int systemBi
 	unsigned short RoQID;
 	std::array<char, MAX_OSPATH> name;
 	int		i;
+
+	if ( CL_ShouldSkipIdLogoCinematic( arg )
+		&& ( ( systemBits & CIN_system ) != 0 || cls.state < CA_LOADING ) ) {
+		if ( ( systemBits & CIN_system ) != 0 ) {
+			CL_RunCinematicNextmap();
+		}
+		return -1;
+	}
 
 	if (strchr(arg, '/') == nullptr && strchr(arg, '\\') == nullptr) {
 		Com_sprintf( name.data(), static_cast<int>( name.size() ), "video/%s", arg );
@@ -1694,12 +1754,17 @@ void CL_PlayCinematic_f( void ) {
 	int bits = CIN_system;
 
 	Com_DPrintf("CL_PlayCinematic_f\n");
+	arg = Cmd_Argv( 1 );
+	s = Cmd_Argv(2);
+
+	if ( CL_ShouldSkipIdLogoCinematic( arg ) ) {
+		CL_RunCinematicNextmap();
+		return;
+	}
+
 	if (cls.state == CA_CINEMATIC) {
 		SCR_StopCinematic();
 	}
-
-	arg = Cmd_Argv( 1 );
-	s = Cmd_Argv(2);
 
 	if ((s && s[0] == '1') || Q_stricmp(arg,"demoend.roq")==0 || Q_stricmp(arg,"end.roq")==0) {
 		bits |= CIN_hold;

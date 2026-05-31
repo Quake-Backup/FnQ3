@@ -654,7 +654,7 @@ static void ParseFace( const dsurface_t *ds, const drawVert_t *verts, msurface_t
 	cv->numPoints = numPoints;
 	cv->numIndices = numIndexes;
 	cv->ofsIndices = ofsIndexes;
-#ifdef USE_LEGACY_DLIGHTS
+#if defined( USE_LEGACY_DLIGHTS ) || defined( USE_PMLIGHT )
 	ClearBounds( cv->bounds[0], cv->bounds[1] );
 #endif
 
@@ -663,7 +663,7 @@ static void ParseFace( const dsurface_t *ds, const drawVert_t *verts, msurface_t
 		for ( j = 0 ; j < 3 ; j++ ) {
 			cv->points[i][j] = LittleFloat( verts[i].xyz[j] );
 		}
-#ifdef USE_LEGACY_DLIGHTS
+#if defined( USE_LEGACY_DLIGHTS ) || defined( USE_PMLIGHT )
 		AddPointToBounds( cv->points[i], cv->bounds[0], cv->bounds[1] );
 #endif
 		for ( j = 0 ; j < 2 ; j++ ) {

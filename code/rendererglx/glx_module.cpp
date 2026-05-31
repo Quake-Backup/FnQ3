@@ -123,7 +123,7 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxStreamDrawDepthFragment", "0", "1", "1" },
 	{ "r_glxStreamDrawTexMods", "0", "1", "1" },
 	{ "r_glxStreamDrawEnvironment", "0", "1", "1" },
-	{ "r_glxStreamDrawDynamicLights", "0", "1", "1" },
+	{ "r_glxStreamDrawDynamicLights", "0", "0", "0" },
 	{ "r_glxStreamDrawScreenMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawVideoMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawShadows", "0", "1", "1" },

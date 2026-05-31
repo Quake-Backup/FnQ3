@@ -1143,12 +1143,15 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		refdef_t adjustedRefdef;
 		bool useAdjustedRefdef = false;
 
-		if ( refdef && ( refdef->rdflags & RDF_NOWORLDMODEL ) != 0 &&
-			( ( cl_hudAspect && cl_hudAspect->integer > 0 ) || ( cl_hudDump && cl_hudDump->integer > 0 ) ) ) {
+		if ( refdef && ( refdef->rdflags & RDF_NOWORLDMODEL ) != 0 ) {
 			adjustedRefdef = *refdef;
-			CL_HudAdjustRefdef( &adjustedRefdef );
 			refdef = &adjustedRefdef;
 			useAdjustedRefdef = true;
+			adjustedRefdef.rdflags |= RDF_NOFOVCORRECTION;
+
+			if ( ( cl_hudAspect && cl_hudAspect->integer > 0 ) || ( cl_hudDump && cl_hudDump->integer > 0 ) ) {
+				CL_HudAdjustRefdef( &adjustedRefdef );
+			}
 		}
 
 		if ( refdef && cl_captureActive && cl_captureActive->integer &&

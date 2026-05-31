@@ -23,6 +23,7 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 
 using fnq3::FileWrite;
 using fnq3::ScopedFileHandle;
@@ -67,6 +68,8 @@ struct HudRule {
 	std::array<char, MAX_QPATH> shader{};
 	bool hasTextLike = false;
 	bool textLike = false;
+	bool hasRefdef = false;
+	bool refdef = false;
 	bool hasRegion = false;
 	float regionX = 0.0f;
 	float regionY = 0.0f;
@@ -91,6 +94,7 @@ struct HudDrawCapture {
 	qhandle_t shader = 0;
 	std::array<char, MAX_QPATH> shaderName{};
 	bool textLike = false;
+	bool refdef = false;
 };
 
 struct HudDumpGroup {
@@ -100,6 +104,7 @@ struct HudDumpGroup {
 	float y2 = 0.0f;
 	std::array<char, MAX_QPATH> shaderName{};
 	bool textLike = false;
+	bool refdef = false;
 	int drawCount = 0;
 	int samples = 0;
 	bool likelyAligned = false;
@@ -216,6 +221,19 @@ qboolean CL_HudParseMode( const char *value, HudTransformMode *mode ) {
 	}
 
 	return qfalse;
+}
+
+qboolean CL_HudShaderMatches( const char *pattern, const char *shaderName ) {
+	if ( !pattern || !*pattern || !shaderName ) {
+		return qfalse;
+	}
+
+	const char *wildcard = std::strchr( pattern, '*' );
+	if ( !wildcard || wildcard[1] != '\0' ) {
+		return QBool( !Q_stricmp( pattern, shaderName ) );
+	}
+
+	return QBool( !Q_stricmpn( pattern, shaderName, static_cast<int>( wildcard - pattern ) ) );
 }
 
 void CL_HudJsonWriteString( fileHandle_t file, const char *text ) {
@@ -335,6 +353,12 @@ qboolean CL_HudLoadRules( qboolean verbose ) {
 			if ( valueJson ) {
 				rule->hasTextLike = true;
 				rule->textLike = JSON_ValueGetInt( valueJson, jsonEnd ) != 0;
+			}
+
+			valueJson = JSON_ObjectGetNamedValue( matchJson, jsonEnd, "refdef" );
+			if ( valueJson ) {
+				rule->hasRefdef = true;
+				rule->refdef = JSON_ValueGetInt( valueJson, jsonEnd ) != 0;
 			}
 
 			regionJson = JSON_ObjectGetNamedValue( matchJson, jsonEnd, "region" );
@@ -516,11 +540,15 @@ const HudRule *CL_HudFindRule( const HudDrawCapture *draw ) {
 		const float cx = draw->x + draw->w * 0.5f;
 		const float cy = draw->y + draw->h * 0.5f;
 
-		if ( rule->hasShader && Q_stricmp( rule->shader.data(), draw->shaderName.data() ) ) {
+		if ( rule->hasShader && !CL_HudShaderMatches( rule->shader.data(), draw->shaderName.data() ) ) {
 			continue;
 		}
 
 		if ( rule->hasTextLike && rule->textLike != draw->textLike ) {
+			continue;
+		}
+
+		if ( rule->hasRefdef && rule->refdef != draw->refdef ) {
 			continue;
 		}
 
@@ -572,6 +600,10 @@ qboolean CL_HudCanMergeGroup( const HudDrawCapture *draw, const HudDumpGroup *gr
 	const float drawY2 = draw->y + draw->h;
 
 	if ( draw->textLike != group->textLike ) {
+		return qfalse;
+	}
+
+	if ( draw->refdef != group->refdef ) {
 		return qfalse;
 	}
 
@@ -636,6 +668,10 @@ qboolean CL_HudSameDumpGroup( const HudDumpGroup *left, const HudDumpGroup *righ
 	const float rightCy = right->y1 + rightH * 0.5f;
 
 	if ( left->textLike != right->textLike ) {
+		return qfalse;
+	}
+
+	if ( left->refdef != right->refdef ) {
 		return qfalse;
 	}
 
@@ -727,6 +763,10 @@ void CL_HudWriteDumpFile() {
 			FS_Printf( dumpFile, ",\n" );
 		}
 
+		if ( group->refdef ) {
+			FS_Printf( dumpFile, "        \"refdef\": 1,\n" );
+		}
+
 		FS_Printf( dumpFile, "        \"textLike\": %i,\n", group->textLike ? 1 : 0 );
 		FS_Printf( dumpFile, "        \"region\": { \"x\": %.3f, \"y\": %.3f, \"w\": %.3f, \"h\": %.3f }\n",
 			group->x1, group->y1, group->x2 - group->x1, group->y2 - group->y1 );
@@ -801,6 +841,7 @@ void CL_HudDumpFrame() {
 		group->y2 = drawY2;
 		Q_strncpyz( group->shaderName.data(), draw->shaderName.data(), static_cast<int>( group->shaderName.size() ) );
 		group->textLike = draw->textLike;
+		group->refdef = draw->refdef;
 		group->drawCount = 1;
 		frameGroupCount++;
 	}
@@ -902,8 +943,11 @@ extern "C" void CL_HudAdjustRefdef( refdef_t *refdef ) {
 		static_cast<float>( refdef->width ), static_cast<float>( refdef->height ),
 		&draw.x, &draw.y, &draw.w, &draw.h );
 	draw.textLike = false;
+	draw.refdef = true;
 
 	CL_HudCaptureDraw( &draw );
+
+	refdef->rdflags |= RDF_NOFOVCORRECTION;
 
 	if ( !cl_hudAspect || cl_hudAspect->integer <= 0 ) {
 		return;

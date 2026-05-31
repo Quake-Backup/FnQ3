@@ -22,12 +22,14 @@ When `cl_hudAspect 1` is enabled, FnQuake3 starts from a centered 4:3 HUD layout
 - `hud_reload` reparses `fnq3-hud.json` without restarting the game.
 - Missing or invalid scripts fall back to centered uniform HUD placement.
 - HUD `refdef` viewports use the same rect transform path as HUD quads, so score heads and other 3D HUD widgets stay aligned with the corrected HUD layout.
+- HUD `refdef` viewports keep their cgame-authored FOV and do not take the world-view `r_fovCorrection` pass.
 
 Supported rule fields:
 
 - `name`: Optional label for the rule.
-- `match.shader`: Match a registered shader name.
+- `match.shader`: Match a registered shader name. A trailing `*` matches any shader with that prefix, such as `icons/*`.
 - `match.textLike`: Match likely text groups.
+- `match.refdef`: Match 3D HUD model viewports rendered through cgame `refdef`s.
 - `match.region`: Match elements by virtual `640x480` region.
 - `mode`: `uniform` or `stretch`.
 - `align.x`: `left`, `center`, or `right`.

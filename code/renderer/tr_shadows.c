@@ -645,17 +645,19 @@ static qboolean GLX_TryStreamDrawStencilShadowVolume( void )
 
 	GL_Cull( CT_BACK_SIDED );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_INCR );
-	if ( !GLX_CompatDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
+	if ( !GLX_CompatDrawElementsClassified( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
 		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
-		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, GLX_STAGE_SHADOW_PASS,
+		GLX_DYNAMIC_CATEGORY_MASK_SPECIAL ) ) {
 		ok = qfalse;
 	}
 
 	GL_Cull( CT_FRONT_SIDED );
 	qglStencilOp( GL_KEEP, GL_KEEP, GL_DECR );
-	if ( !GLX_CompatDrawElements( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
+	if ( !GLX_CompatDrawElementsClassified( GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE,
 		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
-		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, GLX_STAGE_SHADOW_PASS,
+		GLX_DYNAMIC_CATEGORY_MASK_SPECIAL ) ) {
 		ok = qfalse;
 	}
 

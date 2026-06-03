@@ -379,6 +379,7 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	dl->additive = additive;
 	dl->linear = qfalse;
 #ifdef USE_PMLIGHT
+	dl->shadowEligible = qtrue;
 	dl->shadowPlanned = qfalse;
 	dl->shadowIndex = -1;
 	dl->shadowAtlasBaseFace = -1;
@@ -387,6 +388,7 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	Com_Memset( dl->shadowAtlasY, 0, sizeof( dl->shadowAtlasY ) );
 	dl->shadowReceiverCount = 0;
 	dl->shadowPriority = 0.0f;
+	dl->shadowPriorityMultiplier = 1.0f;
 #endif
 }
 
@@ -435,6 +437,7 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	dl->additive = 0;
 	dl->linear = qtrue;
 #ifdef USE_PMLIGHT
+	dl->shadowEligible = qtrue;
 	dl->shadowPlanned = qfalse;
 	dl->shadowIndex = -1;
 	dl->shadowAtlasBaseFace = -1;
@@ -443,11 +446,420 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	Com_Memset( dl->shadowAtlasY, 0, sizeof( dl->shadowAtlasY ) );
 	dl->shadowReceiverCount = 0;
 	dl->shadowPriority = 0.0f;
+	dl->shadowPriorityMultiplier = 1.0f;
 #endif
 }
 
 
 #ifdef USE_PMLIGHT
+static qboolean R_LightCandidateVisibleInPVS( const refdef_t *fd, const vec3_t origin, float radius )
+{
+	vec3_t sample;
+	float sampleRadius;
+	int axis;
+
+	if ( !tr.world || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+		return qtrue;
+	}
+	if ( R_PointInCurrentPVS( fd->vieworg, origin ) ) {
+		return qtrue;
+	}
+	if ( radius <= 32.0f ) {
+		return qfalse;
+	}
+	if ( radius > 1024.0f ) {
+		return qtrue;
+	}
+
+	sampleRadius = Com_Clamp( 32.0f, 512.0f, radius );
+	for ( axis = 0; axis < 3; axis++ ) {
+		VectorCopy( origin, sample );
+		sample[axis] += sampleRadius;
+		if ( R_PointInCurrentPVS( fd->vieworg, sample ) ) {
+			return qtrue;
+		}
+		sample[axis] -= sampleRadius * 2.0f;
+		if ( R_PointInCurrentPVS( fd->vieworg, sample ) ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static float R_StaticMapLightScenePriority( const mapLightDef_t *light, const refdef_t *fd )
+{
+	vec3_t delta;
+	float brightness;
+	float dist2;
+	float radius2;
+
+	brightness = light->color[0];
+	if ( light->color[1] > brightness ) {
+		brightness = light->color[1];
+	}
+	if ( light->color[2] > brightness ) {
+		brightness = light->color[2];
+	}
+	if ( brightness <= 0.0f || light->radius <= 0.0f || light->designerPriority <= 0.0f ) {
+		return 0.0f;
+	}
+
+	VectorSubtract( light->origin, fd->vieworg, delta );
+	dist2 = DotProduct( delta, delta );
+	radius2 = Square( light->radius );
+
+	return brightness * light->designerPriority * light->intensity * radius2 /
+		( dist2 + radius2 + 1.0f );
+}
+
+static float R_SurfaceLightProxyHemisphereWeight( const surfaceLightProxy_t *proxy, const refdef_t *fd )
+{
+	vec3_t toView;
+	float facing;
+
+	if ( proxy->area <= Square( 64.0f ) ) {
+		return 1.0f;
+	}
+
+	VectorSubtract( fd->vieworg, proxy->origin, toView );
+	if ( VectorNormalize2( toView, toView ) <= 1.0f ) {
+		return 1.0f;
+	}
+
+	facing = DotProduct( proxy->normal, toView );
+	if ( facing <= -0.35f ) {
+		return 0.05f;
+	}
+
+	return Com_Clamp( 0.15f, 1.0f, 0.35f + 0.65f * facing );
+}
+
+static float R_SurfaceLightProxyViewWeight( const surfaceLightProxy_t *proxy, const refdef_t *fd,
+	float tanHalfFovX, float tanHalfFovY )
+{
+	vec3_t delta;
+	float forward;
+	float side;
+	float up;
+	float radius;
+	float sideLimit;
+	float upLimit;
+	float sideRatio;
+	float upRatio;
+	float edgeRatio;
+
+	VectorSubtract( proxy->origin, fd->vieworg, delta );
+	forward = DotProduct( delta, fd->viewaxis[0] );
+	radius = Com_Clamp( 32.0f, 1024.0f, proxy->radius );
+	if ( forward <= -radius ) {
+		return 0.08f;
+	}
+	if ( forward <= radius ) {
+		return 0.75f;
+	}
+
+	side = fabsf( DotProduct( delta, fd->viewaxis[1] ) );
+	up = fabsf( DotProduct( delta, fd->viewaxis[2] ) );
+	sideLimit = forward * tanHalfFovX + radius;
+	upLimit = forward * tanHalfFovY + radius;
+	if ( sideLimit <= 1.0f || upLimit <= 1.0f ) {
+		return 1.0f;
+	}
+
+	sideRatio = side / sideLimit;
+	upRatio = up / upLimit;
+	edgeRatio = MAX( sideRatio, upRatio );
+	if ( edgeRatio <= 1.0f ) {
+		return 1.0f;
+	}
+	if ( edgeRatio >= 2.0f ) {
+		return 0.12f;
+	}
+
+	return Com_Clamp( 0.12f, 1.0f, 1.0f - ( edgeRatio - 1.0f ) * 0.65f );
+}
+
+static void R_ResetStaticMapLightFrameCounters( void )
+{
+	tr.staticMapLights.promotedThisFrame = 0;
+	tr.staticMapLights.shadowEligibleThisFrame = 0;
+	tr.staticMapLights.skippedDisabledThisFrame = 0;
+	tr.staticMapLights.skippedPVSThisFrame = 0;
+	tr.staticMapLights.skippedBudgetThisFrame = 0;
+}
+
+static void R_AddStaticMapLightsToScene( const refdef_t *fd )
+{
+	qboolean selected[MAX_STATIC_MAP_LIGHTS];
+	qboolean visible[MAX_STATIC_MAP_LIGHTS];
+	int budget;
+	int shadowBudget;
+	int shadowPromoted;
+	int visibleCount;
+	int pass;
+	int i;
+
+	R_ResetStaticMapLightFrameCounters();
+
+	if ( !tr.staticMapLights.loaded || tr.staticMapLights.parseFailed || tr.staticMapLights.count <= 0 ) {
+		return;
+	}
+	if ( !r_staticLights || !r_staticLights->integer || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+		tr.staticMapLights.skippedDisabledThisFrame = tr.staticMapLights.count;
+		return;
+	}
+
+	budget = r_staticLightMaxLights ? r_staticLightMaxLights->integer : 8;
+	budget = (int)Com_Clamp( 0.0f, (float)MAX_DLIGHTS, (float)budget );
+	if ( budget > (int)ARRAY_LEN( backEndData->dlights ) - r_numdlights ) {
+		budget = (int)ARRAY_LEN( backEndData->dlights ) - r_numdlights;
+	}
+	if ( budget <= 0 ) {
+		tr.staticMapLights.skippedBudgetThisFrame = tr.staticMapLights.count;
+		return;
+	}
+
+	shadowBudget = r_staticLightShadowMaxLights ? r_staticLightShadowMaxLights->integer : 2;
+	shadowBudget = (int)Com_Clamp( 0.0f, (float)MAX_DLIGHTS, (float)shadowBudget );
+	Com_Memset( selected, 0, sizeof( selected ) );
+	Com_Memset( visible, 0, sizeof( visible ) );
+	shadowPromoted = 0;
+	visibleCount = 0;
+
+	for ( i = 0; i < tr.staticMapLights.count; i++ ) {
+		const mapLightDef_t *light = &tr.staticMapLights.lights[i];
+
+		if ( R_LightCandidateVisibleInPVS( fd, light->origin, light->radius ) ) {
+			visible[i] = qtrue;
+			visibleCount++;
+		} else {
+			tr.staticMapLights.skippedPVSThisFrame++;
+		}
+	}
+	if ( visibleCount <= 0 ) {
+		return;
+	}
+
+	for ( pass = 0; pass < budget; pass++ ) {
+		const mapLightDef_t *light;
+		dlight_t *dl;
+		float bestPriority;
+		int bestIndex;
+		int before;
+
+		bestPriority = 0.0f;
+		bestIndex = -1;
+		for ( i = 0; i < tr.staticMapLights.count; i++ ) {
+			float priority;
+
+			if ( selected[i] || !visible[i] ) {
+				continue;
+			}
+			priority = R_StaticMapLightScenePriority( &tr.staticMapLights.lights[i], fd );
+			if ( priority > bestPriority ) {
+				bestPriority = priority;
+				bestIndex = i;
+			}
+		}
+
+		if ( bestIndex < 0 || bestPriority <= 0.0f || r_numdlights >= ARRAY_LEN( backEndData->dlights ) ) {
+			break;
+		}
+
+		selected[bestIndex] = qtrue;
+		light = &tr.staticMapLights.lights[bestIndex];
+		before = r_numdlights;
+		RE_AddDynamicLightToScene( light->origin, light->radius,
+			light->color[0], light->color[1], light->color[2], qfalse );
+		if ( r_numdlights <= before ) {
+			continue;
+		}
+
+		dl = &backEndData->dlights[before];
+		dl->shadowEligible = ( r_staticLightShadows && r_staticLightShadows->integer &&
+			light->castsShadows && shadowPromoted < shadowBudget ) ? qtrue : qfalse;
+		dl->shadowPriorityMultiplier = light->designerPriority *
+			Com_Clamp( 0.25f, 4.0f, light->intensity / light->radius );
+
+		tr.staticMapLights.promotedThisFrame++;
+		if ( dl->shadowEligible ) {
+			tr.staticMapLights.shadowEligibleThisFrame++;
+			shadowPromoted++;
+		}
+	}
+
+	if ( visibleCount > tr.staticMapLights.promotedThisFrame ) {
+		tr.staticMapLights.skippedBudgetThisFrame =
+			visibleCount - tr.staticMapLights.promotedThisFrame;
+	}
+}
+
+static float R_SurfaceLightProxyScenePriority( const surfaceLightProxy_t *proxy, const refdef_t *fd,
+	float tanHalfFovX, float tanHalfFovY )
+{
+	vec3_t delta;
+	float brightness;
+	float dist2;
+	float radius2;
+	float hemisphereWeight;
+	float viewWeight;
+
+	brightness = proxy->color[0];
+	if ( proxy->color[1] > brightness ) {
+		brightness = proxy->color[1];
+	}
+	if ( proxy->color[2] > brightness ) {
+		brightness = proxy->color[2];
+	}
+	if ( brightness <= 0.0f || proxy->radius <= 0.0f ||
+		proxy->intensity <= 0.0f || proxy->designerPriority <= 0.0f ) {
+		return 0.0f;
+	}
+	hemisphereWeight = R_SurfaceLightProxyHemisphereWeight( proxy, fd );
+	if ( hemisphereWeight <= 0.0f ) {
+		return 0.0f;
+	}
+	viewWeight = R_SurfaceLightProxyViewWeight( proxy, fd, tanHalfFovX, tanHalfFovY );
+	if ( viewWeight <= 0.0f ) {
+		return 0.0f;
+	}
+
+	VectorSubtract( proxy->origin, fd->vieworg, delta );
+	dist2 = DotProduct( delta, delta );
+	radius2 = Square( proxy->radius );
+
+	return brightness * proxy->designerPriority * proxy->intensity * hemisphereWeight * viewWeight * radius2 /
+		( dist2 + radius2 + 1.0f );
+}
+
+static void R_ResetSurfaceLightProxyFrameCounters( void )
+{
+	tr.surfaceLightProxies.promotedThisFrame = 0;
+	tr.surfaceLightProxies.shadowEligibleThisFrame = 0;
+	tr.surfaceLightProxies.skippedDisabledThisFrame = 0;
+	tr.surfaceLightProxies.skippedPVSThisFrame = 0;
+	tr.surfaceLightProxies.skippedBudgetThisFrame = 0;
+}
+
+static void R_AddSurfaceLightProxiesToScene( const refdef_t *fd )
+{
+	qboolean selected[MAX_SURFACELIGHT_PROXIES];
+	qboolean visible[MAX_SURFACELIGHT_PROXIES];
+	int budget;
+	int shadowBudget;
+	int shadowPromoted;
+	int visibleCount;
+	int pass;
+	int i;
+	float tanHalfFovX;
+	float tanHalfFovY;
+
+	R_ResetSurfaceLightProxyFrameCounters();
+
+	if ( !tr.surfaceLightProxies.built || tr.surfaceLightProxies.count <= 0 ) {
+		return;
+	}
+	if ( !r_surfaceLightProxies || !r_surfaceLightProxies->integer || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+		tr.surfaceLightProxies.skippedDisabledThisFrame = tr.surfaceLightProxies.count;
+		return;
+	}
+
+	budget = r_surfaceLightProxyMaxLights ? r_surfaceLightProxyMaxLights->integer : 4;
+	budget = (int)Com_Clamp( 0.0f, (float)MAX_DLIGHTS, (float)budget );
+	if ( budget > (int)ARRAY_LEN( backEndData->dlights ) - r_numdlights ) {
+		budget = (int)ARRAY_LEN( backEndData->dlights ) - r_numdlights;
+	}
+	if ( budget <= 0 ) {
+		tr.surfaceLightProxies.skippedBudgetThisFrame = tr.surfaceLightProxies.count;
+		return;
+	}
+
+	shadowBudget = r_surfaceLightProxyShadowMaxLights ? r_surfaceLightProxyShadowMaxLights->integer : 1;
+	shadowBudget = (int)Com_Clamp( 0.0f, (float)MAX_DLIGHTS, (float)shadowBudget );
+	tanHalfFovX = tanf( Com_Clamp( 30.0f, 160.0f, fd->fov_x ) * M_PI / 360.0f );
+	tanHalfFovY = tanf( Com_Clamp( 30.0f, 160.0f, fd->fov_y ) * M_PI / 360.0f );
+	Com_Memset( selected, 0, sizeof( selected ) );
+	Com_Memset( visible, 0, sizeof( visible ) );
+	shadowPromoted = 0;
+	visibleCount = 0;
+
+	for ( i = 0; i < tr.surfaceLightProxies.count; i++ ) {
+		const surfaceLightProxy_t *proxy = &tr.surfaceLightProxies.proxies[i];
+
+		if ( R_LightCandidateVisibleInPVS( fd, proxy->origin, proxy->radius ) ) {
+			visible[i] = qtrue;
+			visibleCount++;
+		} else {
+			tr.surfaceLightProxies.skippedPVSThisFrame++;
+		}
+	}
+	if ( visibleCount <= 0 ) {
+		return;
+	}
+
+	for ( pass = 0; pass < budget; pass++ ) {
+		const surfaceLightProxy_t *proxy;
+		dlight_t *dl;
+		float bestPriority;
+		float hemisphereWeight;
+		float viewWeight;
+		int bestIndex;
+		int before;
+
+		bestPriority = 0.0f;
+		bestIndex = -1;
+		for ( i = 0; i < tr.surfaceLightProxies.count; i++ ) {
+			float priority;
+
+			if ( selected[i] || !visible[i] ) {
+				continue;
+			}
+			priority = R_SurfaceLightProxyScenePriority( &tr.surfaceLightProxies.proxies[i], fd,
+				tanHalfFovX, tanHalfFovY );
+			if ( priority > bestPriority ) {
+				bestPriority = priority;
+				bestIndex = i;
+			}
+		}
+
+		if ( bestIndex < 0 || bestPriority <= 0.0f || r_numdlights >= ARRAY_LEN( backEndData->dlights ) ) {
+			break;
+		}
+
+		selected[bestIndex] = qtrue;
+		proxy = &tr.surfaceLightProxies.proxies[bestIndex];
+		before = r_numdlights;
+		RE_AddDynamicLightToScene( proxy->origin, proxy->radius,
+			proxy->color[0], proxy->color[1], proxy->color[2], qfalse );
+		if ( r_numdlights <= before ) {
+			continue;
+		}
+
+		dl = &backEndData->dlights[before];
+		hemisphereWeight = R_SurfaceLightProxyHemisphereWeight( proxy, fd );
+		viewWeight = R_SurfaceLightProxyViewWeight( proxy, fd, tanHalfFovX, tanHalfFovY );
+		dl->shadowEligible = ( r_surfaceLightProxyShadows && r_surfaceLightProxyShadows->integer &&
+			proxy->castsShadows && hemisphereWeight >= 0.25f && viewWeight >= 0.25f &&
+			shadowPromoted < shadowBudget ) ? qtrue : qfalse;
+		dl->shadowPriorityMultiplier = proxy->designerPriority *
+			Com_Clamp( 0.25f, 4.0f, proxy->intensity / 400.0f ) *
+			Com_Clamp( 0.25f, 1.0f, hemisphereWeight ) *
+			Com_Clamp( 0.25f, 1.0f, viewWeight );
+
+		tr.surfaceLightProxies.promotedThisFrame++;
+		if ( dl->shadowEligible ) {
+			tr.surfaceLightProxies.shadowEligibleThisFrame++;
+			shadowPromoted++;
+		}
+	}
+
+	if ( visibleCount > tr.surfaceLightProxies.promotedThisFrame ) {
+		tr.surfaceLightProxies.skippedBudgetThisFrame =
+			visibleCount - tr.surfaceLightProxies.promotedThisFrame;
+	}
+}
+
 typedef struct {
 	qboolean active;
 	int count;
@@ -654,6 +1066,8 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 #ifdef USE_PMLIGHT
 	R_AddDlightTestLightsToScene( fd );
+	R_AddStaticMapLightsToScene( fd );
+	R_AddSurfaceLightProxiesToScene( fd );
 #endif
 
 

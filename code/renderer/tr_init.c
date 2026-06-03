@@ -113,6 +113,16 @@ cvar_t	*r_dlightIntensity;
 
 cvar_t	*r_dlightSaturation;
 cvar_t	*r_dlightOverbrightGamut;
+cvar_t	*r_staticLights;
+cvar_t	*r_staticLightMaxLights;
+cvar_t	*r_staticLightShadows;
+cvar_t	*r_staticLightShadowMaxLights;
+cvar_t	*r_staticLightDebug;
+cvar_t	*r_surfaceLightProxies;
+cvar_t	*r_surfaceLightProxyMaxLights;
+cvar_t	*r_surfaceLightProxyShadows;
+cvar_t	*r_surfaceLightProxyShadowMaxLights;
+cvar_t	*r_surfaceLightProxyDebug;
 cvar_t	*r_csmShadows;
 cvar_t	*r_csmCascadeCount;
 cvar_t	*r_csmMaxDistance;
@@ -2423,6 +2433,7 @@ static void R_Register( void )
 #ifdef USE_PMLIGHT
 	ri.Cmd_AddCommand( "r_dlightTest", R_DlightTest_f );
 #endif
+	ri.Cmd_AddCommand( "r_staticLightReload", R_StaticMapLightsReload_f );
 	GLX_CompatRegisterCommands();
 
 	//
@@ -2635,6 +2646,46 @@ static void R_Register( void )
 	r_dlightOverbrightGamut = ri.Cvar_Get( "r_dlightOverbrightGamut", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightOverbrightGamut, "0", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightOverbrightGamut, "Compresses overbright dynamic light chroma toward linear luminance; 0 preserves raw mod-provided colors." );
+	r_staticLights = ri.Cvar_Get( "r_staticLights", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_staticLights, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_staticLights, "Enables renderer-only static map lights loaded from maps/<mapname>.lights.json sidecar files." );
+	ri.Cvar_SetGroup( r_staticLights, CVG_RENDERER );
+	r_staticLightMaxLights = ri.Cvar_Get( "r_staticLightMaxLights", "8", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_staticLightMaxLights, "0", va( "%i", MAX_DLIGHTS ), CV_INTEGER );
+	ri.Cvar_SetDescription( r_staticLightMaxLights, "Maximum number of static sidecar lights promoted into a scene." );
+	ri.Cvar_SetGroup( r_staticLightMaxLights, CVG_RENDERER );
+	r_staticLightShadows = ri.Cvar_Get( "r_staticLightShadows", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_staticLightShadows, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_staticLightShadows, "Allows eligible static sidecar lights to enter the point-light shadow planner." );
+	ri.Cvar_SetGroup( r_staticLightShadows, CVG_RENDERER );
+	r_staticLightShadowMaxLights = ri.Cvar_Get( "r_staticLightShadowMaxLights", "2", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_staticLightShadowMaxLights, "0", va( "%i", MAX_DLIGHTS ), CV_INTEGER );
+	ri.Cvar_SetDescription( r_staticLightShadowMaxLights, "Maximum number of promoted static sidecar lights allowed to be shadow candidates." );
+	ri.Cvar_SetGroup( r_staticLightShadowMaxLights, CVG_RENDERER );
+	r_staticLightDebug = ri.Cvar_Get( "r_staticLightDebug", "0", CVAR_CHEAT );
+	ri.Cvar_CheckRange( r_staticLightDebug, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_staticLightDebug, "Prints static sidecar light loading and promotion counters." );
+	ri.Cvar_SetGroup( r_staticLightDebug, CVG_RENDERER );
+	r_surfaceLightProxies = ri.Cvar_Get( "r_surfaceLightProxies", "0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_surfaceLightProxies, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_surfaceLightProxies, "Promotes non-sky q3map_surfaceLight world surfaces into renderer-only proxy lights." );
+	ri.Cvar_SetGroup( r_surfaceLightProxies, CVG_RENDERER );
+	r_surfaceLightProxyMaxLights = ri.Cvar_Get( "r_surfaceLightProxyMaxLights", "4", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_surfaceLightProxyMaxLights, "0", va( "%i", MAX_DLIGHTS ), CV_INTEGER );
+	ri.Cvar_SetDescription( r_surfaceLightProxyMaxLights, "Maximum number of surfacelight proxies promoted into a scene." );
+	ri.Cvar_SetGroup( r_surfaceLightProxyMaxLights, CVG_RENDERER );
+	r_surfaceLightProxyShadows = ri.Cvar_Get( "r_surfaceLightProxyShadows", "0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_surfaceLightProxyShadows, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_surfaceLightProxyShadows, "Allows promoted surfacelight proxies to enter the point-light shadow planner." );
+	ri.Cvar_SetGroup( r_surfaceLightProxyShadows, CVG_RENDERER );
+	r_surfaceLightProxyShadowMaxLights = ri.Cvar_Get( "r_surfaceLightProxyShadowMaxLights", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_surfaceLightProxyShadowMaxLights, "0", va( "%i", MAX_DLIGHTS ), CV_INTEGER );
+	ri.Cvar_SetDescription( r_surfaceLightProxyShadowMaxLights, "Maximum number of promoted surfacelight proxies allowed to be shadow candidates." );
+	ri.Cvar_SetGroup( r_surfaceLightProxyShadowMaxLights, CVG_RENDERER );
+	r_surfaceLightProxyDebug = ri.Cvar_Get( "r_surfaceLightProxyDebug", "0", CVAR_CHEAT );
+	ri.Cvar_CheckRange( r_surfaceLightProxyDebug, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_surfaceLightProxyDebug, "Prints surfacelight proxy build and promotion counters." );
+	ri.Cvar_SetGroup( r_surfaceLightProxyDebug, CVG_RENDERER );
 	r_csmShadows = ri.Cvar_Get( "r_csmShadows", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_csmShadows, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_csmShadows, "Enables sky-sun cascaded shadow maps for opaque world geometry, entity models, and brush models." );
@@ -3202,6 +3253,7 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 #ifdef USE_PMLIGHT
 	ri.Cmd_RemoveCommand( "r_dlightTest" );
 #endif
+	ri.Cmd_RemoveCommand( "r_staticLightReload" );
 	ri.Cmd_RemoveCommand( "shaderstate" );
 	GLX_CompatRemoveCommands();
 

@@ -1904,6 +1904,62 @@ static qboolean ParseSkySunParms( const char **text, vec3_t sunColor,
 	return qtrue;
 }
 
+static void ParseQ3MapSurfaceLight( const char **text )
+{
+	const char *token;
+	float value;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return;
+	}
+
+	value = Q_atof( token );
+	if ( value > 0.0f ) {
+		shader.surfaceLightValid = qtrue;
+		shader.surfaceLight = value;
+	}
+}
+
+static void ParseQ3MapLightSubdivide( const char **text )
+{
+	const char *token;
+	float value;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return;
+	}
+
+	value = Q_atof( token );
+	if ( value > 0.0f ) {
+		shader.surfaceLightSubdivide = value;
+	}
+}
+
+static void ParseQ3MapLightRGB( const char **text )
+{
+	vec3_t color;
+	float maxColor;
+
+	if ( !ParseVector( text, 3, color ) ) {
+		return;
+	}
+
+	maxColor = MAX( color[0], MAX( color[1], color[2] ) );
+	if ( maxColor <= 0.0f ) {
+		return;
+	}
+	if ( maxColor > 1.0f ) {
+		VectorScale( color, 1.0f / maxColor, color );
+	}
+
+	shader.surfaceLightColor[0] = Com_Clamp( 0.0f, 1.0f, color[0] );
+	shader.surfaceLightColor[1] = Com_Clamp( 0.0f, 1.0f, color[1] );
+	shader.surfaceLightColor[2] = Com_Clamp( 0.0f, 1.0f, color[2] );
+	shader.surfaceLightColorValid = qtrue;
+}
+
 
 /*
 =================
@@ -2004,6 +2060,22 @@ static qboolean ParseShader( const char **text )
 		}
 		else if ( !Q_stricmp( token, "q3map_depthFade" ) ) {
 			ParseDepthFade( text );
+			continue;
+		}
+		else if ( !Q_stricmp( token, "q3map_surfaceLight" ) ) {
+			ParseQ3MapSurfaceLight( text );
+			SkipRestOfLine( text );
+			continue;
+		}
+		else if ( !Q_stricmp( token, "q3map_lightSubdivide" ) ) {
+			ParseQ3MapLightSubdivide( text );
+			SkipRestOfLine( text );
+			continue;
+		}
+		else if ( !Q_stricmp( token, "q3map_lightRGB" ) ||
+			!Q_stricmp( token, "q3map_lightColor" ) ) {
+			ParseQ3MapLightRGB( text );
+			SkipRestOfLine( text );
 			continue;
 		}
 		// skip stuff that only the q3map needs
@@ -3128,6 +3200,7 @@ static void InitShader( const char *name, int lightmapIndex ) {
 
 	Q_strncpyz( shader.name, name, sizeof( shader.name ) );
 	shader.lightmapIndex = lightmapIndex;
+	VectorSet( shader.surfaceLightColor, 1.0f, 1.0f, 1.0f );
 	R_ApplyShaderPicMipFilter();
 
 	// we need to know original (unmodified) lightmap index

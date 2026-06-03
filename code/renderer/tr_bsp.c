@@ -297,6 +297,36 @@ static float R_ProcessLightmap( byte *image, const byte *buf_p, float maxIntensi
 	return maxIntensity;
 }
 
+static void R_LightmapAverageColor( const byte *image, int stride, int x0, int y0, int width, int height, vec3_t color )
+{
+	double accum[3];
+	int x, y;
+
+	accum[0] = 0.0;
+	accum[1] = 0.0;
+	accum[2] = 0.0;
+
+	for ( y = 0; y < height; y++ ) {
+		const byte *src = image + ( ( y0 + y ) * stride + x0 ) * 4;
+
+		for ( x = 0; x < width; x++, src += 4 ) {
+			accum[0] += src[0];
+			accum[1] += src[1];
+			accum[2] += src[2];
+		}
+	}
+
+	if ( width > 0 && height > 0 ) {
+		const double scale = 1.0 / ( 255.0 * width * height );
+
+		color[0] = (float)( accum[0] * scale );
+		color[1] = (float)( accum[1] * scale );
+		color[2] = (float)( accum[2] * scale );
+	} else {
+		VectorClear( color );
+	}
+}
+
 
 static int SetLightmapParams( int numLightmaps, int maxTextureSize )
 {
@@ -367,8 +397,14 @@ static void R_LoadMergedLightmaps( const lump_t *l, byte *image )
 	tr.numLightmaps = SetLightmapParams( tr.numLightmaps, glConfig.maxTextureSize );
 
 	tr.lightmaps = ri.Hunk_Alloc( tr.numLightmaps * sizeof(image_t *), h_low );
+	tr.lightmapAverageColors = ri.Hunk_Alloc( tr.numLightmaps * sizeof( *tr.lightmapAverageColors ), h_low );
 
 	for ( offs = 0, i = 0 ; i < tr.numLightmaps; i++ ) {
+		vec3_t averageAccum;
+		int averageCount;
+
+		VectorClear( averageAccum );
+		averageCount = 0;
 
 		tr.lightmaps[ i ] = R_CreateImage( va( "*mergedLightmap%d", i ), NULL, NULL,
 			lightmapWidth, lightmapHeight, lightmapFlags | IMGFLAG_CLAMPTOBORDER );
@@ -382,6 +418,14 @@ static void R_LoadMergedLightmaps( const lump_t *l, byte *image )
 					break;
 
 				R_ProcessLightmap( image, buf + offs, maxIntensity );
+				{
+					vec3_t averageColor;
+
+					R_LightmapAverageColor( image, LIGHTMAP_LEN, LIGHTMAP_BORDER, LIGHTMAP_BORDER,
+						LIGHTMAP_SIZE, LIGHTMAP_SIZE, averageColor );
+					VectorAdd( averageAccum, averageColor, averageAccum );
+					averageCount++;
+				}
 
 				R_UploadSubImage( image, x * LIGHTMAP_LEN, y * LIGHTMAP_LEN,
 					LIGHTMAP_LEN, LIGHTMAP_LEN, tr.lightmaps[ i ] );
@@ -390,6 +434,11 @@ static void R_LoadMergedLightmaps( const lump_t *l, byte *image )
 			}
 		}
 		ri.Printf( PRINT_DEVELOPER, "lightmaps[%i]=%i\n", i, tr.lightmaps[i]->texnum );
+		if ( averageCount > 0 ) {
+			VectorScale( averageAccum, 1.0f / (float)averageCount, tr.lightmapAverageColors[i] );
+		} else {
+			VectorClear( tr.lightmapAverageColors[i] );
+		}
 	}
 
 	//if ( r_lightmap->integer == 2 )	{
@@ -410,6 +459,7 @@ static void R_LoadLightmaps( const lump_t *l ) {
 	float		maxIntensity = 0;
 
 	tr.numLightmaps = 0;
+	tr.lightmapAverageColors = NULL;
 	tr.mergeLightmaps = qfalse;
 	tr.lightmapScale[0] = 1.0f;
 	tr.lightmapScale[1] = 1.0f;
@@ -454,9 +504,12 @@ static void R_LoadLightmaps( const lump_t *l ) {
 	//R_IssuePendingRenderCommands();
 
 	tr.lightmaps = ri.Hunk_Alloc( tr.numLightmaps * sizeof(image_t *), h_low );
+	tr.lightmapAverageColors = ri.Hunk_Alloc( tr.numLightmaps * sizeof( *tr.lightmapAverageColors ), h_low );
 
 	for ( i = 0 ; i < tr.numLightmaps ; i++ ) {
 		maxIntensity = R_ProcessLightmap( image, buf + i * LIGHTMAP_SIZE * LIGHTMAP_SIZE * 3, maxIntensity );
+		R_LightmapAverageColor( image, LIGHTMAP_SIZE, 0, 0, LIGHTMAP_SIZE, LIGHTMAP_SIZE,
+			tr.lightmapAverageColors[i] );
 		tr.lightmaps[i] = R_CreateImage( va( "*lightmap%d", i ), NULL, image, LIGHTMAP_SIZE, LIGHTMAP_SIZE,
 			lightmapFlags | IMGFLAG_CLAMPTOEDGE );
 	}
@@ -523,6 +576,837 @@ static void R_LoadVisibility( const lump_t *l ) {
 ShaderForShaderNum
 ===============
 */
+static void R_ClearWorldSun( void )
+{
+	Com_Memset( &tr.worldSun, 0, sizeof( tr.worldSun ) );
+
+	VectorSet( tr.worldSun.color, 1.0f, 1.0f, 1.0f );
+	VectorSet( tr.worldSun.directionToSun, 0.45f, 0.3f, 0.9f );
+	VectorNormalize( tr.worldSun.directionToSun );
+	VectorScale( tr.worldSun.directionToSun, -1.0f, tr.worldSun.lightDirection );
+	VectorClear( tr.worldSun.light );
+	tr.worldSun.intensity = 0.0f;
+
+	VectorCopy( tr.worldSun.directionToSun, tr.sunDirection );
+	VectorCopy( tr.worldSun.color, tr.sunColor );
+	VectorCopy( tr.worldSun.light, tr.sunLight );
+	tr.sunIntensity = tr.worldSun.intensity;
+	tr.sunParmsValid = qfalse;
+}
+
+static void R_SetWorldSunFromShader( const shader_t *shader )
+{
+	vec3_t directionToSun;
+
+	if ( !shader || !shader->skySunValid || shader->skySunIntensity <= 0.0f ) {
+		return;
+	}
+	if ( VectorNormalize2( shader->skySunDirection, directionToSun ) <= 0.0f ) {
+		return;
+	}
+
+	Com_Memset( &tr.worldSun, 0, sizeof( tr.worldSun ) );
+	tr.worldSun.valid = qtrue;
+	Q_strncpyz( tr.worldSun.shaderName, shader->name, sizeof( tr.worldSun.shaderName ) );
+	VectorCopy( shader->skySunColor, tr.worldSun.color );
+	VectorCopy( directionToSun, tr.worldSun.directionToSun );
+	VectorScale( directionToSun, -1.0f, tr.worldSun.lightDirection );
+	VectorCopy( shader->skySunLight, tr.worldSun.light );
+	tr.worldSun.intensity = shader->skySunIntensity;
+
+	VectorCopy( tr.worldSun.color, tr.sunColor );
+	VectorCopy( tr.worldSun.directionToSun, tr.sunDirection );
+	VectorCopy( tr.worldSun.light, tr.sunLight );
+	tr.sunIntensity = tr.worldSun.intensity;
+	tr.sunParmsValid = qtrue;
+}
+
+static void R_ClearStaticMapLights( void )
+{
+	Com_Memset( &tr.staticMapLights, 0, sizeof( tr.staticMapLights ) );
+}
+
+static qboolean R_StaticMapLightsSkipCompound( const char **p, const char *openToken )
+{
+	const char *token;
+	int objectDepth;
+	int arrayDepth;
+
+	objectDepth = ( openToken[0] == '{' ) ? 1 : 0;
+	arrayDepth = ( openToken[0] == '[' ) ? 1 : 0;
+
+	while ( objectDepth > 0 || arrayDepth > 0 ) {
+		token = COM_ParseComplex( p, qtrue );
+		if ( !*token ) {
+			return qfalse;
+		}
+		if ( !strcmp( token, "{" ) ) {
+			objectDepth++;
+		} else if ( !strcmp( token, "}" ) ) {
+			objectDepth--;
+		} else if ( !strcmp( token, "[" ) ) {
+			arrayDepth++;
+		} else if ( !strcmp( token, "]" ) ) {
+			arrayDepth--;
+		}
+	}
+
+	return qtrue;
+}
+
+static qboolean R_StaticMapLightsSkipValue( const char **p )
+{
+	const char *token;
+
+	token = COM_ParseComplex( p, qtrue );
+	if ( !*token ) {
+		return qfalse;
+	}
+	if ( !strcmp( token, "{" ) || !strcmp( token, "[" ) ) {
+		return R_StaticMapLightsSkipCompound( p, token );
+	}
+	return qtrue;
+}
+
+static qboolean R_StaticMapLightsExpectToken( const char **p, const char *expected )
+{
+	const char *token;
+
+	token = COM_ParseComplex( p, qtrue );
+	return ( strcmp( token, expected ) == 0 ) ? qtrue : qfalse;
+}
+
+static qboolean R_StaticMapLightsParseFloat( const char **p, float *value )
+{
+	const char *token;
+
+	token = COM_ParseComplex( p, qtrue );
+	if ( !*token || strchr( "{}[],:", token[0] ) ) {
+		return qfalse;
+	}
+	*value = Q_atof( token );
+	return qtrue;
+}
+
+static qboolean R_StaticMapLightsParseInt( const char **p, int *value )
+{
+	float parsed;
+
+	if ( !R_StaticMapLightsParseFloat( p, &parsed ) ) {
+		return qfalse;
+	}
+	*value = (int)parsed;
+	return qtrue;
+}
+
+static qboolean R_StaticMapLightsParseVec3( const char **p, vec3_t value )
+{
+	const char *token;
+	int i;
+
+	if ( !R_StaticMapLightsExpectToken( p, "[" ) ) {
+		return qfalse;
+	}
+	for ( i = 0; i < 3; i++ ) {
+		if ( !R_StaticMapLightsParseFloat( p, &value[i] ) ) {
+			return qfalse;
+		}
+		token = COM_ParseComplex( p, qtrue );
+		if ( i < 2 ) {
+			if ( strcmp( token, "," ) != 0 ) {
+				return qfalse;
+			}
+		} else if ( strcmp( token, "]" ) != 0 ) {
+			return qfalse;
+		}
+	}
+
+	return qtrue;
+}
+
+static qboolean R_StaticMapLightsParseBool( const char **p, qboolean *value )
+{
+	const char *token;
+
+	token = COM_ParseComplex( p, qtrue );
+	if ( !Q_stricmp( token, "true" ) || !Q_stricmp( token, "1" ) ) {
+		*value = qtrue;
+		return qtrue;
+	}
+	if ( !Q_stricmp( token, "false" ) || !Q_stricmp( token, "0" ) ) {
+		*value = qfalse;
+		return qtrue;
+	}
+	return qfalse;
+}
+
+static void R_StaticMapLightsNormalizeColor( vec3_t color )
+{
+	float maxComponent;
+	int i;
+
+	maxComponent = color[0];
+	if ( color[1] > maxComponent ) {
+		maxComponent = color[1];
+	}
+	if ( color[2] > maxComponent ) {
+		maxComponent = color[2];
+	}
+	if ( maxComponent > 4.0f ) {
+		VectorScale( color, 1.0f / 255.0f, color );
+	}
+
+	for ( i = 0; i < 3; i++ ) {
+		color[i] = Com_Clamp( 0.0f, 4.0f, color[i] );
+	}
+}
+
+static qboolean R_StaticMapLightsParseLightObject( const char **p, mapLightDef_t *light, qboolean *accepted, int *skipReason )
+{
+	const char *token;
+	qboolean hasOrigin;
+	qboolean unsupportedType;
+
+	Com_Memset( light, 0, sizeof( *light ) );
+	light->type = MAP_LIGHT_POINT;
+	VectorSet( light->color, 1.0f, 1.0f, 1.0f );
+	light->castsShadows = qtrue;
+	light->designerPriority = 1.0f;
+	light->resolution = 256;
+
+	hasOrigin = qfalse;
+	unsupportedType = qfalse;
+	*accepted = qfalse;
+	*skipReason = 0;
+
+	while ( 1 ) {
+		char key[MAX_TOKEN_CHARS];
+
+		token = COM_ParseComplex( p, qtrue );
+		if ( !*token ) {
+			return qfalse;
+		}
+		if ( !strcmp( token, "}" ) ) {
+			break;
+		}
+		if ( !strcmp( token, "," ) ) {
+			continue;
+		}
+
+		Q_strncpyz( key, token, sizeof( key ) );
+		if ( !R_StaticMapLightsExpectToken( p, ":" ) ) {
+			return qfalse;
+		}
+
+		if ( !Q_stricmp( key, "name" ) ) {
+			token = COM_ParseComplex( p, qtrue );
+			if ( !*token ) {
+				return qfalse;
+			}
+			Q_strncpyz( light->name, token, sizeof( light->name ) );
+		} else if ( !Q_stricmp( key, "type" ) ) {
+			token = COM_ParseComplex( p, qtrue );
+			if ( !*token ) {
+				return qfalse;
+			}
+			if ( Q_stricmp( token, "point" ) ) {
+				unsupportedType = qtrue;
+			}
+		} else if ( !Q_stricmp( key, "origin" ) ) {
+			if ( !R_StaticMapLightsParseVec3( p, light->origin ) ) {
+				return qfalse;
+			}
+			hasOrigin = qtrue;
+		} else if ( !Q_stricmp( key, "direction" ) ) {
+			if ( !R_StaticMapLightsParseVec3( p, light->direction ) ) {
+				return qfalse;
+			}
+			VectorNormalize( light->direction );
+		} else if ( !Q_stricmp( key, "color" ) ) {
+			if ( !R_StaticMapLightsParseVec3( p, light->color ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "intensity" ) ) {
+			if ( !R_StaticMapLightsParseFloat( p, &light->intensity ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "radius" ) ) {
+			if ( !R_StaticMapLightsParseFloat( p, &light->radius ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "innerAngle" ) ) {
+			if ( !R_StaticMapLightsParseFloat( p, &light->innerAngle ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "outerAngle" ) ) {
+			if ( !R_StaticMapLightsParseFloat( p, &light->outerAngle ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "castsShadows" ) ) {
+			if ( !R_StaticMapLightsParseBool( p, &light->castsShadows ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "resolution" ) ) {
+			if ( !R_StaticMapLightsParseInt( p, &light->resolution ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "priority" ) ) {
+			if ( !R_StaticMapLightsParseFloat( p, &light->designerPriority ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "style" ) ) {
+			if ( !R_StaticMapLightsParseInt( p, &light->style ) ) {
+				return qfalse;
+			}
+		} else if ( !R_StaticMapLightsSkipValue( p ) ) {
+			return qfalse;
+		}
+	}
+
+	if ( unsupportedType ) {
+		*skipReason = 1;
+		return qtrue;
+	}
+
+	if ( light->radius <= 0.0f && light->intensity > 0.0f ) {
+		light->radius = light->intensity;
+	}
+	if ( light->intensity <= 0.0f ) {
+		light->intensity = light->radius;
+	}
+
+	R_StaticMapLightsNormalizeColor( light->color );
+	light->radius = Com_Clamp( 1.0f, 8192.0f, light->radius );
+	light->intensity = Com_Clamp( 1.0f, 8192.0f, light->intensity );
+	light->designerPriority = Com_Clamp( 0.0f, 16.0f, light->designerPriority );
+	light->resolution = (int)Com_Clamp( 64.0f, 1024.0f, (float)light->resolution );
+
+	if ( !hasOrigin || light->designerPriority <= 0.0f ) {
+		*skipReason = 2;
+		return qtrue;
+	}
+
+	*accepted = qtrue;
+	return qtrue;
+}
+
+static qboolean R_StaticMapLightsParseLightsArray( const char **p )
+{
+	const char *token;
+
+	if ( !R_StaticMapLightsExpectToken( p, "[" ) ) {
+		return qfalse;
+	}
+
+	while ( 1 ) {
+		token = COM_ParseComplex( p, qtrue );
+		if ( !*token ) {
+			return qfalse;
+		}
+		if ( !strcmp( token, "]" ) ) {
+			break;
+		}
+		if ( !strcmp( token, "," ) ) {
+			continue;
+		}
+		if ( strcmp( token, "{" ) != 0 ) {
+			return qfalse;
+		}
+
+		if ( tr.staticMapLights.count >= MAX_STATIC_MAP_LIGHTS ) {
+			tr.staticMapLights.skippedOverflow++;
+			if ( !R_StaticMapLightsSkipCompound( p, "{" ) ) {
+				return qfalse;
+			}
+		} else {
+			mapLightDef_t light;
+			qboolean accepted;
+			int skipReason;
+
+			if ( !R_StaticMapLightsParseLightObject( p, &light, &accepted, &skipReason ) ) {
+				return qfalse;
+			}
+			if ( accepted ) {
+				tr.staticMapLights.lights[tr.staticMapLights.count++] = light;
+			} else if ( skipReason == 1 ) {
+				tr.staticMapLights.skippedUnsupported++;
+			} else {
+				tr.staticMapLights.skippedInvalid++;
+			}
+		}
+	}
+
+	return qtrue;
+}
+
+static qboolean R_ParseStaticMapLights( const char *text )
+{
+	const char *p;
+	const char *token;
+
+	p = text;
+	token = COM_ParseComplex( &p, qtrue );
+	if ( strcmp( token, "{" ) != 0 ) {
+		return qfalse;
+	}
+
+	while ( 1 ) {
+		char key[MAX_TOKEN_CHARS];
+
+		token = COM_ParseComplex( &p, qtrue );
+		if ( !*token ) {
+			return qfalse;
+		}
+		if ( !strcmp( token, "}" ) ) {
+			break;
+		}
+		if ( !strcmp( token, "," ) ) {
+			continue;
+		}
+
+		Q_strncpyz( key, token, sizeof( key ) );
+		if ( !R_StaticMapLightsExpectToken( &p, ":" ) ) {
+			return qfalse;
+		}
+
+		if ( !Q_stricmp( key, "version" ) ) {
+			if ( !R_StaticMapLightsParseInt( &p, &tr.staticMapLights.version ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "lights" ) ) {
+			if ( !R_StaticMapLightsParseLightsArray( &p ) ) {
+				return qfalse;
+			}
+		} else if ( !R_StaticMapLightsSkipValue( &p ) ) {
+			return qfalse;
+		}
+	}
+
+	return qtrue;
+}
+
+static void R_LoadStaticMapLightsForWorld( void )
+{
+	union {
+		char *c;
+		void *v;
+	} buffer;
+	int size;
+	char filename[MAX_QPATH];
+
+	buffer.v = NULL;
+	Com_sprintf( filename, sizeof( filename ), "maps/%s.lights.json", s_worldData.baseName );
+	R_ClearStaticMapLights();
+	Q_strncpyz( tr.staticMapLights.filename, filename, sizeof( tr.staticMapLights.filename ) );
+
+	size = ri.FS_ReadFile( filename, &buffer.v );
+	if ( !buffer.v || size <= 0 ) {
+		if ( buffer.v ) {
+			ri.FS_FreeFile( buffer.v );
+		}
+		return;
+	}
+
+	tr.staticMapLights.loaded = qtrue;
+	if ( !R_ParseStaticMapLights( buffer.c ) ) {
+		tr.staticMapLights.parseFailed = qtrue;
+		tr.staticMapLights.count = 0;
+		ri.Printf( PRINT_WARNING, "WARNING: failed to parse static map lights file %s\n", filename );
+	} else if ( r_staticLightDebug && r_staticLightDebug->integer ) {
+		ri.Printf( PRINT_ALL,
+			"static lights file:%s version:%i loaded:%i skipped unsupported:%i invalid:%i overflow:%i\n",
+			filename, tr.staticMapLights.version, tr.staticMapLights.count,
+			tr.staticMapLights.skippedUnsupported, tr.staticMapLights.skippedInvalid,
+			tr.staticMapLights.skippedOverflow );
+	}
+
+	ri.FS_FreeFile( buffer.v );
+}
+
+void R_StaticMapLightsReload_f( void )
+{
+	if ( !tr.worldMapLoaded || !tr.world ) {
+		R_ClearStaticMapLights();
+		ri.Printf( PRINT_ALL, "No world map loaded; static map lights cleared\n" );
+		return;
+	}
+
+	R_LoadStaticMapLightsForWorld();
+	ri.Printf( PRINT_ALL, "Reloaded %i static map lights from %s\n",
+		tr.staticMapLights.count, tr.staticMapLights.filename );
+}
+
+static void R_ClearSurfaceLightProxies( void )
+{
+	Com_Memset( &tr.surfaceLightProxies, 0, sizeof( tr.surfaceLightProxies ) );
+}
+
+static void R_SurfaceLightAccumulateVertexColor( vec3_t colorAccum, float area,
+	const vec3_t color0, const vec3_t color1, const vec3_t color2 )
+{
+	vec3_t color;
+
+	VectorAdd( color0, color1, color );
+	VectorAdd( color, color2, color );
+	VectorScale( color, area / 3.0f, color );
+	VectorAdd( colorAccum, color, colorAccum );
+}
+
+static void R_SurfaceLightPointColor( const float *point, vec3_t color )
+{
+	const byte *rgba = (const byte *)&point[7];
+
+	color[0] = rgba[0] / 255.0f;
+	color[1] = rgba[1] / 255.0f;
+	color[2] = rgba[2] / 255.0f;
+}
+
+static void R_SurfaceLightDrawVertColor( const drawVert_t *vert, vec3_t color )
+{
+	color[0] = vert->color.rgba[0] / 255.0f;
+	color[1] = vert->color.rgba[1] / 255.0f;
+	color[2] = vert->color.rgba[2] / 255.0f;
+}
+
+static qboolean R_SurfaceLightColorIsUseful( const vec3_t color )
+{
+	float maxColor;
+
+	maxColor = MAX( color[0], MAX( color[1], color[2] ) );
+	return ( maxColor > 0.01f ) ? qtrue : qfalse;
+}
+
+static qboolean R_SurfaceLightLightmapColor( const shader_t *shader, vec3_t color )
+{
+	if ( !tr.lightmapAverageColors || shader->lightmapIndex < 0 || shader->lightmapIndex >= tr.numLightmaps ) {
+		return qfalse;
+	}
+
+	VectorCopy( tr.lightmapAverageColors[shader->lightmapIndex], color );
+	return R_SurfaceLightColorIsUseful( color );
+}
+
+static void R_SurfaceLightResolveColor( const shader_t *shader,
+	const vec3_t colorAccum, float area, vec3_t color )
+{
+	vec3_t bakedColor;
+
+	if ( shader->surfaceLightColorValid ) {
+		VectorCopy( shader->surfaceLightColor, color );
+		return;
+	}
+
+	if ( R_SurfaceLightLightmapColor( shader, bakedColor ) ) {
+		color[0] = Com_Clamp( 0.0f, 1.0f, bakedColor[0] );
+		color[1] = Com_Clamp( 0.0f, 1.0f, bakedColor[1] );
+		color[2] = Com_Clamp( 0.0f, 1.0f, bakedColor[2] );
+		return;
+	}
+
+	if ( area > 1.0f ) {
+		VectorScale( colorAccum, 1.0f / area, bakedColor );
+		if ( R_SurfaceLightColorIsUseful( bakedColor ) ) {
+			color[0] = Com_Clamp( 0.0f, 1.0f, bakedColor[0] );
+			color[1] = Com_Clamp( 0.0f, 1.0f, bakedColor[1] );
+			color[2] = Com_Clamp( 0.0f, 1.0f, bakedColor[2] );
+			return;
+		}
+	}
+
+	VectorCopy( shader->surfaceLightColor, color );
+}
+
+static void R_SurfaceLightAccumulateTriangle( const vec3_t a, const vec3_t b, const vec3_t c,
+	const vec3_t color0, const vec3_t color1, const vec3_t color2,
+	vec3_t centroidAccum, vec3_t normalAccum, vec3_t colorAccum, float *areaAccum )
+{
+	vec3_t edge0;
+	vec3_t edge1;
+	vec3_t cross;
+	vec3_t centroid;
+	float doubleArea;
+	float area;
+
+	VectorSubtract( b, a, edge0 );
+	VectorSubtract( c, a, edge1 );
+	CrossProduct( edge0, edge1, cross );
+	doubleArea = VectorLength( cross );
+	if ( doubleArea <= 0.0f ) {
+		return;
+	}
+
+	area = doubleArea * 0.5f;
+	VectorAdd( a, b, centroid );
+	VectorAdd( centroid, c, centroid );
+	VectorScale( centroid, 1.0f / 3.0f, centroid );
+
+	VectorMA( centroidAccum, area, centroid, centroidAccum );
+	VectorAdd( normalAccum, cross, normalAccum );
+	R_SurfaceLightAccumulateVertexColor( colorAccum, area, color0, color1, color2 );
+	*areaAccum += area;
+}
+
+static float R_SurfaceLightProxyRadius( const shader_t *shader, float area )
+{
+	float extent;
+	float radius;
+
+	extent = sqrtf( area );
+	radius = extent * 2.0f + sqrtf( shader->surfaceLight ) * 8.0f;
+	if ( shader->surfaceLightSubdivide > 0.0f && radius < shader->surfaceLightSubdivide ) {
+		radius = shader->surfaceLightSubdivide;
+	}
+
+	return Com_Clamp( 64.0f, 4096.0f, radius );
+}
+
+static qboolean R_AddSurfaceLightProxy( int surfaceIndex, const shader_t *shader,
+	const vec3_t centroidAccum, const vec3_t normalAccum, const vec3_t colorAccum, float area )
+{
+	surfaceLightProxy_t *proxy;
+	vec3_t origin;
+	vec3_t normal;
+	float offset;
+
+	if ( area <= 1.0f ) {
+		tr.surfaceLightProxies.skippedInvalid++;
+		return qfalse;
+	}
+	if ( VectorNormalize2( normalAccum, normal ) <= 0.0f ) {
+		tr.surfaceLightProxies.skippedInvalid++;
+		return qfalse;
+	}
+
+	if ( tr.surfaceLightProxies.count >= MAX_SURFACELIGHT_PROXIES ) {
+		tr.surfaceLightProxies.skippedOverflow++;
+		return qfalse;
+	}
+
+	VectorScale( centroidAccum, 1.0f / area, origin );
+
+	proxy = &tr.surfaceLightProxies.proxies[tr.surfaceLightProxies.count++];
+	Com_Memset( proxy, 0, sizeof( *proxy ) );
+	proxy->sourceSurface = surfaceIndex;
+	Q_strncpyz( proxy->shaderName, shader->name, sizeof( proxy->shaderName ) );
+	proxy->area = area;
+	proxy->intensity = shader->surfaceLight;
+	proxy->radius = R_SurfaceLightProxyRadius( shader, area );
+	proxy->designerPriority = Com_Clamp( 0.25f, 4.0f, proxy->radius / 512.0f );
+	proxy->castsShadows = qtrue;
+	VectorCopy( normal, proxy->normal );
+	R_SurfaceLightResolveColor( shader, colorAccum, area, proxy->color );
+
+	offset = Com_Clamp( 8.0f, 64.0f, proxy->radius * 0.05f );
+	VectorMA( origin, offset, normal, proxy->origin );
+	return qtrue;
+}
+
+static qboolean R_BuildSurfaceLightFaceProxy( int surfaceIndex, const shader_t *shader, const srfSurfaceFace_t *face )
+{
+	const int *indices;
+	vec3_t centroidAccum;
+	vec3_t normalAccum;
+	vec3_t colorAccum;
+	float area;
+	int i;
+
+	if ( !face || face->numPoints <= 0 || face->numIndices < 3 ) {
+		tr.surfaceLightProxies.skippedInvalid++;
+		return qfalse;
+	}
+
+	indices = (const int *)( (const byte *)face + face->ofsIndices );
+	VectorClear( centroidAccum );
+	VectorClear( normalAccum );
+	VectorClear( colorAccum );
+	area = 0.0f;
+
+	for ( i = 0; i + 2 < face->numIndices; i += 3 ) {
+		int i0 = indices[i + 0];
+		int i1 = indices[i + 1];
+		int i2 = indices[i + 2];
+		vec3_t color0;
+		vec3_t color1;
+		vec3_t color2;
+
+		if ( i0 < 0 || i0 >= face->numPoints || i1 < 0 || i1 >= face->numPoints ||
+			i2 < 0 || i2 >= face->numPoints ) {
+			continue;
+		}
+		R_SurfaceLightPointColor( face->points[i0], color0 );
+		R_SurfaceLightPointColor( face->points[i1], color1 );
+		R_SurfaceLightPointColor( face->points[i2], color2 );
+		R_SurfaceLightAccumulateTriangle( face->points[i0], face->points[i1], face->points[i2],
+			color0, color1, color2, centroidAccum, normalAccum, colorAccum, &area );
+	}
+
+	if ( VectorLengthSquared( normalAccum ) <= 0.0f ) {
+		VectorCopy( face->plane.normal, normalAccum );
+		VectorScale( normalAccum, area, normalAccum );
+	}
+
+	return R_AddSurfaceLightProxy( surfaceIndex, shader, centroidAccum, normalAccum, colorAccum, area );
+}
+
+static qboolean R_BuildSurfaceLightGridProxy( int surfaceIndex, const shader_t *shader, const srfGridMesh_t *grid )
+{
+	vec3_t centroidAccum;
+	vec3_t normalAccum;
+	vec3_t colorAccum;
+	float area;
+	int x, y;
+
+	if ( !grid || grid->width < 2 || grid->height < 2 ) {
+		tr.surfaceLightProxies.skippedInvalid++;
+		return qfalse;
+	}
+
+	VectorClear( centroidAccum );
+	VectorClear( normalAccum );
+	VectorClear( colorAccum );
+	area = 0.0f;
+
+	for ( y = 0; y < grid->height - 1; y++ ) {
+		for ( x = 0; x < grid->width - 1; x++ ) {
+			const drawVert_t *v00 = &grid->verts[y * grid->width + x];
+			const drawVert_t *v10 = &grid->verts[y * grid->width + x + 1];
+			const drawVert_t *v01 = &grid->verts[( y + 1 ) * grid->width + x];
+			const drawVert_t *v11 = &grid->verts[( y + 1 ) * grid->width + x + 1];
+			vec3_t color00;
+			vec3_t color10;
+			vec3_t color01;
+			vec3_t color11;
+
+			R_SurfaceLightDrawVertColor( v00, color00 );
+			R_SurfaceLightDrawVertColor( v10, color10 );
+			R_SurfaceLightDrawVertColor( v01, color01 );
+			R_SurfaceLightDrawVertColor( v11, color11 );
+			R_SurfaceLightAccumulateTriangle( v00->xyz, v10->xyz, v11->xyz,
+				color00, color10, color11, centroidAccum, normalAccum, colorAccum, &area );
+			R_SurfaceLightAccumulateTriangle( v00->xyz, v11->xyz, v01->xyz,
+				color00, color11, color01, centroidAccum, normalAccum, colorAccum, &area );
+		}
+	}
+
+	if ( VectorLengthSquared( normalAccum ) <= 0.0f ) {
+		int i;
+
+		for ( i = 0; i < grid->width * grid->height; i++ ) {
+			VectorAdd( normalAccum, grid->verts[i].normal, normalAccum );
+		}
+	}
+
+	return R_AddSurfaceLightProxy( surfaceIndex, shader, centroidAccum, normalAccum, colorAccum, area );
+}
+
+static qboolean R_BuildSurfaceLightTriProxy( int surfaceIndex, const shader_t *shader, const srfTriangles_t *tri )
+{
+	vec3_t centroidAccum;
+	vec3_t normalAccum;
+	vec3_t colorAccum;
+	float area;
+	int i;
+
+	if ( !tri || tri->numVerts <= 0 || tri->numIndexes < 3 ) {
+		tr.surfaceLightProxies.skippedInvalid++;
+		return qfalse;
+	}
+
+	VectorClear( centroidAccum );
+	VectorClear( normalAccum );
+	VectorClear( colorAccum );
+	area = 0.0f;
+
+	for ( i = 0; i + 2 < tri->numIndexes; i += 3 ) {
+		int i0 = tri->indexes[i + 0];
+		int i1 = tri->indexes[i + 1];
+		int i2 = tri->indexes[i + 2];
+		vec3_t color0;
+		vec3_t color1;
+		vec3_t color2;
+
+		if ( i0 < 0 || i0 >= tri->numVerts || i1 < 0 || i1 >= tri->numVerts ||
+			i2 < 0 || i2 >= tri->numVerts ) {
+			continue;
+		}
+		R_SurfaceLightDrawVertColor( &tri->verts[i0], color0 );
+		R_SurfaceLightDrawVertColor( &tri->verts[i1], color1 );
+		R_SurfaceLightDrawVertColor( &tri->verts[i2], color2 );
+		R_SurfaceLightAccumulateTriangle( tri->verts[i0].xyz, tri->verts[i1].xyz, tri->verts[i2].xyz,
+			color0, color1, color2, centroidAccum, normalAccum, colorAccum, &area );
+	}
+
+	if ( VectorLengthSquared( normalAccum ) <= 0.0f ) {
+		for ( i = 0; i < tri->numVerts; i++ ) {
+			VectorAdd( normalAccum, tri->verts[i].normal, normalAccum );
+		}
+	}
+
+	return R_AddSurfaceLightProxy( surfaceIndex, shader, centroidAccum, normalAccum, colorAccum, area );
+}
+
+static void R_BuildSurfaceLightProxyForSurface( int surfaceIndex, const msurface_t *surf )
+{
+	const shader_t *shader;
+	const surfaceType_t *surfaceType;
+
+	if ( !surf || !surf->shader || !surf->shader->surfaceLightValid ) {
+		return;
+	}
+
+	shader = surf->shader;
+	tr.surfaceLightProxies.sourceSurfaces++;
+	if ( shader->isSky || ( shader->surfaceFlags & SURF_SKY ) ) {
+		tr.surfaceLightProxies.skippedSky++;
+		return;
+	}
+
+	surfaceType = surf->data;
+	if ( !surfaceType || *surfaceType == SF_SKIP ) {
+		tr.surfaceLightProxies.skippedInvalid++;
+		return;
+	}
+
+	switch ( *surfaceType ) {
+	case SF_FACE:
+		R_BuildSurfaceLightFaceProxy( surfaceIndex, shader, (const srfSurfaceFace_t *)surfaceType );
+		break;
+	case SF_GRID:
+		R_BuildSurfaceLightGridProxy( surfaceIndex, shader, (const srfGridMesh_t *)surfaceType );
+		break;
+	case SF_TRIANGLES:
+		R_BuildSurfaceLightTriProxy( surfaceIndex, shader, (const srfTriangles_t *)surfaceType );
+		break;
+	default:
+		tr.surfaceLightProxies.skippedInvalid++;
+		break;
+	}
+}
+
+static void R_BuildSurfaceLightProxiesForWorld( void )
+{
+	int i;
+
+	R_ClearSurfaceLightProxies();
+	tr.surfaceLightProxies.built = qtrue;
+
+	if ( !s_worldData.surfaces || s_worldData.numsurfaces <= 0 ) {
+		return;
+	}
+
+	for ( i = 0; i < s_worldData.numsurfaces; i++ ) {
+		R_BuildSurfaceLightProxyForSurface( i, &s_worldData.surfaces[i] );
+	}
+
+	if ( r_surfaceLightProxyDebug && r_surfaceLightProxyDebug->integer ) {
+		ri.Printf( PRINT_ALL,
+			"surfacelight proxies sources:%i built:%i skip sky:%i invalid:%i overflow:%i\n",
+			tr.surfaceLightProxies.sourceSurfaces, tr.surfaceLightProxies.count,
+			tr.surfaceLightProxies.skippedSky, tr.surfaceLightProxies.skippedInvalid,
+			tr.surfaceLightProxies.skippedOverflow );
+	}
+}
+
 static shader_t *ShaderForShaderNum( const int shaderNum, int lightmapNum ) {
 	shader_t	*shader;
 	const dshader_t *dsh;
@@ -548,13 +1432,7 @@ static shader_t *ShaderForShaderNum( const int shaderNum, int lightmapNum ) {
 		return tr.defaultShader;
 	}
 
-	if ( shader->skySunValid ) {
-		VectorCopy( shader->skySunColor, tr.sunColor );
-		VectorCopy( shader->skySunDirection, tr.sunDirection );
-		VectorCopy( shader->skySunLight, tr.sunLight );
-		tr.sunIntensity = shader->skySunIntensity;
-		tr.sunParmsValid = qtrue;
-	}
+	R_SetWorldSunFromShader( shader );
 
 	if ( r_singleShader->integer && !shader->isSky ) {
 		return tr.defaultShader;
@@ -2242,17 +3120,10 @@ void RE_LoadWorldMap( const char *name ) {
 		ri.Error( ERR_DROP, "ERROR: attempted to redundantly load world map" );
 	}
 
-	// set default sun direction to be used if it isn't
-	// overridden by a shader
-	tr.sunDirection[0] = 0.45f;
-	tr.sunDirection[1] = 0.3f;
-	tr.sunDirection[2] = 0.9f;
-	VectorClear( tr.sunLight );
-	VectorSet( tr.sunColor, 1.0f, 1.0f, 1.0f );
-	tr.sunIntensity = 0.0f;
-	tr.sunParmsValid = qfalse;
-
-	VectorNormalize( tr.sunDirection );
+	// set default sun direction to be used if it isn't overridden by a shader
+	R_ClearWorldSun();
+	R_ClearStaticMapLights();
+	R_ClearSurfaceLightProxies();
 
 	tr.worldMapLoaded = qtrue;
 
@@ -2340,6 +3211,8 @@ void RE_LoadWorldMap( const char *name ) {
 
 	// only set tr.world now that we know the entire level has loaded properly
 	tr.world = &s_worldData;
+	R_BuildSurfaceLightProxiesForWorld();
+	R_LoadStaticMapLightsForWorld();
 
 	if ( translatedMap ) {
 		ri.Free( buffer.v );

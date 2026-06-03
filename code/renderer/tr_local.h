@@ -80,6 +80,7 @@ typedef struct dlight_s {
 #ifdef USE_PMLIGHT
 	struct litSurf_s	*head;
 	struct litSurf_s	*tail;
+	qboolean shadowEligible;
 	qboolean shadowPlanned;
 	int shadowIndex;
 	int shadowAtlasBaseFace;
@@ -88,6 +89,7 @@ typedef struct dlight_s {
 	int shadowAtlasY[DLIGHT_SHADOW_FACES];
 	int shadowReceiverCount;
 	float shadowPriority;
+	float shadowPriorityMultiplier;
 #endif
 } dlight_t;
 
@@ -445,6 +447,11 @@ typedef struct shader_s {
 	vec3_t		skySunDirection;
 	vec3_t		skySunLight;
 	float		skySunIntensity;
+	qboolean	surfaceLightValid;
+	float		surfaceLight;
+	float		surfaceLightSubdivide;
+	qboolean	surfaceLightColorValid;
+	vec3_t		surfaceLightColor;
 	fogParms_t	fogParms;
 
 	float		portalRange;			// distance to fog out at
@@ -722,8 +729,110 @@ typedef struct {
 	float		shadowStrength;
 	vec3_t		lightDirection;
 	vec3_t		lightColor;
+	vec3_t		directionToSun;
+	char		skyShaderName[MAX_QPATH];
 	csmCascadePlan_t cascades[CSM_MAX_CASCADES];
 } csmPlan_t;
+
+typedef struct {
+	qboolean	valid;
+	char		shaderName[MAX_QPATH];
+	vec3_t		color;
+	vec3_t		directionToSun;
+	vec3_t		lightDirection;
+	vec3_t		light;
+	float		intensity;
+} worldSun_t;
+
+#define MAX_STATIC_MAP_LIGHTS 128
+#define MAX_SURFACELIGHT_PROXIES 256
+
+typedef enum {
+	MAP_LIGHT_POINT
+} mapLightType_t;
+
+typedef struct {
+	char		name[64];
+	mapLightType_t type;
+	vec3_t		origin;
+	vec3_t		direction;
+	vec3_t		color;
+	float		intensity;
+	float		radius;
+	float		innerAngle;
+	float		outerAngle;
+	int			resolution;
+	int			style;
+	qboolean	castsShadows;
+	float		designerPriority;
+} mapLightDef_t;
+
+typedef struct {
+	qboolean	loaded;
+	qboolean	parseFailed;
+	char		filename[MAX_QPATH];
+	int			version;
+	int			count;
+	int			skippedUnsupported;
+	int			skippedInvalid;
+	int			skippedOverflow;
+	int			promotedThisFrame;
+	int			shadowEligibleThisFrame;
+	int			skippedDisabledThisFrame;
+	int			skippedPVSThisFrame;
+	int			skippedBudgetThisFrame;
+	mapLightDef_t lights[MAX_STATIC_MAP_LIGHTS];
+} staticMapLights_t;
+
+typedef struct {
+	int			sourceSurface;
+	char		shaderName[MAX_QPATH];
+	vec3_t		origin;
+	vec3_t		normal;
+	vec3_t		color;
+	float		intensity;
+	float		radius;
+	float		area;
+	float		designerPriority;
+	qboolean	castsShadows;
+} surfaceLightProxy_t;
+
+typedef struct {
+	qboolean	built;
+	int			count;
+	int			sourceSurfaces;
+	int			skippedSky;
+	int			skippedInvalid;
+	int			skippedOverflow;
+	int			promotedThisFrame;
+	int			shadowEligibleThisFrame;
+	int			skippedDisabledThisFrame;
+	int			skippedPVSThisFrame;
+	int			skippedBudgetThisFrame;
+	surfaceLightProxy_t proxies[MAX_SURFACELIGHT_PROXIES];
+} surfaceLightProxies_t;
+
+typedef struct {
+	qboolean	planned;
+	qboolean	noWorldModel;
+	int			frameSceneNum;
+	int			frameCount;
+	int			viewCount;
+	int			inputDlights;
+	qboolean	csmPlanned;
+	int			csmCascadeCount;
+	int			csmResolution;
+	int			csmAtlasWidth;
+	int			csmAtlasHeight;
+	qboolean	dlightPlanned;
+	int			dlightConsidered;
+	int			dlightCandidates;
+	int			dlightPlannedCount;
+	int			dlightAtlasWidth;
+	int			dlightAtlasHeight;
+	int			dlightAtlasFaceSize;
+	int			dlightAtlasFill;
+} shadowManager_t;
 
 static ID_INLINE void R_FinalizeViewPassFlags( viewParms_t *viewParms ) {
 	viewParms->passFlags |= VPF_CLEAR_DEPTH;
@@ -1348,6 +1457,7 @@ typedef struct {
 
 	int						numLightmaps;
 	image_t					**lightmaps;
+	vec3_t					*lightmapAverageColors;
 
 	qboolean				mergeLightmaps;
 	float					lightmapOffset[2];	// current shader lightmap offset
@@ -1374,11 +1484,15 @@ typedef struct {
 #ifdef USE_PMLIGHT
 	dlight_t				*light;				// current light during R_RecursiveLightNode
 #endif
+	worldSun_t				worldSun;
 	vec3_t					sunLight;			// from the sky shader for this level
 	vec3_t					sunColor;
 	float					sunIntensity;
 	qboolean				sunParmsValid;
-	vec3_t					sunDirection;
+	vec3_t					sunDirection;		// direction from the world toward the sky sun
+	staticMapLights_t		staticMapLights;
+	surfaceLightProxies_t	surfaceLightProxies;
+	shadowManager_t			shadowManager;
 	csmPlan_t				csm;
 	csmPlan_t				csmDebugPlan;
 
@@ -1494,6 +1608,16 @@ extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
 extern cvar_t	*r_dlightSaturation;	// 0.0 - 1.0
 extern cvar_t	*r_dlightOverbrightGamut;	// 0.0 - 1.0
+extern cvar_t	*r_staticLights;			// 0 - 1
+extern cvar_t	*r_staticLightMaxLights;		// 0 - MAX_DLIGHTS
+extern cvar_t	*r_staticLightShadows;		// 0 - 1
+extern cvar_t	*r_staticLightShadowMaxLights; // 0 - MAX_DLIGHTS
+extern cvar_t	*r_staticLightDebug;			// 0 - 1
+extern cvar_t	*r_surfaceLightProxies;		// 0 - 1
+extern cvar_t	*r_surfaceLightProxyMaxLights; // 0 - MAX_DLIGHTS
+extern cvar_t	*r_surfaceLightProxyShadows;	// 0 - 1
+extern cvar_t	*r_surfaceLightProxyShadowMaxLights; // 0 - MAX_DLIGHTS
+extern cvar_t	*r_surfaceLightProxyDebug;	// 0 - 1
 extern cvar_t	*r_csmShadows;			// 0 - 1
 extern cvar_t	*r_csmCascadeCount;		// 1 - CSM_MAX_CASCADES
 extern cvar_t	*r_csmMaxDistance;		// maximum shadowed camera distance
@@ -1875,6 +1999,7 @@ WORLD MAP
 void R_AddBrushModelSurfaces( trRefEntity_t *e );
 void R_AddWorldSurfaces( void );
 qboolean R_inPVS( const vec3_t p1, const vec3_t p2 );
+qboolean R_PointInCurrentPVS( const vec3_t vieworg, const vec3_t point );
 
 
 /*
@@ -2057,6 +2182,7 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 #ifdef USE_PMLIGHT
 void R_DlightTest_f( void );
 #endif
+void R_StaticMapLightsReload_f( void );
 
 void RE_RenderScene( const refdef_t *fd );
 

@@ -799,6 +799,44 @@ qboolean R_inPVS( const vec3_t p1, const vec3_t p2 ) {
 }
 
 /*
+=====================
+R_PointInCurrentPVS
+=====================
+*/
+qboolean R_PointInCurrentPVS( const vec3_t vieworg, const vec3_t point ) {
+	const mnode_t *viewLeaf;
+	const mnode_t *leaf;
+	const byte *vis;
+	int viewCluster;
+	int cluster;
+
+	if ( !tr.world || !tr.world->nodes || ( r_novis && r_novis->integer ) ) {
+		return qtrue;
+	}
+
+	viewLeaf = R_PointInLeaf( vieworg );
+	leaf = R_PointInLeaf( point );
+	viewCluster = viewLeaf->cluster;
+	cluster = leaf->cluster;
+	if ( viewCluster < 0 || cluster < 0 ||
+		viewCluster >= tr.world->numClusters || cluster >= tr.world->numClusters ) {
+		return qtrue;
+	}
+
+	vis = R_ClusterPVS( viewCluster );
+	if ( !( vis[cluster >> 3] & ( 1 << ( cluster & 7 ) ) ) ) {
+		return qfalse;
+	}
+
+	if ( leaf->area >= 0 && leaf->area < MAX_MAP_AREA_BYTES * 8 &&
+		( tr.refdef.areamask[leaf->area >> 3] & ( 1 << ( leaf->area & 7 ) ) ) ) {
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+/*
 ===============
 R_MarkLeaves
 

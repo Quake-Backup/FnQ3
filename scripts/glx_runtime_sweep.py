@@ -24,11 +24,11 @@ TEXTURE_CLASSIFICATION_MANIFEST_PATH = ROOT / "docs" / "fnquake3" / "GLX_TEXTURE
 RENDERER_NAME_RE = re.compile(r"^[A-Za-z1-9]+$")
 DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO = 0.20
 GLX_EXPECTED_PASS_SCHEDULE = (
-    "frame-setup>sky-opaque-world>opaque-entities>dynamic-scene>transparent-layers>"
+    "frame-setup>sky-opaque-world>opaque-entities>dynamic-lights>dynamic-scene>transparent-layers>"
     "first-person-weapon>hud-2d>postprocess>output-export"
 )
-GLX_EXPECTED_PASS_SCHEDULE_COUNT = 9
-GLX_EXPECTED_PASS_SCHEDULE_HASH = "0c6d7632"
+GLX_EXPECTED_PASS_SCHEDULE_COUNT = 10
+GLX_EXPECTED_PASS_SCHEDULE_HASH = "541629f7"
 GLX_PRODUCT_TIERS = {"GL12", "GL2X", "GL3X", "GL41", "GL46"}
 GLX_BLOCKING_RELEASE_PLATFORMS = ("windows-x64", "linux-x86_64")
 GLX_RELEASE_REQUIRED_GATES = ("rc-smoke", "rc-parity", "rc-proof")
@@ -89,6 +89,7 @@ GLX_DYNAMIC_CATEGORY_TAGS = {
     "poly": "transient-poly",
     "mark": "mark-decal",
     "beam": "beam",
+    "dlight": "dynamic-light",
 }
 GLX_DYNAMIC_STREAM_FEATURE_TAGS = {
     "shadow": "planar-shadow",
@@ -161,6 +162,46 @@ PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "streamDrawTexMods",
     "streamDrawEnvironment",
     "streamDrawDynamicLights",
+    "streamDlightAttempts",
+    "streamDlightDraws",
+    "streamDlightFallbacks",
+    "streamDlightAttemptMegabytes",
+    "streamDlightMegabytes",
+    "streamDlightIndexMegabytes",
+    "streamDlightWraps",
+    "streamDlightSameFrameWrapRejects",
+    "streamDlightSyncWaits",
+    "streamDlightSyncTimeouts",
+    "streamDlightSyncFailures",
+    "streamDlightProgramBinds",
+    "streamDlightProgramBindAttempts",
+    "streamDlightProgramCreates",
+    "streamDlightProgramCacheHits",
+    "dlightStateLegacyPasses",
+    "dlightStateTextureBinds",
+    "dlightStateFogTextureBinds",
+    "dlightStateShadowTextureBinds",
+    "dlightStateShadowTextureFallbackBinds",
+    "dlightStateShadowFboBinds",
+    "dlightStateShadowFboRestores",
+    "dlightStateChanges",
+    "dlightBuildLegacyLights",
+    "dlightBuildLegacySkippedLights",
+    "dlightBuildLegacyNoHitLights",
+    "dlightBuildLegacyVertexes",
+    "dlightBuildLegacyIndexes",
+    "dlightBuildLegacyLitIndexes",
+    "dlightBuildPmPasses",
+    "dlightBuildPmVertexes",
+    "dlightBuildPmIndexes",
+    "dlightCullLegacyVertexes",
+    "dlightCullLegacyIndexes",
+    "dlightScissorCandidates",
+    "dlightScissorComputed",
+    "dlightScissorApplied",
+    "dlightScissorFallbacks",
+    "dlightScissorPixels",
+    "dlightScissorViewportPixels",
     "streamDrawScreenMaps",
     "streamDrawVideoMaps",
     "streamDrawShadows",
@@ -175,7 +216,50 @@ PERFORMANCE_BASELINE_GROWTH_KEYS = (
     "streamCategoryWeaponDraws",
     "streamCategoryUiDraws",
     "streamCategoryBeamDraws",
+    "streamCategoryDlightDraws",
     "streamCategorySpecialDraws",
+    "streamRoleGenericDraws",
+    "streamRoleGenericAttempts",
+    "streamRoleGenericFallbacks",
+    "streamRoleDlightDraws",
+    "streamRoleDlightAttempts",
+    "streamRoleDlightFallbacks",
+    "streamRoleShadowDraws",
+    "streamRoleShadowAttempts",
+    "streamRoleShadowFallbacks",
+    "streamRoleBeamDraws",
+    "streamRoleBeamAttempts",
+    "streamRoleBeamFallbacks",
+    "streamRolePostDraws",
+    "streamRolePostAttempts",
+    "streamRolePostFallbacks",
+    "renderIRRoleGenericDraws",
+    "renderIRRoleGenericIndexes",
+    "renderIRRoleGenericVertices",
+    "renderIRRoleDlightDraws",
+    "renderIRRoleDlightIndexes",
+    "renderIRRoleDlightVertices",
+    "renderIRRoleShadowDraws",
+    "renderIRRoleShadowIndexes",
+    "renderIRRoleShadowVertices",
+    "renderIRRoleBeamDraws",
+    "renderIRRoleBeamIndexes",
+    "renderIRRoleBeamVertices",
+    "renderIRRolePostDraws",
+    "renderIRRolePostIndexes",
+    "renderIRRolePostVertices",
+    "renderIRPassDlightDraws",
+    "renderIRPassDlightIndexes",
+    "renderIRPassDlightVertices",
+    "renderIRPassSceneDraws",
+    "renderIRPassSceneIndexes",
+    "renderIRPassSceneVertices",
+    "renderIRPassPostDraws",
+    "renderIRPassPostIndexes",
+    "renderIRPassPostVertices",
+    "renderIRPassOtherDraws",
+    "renderIRPassOtherIndexes",
+    "renderIRPassOtherVertices",
     "staticDrawAttempts",
     "staticDrawIndexes",
     "staticDrawFallbacks",
@@ -265,7 +349,6 @@ DEFAULT_PERFORMANCE_BUDGET = {
         "materialBindFailures": 0,
         "materialInvalidParameterBlocks": 0,
         "streamDrawFallbacks": 0,
-        "streamDrawDynamicLights": 0,
         "streamDrawScreenMaps": 0,
         "streamDrawVideoMaps": 0,
         "staticDrawFallbacks": 0,
@@ -694,6 +777,25 @@ GLX_RENDER_IR_PRODUCTS_RE = re.compile(
     r"outputs\s+(?P<outputs>\d+),?\s+rejects\s+(?P<rejects>\d+)",
     re.IGNORECASE,
 )
+GLX_RENDER_IR_DYNAMIC_ROLES_RE = re.compile(
+    r"(?:glx:\s*)?render IR dynamic roles:?\s*"
+    r"generic\s+(?P<genericDraws>\d+)/(?P<genericIndexes>\d+)/(?P<genericVertices>\d+),\s*"
+    r"dlight\s+(?P<dlightDraws>\d+)/(?P<dlightIndexes>\d+)/(?P<dlightVertices>\d+),\s*"
+    r"shadow\s+(?P<shadowDraws>\d+)/(?P<shadowIndexes>\d+)/(?P<shadowVertices>\d+),\s*"
+    r"beam\s+(?P<beamDraws>\d+)/(?P<beamIndexes>\d+)/(?P<beamVertices>\d+),\s*"
+    r"post\s+(?P<postDraws>\d+)/(?P<postIndexes>\d+)/(?P<postVertices>\d+)",
+    re.IGNORECASE,
+)
+GLX_RENDER_IR_DYNAMIC_PASSES_RE = re.compile(
+    r"(?:glx:\s*)?render IR dynamic passes:?\s*"
+    r"dlight\s+(?P<dlightDraws>\d+)/(?P<dlightIndexes>\d+)/(?P<dlightVertices>\d+),\s*"
+    r"scene\s+(?P<sceneDraws>\d+)/(?P<sceneIndexes>\d+)/(?P<sceneVertices>\d+),\s*"
+    r"post\s+(?P<postDraws>\d+)/(?P<postIndexes>\d+)/(?P<postVertices>\d+),\s*"
+    r"other\s+(?P<otherDraws>\d+)/(?P<otherIndexes>\d+)/(?P<otherVertices>\d+)",
+    re.IGNORECASE,
+)
+GLX_RENDER_IR_DYNAMIC_ROLE_KEYS = ("generic", "dlight", "shadow", "beam", "post")
+GLX_RENDER_IR_DYNAMIC_PASS_KEYS = ("dlight", "scene", "post", "other")
 GLX_POST_OUTPUT_OWNERSHIP_RE = re.compile(
     r"(?:glx:\s*)?post/output ownership:?\s*"
     r"mode\s+(?P<mode>[A-Za-z0-9_-]+),?\s+post nodes\s+(?P<postNodes>\d+),?\s+"
@@ -851,6 +953,56 @@ STREAM_DRAWS_RE = re.compile(
     r"fallbacks\s+(?P<fallbacks>\d+)",
     re.IGNORECASE,
 )
+STREAM_DLIGHT_TELEMETRY_RE = re.compile(
+    r"dynamic stream dynamic-light telemetry:\s*"
+    r"attempts\s+(?P<attempts>\d+),\s*draws\s+(?P<draws>\d+),\s*"
+    r"fallbacks\s+(?P<fallbacks>\d+),\s*"
+    r"attempt\s+(?P<attemptMegabytes>\d+(?:\.\d+)?)\s+MB,\s*"
+    r"draw\s+(?P<megabytes>\d+(?:\.\d+)?)\s+MB,\s*"
+    r"index\s+(?P<indexMegabytes>\d+(?:\.\d+)?)\s+MB,\s*"
+    r"tex1\s+(?P<tex1Megabytes>\d+(?:\.\d+)?)\s+MB,\s*"
+    r"wraps\s+(?P<wraps>\d+),\s*same-frame rejects\s+(?P<sameFrameRejects>\d+),\s*"
+    r"waits\s+(?P<syncWaits>\d+),\s*timeouts\s+(?P<syncTimeouts>\d+),\s*"
+    r"sync failures\s+(?P<syncFailures>\d+)",
+    re.IGNORECASE,
+)
+DLIGHT_PROGRAM_COMPACT_RE = re.compile(
+    r"dlight program compact:\s*active\s+(?P<active>\w+),\s*"
+    r"programs\s+(?P<programs>\d+),\s*"
+    r"availability\s+(?P<availabilityHits>\d+)/(?P<availabilityQueries>\d+),\s*"
+    r"binds\s+(?P<binds>\d+)/(?P<bindAttempts>\d+),\s*"
+    r"failures\s+(?P<failures>\d+),\s*creates\s+(?P<creates>\d+),\s*"
+    r"cache hits\s+(?P<cacheHits>\d+)",
+    re.IGNORECASE,
+)
+DLIGHT_STATE_COMPACT_RE = re.compile(
+    r"dlight state compact:\s*legacy passes\s+(?P<legacyPasses>\d+),\s*"
+    r"texture binds\s+(?P<textureBinds>\d+),\s*"
+    r"fog textures\s+(?P<fogTextureBinds>\d+),\s*"
+    r"shadow textures\s+(?P<shadowTextureBinds>\d+)/(?P<shadowTextureFallbackBinds>\d+),\s*"
+    r"shadow fbo\s+(?P<shadowFboBinds>\d+)/(?P<shadowFboRestores>\d+),\s*"
+    r"state changes\s+(?P<stateChanges>\d+)",
+    re.IGNORECASE,
+)
+DLIGHT_BUILD_COMPACT_RE = re.compile(
+    r"dlight build compact:\s*legacy lights\s+(?P<legacyLights>\d+)/(?P<legacySkippedLights>\d+),\s*"
+    r"no-hit\s+(?P<legacyNoHitLights>\d+),\s*verts\s+(?P<legacyVertexes>\d+),\s*"
+    r"indexes\s+(?P<legacyIndexes>\d+)/(?P<legacyLitIndexes>\d+),\s*"
+    r"pm\s+(?P<pmPasses>\d+),\s*pm verts/indexes\s+(?P<pmVertexes>\d+)/(?P<pmIndexes>\d+)",
+    re.IGNORECASE,
+)
+DLIGHT_CULL_COMPACT_RE = re.compile(
+    r"dlight cull compact:\s*legacy verts\s+(?P<legacyVertexes>\d+),\s*"
+    r"indexes\s+(?P<legacyIndexes>\d+)",
+    re.IGNORECASE,
+)
+DLIGHT_SCISSOR_COMPACT_RE = re.compile(
+    r"dlight scissor compact:\s*active\s+(?P<active>\w+),\s*"
+    r"candidates\s+(?P<candidates>\d+),\s*computed\s+(?P<computed>\d+),\s*"
+    r"applied\s+(?P<applied>\d+),\s*fallbacks\s+(?P<fallbacks>\d+),\s*"
+    r"pixels\s+(?P<pixels>\d+)/(?P<viewportPixels>\d+)",
+    re.IGNORECASE,
+)
 STREAM_CATEGORIES_RE = re.compile(
     r"dynamic stream categories:\s*"
     r"entity\s+(?P<entityDraws>\d+)/(?P<entityAttempts>\d+),\s*"
@@ -860,6 +1012,7 @@ STREAM_CATEGORIES_RE = re.compile(
     r"weapon\s+(?P<weaponDraws>\d+)/(?P<weaponAttempts>\d+),\s*"
     r"ui\s+(?P<uiDraws>\d+)/(?P<uiAttempts>\d+),\s*"
     r"beam\s+(?P<beamDraws>\d+)/(?P<beamAttempts>\d+),\s*"
+    r"(?:dlight\s+(?P<dlightDraws>\d+)/(?P<dlightAttempts>\d+),\s*)?"
     r"special\s+(?P<specialDraws>\d+)/(?P<specialAttempts>\d+)",
     re.IGNORECASE,
 )
@@ -868,7 +1021,17 @@ STREAM_CATEGORY_FALLBACKS_RE = re.compile(
     r"entity\s+(?P<entity>\d+),\s*particle\s+(?P<particle>\d+),\s*"
     r"poly\s+(?P<poly>\d+),\s*mark\s+(?P<mark>\d+),\s*"
     r"weapon\s+(?P<weapon>\d+),\s*ui\s+(?P<ui>\d+),\s*"
-    r"beam\s+(?P<beam>\d+),\s*special\s+(?P<special>\d+)",
+    r"beam\s+(?P<beam>\d+),\s*(?:dlight\s+(?P<dlight>\d+),\s*)?"
+    r"special\s+(?P<special>\d+)",
+    re.IGNORECASE,
+)
+STREAM_IR_ROLES_RE = re.compile(
+    r"dynamic stream IR roles:\s*"
+    r"generic\s+(?P<genericDraws>\d+)/(?P<genericAttempts>\d+)/(?P<genericFallbacks>\d+),\s*"
+    r"dlight\s+(?P<dlightDraws>\d+)/(?P<dlightAttempts>\d+)/(?P<dlightFallbacks>\d+),\s*"
+    r"shadow\s+(?P<shadowDraws>\d+)/(?P<shadowAttempts>\d+)/(?P<shadowFallbacks>\d+),\s*"
+    r"beam\s+(?P<beamDraws>\d+)/(?P<beamAttempts>\d+)/(?P<beamFallbacks>\d+),\s*"
+    r"post\s+(?P<postDraws>\d+)/(?P<postAttempts>\d+)/(?P<postFallbacks>\d+)",
     re.IGNORECASE,
 )
 STREAM_DRAW_SKIPS_RE = re.compile(
@@ -908,7 +1071,15 @@ STREAM_CATEGORY_KEYS = (
     "weapon",
     "ui",
     "beam",
+    "dlight",
     "special",
+)
+STREAM_ROLE_KEYS = (
+    "generic",
+    "dlight",
+    "shadow",
+    "beam",
+    "post",
 )
 STREAM_FAILURE_RE = re.compile(
     r"dynamic stream (?P<name>allocation|map|unmap|reservation) failures:\s*(?P<count>\d+)",
@@ -1131,6 +1302,46 @@ GLX_STREAM_DRAW_SUMMARY_RE = re.compile(
     r"fallbacks\s+(?P<fallbacks>\d+),\s*skips\s+(?P<skips>\d+)",
     re.IGNORECASE,
 )
+GLX_STREAM_DLIGHT_SUMMARY_RE = re.compile(
+    r"glx:\s*stream dlight attempts\s+(?P<attempts>\d+)\s+"
+    r"draws\s+(?P<draws>\d+)\s+fallbacks\s+(?P<fallbacks>\d+)\s+"
+    r"bytes\s+(?P<attemptMegabytes>\d+(?:\.\d+)?)MB/"
+    r"(?P<megabytes>\d+(?:\.\d+)?)MB\s+index\s+"
+    r"(?P<indexMegabytes>\d+(?:\.\d+)?)MB\s+wraps\s+(?P<wraps>\d+)\s+"
+    r"rejects\s+(?P<sameFrameRejects>\d+)\s+waits\s+(?P<syncWaits>\d+)\s+"
+    r"timeouts\s+(?P<syncTimeouts>\d+)\s+syncfail\s+(?P<syncFailures>\d+)\s+"
+    r"program binds\s+(?P<programBinds>\d+)/(?P<programBindAttempts>\d+)\s+"
+    r"creates\s+(?P<programCreates>\d+)\s+cache\s+(?P<programCacheHits>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_STATE_SUMMARY_RE = re.compile(
+    r"glx:\s*dlight state legacy\s+(?P<legacyPasses>\d+)\s+"
+    r"texture\s+(?P<textureBinds>\d+)\s+fog\s+(?P<fogTextureBinds>\d+)\s+"
+    r"shadowtex\s+(?P<shadowTextureBinds>\d+)/(?P<shadowTextureFallbackBinds>\d+)\s+"
+    r"fbo\s+(?P<shadowFboBinds>\d+)/(?P<shadowFboRestores>\d+)\s+"
+    r"changes\s+(?P<stateChanges>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_BUILD_SUMMARY_RE = re.compile(
+    r"glx:\s*dlight build legacy\s+(?P<legacyLights>\d+)\s+"
+    r"skipped\s+(?P<legacySkippedLights>\d+)\s+nohit\s+(?P<legacyNoHitLights>\d+)\s+"
+    r"verts\s+(?P<legacyVertexes>\d+)\s+idx\s+(?P<legacyIndexes>\d+)/"
+    r"(?P<legacyLitIndexes>\d+)\s+pm\s+(?P<pmPasses>\d+)\s+"
+    r"pmverts\s+(?P<pmVertexes>\d+)\s+pmidx\s+(?P<pmIndexes>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_CULL_SUMMARY_RE = re.compile(
+    r"glx:\s*dlight cull legacy verts\s+(?P<legacyVertexes>\d+)\s+"
+    r"idx\s+(?P<legacyIndexes>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_SCISSOR_SUMMARY_RE = re.compile(
+    r"glx:\s*dlight scissor active\s+(?P<active>\w+)\s+"
+    r"candidates\s+(?P<candidates>\d+)\s+computed\s+(?P<computed>\d+)\s+"
+    r"applied\s+(?P<applied>\d+)\s+fallbacks\s+(?P<fallbacks>\d+)\s+"
+    r"pixels\s+(?P<pixels>\d+)/(?P<viewportPixels>\d+)",
+    re.IGNORECASE,
+)
 GLX_STREAM_CATEGORY_SUMMARY_RE = re.compile(
     r"glx:\s*stream categories\s*"
     r"entity\s+(?P<entityDraws>\d+)/(?P<entityAttempts>\d+),\s*"
@@ -1140,7 +1351,17 @@ GLX_STREAM_CATEGORY_SUMMARY_RE = re.compile(
     r"weapon\s+(?P<weaponDraws>\d+)/(?P<weaponAttempts>\d+),\s*"
     r"ui\s+(?P<uiDraws>\d+)/(?P<uiAttempts>\d+),\s*"
     r"beam\s+(?P<beamDraws>\d+)/(?P<beamAttempts>\d+),\s*"
+    r"(?:dlight\s+(?P<dlightDraws>\d+)/(?P<dlightAttempts>\d+),\s*)?"
     r"special\s+(?P<specialDraws>\d+)/(?P<specialAttempts>\d+)",
+    re.IGNORECASE,
+)
+GLX_STREAM_ROLE_SUMMARY_RE = re.compile(
+    r"glx:\s*stream roles\s*"
+    r"generic\s+(?P<genericDraws>\d+)/(?P<genericAttempts>\d+)/(?P<genericFallbacks>\d+),\s*"
+    r"dlight\s+(?P<dlightDraws>\d+)/(?P<dlightAttempts>\d+)/(?P<dlightFallbacks>\d+),\s*"
+    r"shadow\s+(?P<shadowDraws>\d+)/(?P<shadowAttempts>\d+)/(?P<shadowFallbacks>\d+),\s*"
+    r"beam\s+(?P<beamDraws>\d+)/(?P<beamAttempts>\d+)/(?P<beamFallbacks>\d+),\s*"
+    r"post\s+(?P<postDraws>\d+)/(?P<postAttempts>\d+)/(?P<postFallbacks>\d+)",
     re.IGNORECASE,
 )
 GLX_STREAM_RESERVATION_SUMMARY_RE = re.compile(
@@ -1351,7 +1572,8 @@ GLX_RC_PROFILE_CVARS = {
     "r_glxStreamDrawDepthFragment": "1",
     "r_glxStreamDrawTexMods": "1",
     "r_glxStreamDrawEnvironment": "1",
-    "r_glxStreamDrawDynamicLights": "0",
+    "r_glxStreamDrawDynamicLights": "auto",
+    "r_glxDlightScissor": "auto",
     "r_glxStreamDrawScreenMaps": "0",
     "r_glxStreamDrawVideoMaps": "0",
     "r_glxStreamDrawShadows": "1",
@@ -2568,12 +2790,10 @@ RC_GATE_PRESETS = {
                 "environment",
             ),
             "required_material_stream_guards": (
-                "dynamicLight",
                 "screenMap",
                 "videoMap",
             ),
             "forbidden_material_stream_features": (
-                "dynamicLight",
                 "screenMap",
                 "videoMap",
             ),
@@ -2596,6 +2816,7 @@ RC_GATE_PRESETS = {
             ),
             "required_dynamic_stream_features": (
                 "shadow",
+                "dynamicLight",
             ),
             "required_dynamic_support": (
                 "dynamicEntities",
@@ -2603,12 +2824,8 @@ RC_GATE_PRESETS = {
                 "dynamicLights",
                 "stencilShadows",
             ),
-            "required_dynamic_stream_guards": (
-                "dynamicLight",
-            ),
-            "forbidden_dynamic_stream_features": (
-                "dynamicLight",
-            ),
+            "required_dynamic_stream_guards": (),
+            "forbidden_dynamic_stream_features": (),
             "require_post_proof": True,
             "required_post_tags": (
                 "greyscale-proof",
@@ -2715,7 +2932,6 @@ RC_GATE_PRESETS = {
                 "videoMap",
             ),
             "required_material_stream_guards": (
-                "dynamicLight",
                 "screenMap",
                 "videoMap",
             ),
@@ -2748,6 +2964,7 @@ RC_GATE_PRESETS = {
             "required_dynamic_stream_features": (
                 "shadow",
                 "beam",
+                "dynamicLight",
             ),
             "required_dynamic_support": (
                 "dynamicEntities",
@@ -2756,12 +2973,8 @@ RC_GATE_PRESETS = {
                 "dynamicLights",
                 "stencilShadows",
             ),
-            "required_dynamic_stream_guards": (
-                "dynamicLight",
-            ),
-            "forbidden_dynamic_stream_features": (
-                "dynamicLight",
-            ),
+            "required_dynamic_stream_guards": (),
+            "forbidden_dynamic_stream_features": (),
             "require_post_proof": True,
             "required_post_tags": (
                 "greyscale-proof",
@@ -4536,12 +4749,51 @@ def int_group(match: re.Match[str], name: str) -> int:
     return int(match.group(name))
 
 
+def int_group_default(match: re.Match[str], name: str, default: int = 0) -> int:
+    value = match.groupdict().get(name)
+    return default if value is None else int(value)
+
+
 def int_group_any(match: re.Match[str], *names: str) -> int:
     for name in names:
         value = match.group(name)
         if value is not None:
             return int(value)
     raise KeyError(names)
+
+
+def append_stream_dlight_ir_consistency_failures(
+    metrics: dict[str, object],
+    failures: list[str],
+) -> None:
+    stream_draw = metric_section(metrics, "streamDraw")
+    stream_dlight = metric_section(metrics, "streamDlight")
+    stream_category = metric_section(metrics, "streamCategory")
+    stream_role = metric_section(metrics, "streamRole")
+    render_ir_roles = metric_section(metrics, "renderIRDynamicRoles")
+    render_ir_passes = metric_section(metrics, "renderIRDynamicPasses")
+
+    stream_dlight_draws = max(
+        int_metric(stream_draw.get("dynamicLights")),
+        int_metric(stream_dlight.get("draws")),
+        int_metric(stream_category.get("dlightDraws")),
+        int_metric(stream_role.get("dlightDraws")),
+    )
+    if stream_dlight_draws <= 0:
+        return
+
+    role_dlight_draws = int_metric(render_ir_roles.get("dlightDraws"))
+    pass_dlight_draws = int_metric(render_ir_passes.get("dlightDraws"))
+    if role_dlight_draws < stream_dlight_draws:
+        failures.append(
+            "GLx streamed dlight draws are not classified as render IR dlight role products: "
+            f"stream {stream_dlight_draws}, role {role_dlight_draws}."
+        )
+    if pass_dlight_draws < stream_dlight_draws:
+        failures.append(
+            "GLx streamed dlight draws are not scheduled on the render IR dynamic-lights pass: "
+            f"stream {stream_dlight_draws}, pass {pass_dlight_draws}."
+        )
 
 
 def normalize_color_frame_payload(payload: dict[str, object]) -> dict[str, object]:
@@ -5142,6 +5394,30 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 record_metric_max(metrics, "renderIRProducts", key, int_group(match, key))
             continue
 
+        match = GLX_RENDER_IR_DYNAMIC_ROLES_RE.search(line)
+        if match:
+            for role in GLX_RENDER_IR_DYNAMIC_ROLE_KEYS:
+                for field in ("Draws", "Indexes", "Vertices"):
+                    record_metric_max(
+                        metrics,
+                        "renderIRDynamicRoles",
+                        f"{role}{field}",
+                        int_group(match, f"{role}{field}"),
+                    )
+            continue
+
+        match = GLX_RENDER_IR_DYNAMIC_PASSES_RE.search(line)
+        if match:
+            for pass_name in GLX_RENDER_IR_DYNAMIC_PASS_KEYS:
+                for field in ("Draws", "Indexes", "Vertices"):
+                    record_metric_max(
+                        metrics,
+                        "renderIRDynamicPasses",
+                        f"{pass_name}{field}",
+                        int_group(match, f"{pass_name}{field}"),
+                    )
+            continue
+
         match = GLX_POST_OUTPUT_OWNERSHIP_RE.search(line)
         if match:
             record_metric_max(metrics, "postOutputOwnership", "mode", match.group("mode").lower())
@@ -5607,7 +5883,6 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 failures.append(f"GLx streamed draw fallbacks: {int_group(match, 'fallbacks')}.")
             if requires_glx_paths:
                 for group, label in (
-                    ("dynamicLights", "dynamic-light"),
                     ("screenMaps", "screen-map"),
                     ("videoMaps", "video-map"),
                 ):
@@ -5616,32 +5891,144 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                         failures.append(f"GLx streamed high-risk {label} material draws: {count}.")
             continue
 
+        match = STREAM_DLIGHT_TELEMETRY_RE.search(line)
+        if match:
+            for key in ("attempts", "draws", "fallbacks", "wraps"):
+                record_metric_max(metrics, "streamDlight", key, int_group(match, key))
+            record_metric_max(metrics, "streamDlight", "sameFrameWrapRejects", int_group(match, "sameFrameRejects"))
+            for key in ("syncWaits", "syncTimeouts", "syncFailures"):
+                record_metric_max(metrics, "streamDlight", key, int_group(match, key))
+            for key in ("attemptMegabytes", "megabytes", "indexMegabytes", "tex1Megabytes"):
+                record_metric_max(metrics, "streamDlight", key, float(match.group(key)))
+            if int_group(match, "fallbacks") > 0:
+                failures.append(f"GLx streamed dlight fallbacks: {int_group(match, 'fallbacks')}.")
+            if int_group(match, "sameFrameRejects") > 0:
+                failures.append(f"GLx streamed dlight same-frame wrap rejects: {int_group(match, 'sameFrameRejects')}.")
+            if int_group(match, "syncFailures") > 0:
+                failures.append(f"GLx streamed dlight sync failures: {int_group(match, 'syncFailures')}.")
+            continue
+
+        match = DLIGHT_PROGRAM_COMPACT_RE.search(line)
+        if match:
+            record_metric_max(metrics, "dlightProgram", "active", 1 if q3_bool(match.group("active")) else 0)
+            for key in (
+                "programs",
+                "availabilityHits",
+                "availabilityQueries",
+                "binds",
+                "bindAttempts",
+                "failures",
+                "creates",
+                "cacheHits",
+            ):
+                record_metric_max(metrics, "dlightProgram", key, int_group(match, key))
+            if int_group(match, "failures") > 0:
+                failures.append(f"GLx dlight program failures: {int_group(match, 'failures')}.")
+            continue
+
+        match = DLIGHT_STATE_COMPACT_RE.search(line)
+        if match:
+            for key in (
+                "legacyPasses",
+                "textureBinds",
+                "fogTextureBinds",
+                "shadowTextureBinds",
+                "shadowTextureFallbackBinds",
+                "shadowFboBinds",
+                "shadowFboRestores",
+                "stateChanges",
+            ):
+                record_metric_max(metrics, "dlightState", key, int_group(match, key))
+            continue
+
+        match = DLIGHT_BUILD_COMPACT_RE.search(line)
+        if match:
+            for key in (
+                "legacyLights",
+                "legacySkippedLights",
+                "legacyNoHitLights",
+                "legacyVertexes",
+                "legacyIndexes",
+                "legacyLitIndexes",
+                "pmPasses",
+                "pmVertexes",
+                "pmIndexes",
+            ):
+                record_metric_max(metrics, "dlightBuild", key, int_group(match, key))
+            continue
+
+        match = DLIGHT_CULL_COMPACT_RE.search(line)
+        if match:
+            record_metric_max(metrics, "dlightCull", "legacyVertexes", int_group(match, "legacyVertexes"))
+            record_metric_max(metrics, "dlightCull", "legacyIndexes", int_group(match, "legacyIndexes"))
+            continue
+
+        match = DLIGHT_SCISSOR_COMPACT_RE.search(line)
+        if match:
+            record_metric_max(metrics, "dlightScissor", "active", 1 if q3_bool(match.group("active")) else 0)
+            for key in (
+                "candidates",
+                "computed",
+                "applied",
+                "fallbacks",
+                "pixels",
+                "viewportPixels",
+            ):
+                record_metric_max(metrics, "dlightScissor", key, int_group(match, key))
+            continue
+
         match = STREAM_CATEGORIES_RE.search(line)
         if match:
             saw_stream_categories = True
             for category in STREAM_CATEGORY_KEYS:
-                record_metric_max(metrics, "streamCategory", f"{category}Draws", int_group(match, f"{category}Draws"))
+                record_metric_max(
+                    metrics,
+                    "streamCategory",
+                    f"{category}Draws",
+                    int_group_default(match, f"{category}Draws"),
+                )
                 record_metric_max(
                     metrics,
                     "streamCategory",
                     f"{category}Attempts",
-                    int_group(match, f"{category}Attempts"),
+                    int_group_default(match, f"{category}Attempts"),
                 )
                 record_metric_max(
                     metrics,
                     "streamCategory",
                     f"{category}Observed",
-                    1 if int_group(match, f"{category}Attempts") > 0 else 0,
+                    1 if int_group_default(match, f"{category}Attempts") > 0 else 0,
                 )
             continue
 
         match = STREAM_CATEGORY_FALLBACKS_RE.search(line)
         if match:
             for category in STREAM_CATEGORY_KEYS:
-                count = int_group(match, category)
+                count = int_group_default(match, category)
                 record_metric_max(metrics, "streamCategory", f"{category}Fallbacks", count)
                 if count > 0:
                     failures.append(f"GLx streamed {category} category fallbacks: {count}.")
+            continue
+
+        match = STREAM_IR_ROLES_RE.search(line)
+        if match:
+            for role in STREAM_ROLE_KEYS:
+                record_metric_max(
+                    metrics,
+                    "streamRole",
+                    f"{role}Draws",
+                    int_group(match, f"{role}Draws"),
+                )
+                record_metric_max(
+                    metrics,
+                    "streamRole",
+                    f"{role}Attempts",
+                    int_group(match, f"{role}Attempts"),
+                )
+                fallbacks = int_group(match, f"{role}Fallbacks")
+                record_metric_max(metrics, "streamRole", f"{role}Fallbacks", fallbacks)
+                if fallbacks > 0:
+                    failures.append(f"GLx streamed {role} role fallbacks: {fallbacks}.")
             continue
 
         match = STREAM_DRAW_SKIPS_RE.search(line)
@@ -5763,6 +6150,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
     if requires_glx_ownership and not saw_ownership:
         failures.append("No GLx ownership diagnostic output was found in the run log.")
     if requires_glx_paths:
+        append_stream_dlight_ir_consistency_failures(metrics, failures)
         pass_schedule = metric_section(metrics, "passSchedule")
         schedule_failure = pass_schedule_failure_from_values(
             pass_schedule.get("valid"),
@@ -6194,6 +6582,30 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
             )
             continue
 
+        match = GLX_RENDER_IR_DYNAMIC_ROLES_RE.search(line)
+        if match:
+            for role in GLX_RENDER_IR_DYNAMIC_ROLE_KEYS:
+                suffix = pass_metric_suffix(role)
+                for field in ("Draws", "Indexes", "Vertices"):
+                    perf_record_numeric(
+                        performance,
+                        f"renderIRRole{suffix}{field}",
+                        int_group(match, f"{role}{field}"),
+                    )
+            continue
+
+        match = GLX_RENDER_IR_DYNAMIC_PASSES_RE.search(line)
+        if match:
+            for pass_name in GLX_RENDER_IR_DYNAMIC_PASS_KEYS:
+                suffix = pass_metric_suffix(pass_name)
+                for field in ("Draws", "Indexes", "Vertices"):
+                    perf_record_numeric(
+                        performance,
+                        f"renderIRPass{suffix}{field}",
+                        int_group(match, f"{pass_name}{field}"),
+                    )
+            continue
+
         match = GLX_POST_OUTPUT_OWNERSHIP_RE.search(line)
         if match:
             perf_record_string(performance, "postOutputMode", match.group("mode").lower())
@@ -6599,6 +7011,82 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 perf_record_numeric(performance, prefixed_key("streamDraw", key), float(match.group(key)))
             continue
 
+        match = GLX_STREAM_DLIGHT_SUMMARY_RE.search(line)
+        if match:
+            for name in (
+                "attempts",
+                "draws",
+                "fallbacks",
+                "wraps",
+                "syncWaits",
+                "syncTimeouts",
+                "syncFailures",
+                "programBinds",
+                "programBindAttempts",
+                "programCreates",
+                "programCacheHits",
+            ):
+                perf_record_numeric(performance, prefixed_key("streamDlight", name), int_group(match, name))
+            perf_record_numeric(
+                performance,
+                "streamDlightSameFrameWrapRejects",
+                int_group(match, "sameFrameRejects"),
+            )
+            for name in ("attemptMegabytes", "megabytes", "indexMegabytes"):
+                perf_record_numeric(performance, prefixed_key("streamDlight", name), float(match.group(name)))
+            continue
+
+        match = GLX_DLIGHT_STATE_SUMMARY_RE.search(line)
+        if match:
+            for group, key in (
+                ("legacyPasses", "dlightStateLegacyPasses"),
+                ("textureBinds", "dlightStateTextureBinds"),
+                ("fogTextureBinds", "dlightStateFogTextureBinds"),
+                ("shadowTextureBinds", "dlightStateShadowTextureBinds"),
+                ("shadowTextureFallbackBinds", "dlightStateShadowTextureFallbackBinds"),
+                ("shadowFboBinds", "dlightStateShadowFboBinds"),
+                ("shadowFboRestores", "dlightStateShadowFboRestores"),
+                ("stateChanges", "dlightStateChanges"),
+            ):
+                perf_record_numeric(performance, key, int_group(match, group))
+            continue
+
+        match = GLX_DLIGHT_BUILD_SUMMARY_RE.search(line)
+        if match:
+            for group, key in (
+                ("legacyLights", "dlightBuildLegacyLights"),
+                ("legacySkippedLights", "dlightBuildLegacySkippedLights"),
+                ("legacyNoHitLights", "dlightBuildLegacyNoHitLights"),
+                ("legacyVertexes", "dlightBuildLegacyVertexes"),
+                ("legacyIndexes", "dlightBuildLegacyIndexes"),
+                ("legacyLitIndexes", "dlightBuildLegacyLitIndexes"),
+                ("pmPasses", "dlightBuildPmPasses"),
+                ("pmVertexes", "dlightBuildPmVertexes"),
+                ("pmIndexes", "dlightBuildPmIndexes"),
+            ):
+                perf_record_numeric(performance, key, int_group(match, group))
+            continue
+
+        match = GLX_DLIGHT_CULL_SUMMARY_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "dlightCullLegacyVertexes", int_group(match, "legacyVertexes"))
+            perf_record_numeric(performance, "dlightCullLegacyIndexes", int_group(match, "legacyIndexes"))
+            continue
+
+        match = GLX_DLIGHT_SCISSOR_SUMMARY_RE.search(line)
+        if match:
+            perf_record_numeric(performance, "dlightScissorActive", 1 if q3_bool(match.group("active")) else 0)
+            for group, key in (
+                ("candidates", "dlightScissorCandidates"),
+                ("computed", "dlightScissorComputed"),
+                ("applied", "dlightScissorApplied"),
+                ("fallbacks", "dlightScissorFallbacks"),
+                ("pixels", "dlightScissorPixels"),
+                ("viewportPixels", "dlightScissorViewportPixels"),
+            ):
+                perf_record_numeric(performance, key, int_group(match, group))
+            continue
+
         match = GLX_STREAM_CATEGORY_SUMMARY_RE.search(line)
         if match:
             for category in STREAM_CATEGORY_KEYS:
@@ -6606,12 +7094,33 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 perf_record_numeric(
                     performance,
                     f"streamCategory{suffix}Draws",
-                    int_group(match, f"{category}Draws"),
+                    int_group_default(match, f"{category}Draws"),
                 )
                 perf_record_numeric(
                     performance,
                     f"streamCategory{suffix}Attempts",
-                    int_group(match, f"{category}Attempts"),
+                    int_group_default(match, f"{category}Attempts"),
+                )
+            continue
+
+        match = GLX_STREAM_ROLE_SUMMARY_RE.search(line)
+        if match:
+            for role in STREAM_ROLE_KEYS:
+                suffix = f"{role[0].upper()}{role[1:]}"
+                perf_record_numeric(
+                    performance,
+                    f"streamRole{suffix}Draws",
+                    int_group(match, f"{role}Draws"),
+                )
+                perf_record_numeric(
+                    performance,
+                    f"streamRole{suffix}Attempts",
+                    int_group(match, f"{role}Attempts"),
+                )
+                perf_record_numeric(
+                    performance,
+                    f"streamRole{suffix}Fallbacks",
+                    int_group(match, f"{role}Fallbacks"),
                 )
             continue
 
@@ -9050,6 +9559,8 @@ def dynamic_proof_evidence(
         "dynamicLight": 0,
         "postProcess": 0,
     }
+    render_ir_dlight_role = {"draws": 0, "indexes": 0, "vertices": 0}
+    render_ir_dlight_pass = {"draws": 0, "indexes": 0, "vertices": 0}
     stream_draws = 0
     stream_attempts = 0
     stream_indexes = 0
@@ -9069,6 +9580,14 @@ def dynamic_proof_evidence(
         for key in GLX_DYNAMIC_SUPPORT_KEYS:
             if int_metric(support.get(key)) > 0:
                 support_tiers.setdefault(key, set()).add(tier_label)
+
+    def record_render_ir_dlight_section(
+        target: dict[str, int],
+        section: dict[str, object],
+    ) -> None:
+        target["draws"] = max(target["draws"], int_metric(section.get("dlightDraws")))
+        target["indexes"] = max(target["indexes"], int_metric(section.get("dlightIndexes")))
+        target["vertices"] = max(target["vertices"], int_metric(section.get("dlightVertices")))
 
     def record_dynamic_metrics(metrics: dict[str, object], run_label: str) -> None:
         nonlocal stream_draws, stream_attempts, stream_indexes
@@ -9126,6 +9645,14 @@ def dynamic_proof_evidence(
                 record["fallbacks"] = max(record["fallbacks"], fallbacks)
                 record["observed"] = max(record["observed"], observed, 1 if draws or attempts else 0)
 
+        render_ir_roles = metrics.get("renderIRDynamicRoles")
+        if isinstance(render_ir_roles, dict):
+            record_render_ir_dlight_section(render_ir_dlight_role, render_ir_roles)
+
+        render_ir_passes = metrics.get("renderIRDynamicPasses")
+        if isinstance(render_ir_passes, dict):
+            record_render_ir_dlight_section(render_ir_dlight_pass, render_ir_passes)
+
         gates = metrics.get("streamMaterialGate")
         if isinstance(gates, dict):
             for gate_name in ("dynamicLight",):
@@ -9173,6 +9700,30 @@ def dynamic_proof_evidence(
             record["draws"] = max(record["draws"], draws)
             record["attempts"] = max(record["attempts"], attempts)
             record["observed"] = max(record["observed"], 1 if draws or attempts else 0)
+        render_ir_dlight_role["draws"] = max(
+            render_ir_dlight_role["draws"],
+            performance_numeric_value(performance, "renderIRRoleDlightDraws"),
+        )
+        render_ir_dlight_role["indexes"] = max(
+            render_ir_dlight_role["indexes"],
+            performance_numeric_value(performance, "renderIRRoleDlightIndexes"),
+        )
+        render_ir_dlight_role["vertices"] = max(
+            render_ir_dlight_role["vertices"],
+            performance_numeric_value(performance, "renderIRRoleDlightVertices"),
+        )
+        render_ir_dlight_pass["draws"] = max(
+            render_ir_dlight_pass["draws"],
+            performance_numeric_value(performance, "renderIRPassDlightDraws"),
+        )
+        render_ir_dlight_pass["indexes"] = max(
+            render_ir_dlight_pass["indexes"],
+            performance_numeric_value(performance, "renderIRPassDlightIndexes"),
+        )
+        render_ir_dlight_pass["vertices"] = max(
+            render_ir_dlight_pass["vertices"],
+            performance_numeric_value(performance, "renderIRPassDlightVertices"),
+        )
 
     runs = manifest.get("runs", [])
     if isinstance(runs, list):
@@ -9254,6 +9805,23 @@ def dynamic_proof_evidence(
         for category, record in dynamic_categories.items()
         if record.get("fallbacks", 0) > 0
     }
+    stream_dlight_draws = max(
+        stream_features.get("dynamicLight", 0),
+        dynamic_categories.get("dlight", {}).get("draws", 0),
+    )
+    require_dlight_ownership = (
+        "dynamicLight" in required_stream_features or "dynamic-light" in required_tags
+    )
+    missing_render_ir_dlight_role = (
+        require_dlight_ownership
+        and stream_dlight_draws > 0
+        and render_ir_dlight_role["draws"] < stream_dlight_draws
+    )
+    missing_render_ir_dlight_pass = (
+        require_dlight_ownership
+        and stream_dlight_draws > 0
+        and render_ir_dlight_pass["draws"] < stream_dlight_draws
+    )
 
     failures: list[str] = []
     if require_dynamic and not dry_run:
@@ -9295,6 +9863,16 @@ def dynamic_proof_evidence(
                     for feature in forbidden_stream_draws
                 )
                 + "."
+            )
+        if missing_render_ir_dlight_role:
+            failures.append(
+                "Dynamic proof streamed dlights are missing render-IR dlight role ownership: "
+                f"stream={stream_dlight_draws}, role={render_ir_dlight_role['draws']}."
+            )
+        if missing_render_ir_dlight_pass:
+            failures.append(
+                "Dynamic proof streamed dlights are missing render-IR dynamic-lights pass ownership: "
+                f"stream={stream_dlight_draws}, pass={render_ir_dlight_pass['draws']}."
             )
         if stream_attempts <= 0 and stream_draws <= 0:
             failures.append("Dynamic proof did not observe dynamic stream draw attempts.")
@@ -9343,6 +9921,11 @@ def dynamic_proof_evidence(
             "indexes": stream_indexes,
             "fallbacks": stream_fallbacks,
             "skips": stream_skips,
+        },
+        "renderIRDlightOwnership": {
+            "streamDraws": stream_dlight_draws,
+            "role": dict(render_ir_dlight_role),
+            "pass": dict(render_ir_dlight_pass),
         },
         "streamCategories": dynamic_categories,
         "streamFeatures": dict(stream_features),
@@ -12238,9 +12821,35 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
                 postprocess = metrics.get("postprocess", {}) if isinstance(metrics.get("postprocess"), dict) else {}
                 stream = metrics.get("stream", {}) if isinstance(metrics.get("stream"), dict) else {}
                 stream_draw = metrics.get("streamDraw", {}) if isinstance(metrics.get("streamDraw"), dict) else {}
+                stream_dlight = metrics.get("streamDlight", {}) if isinstance(metrics.get("streamDlight"), dict) else {}
                 stream_draw_skip = (
                     metrics.get("streamDrawSkip", {})
                     if isinstance(metrics.get("streamDrawSkip"), dict)
+                    else {}
+                )
+                dlight_program = (
+                    metrics.get("dlightProgram", {})
+                    if isinstance(metrics.get("dlightProgram"), dict)
+                    else {}
+                )
+                dlight_state = (
+                    metrics.get("dlightState", {})
+                    if isinstance(metrics.get("dlightState"), dict)
+                    else {}
+                )
+                dlight_build = (
+                    metrics.get("dlightBuild", {})
+                    if isinstance(metrics.get("dlightBuild"), dict)
+                    else {}
+                )
+                dlight_cull = (
+                    metrics.get("dlightCull", {})
+                    if isinstance(metrics.get("dlightCull"), dict)
+                    else {}
+                )
+                dlight_scissor = (
+                    metrics.get("dlightScissor", {})
+                    if isinstance(metrics.get("dlightScissor"), dict)
                     else {}
                 )
                 static_world = metrics.get("staticWorld", {}) if isinstance(metrics.get("staticWorld"), dict) else {}
@@ -12259,6 +12868,26 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
                     f"`{stream_draw.get('dynamicLights', '-')}/"
                     f"{stream_draw.get('screenMaps', '-')}/"
                     f"{stream_draw.get('videoMaps', '-')}`, "
+                    f"stream dlight attempts/draws/fallbacks "
+                    f"`{stream_dlight.get('attempts', '-')}/"
+                    f"{stream_dlight.get('draws', '-')}/"
+                    f"{stream_dlight.get('fallbacks', '-')}`, "
+                    f"dlight program binds/failures "
+                    f"`{dlight_program.get('binds', '-')}/"
+                    f"{dlight_program.get('failures', '-')}`, "
+                    f"dlight state tex/shadow/fbo "
+                    f"`{dlight_state.get('textureBinds', '-')}/"
+                    f"{dlight_state.get('shadowTextureBinds', '-')}/"
+                    f"{dlight_state.get('shadowFboBinds', '-')}`, "
+                    f"dlight build legacy/pm idx "
+                    f"`{dlight_build.get('legacyLitIndexes', '-')}/"
+                    f"{dlight_build.get('pmIndexes', '-')}`, "
+                    f"dlight cull v/i "
+                    f"`{dlight_cull.get('legacyVertexes', '-')}/"
+                    f"{dlight_cull.get('legacyIndexes', '-')}`, "
+                    f"dlight scissor applied/pixels "
+                    f"`{dlight_scissor.get('applied', '-')}/"
+                    f"{dlight_scissor.get('pixels', '-')}`, "
                     f"stream skip bind/key/fog/program "
                     f"`{stream_draw_skip.get('bind', '-')}/"
                     f"{stream_draw_skip.get('key', '-')}/"
@@ -12308,7 +12937,26 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
                 f"{maxima.get('streamDrawDynamicLights', '-')}/"
                 f"{maxima.get('streamDrawScreenMaps', '-')}/"
                 f"{maxima.get('streamDrawVideoMaps', '-')}`, "
-                f"categories ent/part/poly/mark/weapon/ui/beam/special "
+                f"stream dlight draws/fallbacks/bytes "
+                f"`{maxima.get('streamDlightDraws', '-')}/"
+                f"{maxima.get('streamDlightFallbacks', '-')}/"
+                f"{maxima.get('streamDlightMegabytes', '-')}`, "
+                f"dlight program binds `{maxima.get('streamDlightProgramBinds', '-')}/"
+                f"{maxima.get('streamDlightProgramBindAttempts', '-')}`, "
+                f"dlight state tex/shadow/fbo "
+                f"`{maxima.get('dlightStateTextureBinds', '-')}/"
+                f"{maxima.get('dlightStateShadowTextureBinds', '-')}/"
+                f"{maxima.get('dlightStateShadowFboBinds', '-')}`, "
+                f"dlight build legacy/pm idx "
+                f"`{maxima.get('dlightBuildLegacyLitIndexes', '-')}/"
+                f"{maxima.get('dlightBuildPmIndexes', '-')}`, "
+                f"dlight cull v/i "
+                f"`{maxima.get('dlightCullLegacyVertexes', '-')}/"
+                f"{maxima.get('dlightCullLegacyIndexes', '-')}`, "
+                f"dlight scissor applied/pixels "
+                f"`{maxima.get('dlightScissorApplied', '-')}/"
+                f"{maxima.get('dlightScissorPixels', '-')}`, "
+                f"categories ent/part/poly/mark/weapon/ui/beam/dlight/special "
                 f"`{maxima.get('streamCategoryEntityDraws', '-')}/"
                 f"{maxima.get('streamCategoryParticleDraws', '-')}/"
                 f"{maxima.get('streamCategoryPolyDraws', '-')}/"
@@ -12316,7 +12964,14 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
                 f"{maxima.get('streamCategoryWeaponDraws', '-')}/"
                 f"{maxima.get('streamCategoryUiDraws', '-')}/"
                 f"{maxima.get('streamCategoryBeamDraws', '-')}/"
+                f"{maxima.get('streamCategoryDlightDraws', '-')}/"
                 f"{maxima.get('streamCategorySpecialDraws', '-')}`, "
+                f"roles generic/dlight/shadow/beam/post "
+                f"`{maxima.get('streamRoleGenericDraws', '-')}/"
+                f"{maxima.get('streamRoleDlightDraws', '-')}/"
+                f"{maxima.get('streamRoleShadowDraws', '-')}/"
+                f"{maxima.get('streamRoleBeamDraws', '-')}/"
+                f"{maxima.get('streamRolePostDraws', '-')}`, "
                 f"stream draw fallbacks `{maxima.get('streamDrawFallbacks', '-')}`, "
                 f"static draw fallbacks `{maxima.get('staticDrawFallbacks', '-')}`, "
                 f"static MDI errors `{maxima.get('staticMdiErrors', '-')}`"

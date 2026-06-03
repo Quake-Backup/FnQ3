@@ -244,6 +244,36 @@ static void GLX_Executor_RecordReject( ExecutorState *state )
 	}
 }
 
+static void GLX_Executor_RecordDynamicDrawAccounting( ExecutorState *state,
+	const DynamicDraw &draw )
+{
+	const unsigned int count = draw.count > 0 ? static_cast<unsigned int>( draw.count ) : 0u;
+	const int role = static_cast<int>( draw.role );
+	const int pass = static_cast<int>( draw.pass );
+
+	if ( !state ) {
+		return;
+	}
+
+	if ( role >= 0 && role < GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT ) {
+		state->dynamicDrawRoleDraws[role]++;
+		if ( draw.kind == DynamicDrawKind::Indexed ) {
+			state->dynamicDrawRoleIndexes[role] += count;
+		} else {
+			state->dynamicDrawRoleVertices[role] += count;
+		}
+	}
+
+	if ( pass >= 0 && pass < GLX_RENDER_IR_PASS_COUNT ) {
+		state->dynamicDrawPassDraws[pass]++;
+		if ( draw.kind == DynamicDrawKind::Indexed ) {
+			state->dynamicDrawPassIndexes[pass] += count;
+		} else {
+			state->dynamicDrawPassVertices[pass] += count;
+		}
+	}
+}
+
 void GLX_Executor_Reset( ExecutorState *state )
 {
 	if ( !state ) {
@@ -638,6 +668,7 @@ qboolean GLX_Executor_ExecuteDynamicDraw( ExecutorState *state, const DynamicDra
 	}
 
 	state->dynamicDraws++;
+	GLX_Executor_RecordDynamicDrawAccounting( state, draw );
 	if ( state->tier == RenderProductTier::GL12 ) {
 		state->fixedFunctionDraws++;
 		if ( draw.upload.kind == UploadPlanKind::NoUpload || draw.upload.kind == UploadPlanKind::ClientMemory ) {
@@ -673,6 +704,26 @@ qboolean GLX_Executor_ExecuteDynamicDraw( ExecutorState *state, const DynamicDra
 void GLX_Executor_PrintInfo( const ExecutorState &state )
 {
 	const TierExecutionPolicy policy = GLX_RenderIR_TierExecutionPolicy( state.tier );
+	const int genericRole = static_cast<int>( DynamicDrawRole::Generic );
+	const int dlightRole = static_cast<int>( DynamicDrawRole::DynamicLight );
+	const int shadowRole = static_cast<int>( DynamicDrawRole::Shadow );
+	const int beamRole = static_cast<int>( DynamicDrawRole::Beam );
+	const int postRole = static_cast<int>( DynamicDrawRole::PostProcess );
+	const int dlightPass = static_cast<int>( FramePassKind::DynamicLights );
+	const int scenePass = static_cast<int>( FramePassKind::DynamicScene );
+	const int postPass = static_cast<int>( FramePassKind::PostProcess );
+	const unsigned int focusedPassDraws = state.dynamicDrawPassDraws[dlightPass] +
+		state.dynamicDrawPassDraws[scenePass] + state.dynamicDrawPassDraws[postPass];
+	const unsigned int focusedPassIndexes = state.dynamicDrawPassIndexes[dlightPass] +
+		state.dynamicDrawPassIndexes[scenePass] + state.dynamicDrawPassIndexes[postPass];
+	const unsigned int focusedPassVertices = state.dynamicDrawPassVertices[dlightPass] +
+		state.dynamicDrawPassVertices[scenePass] + state.dynamicDrawPassVertices[postPass];
+	const unsigned int otherPassDraws = state.dynamicDraws > focusedPassDraws ?
+		state.dynamicDraws - focusedPassDraws : 0u;
+	const unsigned int otherPassIndexes = state.dynamicIndexes > focusedPassIndexes ?
+		state.dynamicIndexes - focusedPassIndexes : 0u;
+	const unsigned int otherPassVertices = state.dynamicVertices > focusedPassVertices ?
+		state.dynamicVertices - focusedPassVertices : 0u;
 
 	RI().Printf( PRINT_ALL, "  render IR executor: %s (%s)\n",
 		GLX_Executor_TierName( state ), policy.executorName );
@@ -821,6 +872,35 @@ void GLX_Executor_PrintInfo( const ExecutorState &state )
 		state.postNodes,
 		state.outputTransforms,
 		state.rejectedProducts );
+	RI().Printf( PRINT_ALL, "  render IR dynamic roles: generic %u/%u/%u, dlight %u/%u/%u, shadow %u/%u/%u, beam %u/%u/%u, post %u/%u/%u\n",
+		state.dynamicDrawRoleDraws[genericRole],
+		state.dynamicDrawRoleIndexes[genericRole],
+		state.dynamicDrawRoleVertices[genericRole],
+		state.dynamicDrawRoleDraws[dlightRole],
+		state.dynamicDrawRoleIndexes[dlightRole],
+		state.dynamicDrawRoleVertices[dlightRole],
+		state.dynamicDrawRoleDraws[shadowRole],
+		state.dynamicDrawRoleIndexes[shadowRole],
+		state.dynamicDrawRoleVertices[shadowRole],
+		state.dynamicDrawRoleDraws[beamRole],
+		state.dynamicDrawRoleIndexes[beamRole],
+		state.dynamicDrawRoleVertices[beamRole],
+		state.dynamicDrawRoleDraws[postRole],
+		state.dynamicDrawRoleIndexes[postRole],
+		state.dynamicDrawRoleVertices[postRole] );
+	RI().Printf( PRINT_ALL, "  render IR dynamic passes: dlight %u/%u/%u, scene %u/%u/%u, post %u/%u/%u, other %u/%u/%u\n",
+		state.dynamicDrawPassDraws[dlightPass],
+		state.dynamicDrawPassIndexes[dlightPass],
+		state.dynamicDrawPassVertices[dlightPass],
+		state.dynamicDrawPassDraws[scenePass],
+		state.dynamicDrawPassIndexes[scenePass],
+		state.dynamicDrawPassVertices[scenePass],
+		state.dynamicDrawPassDraws[postPass],
+		state.dynamicDrawPassIndexes[postPass],
+		state.dynamicDrawPassVertices[postPass],
+		otherPassDraws,
+		otherPassIndexes,
+		otherPassVertices );
 }
 
 } // namespace glx

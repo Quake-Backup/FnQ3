@@ -19,6 +19,12 @@ struct ExecutorState {
 	unsigned int dynamicDraws;
 	unsigned int dynamicIndexes;
 	unsigned int dynamicVertices;
+	unsigned int dynamicDrawRoleDraws[GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT];
+	unsigned int dynamicDrawRoleIndexes[GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT];
+	unsigned int dynamicDrawRoleVertices[GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT];
+	unsigned int dynamicDrawPassDraws[GLX_RENDER_IR_PASS_COUNT];
+	unsigned int dynamicDrawPassIndexes[GLX_RENDER_IR_PASS_COUNT];
+	unsigned int dynamicDrawPassVertices[GLX_RENDER_IR_PASS_COUNT];
 	unsigned int materialPlans;
 	unsigned int uploadPlans;
 	unsigned int postNodes;

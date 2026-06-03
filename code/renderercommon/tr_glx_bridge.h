@@ -140,6 +140,26 @@ static ID_INLINE qboolean GLX_CompatDrawElements( unsigned int mode, int count,
 #endif
 }
 
+static ID_INLINE qboolean GLX_CompatDrawElementsClassified( unsigned int mode, int count,
+	unsigned int type, const void *indices, int legacyReason, int profilerPath,
+	int materialFlags, unsigned int categoryMask )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_DrawElementsClassified( mode, count, type, indices, legacyReason,
+		profilerPath, materialFlags, categoryMask );
+#else
+	(void)mode;
+	(void)count;
+	(void)type;
+	(void)indices;
+	(void)legacyReason;
+	(void)profilerPath;
+	(void)materialFlags;
+	(void)categoryMask;
+	return qfalse;
+#endif
+}
+
 static ID_INLINE qboolean GLX_CompatDrawArrays( unsigned int mode, int first, int count,
 	int legacyReason, int profilerPath )
 {
@@ -151,6 +171,24 @@ static ID_INLINE qboolean GLX_CompatDrawArrays( unsigned int mode, int first, in
 	(void)count;
 	(void)legacyReason;
 	(void)profilerPath;
+	return qfalse;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatDrawArraysClassified( unsigned int mode, int first, int count,
+	int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_DrawArraysClassified( mode, first, count, legacyReason, profilerPath,
+		materialFlags, categoryMask );
+#else
+	(void)mode;
+	(void)first;
+	(void)count;
+	(void)legacyReason;
+	(void)profilerPath;
+	(void)materialFlags;
+	(void)categoryMask;
 	return qfalse;
 #endif
 }
@@ -276,6 +314,76 @@ static ID_INLINE void GLX_CompatUnbindDlightProgram( void )
 {
 #ifdef RENDERER_GLX
 	GLX_Renderer_UnbindDlightProgram();
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatDlightScissorEnabled( void )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_DlightScissorEnabled();
+#else
+	return qfalse;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordDlightState( int event )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordDlightState( event );
+#else
+	(void)event;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordDlightBuild( int legacyLights,
+	int legacySkippedLights, int legacyNoHitLights, int legacyVertexes,
+	int legacyIndexes, int legacyLitIndexes, int pmPasses, int pmVertexes,
+	int pmIndexes )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordDlightBuild( legacyLights, legacySkippedLights,
+		legacyNoHitLights, legacyVertexes, legacyIndexes, legacyLitIndexes,
+		pmPasses, pmVertexes, pmIndexes );
+#else
+	(void)legacyLights;
+	(void)legacySkippedLights;
+	(void)legacyNoHitLights;
+	(void)legacyVertexes;
+	(void)legacyIndexes;
+	(void)legacyLitIndexes;
+	(void)pmPasses;
+	(void)pmVertexes;
+	(void)pmIndexes;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordDlightCull( int legacyVertexes,
+	int legacyIndexes )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordDlightCull( legacyVertexes, legacyIndexes );
+#else
+	(void)legacyVertexes;
+	(void)legacyIndexes;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordDlightScissor( qboolean computed,
+	qboolean applied, int x, int y, int width, int height, int viewportWidth,
+	int viewportHeight )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordDlightScissor( computed, applied, x, y, width, height,
+		viewportWidth, viewportHeight );
+#else
+	(void)computed;
+	(void)applied;
+	(void)x;
+	(void)y;
+	(void)width;
+	(void)height;
+	(void)viewportWidth;
+	(void)viewportHeight;
 #endif
 }
 
@@ -436,6 +544,15 @@ static ID_INLINE void GLX_CompatStreamCommit( glxStreamReservation_t *reservatio
 {
 #ifdef RENDERER_GLX
 	GLX_Renderer_StreamCommit( reservation );
+#else
+	(void)reservation;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordStreamDlightReservation( const glxStreamReservation_t *reservation )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordStreamDlightReservation( reservation );
 #else
 	(void)reservation;
 #endif

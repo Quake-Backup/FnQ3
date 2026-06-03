@@ -767,7 +767,7 @@ static float R_CSMSnapLightCoord( float value, float texelSize )
 
 static void R_CSMBuildLightAxis( const vec3_t lightDirection, vec3_t axis[3] )
 {
-	VectorScale( lightDirection, -1.0f, axis[0] );
+	VectorCopy( lightDirection, axis[0] );
 	PerpendicularVector( axis[1], axis[0] );
 	CrossProduct( axis[0], axis[1], axis[2] );
 	VectorNormalize( axis[1] );
@@ -940,12 +940,12 @@ static void R_PlanCascadedShadows( void )
 		return;
 	}
 
-	if ( !tr.sunParmsValid || tr.sunIntensity <= 0.0f ) {
+	if ( !tr.worldSun.valid || !tr.sunParmsValid || tr.sunIntensity <= 0.0f ) {
 		tr.pc.c_csmSkippedNoSun++;
 		return;
 	}
 
-	if ( VectorNormalize2( tr.sunDirection, lightDirection ) <= 0.0f ) {
+	if ( VectorNormalize2( tr.worldSun.lightDirection, lightDirection ) <= 0.0f ) {
 		tr.pc.c_csmSkippedNoSun++;
 		return;
 	}
@@ -999,6 +999,8 @@ static void R_PlanCascadedShadows( void )
 	tr.csm.shadowStrength = shadowStrength;
 	VectorCopy( lightDirection, tr.csm.lightDirection );
 	VectorCopy( lightColor, tr.csm.lightColor );
+	VectorCopy( tr.worldSun.directionToSun, tr.csm.directionToSun );
+	Q_strncpyz( tr.csm.skyShaderName, tr.worldSun.shaderName, sizeof( tr.csm.skyShaderName ) );
 
 	splitNear = zNear;
 	for ( i = 0; i < cascadeCount; i++ ) {
@@ -1445,6 +1447,7 @@ static float R_DlightShadowPriority( const dlight_t *dl, int receivers )
 	float dist2;
 	float radius2;
 	float receiverScale;
+	float priorityMultiplier;
 
 	brightness = dl->color[0];
 	if ( dl->color[1] > brightness ) {
@@ -1461,8 +1464,9 @@ static float R_DlightShadowPriority( const dlight_t *dl, int receivers )
 	dist2 = DotProduct( delta, delta );
 	radius2 = Square( dl->radius );
 	receiverScale = 1.0f + 0.03125f * Com_Clamp( 0.0f, 64.0f, (float)receivers );
+	priorityMultiplier = ( dl->shadowPriorityMultiplier > 0.0f ) ? dl->shadowPriorityMultiplier : 1.0f;
 
-	return brightness * receiverScale * radius2 / ( dist2 + radius2 + 1.0f );
+	return brightness * receiverScale * radius2 * priorityMultiplier / ( dist2 + radius2 + 1.0f );
 }
 
 
@@ -1516,6 +1520,10 @@ static void R_PlanDlightShadows( void )
 		dl = &tr.viewParms.dlights[i];
 		tr.pc.c_dlightShadowConsidered++;
 
+		if ( !dl->shadowEligible ) {
+			tr.pc.c_dlightShadowSkippedDisabled++;
+			continue;
+		}
 		if ( dl->linear ) {
 			tr.pc.c_dlightShadowSkippedLinear++;
 			continue;
@@ -1626,6 +1634,51 @@ static void R_PlanDlightShadows( void )
 	}
 }
 #endif // USE_PMLIGHT
+
+static void R_ClearShadowManager( void )
+{
+	Com_Memset( &tr.shadowManager, 0, sizeof( tr.shadowManager ) );
+	tr.shadowManager.frameSceneNum = tr.viewParms.frameSceneNum;
+	tr.shadowManager.frameCount = tr.viewParms.frameCount;
+	tr.shadowManager.viewCount = tr.viewCount;
+	tr.shadowManager.inputDlights = tr.viewParms.num_dlights;
+	tr.shadowManager.noWorldModel = ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ? qtrue : qfalse;
+}
+
+static void R_UpdateShadowManagerSummary( void )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+
+	manager->planned = qtrue;
+	manager->csmPlanned = ( tr.csm.enabled && tr.csm.cascadeCount > 0 ) ? qtrue : qfalse;
+	manager->csmCascadeCount = tr.csm.cascadeCount;
+	manager->csmResolution = tr.csm.resolution;
+	if ( manager->csmPlanned ) {
+		manager->csmAtlasWidth = tr.csm.cascadeCount * tr.csm.resolution;
+		manager->csmAtlasHeight = tr.csm.resolution;
+	}
+
+#ifdef USE_PMLIGHT
+	manager->dlightConsidered = tr.pc.c_dlightShadowConsidered;
+	manager->dlightCandidates = tr.pc.c_dlightShadowCandidates;
+	manager->dlightPlannedCount = tr.pc.c_dlightShadowPlanned;
+	manager->dlightPlanned = ( tr.pc.c_dlightShadowPlanned > 0 ) ? qtrue : qfalse;
+	manager->dlightAtlasWidth = tr.pc.c_dlightShadowAtlasWidth;
+	manager->dlightAtlasHeight = tr.pc.c_dlightShadowAtlasHeight;
+	manager->dlightAtlasFaceSize = tr.pc.c_dlightShadowAtlasFaceSize;
+	manager->dlightAtlasFill = tr.pc.c_dlightShadowAtlasFill;
+#endif
+}
+
+static void R_PlanFrameShadows( void )
+{
+	R_ClearShadowManager();
+	R_PlanCascadedShadows();
+#ifdef USE_PMLIGHT
+	R_PlanDlightShadows();
+#endif
+	R_UpdateShadowManagerSummary();
+}
 
 
 //==========================================================================================
@@ -1858,11 +1911,7 @@ static void R_GenerateDrawSurfs( void ) {
 
 	R_AddEntitySurfaces();
 
-	R_PlanCascadedShadows();
-
-#ifdef USE_PMLIGHT
-	R_PlanDlightShadows();
-#endif
+	R_PlanFrameShadows();
 }
 
 

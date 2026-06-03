@@ -299,7 +299,7 @@ def color_diagnostics_metrics() -> dict[str, object]:
             "depthFragment": 1,
             "texMods": 2,
             "environment": 1,
-            "dynamicLights": 0,
+            "dynamicLights": 1,
             "screenMaps": 0,
             "videoMaps": 0,
             "shadows": 2,
@@ -337,10 +337,31 @@ def color_diagnostics_metrics() -> dict[str, object]:
             "beamAttempts": 0,
             "beamObserved": 0,
             "beamFallbacks": 0,
+            "dlightDraws": 1,
+            "dlightAttempts": 1,
+            "dlightObserved": 1,
+            "dlightFallbacks": 0,
             "specialDraws": 0,
             "specialAttempts": 0,
             "specialObserved": 0,
             "specialFallbacks": 0,
+        },
+        "streamRole": {
+            "genericDraws": 3,
+            "genericAttempts": 3,
+            "genericFallbacks": 0,
+            "dlightDraws": 1,
+            "dlightAttempts": 1,
+            "dlightFallbacks": 0,
+            "shadowDraws": 2,
+            "shadowAttempts": 2,
+            "shadowFallbacks": 0,
+            "beamDraws": 0,
+            "beamAttempts": 0,
+            "beamFallbacks": 0,
+            "postDraws": 0,
+            "postAttempts": 0,
+            "postFallbacks": 0,
         },
         "streamDrawSkip": {
             "program": 0,
@@ -423,8 +444,8 @@ def color_diagnostics_metrics() -> dict[str, object]:
             "environmentEnabled": 1,
             "environmentAccepted": 1,
             "environmentRejected": 0,
-            "dynamicLightEnabled": 0,
-            "dynamicLightAccepted": 0,
+            "dynamicLightEnabled": 1,
+            "dynamicLightAccepted": 1,
             "dynamicLightRejected": 0,
             "screenMapEnabled": 0,
             "screenMapAccepted": 0,
@@ -690,7 +711,7 @@ def locked_performance_sample(row: dict[str, object] | None = None) -> dict[str,
             "streamDrawDepthFragment": 1,
             "streamDrawTexMods": 2,
             "streamDrawEnvironment": 1,
-            "streamDrawDynamicLights": 0,
+            "streamDrawDynamicLights": 1,
             "streamDrawScreenMaps": 0,
             "streamDrawVideoMaps": 0,
             "streamDrawShadows": 2,
@@ -712,8 +733,52 @@ def locked_performance_sample(row: dict[str, object] | None = None) -> dict[str,
             "streamCategoryUiAttempts": 0,
             "streamCategoryBeamDraws": 0,
             "streamCategoryBeamAttempts": 0,
+            "streamCategoryDlightDraws": 1,
+            "streamCategoryDlightAttempts": 1,
             "streamCategorySpecialDraws": 0,
             "streamCategorySpecialAttempts": 0,
+            "streamRoleGenericDraws": 3,
+            "streamRoleGenericAttempts": 3,
+            "streamRoleGenericFallbacks": 0,
+            "streamRoleDlightDraws": 1,
+            "streamRoleDlightAttempts": 1,
+            "streamRoleDlightFallbacks": 0,
+            "streamRoleShadowDraws": 2,
+            "streamRoleShadowAttempts": 2,
+            "streamRoleShadowFallbacks": 0,
+            "streamRoleBeamDraws": 0,
+            "streamRoleBeamAttempts": 0,
+            "streamRoleBeamFallbacks": 0,
+            "streamRolePostDraws": 0,
+            "streamRolePostAttempts": 0,
+            "streamRolePostFallbacks": 0,
+            "renderIRRoleGenericDraws": 3,
+            "renderIRRoleGenericIndexes": 1024,
+            "renderIRRoleGenericVertices": 0,
+            "renderIRRoleDlightDraws": 1,
+            "renderIRRoleDlightIndexes": 64,
+            "renderIRRoleDlightVertices": 0,
+            "renderIRRoleShadowDraws": 2,
+            "renderIRRoleShadowIndexes": 128,
+            "renderIRRoleShadowVertices": 0,
+            "renderIRRoleBeamDraws": 0,
+            "renderIRRoleBeamIndexes": 0,
+            "renderIRRoleBeamVertices": 0,
+            "renderIRRolePostDraws": 0,
+            "renderIRRolePostIndexes": 0,
+            "renderIRRolePostVertices": 0,
+            "renderIRPassDlightDraws": 1,
+            "renderIRPassDlightIndexes": 64,
+            "renderIRPassDlightVertices": 0,
+            "renderIRPassSceneDraws": 3,
+            "renderIRPassSceneIndexes": 1024,
+            "renderIRPassSceneVertices": 0,
+            "renderIRPassPostDraws": 0,
+            "renderIRPassPostIndexes": 0,
+            "renderIRPassPostVertices": 0,
+            "renderIRPassOtherDraws": 0,
+            "renderIRPassOtherIndexes": 0,
+            "renderIRPassOtherVertices": 0,
             "materialRenderer": "enabled",
             "materialReady": "ready",
             "materialPrograms": 3,
@@ -1834,8 +1899,12 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("GLX_CompatBindStreamElementArrayBuffer", bridge)
         self.assertIn("GLX_Renderer_BindStreamArrayBuffer", api)
         self.assertIn("GLX_Renderer_BindStreamElementArrayBuffer", api)
+        self.assertIn("GLX_Renderer_DrawElementsClassified", api)
+        self.assertIn("GLX_Renderer_DrawArraysClassified", api)
         self.assertIn("GLX_CompatRestoreStreamArrayBuffer", bridge)
         self.assertIn("GLX_CompatRestoreStreamElementArrayBuffer", bridge)
+        self.assertIn("GLX_CompatDrawElementsClassified", bridge)
+        self.assertIn("GLX_CompatDrawArraysClassified", bridge)
         self.assertIn("GLX_CompatRecordStreamBufferBind", bridge)
         self.assertIn("GLX_Stream_BindArrayBufferCached", glx_stream)
         self.assertIn("GLX_Stream_BindElementArrayBufferCached", glx_stream)
@@ -1866,6 +1935,8 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("post/output ownership", glx_module)
         self.assertIn("GLX_RenderIR_BuildPostOutputPlan", glx_module)
         self.assertIn("GLX_Executor_ConsumeOutputTransform", glx_module)
+        self.assertIn("DrawElementsClassified", glx_module)
+        self.assertIn("GLX_RenderIR_ClassifyDynamicDrawRole", glx_module)
         self.assertIn("MaterialParameterBlock", glx_ir)
         self.assertIn("PostOutputPlan", glx_ir)
         self.assertIn("GLX_POST_OUTPUT_FALLBACK_EXECUTOR_REJECT", glx_ir)
@@ -2282,9 +2353,11 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "  GL2X programmable executor: active yes, client-memory fallback yes, stream uploads yes, material compiler yes, postprocess-lite yes, modern post chain no, scene-linear output no",
                         "  GL2X programmable support: common materials yes, dynamic entities yes, lightmaps yes, multitexture yes, fog yes, sprites yes, beams yes, screenshots yes, demos yes",
                         "  glx: ownership legacy delegation 0 calls/0 items, generic 0, vbo-device 0, vbo-soft 0, arrays 0",
-                        f"  GLx pass schedule: valid 9/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
+                        f"  GLx pass schedule: valid {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
                         "  pass schedule: invalid 0/00000000 none",
-                        "  render IR products: passes 9, world packets 1, dynamic draws 2, materials 3, uploads 4, post nodes 1, outputs 1, rejects 0",
+                        f"  render IR products: passes {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}, world packets 1, dynamic draws 2, materials 3, uploads 4, post nodes 1, outputs 1, rejects 0",
+                        "  render IR dynamic roles: generic 1/12/0, dlight 1/6/0, shadow 0/0/0, beam 0/0/0, post 0/0/0",
+                        "  render IR dynamic passes: dlight 1/6/0, scene 1/12/0, post 0/0/0, other 0/0/0",
                         "  post/output ownership: mode legacy-fallback, post nodes 1, outputs 1, legacy fallback yes, executable nodes 0, executable outputs 0, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000001",
                         "  post shader plan: valid yes, features 0x000000de, hash 0x0badcafe, textures 2, uniforms 12, frames 3, invalid 0",
                         "  post shader cache: ready yes, programs 3/32, plans 4 valid/0 invalid, cache 2 hits/3 misses, compile 3 attempts/0 failures, link failures 0, source failures 0, source hash 0x12345678, program 99",
@@ -2315,14 +2388,21 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "  dynamic stream reservations: 1, commits: 1, wraps: 0, same-frame wrap rejects: 0, orphans: 0",
                         "  dynamic stream uploads: 1 calls, 0.01 MB, failures 0",
                         "  dynamic stream binding cache: queries 1, hits 3, restores 2, invalidations 1, external 4, array known no buffer 0, element known no buffer 0",
-                        "  dynamic stream draws: 1/1 attempts, 3 verts, 3 indexes, 0.01 MB, index 0.01 MB, tex1 0.00 MB, mt 0, fog 0, depthfrag 0, texmod 0, env 0, dlight 0, screen 0, video 0, shadow 0, beam 0, post 0, fallbacks 0",
-                        "  dynamic stream categories: entity 1/1, particle 0/0, poly 0/0, mark 0/0, weapon 0/0, ui 0/0, beam 0/0, special 0/0",
-                        "  dynamic stream category fallbacks: entity 0, particle 0, poly 0, mark 0, weapon 0, ui 0, beam 0, special 0",
+                        "  dynamic stream draws: 1/1 attempts, 3 verts, 3 indexes, 0.01 MB, index 0.01 MB, tex1 0.00 MB, mt 0, fog 0, depthfrag 0, texmod 0, env 0, dlight 1, screen 0, video 0, shadow 0, beam 0, post 0, fallbacks 0",
+                        "  dynamic stream dynamic-light telemetry: attempts 2, draws 1, fallbacks 0, attempt 0.03 MB, draw 0.02 MB, index 0.01 MB, tex1 0.00 MB, wraps 1, same-frame rejects 0, waits 1, timeouts 0, sync failures 0",
+                        "  dynamic stream categories: entity 1/1, particle 0/0, poly 0/0, mark 0/0, weapon 0/0, ui 0/0, beam 0/0, dlight 1/1, special 0/0",
+                        "  dynamic stream category fallbacks: entity 0, particle 0, poly 0, mark 0, weapon 0, ui 0, beam 0, dlight 0, special 0",
+                        "  dynamic stream IR roles: generic 1/1/0, dlight 1/1/0, shadow 0/0/0, beam 0/0/0, post 0/0/0",
                         "  dynamic stream draw skips: 2 (bind 0, input 0, mt 0, depthfrag 0, texcoord 0, empty 0, key 1, fog 1, program 0)",
                         "  dynamic stream material compiler: rejected 0, last unsupported 0x0 (none)",
                         "  dynamic stream multitexture gate: yes, accepted 2, rejected 0",
                         "  dynamic stream depth-fragment gate: yes, accepted 1, rejected 0",
                         "  dynamic stream reservation failures: 0",
+                        "  dlight program compact: active yes, programs 2, availability 3/4, binds 5/6, failures 0, creates 2, cache hits 7",
+                        "  dlight state compact: legacy passes 2, texture binds 3, fog textures 4, shadow textures 5/1, shadow fbo 6/7, state changes 8",
+                        "  dlight build compact: legacy lights 9/10, no-hit 2, verts 300, indexes 600/450, pm 3, pm verts/indexes 240/360",
+                        "  dlight cull compact: legacy verts 40, indexes 90",
+                        "  dlight scissor compact: active yes, candidates 4, computed 3, applied 2, fallbacks 1, pixels 1200/4800",
                         "  static world GLx renderer: yes, arena upload yes, arena draw yes",
                         "  static world GLx arena: yes, builds 1, skips 0, failures 0, binds v1/i1, draw skips 0, 1.00 MB",
                         "  static world GLx packet batches: yes, attempts 1, batches 1, packet runs 1/3 indexes, fallback runs 0, singles 0",
@@ -2376,11 +2456,60 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(diagnostics["metrics"]["postShaderDirectFinal"]["rejects"], 2)
             stream_draw = diagnostics["metrics"]["streamDraw"]
             self.assertEqual(stream_draw["draws"], 1)
-            self.assertEqual(stream_draw["dynamicLights"], 0)
+            self.assertEqual(stream_draw["dynamicLights"], 1)
             self.assertEqual(stream_draw["screenMaps"], 0)
             self.assertEqual(stream_draw["videoMaps"], 0)
             self.assertEqual(stream_draw["shadows"], 0)
             self.assertEqual(stream_draw["skips"], 2)
+            stream_dlight = diagnostics["metrics"]["streamDlight"]
+            self.assertEqual(stream_dlight["attempts"], 2)
+            self.assertEqual(stream_dlight["draws"], 1)
+            self.assertEqual(stream_dlight["fallbacks"], 0)
+            self.assertEqual(stream_dlight["attemptMegabytes"], 0.03)
+            self.assertEqual(stream_dlight["megabytes"], 0.02)
+            self.assertEqual(stream_dlight["indexMegabytes"], 0.01)
+            self.assertEqual(stream_dlight["wraps"], 1)
+            self.assertEqual(stream_dlight["sameFrameWrapRejects"], 0)
+            self.assertEqual(stream_dlight["syncWaits"], 1)
+            self.assertEqual(stream_dlight["syncFailures"], 0)
+            dlight_program = diagnostics["metrics"]["dlightProgram"]
+            self.assertEqual(dlight_program["active"], 1)
+            self.assertEqual(dlight_program["programs"], 2)
+            self.assertEqual(dlight_program["availabilityHits"], 3)
+            self.assertEqual(dlight_program["availabilityQueries"], 4)
+            self.assertEqual(dlight_program["binds"], 5)
+            self.assertEqual(dlight_program["bindAttempts"], 6)
+            self.assertEqual(dlight_program["cacheHits"], 7)
+            dlight_state = diagnostics["metrics"]["dlightState"]
+            self.assertEqual(dlight_state["legacyPasses"], 2)
+            self.assertEqual(dlight_state["textureBinds"], 3)
+            self.assertEqual(dlight_state["fogTextureBinds"], 4)
+            self.assertEqual(dlight_state["shadowTextureBinds"], 5)
+            self.assertEqual(dlight_state["shadowTextureFallbackBinds"], 1)
+            self.assertEqual(dlight_state["shadowFboBinds"], 6)
+            self.assertEqual(dlight_state["shadowFboRestores"], 7)
+            self.assertEqual(dlight_state["stateChanges"], 8)
+            dlight_build = diagnostics["metrics"]["dlightBuild"]
+            self.assertEqual(dlight_build["legacyLights"], 9)
+            self.assertEqual(dlight_build["legacySkippedLights"], 10)
+            self.assertEqual(dlight_build["legacyNoHitLights"], 2)
+            self.assertEqual(dlight_build["legacyVertexes"], 300)
+            self.assertEqual(dlight_build["legacyIndexes"], 600)
+            self.assertEqual(dlight_build["legacyLitIndexes"], 450)
+            self.assertEqual(dlight_build["pmPasses"], 3)
+            self.assertEqual(dlight_build["pmVertexes"], 240)
+            self.assertEqual(dlight_build["pmIndexes"], 360)
+            dlight_cull = diagnostics["metrics"]["dlightCull"]
+            self.assertEqual(dlight_cull["legacyVertexes"], 40)
+            self.assertEqual(dlight_cull["legacyIndexes"], 90)
+            dlight_scissor = diagnostics["metrics"]["dlightScissor"]
+            self.assertEqual(dlight_scissor["active"], 1)
+            self.assertEqual(dlight_scissor["candidates"], 4)
+            self.assertEqual(dlight_scissor["computed"], 3)
+            self.assertEqual(dlight_scissor["applied"], 2)
+            self.assertEqual(dlight_scissor["fallbacks"], 1)
+            self.assertEqual(dlight_scissor["pixels"], 1200)
+            self.assertEqual(dlight_scissor["viewportPixels"], 4800)
             stream_binding = diagnostics["metrics"]["streamBindingCache"]
             self.assertEqual(stream_binding["queries"], 1)
             self.assertEqual(stream_binding["hits"], 3)
@@ -2389,8 +2518,17 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(stream_category["entityDraws"], 1)
             self.assertEqual(stream_category["entityAttempts"], 1)
             self.assertEqual(stream_category["particleDraws"], 0)
+            self.assertEqual(stream_category["dlightDraws"], 1)
+            self.assertEqual(stream_category["dlightAttempts"], 1)
             self.assertEqual(stream_category["specialDraws"], 0)
             self.assertEqual(stream_category["entityFallbacks"], 0)
+            self.assertEqual(stream_category["dlightFallbacks"], 0)
+            stream_role = diagnostics["metrics"]["streamRole"]
+            self.assertEqual(stream_role["genericDraws"], 1)
+            self.assertEqual(stream_role["genericAttempts"], 1)
+            self.assertEqual(stream_role["dlightDraws"], 1)
+            self.assertEqual(stream_role["dlightAttempts"], 1)
+            self.assertEqual(stream_role["dlightFallbacks"], 0)
             stream_draw_skips = diagnostics["metrics"]["streamDrawSkip"]
             self.assertEqual(stream_draw_skips["key"], 1)
             self.assertEqual(stream_draw_skips["fog"], 1)
@@ -2421,9 +2559,20 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(executor["modernPostChain"], 0)
             pass_schedule = diagnostics["metrics"]["passSchedule"]
             self.assertEqual(pass_schedule["valid"], 1)
-            self.assertEqual(pass_schedule["count"], 9)
+            self.assertEqual(
+                pass_schedule["count"],
+                glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT,
+            )
             self.assertEqual(pass_schedule["hash"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH)
             self.assertEqual(pass_schedule["order"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE)
+            render_ir_roles = diagnostics["metrics"]["renderIRDynamicRoles"]
+            self.assertEqual(render_ir_roles["genericDraws"], 1)
+            self.assertEqual(render_ir_roles["dlightDraws"], 1)
+            self.assertEqual(render_ir_roles["dlightIndexes"], 6)
+            render_ir_passes = diagnostics["metrics"]["renderIRDynamicPasses"]
+            self.assertEqual(render_ir_passes["dlightDraws"], 1)
+            self.assertEqual(render_ir_passes["sceneDraws"], 1)
+            self.assertEqual(render_ir_passes["sceneIndexes"], 12)
             color_pipeline = diagnostics["metrics"]["colorPipeline"]
             self.assertEqual(color_pipeline["space"], "scene-linear")
             self.assertEqual(color_pipeline["transfer"], "sdr-srgb")
@@ -2532,6 +2681,40 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(display_state["flags"], 0x000000FE)
             self.assertEqual(display_state["hash"], 0x12345678)
             self.assertEqual(display_state["previous"], 0x01020304)
+
+    def test_glx_diagnostics_reject_stream_dlights_without_ir_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-ir-mismatch.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "  product tier: GL2X",
+                        "  GL2X programmable executor: active yes, client-memory fallback yes, stream uploads yes, material compiler yes, postprocess-lite yes, modern post chain no, scene-linear output no",
+                        "  GL2X programmable support: common materials yes, dynamic entities yes, lightmaps yes, multitexture yes, fog yes, sprites yes, beams yes, screenshots yes, demos yes",
+                        "  glx: ownership legacy delegation 0 calls/0 items, generic 0, vbo-device 0, vbo-soft 0, arrays 0",
+                        f"  GLx pass schedule: valid {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
+                        "  render IR dynamic roles: generic 2/12/0, dlight 0/0/0, shadow 0/0/0, beam 0/0/0, post 0/0/0",
+                        "  render IR dynamic passes: dlight 0/0/0, scene 2/12/0, post 0/0/0, other 0/0/0",
+                        "  dynamic stream dynamic-light telemetry: attempts 2, draws 2, fallbacks 0, attempt 0.03 MB, draw 0.02 MB, index 0.01 MB, tex1 0.00 MB, wraps 0, same-frame rejects 0, waits 0, timeouts 0, sync failures 0",
+                        "  dynamic stream categories: entity 0/0, particle 0/0, poly 0/0, mark 0/0, weapon 0/0, ui 0/0, beam 0/0, dlight 2/2, special 0/0",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-parity")
+
+            self.assertTrue(diagnostics["found"])
+            self.assertIn(
+                "GLx streamed dlight draws are not classified as render IR dlight role products: "
+                "stream 2, role 0.",
+                diagnostics["failures"],
+            )
+            self.assertIn(
+                "GLx streamed dlight draws are not scheduled on the render IR dynamic-lights pass: "
+                "stream 2, pass 0.",
+                diagnostics["failures"],
+            )
 
     def test_glx_color_frame_csv_is_gate_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2997,7 +3180,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             log.write_text(
                 "\n".join(
                     [
-                        "  dynamic stream draws: 3/3 attempts, 9 verts, 9 indexes, 0.01 MB, index 0.01 MB, tex1 0.00 MB, mt 0, fog 0, depthfrag 0, texmod 0, env 0, dlight 1, screen 1, video 1, shadow 0, beam 0, post 0, fallbacks 0",
+                        "  dynamic stream draws: 3/3 attempts, 9 verts, 9 indexes, 0.01 MB, index 0.01 MB, tex1 0.00 MB, mt 0, fog 0, depthfrag 0, texmod 0, env 0, dlight 0, screen 1, video 1, shadow 0, beam 0, post 0, fallbacks 0",
                     ]
                 ),
                 encoding="utf-8",
@@ -3007,10 +3190,9 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             failures = "\n".join(diagnostics["failures"])
             stream_draw = diagnostics["metrics"]["streamDraw"]
 
-            self.assertIn("dynamic-light", failures)
             self.assertIn("screen-map", failures)
             self.assertIn("video-map", failures)
-            self.assertEqual(stream_draw["dynamicLights"], 1)
+            self.assertEqual(stream_draw["dynamicLights"], 0)
             self.assertEqual(stream_draw["screenMaps"], 1)
             self.assertEqual(stream_draw["videoMaps"], 1)
 
@@ -3494,11 +3676,15 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertIn("demo1", evidence["requiredDemos"])
         self.assertGreater(evidence["streamCategories"]["entity"]["draws"], 0)
         self.assertGreater(evidence["streamCategories"]["weapon"]["draws"], 0)
+        self.assertGreater(evidence["streamCategories"]["dlight"]["draws"], 0)
         self.assertGreater(evidence["streamFeatures"]["shadow"], 0)
-        self.assertEqual(evidence["streamFeatures"]["dynamicLight"], 0)
+        self.assertGreater(evidence["streamFeatures"]["dynamicLight"], 0)
+        self.assertGreater(evidence["renderIRDlightOwnership"]["streamDraws"], 0)
+        self.assertGreater(evidence["renderIRDlightOwnership"]["role"]["draws"], 0)
+        self.assertGreater(evidence["renderIRDlightOwnership"]["pass"]["draws"], 0)
         self.assertIn("GL2X", evidence["tierSupport"]["dynamicEntities"])
         self.assertIn("GL12", evidence["tierSupport"]["dynamicLights"])
-        self.assertEqual(evidence["streamGuards"]["dynamicLight"]["accepted"], 0)
+        self.assertGreater(evidence["streamGuards"]["dynamicLight"]["accepted"], 0)
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
 
     def test_dynamic_proof_evidence_proves_staged_particles_and_beams(self) -> None:
@@ -3512,7 +3698,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertGreater(evidence["streamCategories"]["mark"]["draws"], 0)
         self.assertGreater(evidence["streamCategories"]["beam"]["draws"], 0)
         self.assertGreater(evidence["streamFeatures"]["beam"], 0)
-        self.assertEqual(evidence["streamFeatures"]["dynamicLight"], 0)
+        self.assertGreater(evidence["streamFeatures"]["dynamicLight"], 0)
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
 
     def test_dynamic_proof_evidence_requires_versioned_object(self) -> None:
@@ -3575,6 +3761,22 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                             "dynamicLightRejected": 0,
                         }
                     )
+                if isinstance(metrics.get("renderIRDynamicRoles"), dict):
+                    metrics["renderIRDynamicRoles"].update(  # type: ignore[index, union-attr]
+                        {
+                            "dlightDraws": 0,
+                            "dlightIndexes": 0,
+                            "dlightVertices": 0,
+                        }
+                    )
+                if isinstance(metrics.get("renderIRDynamicPasses"), dict):
+                    metrics["renderIRDynamicPasses"].update(  # type: ignore[index, union-attr]
+                        {
+                            "dlightDraws": 0,
+                            "dlightIndexes": 0,
+                            "dlightVertices": 0,
+                        }
+                    )
 
             performance = run.get("performance")
             if isinstance(performance, dict) and isinstance(performance.get("latest"), dict):
@@ -3591,6 +3793,12 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "streamCategoryEntityAttempts": 0,
                         "streamCategoryWeaponDraws": 0,
                         "streamCategoryWeaponAttempts": 0,
+                        "renderIRRoleDlightDraws": 0,
+                        "renderIRRoleDlightIndexes": 0,
+                        "renderIRRoleDlightVertices": 0,
+                        "renderIRPassDlightDraws": 0,
+                        "renderIRPassDlightIndexes": 0,
+                        "renderIRPassDlightVertices": 0,
                     }
                 )
 
@@ -3607,8 +3815,10 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertIn("stream category evidence", text)
         self.assertIn("stream feature evidence", text)
         self.assertIn("tier-support evidence", text)
-        self.assertIn("accepted forbidden", text)
-        self.assertIn("high-risk stream draws", text)
+        self.assertIn("render-IR dlight role ownership", text)
+        self.assertIn("render-IR dynamic-lights pass ownership", text)
+        self.assertIn("dynamic stream draw attempts", text)
+        self.assertIn("submitted dynamic stream indexes or draws", text)
         self.assertIn("stream draw fallbacks", text)
         self.assertIn("stream draw skips", text)
 
@@ -4168,7 +4378,8 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(startup["r_glxRequireOwnership"], "1")
         self.assertEqual(filtered["r_glxRequireOwnership"], "1")
         self.assertNotIn("r_glxStreamDraw", filtered)
-        self.assertEqual(profile["r_glxStreamDrawDynamicLights"], "0")
+        self.assertEqual(profile["r_glxStreamDrawDynamicLights"], "auto")
+        self.assertEqual(profile["r_glxDlightScissor"], "auto")
         self.assertEqual(profile["r_glxStreamDrawScreenMaps"], "0")
         self.assertEqual(profile["r_glxStreamDrawVideoMaps"], "0")
 
@@ -4731,7 +4942,8 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                 self.assertEqual(profile["r_glxStreamDrawShadows"], "1")
                 self.assertEqual(profile["r_glxStreamDrawBeams"], "1")
                 self.assertEqual(profile["r_glxStreamDrawPostProcess"], "1")
-                self.assertEqual(profile["r_glxStreamDrawDynamicLights"], "0")
+                self.assertEqual(profile["r_glxStreamDrawDynamicLights"], "auto")
+                self.assertEqual(profile["r_glxDlightScissor"], "auto")
                 self.assertEqual(profile["r_glxStreamDrawScreenMaps"], "0")
                 self.assertEqual(profile["r_glxStreamDrawVideoMaps"], "0")
 
@@ -4742,8 +4954,10 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                 "\n".join(
                     [
                         "glx: tier GL2X, batches 10, draws 20/300 idx, stream map-range/ready 1.25MB/2wraps/0rejects shadow 3, frames 4, backend queries 5, gpu 0.27 ms, static 6 batches/7 packets/8 surfaces/9 verts/10 indexes 2.50 MB, arena ready 3.75 MB",
-                        f"glx: pass schedule valid 9/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
+                        f"glx: pass schedule valid {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
                         "pass schedule: invalid 0/00000000 none",
+                        "glx: render IR dynamic roles generic 7/70/0, dlight 5/50/0, shadow 2/20/0, beam 3/0/30, post 4/0/40",
+                        "glx: render IR dynamic passes dlight 5/50/0, scene 12/90/30, post 4/0/40, other 0/0/0",
                         "glx: post/output ownership mode glx-owned, post nodes 4, outputs 2, legacy fallback no, executable nodes 4, executable outputs 2, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000000",
                         "glx: post shader plan valid yes, features 0x00000d5e, hash 0x0badcafe, textures 2, uniforms 13, frames 4, invalid 0",
                         "glx: post shader cache ready yes, programs 3/32, plans 4 valid/0 invalid, cache 2 hits/3 misses, compile 3 attempts/0 failures, link failures 0, source failures 0, source hash 0x12345678, program 99",
@@ -4766,8 +4980,14 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                         "glx: texture audit srgb 4 decode 4, linear 2 decode 0, data 2 decode 0, unknown 0 decode 0, missing-srgb-decode 0, unexpected-decode 0",
                         'glx: color-frame-json {"frame":1,"backend":"hdr10-pq","space":"scene-linear","transfer":"hdr10-pq","exposure":1.0000,"paperWhiteNits":203.0,"maxOutputNits":812.0,"srgbDecode":true,"framebufferSrgb":false,"internalFormat":"0x881a","textureFormat":"0x1908","textureType":"0x140b","sceneTargetFloat":true,"shaderSrgbEncode":true,"contractValid":true}',
                         "glx: output backend request hdr10-pq selected hdr10-pq native windows-scrgb hardware yes experimental no display-hdr yes headroom 4.00 sdr-white 203 display-max 812 icc yes/2048",
-                        "glx: stream draws 7/8 attempts, 90 idx, 0.50MB/index 0.10MB/tex1 0.20MB, mt 1, fog 2, depthfrag 3, texmod 4, env 5, dlight 0, screen 0, video 0, shadow 2, beam 3, post 4, fallbacks 0, skips 1",
-                        "glx: stream categories entity 2/2, particle 1/1, poly 1/1, mark 1/1, weapon 1/1, ui 1/1, beam 3/3, special 4/4",
+                        "glx: stream draws 7/8 attempts, 90 idx, 0.50MB/index 0.10MB/tex1 0.20MB, mt 1, fog 2, depthfrag 3, texmod 4, env 5, dlight 5, screen 0, video 0, shadow 2, beam 3, post 4, fallbacks 0, skips 1",
+                        "glx: stream dlight attempts 6 draws 5 fallbacks 1 bytes 0.30MB/0.25MB index 0.05MB wraps 2 rejects 0 waits 3 timeouts 0 syncfail 0 program binds 4/5 creates 2 cache 6",
+                        "glx: dlight state legacy 2 texture 3 fog 4 shadowtex 5/1 fbo 6/7 changes 8",
+                        "glx: dlight build legacy 9 skipped 10 nohit 2 verts 300 idx 600/450 pm 3 pmverts 240 pmidx 360",
+                        "glx: dlight cull legacy verts 40 idx 90",
+                        "glx: dlight scissor active yes candidates 4 computed 3 applied 2 fallbacks 1 pixels 1200/4800",
+                        "glx: stream categories entity 2/2, particle 1/1, poly 1/1, mark 1/1, weapon 1/1, ui 1/1, beam 3/3, dlight 5/6, special 4/4",
+                        "glx: stream roles generic 7/8/0, dlight 5/6/1, shadow 2/2/0, beam 3/3/0, post 4/4/0",
                         "glx: stream reservation last 256 bytes at 1024 using map-range, largest 4096 bytes, same-frame wrap rejects 0",
                         "glx: stream binding cache queries 1 hits 6 restores 8 invalidations 2 external 4 array-known yes array-buffer 0 element-known yes element-buffer 0",
                         "glx: static queue packets last 1 full/2 partial/3 miss/4 mismatch, total 5 full/6 partial/7 miss",
@@ -4800,9 +5020,19 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["gpuPassBloomDownscaleSamples"], 3)
             self.assertEqual(performance["latest"]["gpuPassFlareMs"], 0.02)
             self.assertEqual(performance["latest"]["passScheduleValid"], 1)
-            self.assertEqual(performance["latest"]["passScheduleCount"], 9)
+            self.assertEqual(
+                performance["latest"]["passScheduleCount"],
+                glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT,
+            )
             self.assertEqual(performance["latest"]["passScheduleHash"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH)
             self.assertEqual(performance["latest"]["passScheduleOrder"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE)
+            self.assertEqual(performance["latest"]["renderIRRoleGenericDraws"], 7)
+            self.assertEqual(performance["latest"]["renderIRRoleDlightDraws"], 5)
+            self.assertEqual(performance["latest"]["renderIRRoleBeamVertices"], 30)
+            self.assertEqual(performance["latest"]["renderIRRolePostVertices"], 40)
+            self.assertEqual(performance["latest"]["renderIRPassDlightDraws"], 5)
+            self.assertEqual(performance["latest"]["renderIRPassSceneIndexes"], 90)
+            self.assertEqual(performance["latest"]["renderIRPassPostVertices"], 40)
             self.assertEqual(performance["latest"]["postOutputMode"], "glx-owned")
             self.assertEqual(performance["latest"]["postOutputPostNodes"], 4)
             self.assertEqual(performance["latest"]["postOutputOutputs"], 2)
@@ -4939,12 +5169,52 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["streamDrawDepthFragment"], 3)
             self.assertEqual(performance["latest"]["streamDrawTexMods"], 4)
             self.assertEqual(performance["latest"]["streamDrawEnvironment"], 5)
-            self.assertEqual(performance["latest"]["streamDrawDynamicLights"], 0)
+            self.assertEqual(performance["latest"]["streamDrawDynamicLights"], 5)
             self.assertEqual(performance["latest"]["streamDrawScreenMaps"], 0)
             self.assertEqual(performance["latest"]["streamDrawVideoMaps"], 0)
             self.assertEqual(performance["latest"]["streamDrawShadows"], 2)
             self.assertEqual(performance["latest"]["streamDrawBeams"], 3)
             self.assertEqual(performance["latest"]["streamDrawPostProcess"], 4)
+            self.assertEqual(performance["latest"]["streamDlightAttempts"], 6)
+            self.assertEqual(performance["latest"]["streamDlightDraws"], 5)
+            self.assertEqual(performance["latest"]["streamDlightFallbacks"], 1)
+            self.assertEqual(performance["latest"]["streamDlightAttemptMegabytes"], 0.30)
+            self.assertEqual(performance["latest"]["streamDlightMegabytes"], 0.25)
+            self.assertEqual(performance["latest"]["streamDlightIndexMegabytes"], 0.05)
+            self.assertEqual(performance["latest"]["streamDlightWraps"], 2)
+            self.assertEqual(performance["latest"]["streamDlightSameFrameWrapRejects"], 0)
+            self.assertEqual(performance["latest"]["streamDlightSyncWaits"], 3)
+            self.assertEqual(performance["latest"]["streamDlightSyncFailures"], 0)
+            self.assertEqual(performance["latest"]["streamDlightProgramBinds"], 4)
+            self.assertEqual(performance["latest"]["streamDlightProgramBindAttempts"], 5)
+            self.assertEqual(performance["latest"]["streamDlightProgramCreates"], 2)
+            self.assertEqual(performance["latest"]["streamDlightProgramCacheHits"], 6)
+            self.assertEqual(performance["latest"]["dlightStateLegacyPasses"], 2)
+            self.assertEqual(performance["latest"]["dlightStateTextureBinds"], 3)
+            self.assertEqual(performance["latest"]["dlightStateFogTextureBinds"], 4)
+            self.assertEqual(performance["latest"]["dlightStateShadowTextureBinds"], 5)
+            self.assertEqual(performance["latest"]["dlightStateShadowTextureFallbackBinds"], 1)
+            self.assertEqual(performance["latest"]["dlightStateShadowFboBinds"], 6)
+            self.assertEqual(performance["latest"]["dlightStateShadowFboRestores"], 7)
+            self.assertEqual(performance["latest"]["dlightStateChanges"], 8)
+            self.assertEqual(performance["latest"]["dlightBuildLegacyLights"], 9)
+            self.assertEqual(performance["latest"]["dlightBuildLegacySkippedLights"], 10)
+            self.assertEqual(performance["latest"]["dlightBuildLegacyNoHitLights"], 2)
+            self.assertEqual(performance["latest"]["dlightBuildLegacyVertexes"], 300)
+            self.assertEqual(performance["latest"]["dlightBuildLegacyIndexes"], 600)
+            self.assertEqual(performance["latest"]["dlightBuildLegacyLitIndexes"], 450)
+            self.assertEqual(performance["latest"]["dlightBuildPmPasses"], 3)
+            self.assertEqual(performance["latest"]["dlightBuildPmVertexes"], 240)
+            self.assertEqual(performance["latest"]["dlightBuildPmIndexes"], 360)
+            self.assertEqual(performance["latest"]["dlightCullLegacyVertexes"], 40)
+            self.assertEqual(performance["latest"]["dlightCullLegacyIndexes"], 90)
+            self.assertEqual(performance["latest"]["dlightScissorActive"], 1)
+            self.assertEqual(performance["latest"]["dlightScissorCandidates"], 4)
+            self.assertEqual(performance["latest"]["dlightScissorComputed"], 3)
+            self.assertEqual(performance["latest"]["dlightScissorApplied"], 2)
+            self.assertEqual(performance["latest"]["dlightScissorFallbacks"], 1)
+            self.assertEqual(performance["latest"]["dlightScissorPixels"], 1200)
+            self.assertEqual(performance["latest"]["dlightScissorViewportPixels"], 4800)
             self.assertEqual(performance["latest"]["streamCategoryEntityDraws"], 2)
             self.assertEqual(performance["latest"]["streamCategoryParticleDraws"], 1)
             self.assertEqual(performance["latest"]["streamCategoryPolyDraws"], 1)
@@ -4952,7 +5222,14 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["streamCategoryWeaponDraws"], 1)
             self.assertEqual(performance["latest"]["streamCategoryUiDraws"], 1)
             self.assertEqual(performance["latest"]["streamCategoryBeamDraws"], 3)
+            self.assertEqual(performance["latest"]["streamCategoryDlightDraws"], 5)
             self.assertEqual(performance["latest"]["streamCategorySpecialDraws"], 4)
+            self.assertEqual(performance["latest"]["streamRoleGenericDraws"], 7)
+            self.assertEqual(performance["latest"]["streamRoleDlightDraws"], 5)
+            self.assertEqual(performance["latest"]["streamRoleDlightFallbacks"], 1)
+            self.assertEqual(performance["latest"]["streamRoleShadowDraws"], 2)
+            self.assertEqual(performance["latest"]["streamRoleBeamDraws"], 3)
+            self.assertEqual(performance["latest"]["streamRolePostDraws"], 4)
             self.assertEqual(performance["latest"]["staticDrawPacketMisses"], 3)
             self.assertEqual(performance["latest"]["staticQueuePacketMisses"], 7)
             self.assertEqual(performance["latest"]["staticPacketLookupMisses"], 9)
@@ -5106,7 +5383,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
         failures = glx_runtime_sweep.evaluate_performance_budget(aggregate, budget)
 
         self.assertTrue(any("streamDrawFallbacks" in failure for failure in failures))
-        self.assertTrue(any("streamDrawDynamicLights" in failure for failure in failures))
+        self.assertFalse(any("streamDrawDynamicLights" in failure for failure in failures))
         self.assertTrue(any("streamSameFrameWrapRejects" in failure for failure in failures))
         self.assertFalse(any("staticDrawFallbacks" in failure for failure in failures))
 
@@ -5274,7 +5551,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             "max": {
                 "streamDrawScreenMaps": 2,
                 "streamDrawVideoMaps": 2,
-                "streamDrawDynamicLights": 0,
+                "streamDrawDynamicLights": 2,
             },
         }
 

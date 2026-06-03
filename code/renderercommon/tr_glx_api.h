@@ -38,6 +38,11 @@ qboolean GLX_Renderer_DrawElements( unsigned int mode, int count,
 	unsigned int type, const void *indices, int legacyReason, int profilerPath );
 qboolean GLX_Renderer_DrawArrays( unsigned int mode, int first, int count,
 	int legacyReason, int profilerPath );
+qboolean GLX_Renderer_DrawElementsClassified( unsigned int mode, int count,
+	unsigned int type, const void *indices, int legacyReason, int profilerPath,
+	int materialFlags, unsigned int categoryMask );
+qboolean GLX_Renderer_DrawArraysClassified( unsigned int mode, int first, int count,
+	int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask );
 void GLX_Renderer_RecordDraw( int indexes, int path );
 void GLX_Renderer_RecordShaderBatch( const char *shaderName, int sort, int numPasses,
 	int numVertexes, int numIndexes, int flags );
@@ -68,6 +73,14 @@ qboolean GLX_Renderer_BindDlightProgram( qboolean linear, int fogMode,
 	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
 	const float *shadowAtlas, const float *shadowDepth, const float *shadowFilter );
 void GLX_Renderer_UnbindDlightProgram( void );
+qboolean GLX_Renderer_DlightScissorEnabled( void );
+void GLX_Renderer_RecordDlightState( int event );
+void GLX_Renderer_RecordDlightBuild( int legacyLights, int legacySkippedLights,
+	int legacyNoHitLights, int legacyVertexes, int legacyIndexes, int legacyLitIndexes,
+	int pmPasses, int pmVertexes, int pmIndexes );
+void GLX_Renderer_RecordDlightCull( int legacyVertexes, int legacyIndexes );
+void GLX_Renderer_RecordDlightScissor( qboolean computed, qboolean applied,
+	int x, int y, int width, int height, int viewportWidth, int viewportHeight );
 qboolean GLX_Renderer_StreamDrawEnabled( void );
 qboolean GLX_Renderer_StreamDrawMultitextureEnabled( void );
 qboolean GLX_Renderer_StreamDrawFogEnabled( void );
@@ -86,6 +99,7 @@ qboolean GLX_Renderer_StreamReserve( int bytes, int alignment, glxStreamReservat
 qboolean GLX_Renderer_StreamUploadAt( glxStreamReservation_t *reservation, int relativeOffset,
 	const void *data, int bytes );
 void GLX_Renderer_StreamCommit( glxStreamReservation_t *reservation );
+void GLX_Renderer_RecordStreamDlightReservation( const glxStreamReservation_t *reservation );
 unsigned int GLX_Renderer_BindStreamArrayBuffer( unsigned int buffer );
 void GLX_Renderer_RestoreStreamArrayBuffer( unsigned int buffer );
 unsigned int GLX_Renderer_BindStreamElementArrayBuffer( unsigned int buffer );

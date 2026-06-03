@@ -24,6 +24,7 @@ enum class FramePassKind {
 	SkyAndOpaqueWorld,
 	OpaqueEntities,
 	DynamicScene,
+	DynamicLights,
 	TransparentLayers,
 	FirstPersonWeapon,
 	HudAnd2D,
@@ -31,7 +32,7 @@ enum class FramePassKind {
 	OutputExport
 };
 
-static constexpr int GLX_RENDER_IR_PASS_COUNT = 9;
+static constexpr int GLX_RENDER_IR_PASS_COUNT = 10;
 static constexpr int GLX_RENDER_IR_PRODUCT_COUNT = 7;
 static constexpr int GLX_RENDER_IR_PASS_SCHEDULE_TEXT_BYTES = 192;
 static constexpr int GLX_RENDER_IR_MAX_POST_OUTPUT_NODES = 6;
@@ -153,8 +154,19 @@ enum class DynamicDrawKind {
 	Indexed
 };
 
+enum class DynamicDrawRole {
+	Generic,
+	DynamicLight,
+	Shadow,
+	Beam,
+	PostProcess
+};
+
+static constexpr int GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT = 5;
+
 struct DynamicDraw {
 	DynamicDrawKind kind;
+	DynamicDrawRole role;
 	FramePassKind pass;
 	unsigned int primitive;
 	int first;
@@ -590,6 +602,8 @@ static ID_INLINE const char *GLX_RenderIR_PassName( FramePassKind pass )
 		return "opaque-entities";
 	case FramePassKind::DynamicScene:
 		return "dynamic-scene";
+	case FramePassKind::DynamicLights:
+		return "dynamic-lights";
 	case FramePassKind::TransparentLayers:
 		return "transparent-layers";
 	case FramePassKind::FirstPersonWeapon:
@@ -936,6 +950,7 @@ static ID_INLINE qboolean GLX_RenderIR_DefaultPassSchedule( FramePass *passes,
 		FramePassKind::FrameSetup,
 		FramePassKind::SkyAndOpaqueWorld,
 		FramePassKind::OpaqueEntities,
+		FramePassKind::DynamicLights,
 		FramePassKind::DynamicScene,
 		FramePassKind::TransparentLayers,
 		FramePassKind::FirstPersonWeapon,
@@ -1480,12 +1495,85 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateWorldPacket( const WorldPacket &p
 		GLX_RenderIR_ValidateUploadPlan( packet.upload ) ? qtrue : qfalse;
 }
 
+static ID_INLINE qboolean GLX_RenderIR_DynamicDrawRoleImplemented( DynamicDrawRole role )
+{
+	switch ( role ) {
+	case DynamicDrawRole::Generic:
+	case DynamicDrawRole::DynamicLight:
+	case DynamicDrawRole::Shadow:
+	case DynamicDrawRole::Beam:
+	case DynamicDrawRole::PostProcess:
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
+static ID_INLINE const char *GLX_RenderIR_DynamicDrawRoleName( DynamicDrawRole role )
+{
+	switch ( role ) {
+	case DynamicDrawRole::Generic:
+		return "generic";
+	case DynamicDrawRole::DynamicLight:
+		return "dlight";
+	case DynamicDrawRole::Shadow:
+		return "shadow";
+	case DynamicDrawRole::Beam:
+		return "beam";
+	case DynamicDrawRole::PostProcess:
+		return "postprocess";
+	default:
+		return "unknown";
+	}
+}
+
+static ID_INLINE FramePassKind GLX_RenderIR_DefaultPassForDynamicDrawRole(
+	DynamicDrawRole role )
+{
+	switch ( role ) {
+	case DynamicDrawRole::DynamicLight:
+		return FramePassKind::DynamicLights;
+	case DynamicDrawRole::PostProcess:
+		return FramePassKind::PostProcess;
+	case DynamicDrawRole::Generic:
+	case DynamicDrawRole::Shadow:
+	case DynamicDrawRole::Beam:
+	default:
+		return FramePassKind::DynamicScene;
+	}
+}
+
+static ID_INLINE DynamicDrawRole GLX_RenderIR_ClassifyDynamicDrawRole(
+	int materialFlags, unsigned int categoryMask )
+{
+	const unsigned int mask = categoryMask & GLX_DYNAMIC_CATEGORY_MASK_ALL;
+
+	if ( ( materialFlags & GLX_STAGE_DLIGHT_MAP ) ||
+		( mask & GLX_DYNAMIC_CATEGORY_MASK_DLIGHT ) ) {
+		return DynamicDrawRole::DynamicLight;
+	}
+	if ( materialFlags & GLX_STAGE_SHADOW_PASS ) {
+		return DynamicDrawRole::Shadow;
+	}
+	if ( ( materialFlags & GLX_STAGE_BEAM_PASS ) ||
+		( mask & GLX_DYNAMIC_CATEGORY_MASK_BEAM ) ) {
+		return DynamicDrawRole::Beam;
+	}
+	if ( materialFlags & GLX_STAGE_POSTPROCESS_PASS ) {
+		return DynamicDrawRole::PostProcess;
+	}
+	return DynamicDrawRole::Generic;
+}
+
 static ID_INLINE qboolean GLX_RenderIR_ValidateDynamicDraw( const DynamicDraw &draw )
 {
 	if ( draw.primitive == 0 || draw.count <= 0 ) {
 		return qfalse;
 	}
 	if ( draw.kind == DynamicDrawKind::Indexed && draw.indexType == 0 ) {
+		return qfalse;
+	}
+	if ( !GLX_RenderIR_DynamicDrawRoleImplemented( draw.role ) ) {
 		return qfalse;
 	}
 	return GLX_RenderIR_ValidateMaterial( draw.material ) &&

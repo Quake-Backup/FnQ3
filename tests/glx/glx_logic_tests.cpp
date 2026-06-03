@@ -865,6 +865,65 @@ bool StreamSpecialSceneGatesAreExplicit()
 	return true;
 }
 
+bool StreamDynamicLightAutoGateIsTierAndReadinessBound()
+{
+	CHECK( glx::GLX_Stream_ParseDynamicLightGateMode( "auto", 0 ) ==
+		glx::StreamDynamicLightGateMode::Auto );
+	CHECK( glx::GLX_Stream_ParseDynamicLightGateMode( "AUTO", 0 ) ==
+		glx::StreamDynamicLightGateMode::Auto );
+	CHECK( glx::GLX_Stream_ParseDynamicLightGateMode( "1", 1 ) ==
+		glx::StreamDynamicLightGateMode::On );
+	CHECK( glx::GLX_Stream_ParseDynamicLightGateMode( "2", 2 ) ==
+		glx::StreamDynamicLightGateMode::On );
+	CHECK( glx::GLX_Stream_ParseDynamicLightGateMode( "true", 0 ) ==
+		glx::StreamDynamicLightGateMode::On );
+	CHECK( glx::GLX_Stream_ParseDynamicLightGateMode( "off", 1 ) ==
+		glx::StreamDynamicLightGateMode::Off );
+	CHECK( glx::GLX_Stream_ParseDynamicLightGateMode( nullptr, 0 ) ==
+		glx::StreamDynamicLightGateMode::Off );
+
+	glx::StreamDynamicLightGateConfig config {};
+	config.streamDraw = qtrue;
+	config.streamReady = qtrue;
+	config.mode = glx::StreamDynamicLightGateMode::Auto;
+
+	config.tier = glx::RenderProductTier::GL12;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qfalse );
+
+	config.tier = glx::RenderProductTier::GL2X;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qfalse );
+
+	config.tier = glx::RenderProductTier::GL3X;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qtrue );
+
+	config.tier = glx::RenderProductTier::GL41;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qtrue );
+
+	config.tier = glx::RenderProductTier::GL46;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qtrue );
+
+	config.streamReady = qfalse;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qfalse );
+
+	config.streamReady = qtrue;
+	config.streamDraw = qfalse;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qfalse );
+
+	config.streamDraw = qtrue;
+	config.streamReady = qfalse;
+	config.tier = glx::RenderProductTier::GL12;
+	config.mode = glx::StreamDynamicLightGateMode::On;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qfalse );
+
+	config.streamReady = qtrue;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qtrue );
+
+	config.mode = glx::StreamDynamicLightGateMode::Off;
+	CHECK( glx::GLX_Stream_EvaluateDynamicLightGate( config ) == qfalse );
+
+	return true;
+}
+
 bool StreamShadowGateIsExplicit()
 {
 	glx::StreamSpecialDrawGateConfig config {};
@@ -936,7 +995,13 @@ bool StreamDynamicCategoriesNormalizeToSceneProducts()
 	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask( 0,
 		GLX_STAGE_POSTPROCESS_PASS ) == GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
 	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask( 0,
-		GLX_STAGE_DLIGHT_MAP ) == GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
+		GLX_STAGE_DLIGHT_MAP ) == GLX_DYNAMIC_CATEGORY_MASK_DLIGHT );
+	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask(
+		GLX_DYNAMIC_CATEGORY_MASK_ENTITY, GLX_STAGE_DLIGHT_MAP ) ==
+		( GLX_DYNAMIC_CATEGORY_MASK_ENTITY | GLX_DYNAMIC_CATEGORY_MASK_DLIGHT ) );
+	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask(
+		GLX_DYNAMIC_CATEGORY_MASK_ENTITY, GLX_STAGE_SHADOW_PASS ) ==
+		( GLX_DYNAMIC_CATEGORY_MASK_ENTITY | GLX_DYNAMIC_CATEGORY_MASK_SPECIAL ) );
 	CHECK( glx::GLX_Stream_NormalizeDynamicCategoryMask( 0, 0 ) ==
 		GLX_DYNAMIC_CATEGORY_MASK_SPECIAL );
 
@@ -1130,14 +1195,15 @@ bool RenderIRDefaultPassScheduleIsDeterministic()
 	CHECK( glx::GLX_RenderIR_FormatPassSchedule( passes, count, schedule,
 		glx::GLX_RENDER_IR_PASS_SCHEDULE_TEXT_BYTES ) > 0 );
 	CHECK( std::strcmp( schedule,
-		"frame-setup>sky-opaque-world>opaque-entities>dynamic-scene>transparent-layers>"
+		"frame-setup>sky-opaque-world>opaque-entities>dynamic-lights>dynamic-scene>transparent-layers>"
 		"first-person-weapon>hud-2d>postprocess>output-export" ) == 0 );
 	CHECK( glx::GLX_RenderIR_PassScheduleHash( passes, count ) != 0 );
 	CHECK( passes[0].kind == glx::FramePassKind::FrameSetup );
 	CHECK( passes[1].kind == glx::FramePassKind::SkyAndOpaqueWorld );
-	CHECK( passes[3].kind == glx::FramePassKind::DynamicScene );
-	CHECK( passes[7].kind == glx::FramePassKind::PostProcess );
-	CHECK( passes[8].kind == glx::FramePassKind::OutputExport );
+	CHECK( passes[3].kind == glx::FramePassKind::DynamicLights );
+	CHECK( passes[4].kind == glx::FramePassKind::DynamicScene );
+	CHECK( passes[8].kind == glx::FramePassKind::PostProcess );
+	CHECK( passes[9].kind == glx::FramePassKind::OutputExport );
 
 	CHECK( glx::GLX_RenderIR_DefaultPassSchedule( nullptr, 0, &count ) == qfalse );
 	CHECK( count == glx::GLX_RENDER_IR_PASS_COUNT );
@@ -1178,7 +1244,8 @@ bool RenderIRProductsValidate()
 
 	glx::DynamicDraw draw {};
 	draw.kind = glx::DynamicDrawKind::Indexed;
-	draw.pass = glx::FramePassKind::DynamicScene;
+	draw.role = glx::DynamicDrawRole::DynamicLight;
+	draw.pass = glx::GLX_RenderIR_DefaultPassForDynamicDrawRole( draw.role );
 	draw.primitive = 0x0004;
 	draw.count = 96;
 	draw.indexType = 0x1403;
@@ -1239,6 +1306,25 @@ bool RenderIRProductsValidate()
 	CHECK( std::strcmp( glx::GLX_RenderIR_OutputPrimariesContractName( glx::OutputPrimaries::Native ), "native-pass-through" ) == 0 );
 	CHECK( glx::GLX_RenderIR_OutputPrimariesImplemented( glx::OutputPrimaries::Unknown ) == qfalse );
 	CHECK( std::strcmp( glx::GLX_RenderIR_GamutMapName( glx::GamutMapMode::CompressToOutput ), "compress" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_DynamicDrawRoleName( glx::DynamicDrawRole::Generic ), "generic" ) == 0 );
+	CHECK( std::strcmp( glx::GLX_RenderIR_DynamicDrawRoleName( glx::DynamicDrawRole::DynamicLight ), "dlight" ) == 0 );
+	CHECK( glx::GLX_RenderIR_DefaultPassForDynamicDrawRole( glx::DynamicDrawRole::Generic ) ==
+		glx::FramePassKind::DynamicScene );
+	CHECK( glx::GLX_RenderIR_DefaultPassForDynamicDrawRole( glx::DynamicDrawRole::DynamicLight ) ==
+		glx::FramePassKind::DynamicLights );
+	CHECK( glx::GLX_RenderIR_DefaultPassForDynamicDrawRole( glx::DynamicDrawRole::PostProcess ) ==
+		glx::FramePassKind::PostProcess );
+	CHECK( glx::GLX_RenderIR_ClassifyDynamicDrawRole( 0, 0 ) == glx::DynamicDrawRole::Generic );
+	CHECK( glx::GLX_RenderIR_ClassifyDynamicDrawRole( GLX_STAGE_DLIGHT_MAP, 0 ) ==
+		glx::DynamicDrawRole::DynamicLight );
+	CHECK( glx::GLX_RenderIR_ClassifyDynamicDrawRole( 0, GLX_DYNAMIC_CATEGORY_MASK_DLIGHT ) ==
+		glx::DynamicDrawRole::DynamicLight );
+	CHECK( glx::GLX_RenderIR_ClassifyDynamicDrawRole( GLX_STAGE_SHADOW_PASS, 0 ) ==
+		glx::DynamicDrawRole::Shadow );
+	CHECK( glx::GLX_RenderIR_ClassifyDynamicDrawRole( 0, GLX_DYNAMIC_CATEGORY_MASK_BEAM ) ==
+		glx::DynamicDrawRole::Beam );
+	CHECK( glx::GLX_RenderIR_ClassifyDynamicDrawRole( GLX_STAGE_POSTPROCESS_PASS, 0 ) ==
+		glx::DynamicDrawRole::PostProcess );
 
 	glx::PostNode post {};
 	post.kind = glx::PostNodeKind::BloomFinal;
@@ -1272,6 +1358,9 @@ bool RenderIRProductsValidate()
 	upload.bytes = 0;
 	CHECK( glx::GLX_RenderIR_ValidateUploadPlan( upload ) == qfalse );
 	draw.count = 0;
+	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qfalse );
+	draw.count = 96;
+	draw.role = static_cast<glx::DynamicDrawRole>( 99 );
 	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qfalse );
 	output.exposure = -1.0f;
 	CHECK( glx::GLX_RenderIR_ValidateOutputTransform( output ) == qfalse );
@@ -2747,6 +2836,7 @@ int main()
 		{ "StreamGatesMatchRcAllowlist", StreamGatesMatchRcAllowlist },
 		{ "StreamBroadKeyModeRemainsDeveloperEscapeHatch", StreamBroadKeyModeRemainsDeveloperEscapeHatch },
 		{ "StreamSpecialSceneGatesAreExplicit", StreamSpecialSceneGatesAreExplicit },
+		{ "StreamDynamicLightAutoGateIsTierAndReadinessBound", StreamDynamicLightAutoGateIsTierAndReadinessBound },
 		{ "StreamShadowGateIsExplicit", StreamShadowGateIsExplicit },
 		{ "StreamBeamGateIsExplicit", StreamBeamGateIsExplicit },
 		{ "StreamPostProcessGateIsExplicit", StreamPostProcessGateIsExplicit },

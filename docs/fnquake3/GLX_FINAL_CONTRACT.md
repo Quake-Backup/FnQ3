@@ -117,13 +117,14 @@ GLx keeps one compatibility-safe pass schedule:
 1. Frame setup, visibility, and clear policy.
 2. Sky and opaque static world.
 3. Opaque entities and model surfaces.
-4. Marks, decals, particles, beams, dynamic-light overlays, and other
-   ordered dynamic scene draws.
-5. Transparent and sorted material layers in legacy-compatible order.
-6. First-person weapon and viewmodel effects.
-7. Cinematics, 2D UI, console, and HUD.
-8. Scene-linear postprocess, bloom, grading, tone map, and resolve.
-9. Output transform, screenshot, video, cube-map, and export work.
+4. Native dynamic-light accumulation, including future shaderized light-list
+   work, while the compatibility renderer still preserves current visuals.
+5. Marks, decals, particles, beams, and other ordered dynamic scene draws.
+6. Transparent and sorted material layers in legacy-compatible order.
+7. First-person weapon and viewmodel effects.
+8. Cinematics, 2D UI, console, and HUD.
+9. Scene-linear postprocess, bloom, grading, tone map, and resolve.
+10. Output transform, screenshot, video, cube-map, and export work.
 
 Postprocess internals may use a small dependency graph, but top-level frame
 order is emitted once and validated by tests and capture logs.
@@ -211,13 +212,14 @@ migration alias to GLx, until all of these are true:
   selected material-stage/tcgen corpus maps, GLx screenshot histograms,
   material renderer readiness, compile/program activity, zero material failures
   or unsupported plans, parameter-block fingerprints, required stream-material
-  feature counters, and RC guards that keep dynamic-light, screen-map, and
-  video-map material streams out of the conservative proof surface;
+  feature counters, positive dynamic-light stream evidence, and RC guards that
+  keep screen-map and video-map material streams out of the conservative proof
+  surface;
 - `rc-proof` manifests carry current passing `dynamicProofEvidence` for
-  selected dynamic entity, first-person weapon, dynamic-light guard, and
-  planar-shadow corpus coverage, with required stream-category/feature counters,
-  tier-support evidence, screenshots or timedemos for the selected dynamic
-  scenes, and zero stream/category fallbacks;
+  selected dynamic entity, first-person weapon, dynamic-light, and planar-shadow
+  corpus coverage, with required stream-category/feature counters, render-IR
+  dlight ownership evidence, tier-support evidence, screenshots or timedemos for
+  the selected dynamic scenes, and zero stream/category fallbacks;
 - `rc-proof` manifests carry current passing `postProofEvidence` for selected
   greyscale and render-scale corpus maps, GLx screenshot histograms, ready FBO
   state, zero FBO failures, positive postprocess frame/screenshot counters,

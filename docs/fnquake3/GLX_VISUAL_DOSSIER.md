@@ -64,8 +64,8 @@ Each dossier contains:
   stream-material counters, and guarded high-risk screen/video material state
   are present with no unsafe fallback or failure counters.
 - Use the dynamic-proof table on hard RC artifacts to confirm that required
-  entity, weapon, particle, mark/decal, beam, dynamic-light guard, and shadow
-  evidence is present with no stream or category fallbacks.
+  entity, weapon, particle, mark/decal, beam, dynamic-light stream/ownership,
+  and shadow evidence is present with no stream or category fallbacks.
 - Use the post-proof table on hard RC artifacts to confirm that greyscale and
   render-scale tagged maps have found GLx screenshots and histograms, the FBO is
   ready with no init failures, postprocess frames and screenshot frames are

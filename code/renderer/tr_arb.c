@@ -855,6 +855,7 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 		ok = qfalse;
 	}
 	GLX_CompatStreamCommit( &reservation );
+	GLX_CompatRecordStreamDlightReservation( &reservation );
 
 	if ( !ok ) {
 		GLX_CompatRecordStreamDrawResult( input->numVertexes, numIndexes,
@@ -871,9 +872,9 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 	qglNormalPointer( GL_FLOAT, sizeof( input->normal[0] ), (const GLvoid *)(intptr_t)( reservation.offset + normalOffset ) );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
 
-	if ( !GLX_CompatDrawElements( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
+	if ( !GLX_CompatDrawElementsClassified( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
 		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
-		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, materialFlags, categoryMask ) ) {
 		ok = qfalse;
 	}
 
@@ -1002,6 +1003,9 @@ static void ARB_Lighting_Fast( const shaderStage_t* pStage )
 {
 	if ( !tess.numIndexes )
 		return;
+
+	GLX_CompatRecordDlightBuild( 0, 0, 0, 0, 0, 0,
+		1, tess.numVertexes, tess.numIndexes );
 
 	if ( tess.shader->sort < SS_OPAQUE ) {
 		GL_State( GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL );
@@ -1247,6 +1251,7 @@ qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage )
 		fp = RB_CalcFogProgramParms();
 		fogMode = fp && fp->eyeOutside ? 1 : 2;
 		GL_BindTexture( 1, tr.fogImage->texnum );
+		GLX_CompatRecordDlightState( GLX_DLIGHT_STATE_FOG_TEXTURE_BIND );
 		GL_SelectTexture( 0 );
 	}
 	if ( dlightShadowEnabled ) {
@@ -3820,11 +3825,13 @@ qboolean FBO_BeginDlightShadowAtlas( void )
 	}
 
 	FBO_Bind( GL_FRAMEBUFFER, dlightShadowAtlasFbo );
+	GLX_CompatRecordDlightState( GLX_DLIGHT_STATE_SHADOW_FBO_BIND );
 	qglDrawBuffer( GL_NONE );
 	qglReadBuffer( GL_NONE );
 	qglViewport( 0, 0, dlightShadowAtlasLayout.width, dlightShadowAtlasLayout.height );
 	qglScissor( 0, 0, dlightShadowAtlasLayout.width, dlightShadowAtlasLayout.height );
 	GL_State( GLS_DEFAULT );
+	GLX_CompatRecordDlightState( GLX_DLIGHT_STATE_GL_STATE );
 
 	return qtrue;
 }
@@ -3833,6 +3840,7 @@ void FBO_EndDlightShadowAtlas( void )
 {
 	if ( fboEnabled ) {
 		FBO_BindMain();
+		GLX_CompatRecordDlightState( GLX_DLIGHT_STATE_SHADOW_FBO_RESTORE );
 		qglDrawBuffer( GL_COLOR_ATTACHMENT0 );
 		qglReadBuffer( GL_COLOR_ATTACHMENT0 );
 	}
@@ -3992,7 +4000,12 @@ void FBO_BindDepthFadeTexture( int texUnit )
 
 void FBO_BindDlightShadowTexture( int texUnit )
 {
-	GL_BindTexture( texUnit, FBO_DlightShadowsReady() ? dlightShadowAtlasTexture : 0 );
+	qboolean ready = FBO_DlightShadowsReady();
+
+	GL_BindTexture( texUnit, ready ? dlightShadowAtlasTexture : 0 );
+	GLX_CompatRecordDlightState( ready ?
+		GLX_DLIGHT_STATE_SHADOW_TEXTURE_BIND :
+		GLX_DLIGHT_STATE_SHADOW_TEXTURE_FALLBACK_BIND );
 }
 
 void FBO_BindCSMShadowTexture( int texUnit )

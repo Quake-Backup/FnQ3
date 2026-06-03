@@ -405,7 +405,7 @@ static void RB_ApplyDlightShadowCasterNormalBias( void )
 		}
 
 		if ( tess.csmCasterPass ) {
-			VectorScale( tr.csm.lightDirection, -1.0f, lightToVertex );
+			VectorCopy( tr.csm.lightDirection, lightToVertex );
 		} else {
 			world[0] = backEnd.or.origin[0] +
 				tess.xyz[i][0] * backEnd.or.axis[0][0] +

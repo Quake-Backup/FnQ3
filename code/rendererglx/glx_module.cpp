@@ -123,7 +123,8 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxStreamDrawDepthFragment", "0", "1", "1" },
 	{ "r_glxStreamDrawTexMods", "0", "1", "1" },
 	{ "r_glxStreamDrawEnvironment", "0", "1", "1" },
-	{ "r_glxStreamDrawDynamicLights", "0", "0", "0" },
+	{ "r_glxStreamDrawDynamicLights", "0", "auto", "auto" },
+	{ "r_glxDlightScissor", "0", "auto", "auto" },
 	{ "r_glxStreamDrawScreenMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawVideoMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawShadows", "0", "1", "1" },
@@ -202,12 +203,51 @@ static constexpr int GLX_DLIGHT_PROGRAM_LIMIT = 24;
 
 struct DlightState {
 	cvar_t *enabled;
+	cvar_t *scissor;
 	DlightFns fns;
 	DlightProgram programs[GLX_DLIGHT_PROGRAM_LIMIT];
 	int programCount;
 	GLuint currentProgram;
 	qboolean ready;
 	char reason[96];
+	unsigned int availabilityQueries;
+	unsigned int availabilityHits;
+	unsigned int availabilityMisses;
+	unsigned int programCacheHits;
+	unsigned int programCreates;
+	unsigned int programCreateFailures;
+	unsigned int shaderCompileFailures;
+	unsigned int programLinkFailures;
+	unsigned int bindAttempts;
+	unsigned int binds;
+	unsigned int bindFailures;
+	unsigned int unbinds;
+	unsigned int uniformUpdates;
+	unsigned int legacyPasses;
+	unsigned int textureBinds;
+	unsigned int fogTextureBinds;
+	unsigned int shadowTextureBinds;
+	unsigned int shadowTextureFallbackBinds;
+	unsigned int shadowFboBinds;
+	unsigned int shadowFboRestores;
+	unsigned int stateChanges;
+	unsigned int buildLegacyLights;
+	unsigned int buildLegacySkippedLights;
+	unsigned int buildLegacyNoHitLights;
+	unsigned int buildLegacyVertexes;
+	unsigned int buildLegacyIndexes;
+	unsigned int buildLegacyLitIndexes;
+	unsigned int buildPmPasses;
+	unsigned int buildPmVertexes;
+	unsigned int buildPmIndexes;
+	unsigned int cullLegacyVertexes;
+	unsigned int cullLegacyIndexes;
+	unsigned int scissorCandidates;
+	unsigned int scissorComputed;
+	unsigned int scissorApplied;
+	unsigned int scissorFallbacks;
+	unsigned long long scissorPixels;
+	unsigned long long scissorViewportPixels;
 };
 
 static int GLX_Dlight_ClampFogMode( int fogMode )
@@ -237,6 +277,168 @@ static void GLX_Dlight_SetReason( DlightState *state, const char *reason )
 	}
 	std::snprintf( state->reason, sizeof( state->reason ), "%s",
 		reason ? reason : "" );
+}
+
+static void GLX_Dlight_ResetCounters( DlightState *state )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->availabilityQueries = 0;
+	state->availabilityHits = 0;
+	state->availabilityMisses = 0;
+	state->programCacheHits = 0;
+	state->programCreates = 0;
+	state->programCreateFailures = 0;
+	state->shaderCompileFailures = 0;
+	state->programLinkFailures = 0;
+	state->bindAttempts = 0;
+	state->binds = 0;
+	state->bindFailures = 0;
+	state->unbinds = 0;
+	state->uniformUpdates = 0;
+	state->legacyPasses = 0;
+	state->textureBinds = 0;
+	state->fogTextureBinds = 0;
+	state->shadowTextureBinds = 0;
+	state->shadowTextureFallbackBinds = 0;
+	state->shadowFboBinds = 0;
+	state->shadowFboRestores = 0;
+	state->stateChanges = 0;
+	state->buildLegacyLights = 0;
+	state->buildLegacySkippedLights = 0;
+	state->buildLegacyNoHitLights = 0;
+	state->buildLegacyVertexes = 0;
+	state->buildLegacyIndexes = 0;
+	state->buildLegacyLitIndexes = 0;
+	state->buildPmPasses = 0;
+	state->buildPmVertexes = 0;
+	state->buildPmIndexes = 0;
+	state->cullLegacyVertexes = 0;
+	state->cullLegacyIndexes = 0;
+	state->scissorCandidates = 0;
+	state->scissorComputed = 0;
+	state->scissorApplied = 0;
+	state->scissorFallbacks = 0;
+	state->scissorPixels = 0;
+	state->scissorViewportPixels = 0;
+}
+
+static void GLX_Dlight_RecordState( DlightState *state, int event )
+{
+	if ( !state ) {
+		return;
+	}
+
+	switch ( event ) {
+		case GLX_DLIGHT_STATE_LEGACY_PASS:
+			state->legacyPasses++;
+			break;
+		case GLX_DLIGHT_STATE_TEXTURE_BIND:
+			state->textureBinds++;
+			break;
+		case GLX_DLIGHT_STATE_FOG_TEXTURE_BIND:
+			state->fogTextureBinds++;
+			break;
+		case GLX_DLIGHT_STATE_SHADOW_TEXTURE_BIND:
+			state->shadowTextureBinds++;
+			break;
+		case GLX_DLIGHT_STATE_SHADOW_TEXTURE_FALLBACK_BIND:
+			state->shadowTextureFallbackBinds++;
+			break;
+		case GLX_DLIGHT_STATE_SHADOW_FBO_BIND:
+			state->shadowFboBinds++;
+			break;
+		case GLX_DLIGHT_STATE_SHADOW_FBO_RESTORE:
+			state->shadowFboRestores++;
+			break;
+		case GLX_DLIGHT_STATE_GL_STATE:
+			state->stateChanges++;
+			break;
+		default:
+			break;
+	}
+}
+
+static unsigned int GLX_Dlight_PositiveCounter( int value )
+{
+	return value > 0 ? static_cast<unsigned int>( value ) : 0u;
+}
+
+static void GLX_Dlight_RecordBuild( DlightState *state, int legacyLights,
+	int legacySkippedLights, int legacyNoHitLights, int legacyVertexes,
+	int legacyIndexes, int legacyLitIndexes, int pmPasses, int pmVertexes,
+	int pmIndexes )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->buildLegacyLights += GLX_Dlight_PositiveCounter( legacyLights );
+	state->buildLegacySkippedLights += GLX_Dlight_PositiveCounter( legacySkippedLights );
+	state->buildLegacyNoHitLights += GLX_Dlight_PositiveCounter( legacyNoHitLights );
+	state->buildLegacyVertexes += GLX_Dlight_PositiveCounter( legacyVertexes );
+	state->buildLegacyIndexes += GLX_Dlight_PositiveCounter( legacyIndexes );
+	state->buildLegacyLitIndexes += GLX_Dlight_PositiveCounter( legacyLitIndexes );
+	state->buildPmPasses += GLX_Dlight_PositiveCounter( pmPasses );
+	state->buildPmVertexes += GLX_Dlight_PositiveCounter( pmVertexes );
+	state->buildPmIndexes += GLX_Dlight_PositiveCounter( pmIndexes );
+}
+
+static void GLX_Dlight_RecordCull( DlightState *state, int legacyVertexes,
+	int legacyIndexes )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->cullLegacyVertexes += GLX_Dlight_PositiveCounter( legacyVertexes );
+	state->cullLegacyIndexes += GLX_Dlight_PositiveCounter( legacyIndexes );
+}
+
+static qboolean GLX_Dlight_ScissorEnabled( const DlightState &state )
+{
+	if ( !state.scissor ) {
+		return qfalse;
+	}
+	if ( state.scissor->integer ) {
+		return qtrue;
+	}
+	if ( state.scissor->string &&
+		!GLX_Module_Stricmp( state.scissor->string, "auto" ) ) {
+		return qtrue;
+	}
+	return qfalse;
+}
+
+static void GLX_Dlight_RecordScissor( DlightState *state, qboolean computed,
+	qboolean applied, int width, int height, int viewportWidth, int viewportHeight )
+{
+	unsigned long long pixels;
+	unsigned long long viewportPixels;
+
+	if ( !state ) {
+		return;
+	}
+
+	state->scissorCandidates++;
+	if ( !computed || width <= 0 || height <= 0 ||
+		viewportWidth <= 0 || viewportHeight <= 0 ) {
+		state->scissorFallbacks++;
+		return;
+	}
+
+	pixels = static_cast<unsigned long long>( width ) *
+		static_cast<unsigned long long>( height );
+	viewportPixels = static_cast<unsigned long long>( viewportWidth ) *
+		static_cast<unsigned long long>( viewportHeight );
+	state->scissorComputed++;
+	state->scissorPixels += pixels;
+	state->scissorViewportPixels += viewportPixels;
+	if ( applied ) {
+		state->scissorApplied++;
+	}
 }
 
 static void *GLX_Dlight_GetProc( const char *name )
@@ -515,6 +717,7 @@ static GLuint GLX_Dlight_CompileShader( DlightState *state, GLenum shaderType,
 	if ( !ok ) {
 		GLX_Dlight_SetReason( state,
 			shaderType == GL_VERTEX_SHADER ? "dlight vertex compile failed" : "dlight fragment compile failed" );
+		state->shaderCompileFailures++;
 		GLX_Dlight_PrintObjectLog( *state, shader, qfalse, PRINT_WARNING );
 		state->fns.DeleteShader( shader );
 		return 0;
@@ -535,11 +738,13 @@ static DlightProgram *GLX_Dlight_CreateProgram( DlightState *state,
 
 	if ( state->programCount >= GLX_DLIGHT_PROGRAM_LIMIT ) {
 		GLX_Dlight_SetReason( state, "dlight program cache full" );
+		state->programCreateFailures++;
 		return nullptr;
 	}
 	if ( !GLX_Dlight_VertexSource( key, vertexSource, sizeof( vertexSource ) ) ||
 		!GLX_Dlight_FragmentSource( key, fragmentSource, sizeof( fragmentSource ) ) ) {
 		GLX_Dlight_SetReason( state, "dlight shader source overflow" );
+		state->programCreateFailures++;
 		return nullptr;
 	}
 
@@ -559,6 +764,7 @@ static DlightProgram *GLX_Dlight_CreateProgram( DlightState *state,
 	program->program = state->fns.CreateProgram();
 	if ( !program->program ) {
 		GLX_Dlight_SetReason( state, "glCreateProgram failed" );
+		state->programCreateFailures++;
 		state->fns.DeleteShader( vertexShader );
 		state->fns.DeleteShader( fragmentShader );
 		return nullptr;
@@ -572,6 +778,8 @@ static DlightProgram *GLX_Dlight_CreateProgram( DlightState *state,
 	state->fns.DeleteShader( fragmentShader );
 	if ( !ok ) {
 		GLX_Dlight_SetReason( state, "dlight program link failed" );
+		state->programLinkFailures++;
+		state->programCreateFailures++;
 		GLX_Dlight_PrintObjectLog( *state, program->program, qtrue, PRINT_WARNING );
 		state->fns.DeleteProgram( program->program );
 		program->program = 0;
@@ -596,6 +804,7 @@ static DlightProgram *GLX_Dlight_CreateProgram( DlightState *state,
 	program->shadowFilterUniform = state->fns.GetUniformLocation( program->program, "u_ShadowFilter" );
 
 	state->programCount++;
+	state->programCreates++;
 	GLX_Dlight_SetReason( state, "" );
 	return program;
 }
@@ -636,6 +845,7 @@ static DlightProgram *GLX_Dlight_FindOrCreateProgram( DlightState *state,
 
 	program = GLX_Dlight_FindProgram( state, key );
 	if ( program ) {
+		state->programCacheHits++;
 		return program;
 	}
 	return GLX_Dlight_CreateProgram( state, key );
@@ -646,6 +856,7 @@ static void GLX_Dlight_SetUniform4fv( DlightState *state, GLint location,
 {
 	if ( location >= 0 && value ) {
 		state->fns.Uniform4fv( location, 1, value );
+		state->uniformUpdates++;
 	}
 }
 
@@ -658,6 +869,9 @@ static void GLX_Dlight_RegisterCvars( DlightState *state )
 	state->enabled = RI().Cvar_Get( "r_glxDlightProgram", "1", CVAR_ARCHIVE_ND );
 	RI().Cvar_SetDescription( state->enabled,
 		"Use a GLx-native GLSL dynamic-light program for r_dlightMode 1/2, falling back to the ARB path when unsupported." );
+	state->scissor = RI().Cvar_Get( "r_glxDlightScissor", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->scissor,
+		"Restrict legacy projected dynamic-light overlay draws to computed screen-space scissor rectangles; auto enables this in GLx RC/stress profiles." );
 }
 
 static void GLX_Dlight_Shutdown( DlightState *state, qboolean deletePrograms )
@@ -691,6 +905,7 @@ static void GLX_Dlight_OnOpenGLReady( DlightState *state )
 	}
 
 	GLX_Dlight_Shutdown( state, qtrue );
+	GLX_Dlight_ResetCounters( state );
 	GLX_Dlight_LoadFunctions( state );
 	state->ready = GLX_Dlight_FunctionsReady( *state );
 	GLX_Dlight_SetReason( state, state->ready ? "" : "missing GLSL program functions" );
@@ -699,7 +914,20 @@ static void GLX_Dlight_OnOpenGLReady( DlightState *state )
 static qboolean GLX_Dlight_ProgramAvailable( DlightState *state, qboolean linear,
 	int fogMode, qboolean absLight, qboolean shadow )
 {
-	return GLX_Dlight_FindOrCreateProgram( state, linear, fogMode, absLight, shadow ) ? qtrue : qfalse;
+	DlightProgram *program;
+
+	if ( state ) {
+		state->availabilityQueries++;
+	}
+	program = GLX_Dlight_FindOrCreateProgram( state, linear, fogMode, absLight, shadow );
+	if ( state ) {
+		if ( program ) {
+			state->availabilityHits++;
+		} else {
+			state->availabilityMisses++;
+		}
+	}
+	return program ? qtrue : qfalse;
 }
 
 static qboolean GLX_Dlight_BindProgram( DlightState *state, qboolean linear,
@@ -711,25 +939,41 @@ static qboolean GLX_Dlight_BindProgram( DlightState *state, qboolean linear,
 {
 	DlightProgram *program;
 
+	if ( state ) {
+		state->bindAttempts++;
+	}
 	fogMode = GLX_Dlight_ClampFogMode( fogMode );
 	if ( fogMode && ( !fogDistanceVector || !fogDepthVector ) ) {
+		if ( state ) {
+			state->bindFailures++;
+		}
 		return qfalse;
 	}
 	if ( !eyePos || !lightPos || !lightColor || !lightVector || !texFactors ||
 		!dlightFactors ) {
+		if ( state ) {
+			state->bindFailures++;
+		}
 		return qfalse;
 	}
 	if ( shadow && ( !dlightShadow || !shadowAtlas || !shadowDepth || !shadowFilter ) ) {
+		if ( state ) {
+			state->bindFailures++;
+		}
 		return qfalse;
 	}
 
 	program = GLX_Dlight_FindOrCreateProgram( state, linear, fogMode, absLight, shadow );
 	if ( !program ) {
+		if ( state ) {
+			state->bindFailures++;
+		}
 		return qfalse;
 	}
 
 	state->fns.UseProgram( program->program );
 	state->currentProgram = program->program;
+	state->binds++;
 	if ( program->texture0Uniform >= 0 ) {
 		state->fns.Uniform1i( program->texture0Uniform, 0 );
 	}
@@ -765,6 +1009,53 @@ static void GLX_Dlight_Unbind( DlightState *state )
 
 	state->fns.UseProgram( 0 );
 	state->currentProgram = 0;
+	state->unbinds++;
+}
+
+static void GLX_Dlight_PrintInfo( const DlightState &state )
+{
+	RI().Printf( PRINT_ALL, "  dlight program active: %s, ready %s, programs %i, current %u\n",
+		BoolName( GLX_Dlight_Active( state ) ), BoolName( state.ready ),
+		state.programCount, state.currentProgram );
+	RI().Printf( PRINT_ALL, "  dlight program reason: %s\n",
+		state.reason[0] ? state.reason : "ready" );
+	RI().Printf( PRINT_ALL, "  dlight program availability: %u queries, %u hits, %u misses, cache hits %u, creates %u, create failures %u, shader compile failures %u, link failures %u\n",
+		state.availabilityQueries, state.availabilityHits, state.availabilityMisses,
+		state.programCacheHits, state.programCreates, state.programCreateFailures,
+		state.shaderCompileFailures, state.programLinkFailures );
+	RI().Printf( PRINT_ALL, "  dlight program binds: %u/%u, failures %u, unbinds %u, uniform vec4 updates %u\n",
+		state.binds, state.bindAttempts, state.bindFailures, state.unbinds,
+		state.uniformUpdates );
+	RI().Printf( PRINT_ALL, "  dlight state: legacy passes %u, texture binds %u, fog textures %u, shadow textures %u/%u, shadow fbo %u/%u, state changes %u\n",
+		state.legacyPasses,
+		state.textureBinds,
+		state.fogTextureBinds,
+		state.shadowTextureBinds,
+		state.shadowTextureFallbackBinds,
+		state.shadowFboBinds,
+		state.shadowFboRestores,
+		state.stateChanges );
+	RI().Printf( PRINT_ALL, "  dlight build: legacy lights %u/%u skipped, no-hit %u, verts %u, indexes %u/%u, pm passes %u, pm verts/indexes %u/%u\n",
+		state.buildLegacyLights,
+		state.buildLegacySkippedLights,
+		state.buildLegacyNoHitLights,
+		state.buildLegacyVertexes,
+		state.buildLegacyIndexes,
+		state.buildLegacyLitIndexes,
+		state.buildPmPasses,
+		state.buildPmVertexes,
+		state.buildPmIndexes );
+	RI().Printf( PRINT_ALL, "  dlight cull: legacy verts %u, indexes %u\n",
+		state.cullLegacyVertexes,
+		state.cullLegacyIndexes );
+	RI().Printf( PRINT_ALL, "  dlight scissor: active %s, candidates %u, computed %u, applied %u, fallbacks %u, pixels %llu/%llu\n",
+		BoolName( GLX_Dlight_ScissorEnabled( state ) ),
+		state.scissorCandidates,
+		state.scissorComputed,
+		state.scissorApplied,
+		state.scissorFallbacks,
+		state.scissorPixels,
+		state.scissorViewportPixels );
 }
 
 static const char *GLX_Module_ProfileName( GlxProfile profile )
@@ -893,6 +1184,11 @@ static StreamReservation GLX_Module_FromPublicReservation( const glxStreamReserv
 	streamReservation.strategy = static_cast<StreamStrategy>( reservation.strategy );
 	streamReservation.mapped = reservation.mapped ? qtrue : qfalse;
 	streamReservation.committed = reservation.committed ? qtrue : qfalse;
+	streamReservation.reserveWraps = reservation.reserveWraps;
+	streamReservation.reserveSameFrameWrapRejects = reservation.reserveSameFrameWrapRejects;
+	streamReservation.reserveSyncWaits = reservation.reserveSyncWaits;
+	streamReservation.reserveSyncTimeouts = reservation.reserveSyncTimeouts;
+	streamReservation.reserveSyncFailures = reservation.reserveSyncFailures;
 
 	return streamReservation;
 }
@@ -910,6 +1206,11 @@ static void GLX_Module_ToPublicReservation( const StreamReservation &streamReser
 	reservation->strategy = static_cast<int>( streamReservation.strategy );
 	reservation->mapped = streamReservation.mapped;
 	reservation->committed = streamReservation.committed;
+	reservation->reserveWraps = streamReservation.reserveWraps;
+	reservation->reserveSameFrameWrapRejects = streamReservation.reserveSameFrameWrapRejects;
+	reservation->reserveSyncWaits = streamReservation.reserveSyncWaits;
+	reservation->reserveSyncTimeouts = streamReservation.reserveSyncTimeouts;
+	reservation->reserveSyncFailures = streamReservation.reserveSyncFailures;
 }
 
 static UploadPlan GLX_Module_ClientMemoryUploadPlan()
@@ -967,11 +1268,13 @@ static MaterialIR GLX_Module_StageMaterialIR( int sort, int flags, unsigned int 
 }
 
 static DynamicDraw GLX_Module_IndexedDrawIR( unsigned int mode, int count, unsigned int type,
-	const void *indices, int legacyReason, int profilerPath )
+	const void *indices, int legacyReason, int profilerPath, int materialFlags,
+	unsigned int categoryMask )
 {
 	DynamicDraw draw {};
 	draw.kind = DynamicDrawKind::Indexed;
-	draw.pass = FramePassKind::DynamicScene;
+	draw.role = GLX_RenderIR_ClassifyDynamicDrawRole( materialFlags, categoryMask );
+	draw.pass = GLX_RenderIR_DefaultPassForDynamicDrawRole( draw.role );
 	draw.primitive = mode;
 	draw.count = count;
 	draw.indexType = type;
@@ -979,23 +1282,26 @@ static DynamicDraw GLX_Module_IndexedDrawIR( unsigned int mode, int count, unsig
 	draw.legacyReason = legacyReason;
 	draw.profilerPath = profilerPath;
 	draw.material = GLX_Module_DrawMaterialIR( profilerPath );
+	draw.material.flags |= materialFlags;
 	draw.upload = legacyReason >= 0 ? GLX_Module_ClientMemoryUploadPlan() :
 		GLX_Module_StreamUploadPlan( count > 0 ? count : 0, 0, count > 0 ? count : 0 );
 	return draw;
 }
 
 static DynamicDraw GLX_Module_ArrayDrawIR( unsigned int mode, int first, int count,
-	int legacyReason, int profilerPath )
+	int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask )
 {
 	DynamicDraw draw {};
 	draw.kind = DynamicDrawKind::Arrays;
-	draw.pass = FramePassKind::DynamicScene;
+	draw.role = GLX_RenderIR_ClassifyDynamicDrawRole( materialFlags, categoryMask );
+	draw.pass = GLX_RenderIR_DefaultPassForDynamicDrawRole( draw.role );
 	draw.primitive = mode;
 	draw.first = first;
 	draw.count = count;
 	draw.legacyReason = legacyReason;
 	draw.profilerPath = profilerPath;
 	draw.material = GLX_Module_DrawMaterialIR( profilerPath );
+	draw.material.flags |= materialFlags;
 	draw.upload = legacyReason >= 0 ? GLX_Module_ClientMemoryUploadPlan() :
 		GLX_Module_StreamUploadPlan( count > 0 ? count : 0, count > 0 ? count : 0, 0 );
 	return draw;
@@ -1100,6 +1406,11 @@ public:
 		const void *indices, int legacyReason, int profilerPath );
 	qboolean DrawArrays( unsigned int mode, int first, int count,
 		int legacyReason, int profilerPath );
+	qboolean DrawElementsClassified( unsigned int mode, int count, unsigned int type,
+		const void *indices, int legacyReason, int profilerPath,
+		int materialFlags, unsigned int categoryMask );
+	qboolean DrawArraysClassified( unsigned int mode, int first, int count,
+		int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask );
 	void RecordDraw( int indexes, int path );
 	void RecordShaderBatch( const char *shaderName, int sort, int numPasses, int numVertexes, int numIndexes, int flags );
 	void RecordMaterialStage( int path, int flags, unsigned int stateBits, int rgbGen, int alphaGen,
@@ -1130,6 +1441,14 @@ public:
 		const float *dlightShadow, const float *shadowAtlas,
 		const float *shadowDepth, const float *shadowFilter );
 	void UnbindDlightProgram();
+	qboolean DlightScissorEnabled() const;
+	void RecordDlightState( int event );
+	void RecordDlightBuild( int legacyLights, int legacySkippedLights,
+		int legacyNoHitLights, int legacyVertexes, int legacyIndexes,
+		int legacyLitIndexes, int pmPasses, int pmVertexes, int pmIndexes );
+	void RecordDlightCull( int legacyVertexes, int legacyIndexes );
+	void RecordDlightScissor( qboolean computed, qboolean applied, int x, int y,
+		int width, int height, int viewportWidth, int viewportHeight );
 	qboolean StreamDrawEnabled() const;
 	qboolean StreamDrawMultitextureEnabled() const;
 	qboolean StreamDrawFogEnabled() const;
@@ -1147,6 +1466,7 @@ public:
 	qboolean StreamReserve( int bytes, int alignment, glxStreamReservation_t *reservation );
 	qboolean StreamUploadAt( glxStreamReservation_t *reservation, int relativeOffset, const void *data, int bytes );
 	void StreamCommit( glxStreamReservation_t *reservation );
+	void RecordStreamDlightReservation( const glxStreamReservation_t *reservation );
 	GLuint BindStreamArrayBuffer( GLuint buffer );
 	void RestoreStreamArrayBuffer( GLuint buffer );
 	GLuint BindStreamElementArrayBuffer( GLuint buffer );
@@ -1600,6 +1920,16 @@ void RendererModule::PrintCaps() const
 	RI().Printf( PRINT_ALL, "  dynamic stream uploads: %.2f MB, wraps %u, same-frame rejects %u\n",
 		static_cast<double>( stream_.uploadBytes ) / ( 1024.0 * 1024.0 ),
 		stream_.wraps, stream_.sameFrameWrapRejects );
+	RI().Printf( PRINT_ALL, "  dynamic stream dlight uploads: attempts %u, draws %u, fallbacks %u, attempt %.2f MB, draw %.2f MB, wraps %u, waits %u, timeouts %u, sync failures %u\n",
+		stream_.streamedDrawDynamicLightAttempts,
+		stream_.streamedDrawDynamicLightDraws,
+		stream_.streamedDrawDynamicLightFallbacks,
+		static_cast<double>( stream_.streamedDrawDynamicLightAttemptBytes ) / ( 1024.0 * 1024.0 ),
+		static_cast<double>( stream_.streamedDrawDynamicLightBytes ) / ( 1024.0 * 1024.0 ),
+		stream_.streamedDrawDynamicLightReserveWraps,
+		stream_.streamedDrawDynamicLightSyncWaits,
+		stream_.streamedDrawDynamicLightSyncTimeouts,
+		stream_.streamedDrawDynamicLightSyncFailures );
 	RI().Printf( PRINT_ALL, "  dynamic stream tess shadow: %u batches, %.2f MB\n",
 		stream_.shadowTessUploads,
 		static_cast<double>( stream_.shadowTessBytes ) / ( 1024.0 * 1024.0 ) );
@@ -1642,7 +1972,7 @@ void RendererModule::PrintCaps() const
 		stream_.streamedDrawShadowDraws,
 		stream_.streamedDrawBeamDraws,
 		stream_.streamedDrawPostProcessDraws );
-	RI().Printf( PRINT_ALL, "  dynamic stream categories: entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, special %u/%u\n",
+	RI().Printf( PRINT_ALL, "  dynamic stream categories: entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, dlight %u/%u, special %u/%u\n",
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_ENTITY],
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_ENTITY],
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_PARTICLE],
@@ -1657,8 +1987,26 @@ void RendererModule::PrintCaps() const
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_UI],
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_BEAM],
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_BEAM],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_DLIGHT],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_DLIGHT],
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_SPECIAL],
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_SPECIAL] );
+	RI().Printf( PRINT_ALL, "  dynamic stream IR roles: generic %u/%u/%u, dlight %u/%u/%u, shadow %u/%u/%u, beam %u/%u/%u, post %u/%u/%u\n",
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::Generic )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::Generic )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::Generic )],
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::DynamicLight )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::DynamicLight )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::DynamicLight )],
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::Shadow )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::Shadow )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::Shadow )],
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::Beam )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::Beam )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::Beam )],
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::PostProcess )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::PostProcess )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::PostProcess )] );
 	RI().Printf( PRINT_ALL, "  dynamic stream draw material keys: accepted %u, rejected %u, mt accepted %u, mt rejected %u, depthfrag accepted %u, depthfrag rejected %u, texmod accepted %u, texmod rejected %u, env accepted %u, env rejected %u, dlight accepted %u, dlight rejected %u, screen accepted %u, screen rejected %u, video accepted %u, video rejected %u\n",
 		stream_.streamedDrawMaterialAccepted, stream_.streamedDrawMaterialRejected,
 		stream_.streamedDrawMultitextureAccepted, stream_.streamedDrawMultitextureRejected,
@@ -1668,12 +2016,53 @@ void RendererModule::PrintCaps() const
 		stream_.streamedDrawDynamicLightAccepted, stream_.streamedDrawDynamicLightRejected,
 		stream_.streamedDrawScreenMapAccepted, stream_.streamedDrawScreenMapRejected,
 		stream_.streamedDrawVideoMapAccepted, stream_.streamedDrawVideoMapRejected );
+	RI().Printf( PRINT_ALL, "  dlight program compact: active %s, programs %i, availability %u/%u, binds %u/%u, failures %u, creates %u, cache hits %u\n",
+		BoolName( GLX_Dlight_Active( dlight_ ) ),
+		dlight_.programCount,
+		dlight_.availabilityHits,
+		dlight_.availabilityQueries,
+		dlight_.binds,
+		dlight_.bindAttempts,
+		dlight_.bindFailures + dlight_.programCreateFailures,
+		dlight_.programCreates,
+		dlight_.programCacheHits );
+	RI().Printf( PRINT_ALL, "  dlight state compact: legacy passes %u, texture binds %u, fog textures %u, shadow textures %u/%u, shadow fbo %u/%u, state changes %u\n",
+		dlight_.legacyPasses,
+		dlight_.textureBinds,
+		dlight_.fogTextureBinds,
+		dlight_.shadowTextureBinds,
+		dlight_.shadowTextureFallbackBinds,
+		dlight_.shadowFboBinds,
+		dlight_.shadowFboRestores,
+		dlight_.stateChanges );
+	RI().Printf( PRINT_ALL, "  dlight build compact: legacy lights %u/%u, no-hit %u, verts %u, indexes %u/%u, pm %u, pm verts/indexes %u/%u\n",
+		dlight_.buildLegacyLights,
+		dlight_.buildLegacySkippedLights,
+		dlight_.buildLegacyNoHitLights,
+		dlight_.buildLegacyVertexes,
+		dlight_.buildLegacyIndexes,
+		dlight_.buildLegacyLitIndexes,
+		dlight_.buildPmPasses,
+		dlight_.buildPmVertexes,
+		dlight_.buildPmIndexes );
+	RI().Printf( PRINT_ALL, "  dlight cull compact: legacy verts %u, indexes %u\n",
+		dlight_.cullLegacyVertexes,
+		dlight_.cullLegacyIndexes );
+	RI().Printf( PRINT_ALL, "  dlight scissor compact: active %s, candidates %u, computed %u, applied %u, fallbacks %u, pixels %llu/%llu\n",
+		BoolName( GLX_Dlight_ScissorEnabled( dlight_ ) ),
+		dlight_.scissorCandidates,
+		dlight_.scissorComputed,
+		dlight_.scissorApplied,
+		dlight_.scissorFallbacks,
+		dlight_.scissorPixels,
+		dlight_.scissorViewportPixels );
 }
 
 void RendererModule::PrintInfo() const
 {
 	PrintCaps();
 	GLX_Material_PrintInfo( material_ );
+	GLX_Dlight_PrintInfo( dlight_ );
 	GLX_PostShader_PrintInfo( postShader_ );
 	GLX_PostProcess_PrintInfo( postprocess_ );
 	GLX_Executor_PrintInfo( executor_ );
@@ -1805,6 +2194,27 @@ void RendererModule::PrintFrameCounters() const
 		return;
 	}
 
+	const int genericRole = static_cast<int>( DynamicDrawRole::Generic );
+	const int dlightRole = static_cast<int>( DynamicDrawRole::DynamicLight );
+	const int shadowRole = static_cast<int>( DynamicDrawRole::Shadow );
+	const int beamRole = static_cast<int>( DynamicDrawRole::Beam );
+	const int postRole = static_cast<int>( DynamicDrawRole::PostProcess );
+	const int dlightPass = static_cast<int>( FramePassKind::DynamicLights );
+	const int scenePass = static_cast<int>( FramePassKind::DynamicScene );
+	const int postPass = static_cast<int>( FramePassKind::PostProcess );
+	const unsigned int focusedPassDraws = executor_.dynamicDrawPassDraws[dlightPass] +
+		executor_.dynamicDrawPassDraws[scenePass] + executor_.dynamicDrawPassDraws[postPass];
+	const unsigned int focusedPassIndexes = executor_.dynamicDrawPassIndexes[dlightPass] +
+		executor_.dynamicDrawPassIndexes[scenePass] + executor_.dynamicDrawPassIndexes[postPass];
+	const unsigned int focusedPassVertices = executor_.dynamicDrawPassVertices[dlightPass] +
+		executor_.dynamicDrawPassVertices[scenePass] + executor_.dynamicDrawPassVertices[postPass];
+	const unsigned int otherPassDraws = executor_.dynamicDraws > focusedPassDraws ?
+		executor_.dynamicDraws - focusedPassDraws : 0u;
+	const unsigned int otherPassIndexes = executor_.dynamicIndexes > focusedPassIndexes ?
+		executor_.dynamicIndexes - focusedPassIndexes : 0u;
+	const unsigned int otherPassVertices = executor_.dynamicVertices > focusedPassVertices ?
+		executor_.dynamicVertices - focusedPassVertices : 0u;
+
 	RI().Printf( PRINT_ALL, "glx: tier %s, batches %u, draws %u/%u idx, stream %s/%s %.2fMB/%uwraps/%urejects shadow %u, frames %u, backend queries %u, gpu %s, static %i batches/%i packets/%i surfaces/%i verts/%i indexes %.2f MB, arena %s %.2f MB\n",
 		GLX_Caps_TierName( caps_.tier ),
 		profiler_.shaderBatches,
@@ -1865,6 +2275,35 @@ void RendererModule::PrintFrameCounters() const
 		executor_.postNodes,
 		executor_.outputTransforms,
 		executor_.rejectedProducts );
+	RI().Printf( PRINT_ALL, "glx: render IR dynamic roles generic %u/%u/%u, dlight %u/%u/%u, shadow %u/%u/%u, beam %u/%u/%u, post %u/%u/%u\n",
+		executor_.dynamicDrawRoleDraws[genericRole],
+		executor_.dynamicDrawRoleIndexes[genericRole],
+		executor_.dynamicDrawRoleVertices[genericRole],
+		executor_.dynamicDrawRoleDraws[dlightRole],
+		executor_.dynamicDrawRoleIndexes[dlightRole],
+		executor_.dynamicDrawRoleVertices[dlightRole],
+		executor_.dynamicDrawRoleDraws[shadowRole],
+		executor_.dynamicDrawRoleIndexes[shadowRole],
+		executor_.dynamicDrawRoleVertices[shadowRole],
+		executor_.dynamicDrawRoleDraws[beamRole],
+		executor_.dynamicDrawRoleIndexes[beamRole],
+		executor_.dynamicDrawRoleVertices[beamRole],
+		executor_.dynamicDrawRoleDraws[postRole],
+		executor_.dynamicDrawRoleIndexes[postRole],
+		executor_.dynamicDrawRoleVertices[postRole] );
+	RI().Printf( PRINT_ALL, "glx: render IR dynamic passes dlight %u/%u/%u, scene %u/%u/%u, post %u/%u/%u, other %u/%u/%u\n",
+		executor_.dynamicDrawPassDraws[dlightPass],
+		executor_.dynamicDrawPassIndexes[dlightPass],
+		executor_.dynamicDrawPassVertices[dlightPass],
+		executor_.dynamicDrawPassDraws[scenePass],
+		executor_.dynamicDrawPassIndexes[scenePass],
+		executor_.dynamicDrawPassVertices[scenePass],
+		executor_.dynamicDrawPassDraws[postPass],
+		executor_.dynamicDrawPassIndexes[postPass],
+		executor_.dynamicDrawPassVertices[postPass],
+		otherPassDraws,
+		otherPassIndexes,
+		otherPassVertices );
 	RI().Printf( PRINT_ALL, "glx: post/output ownership mode %s, post nodes %u, outputs %u, legacy fallback %s, executable nodes %u, executable outputs %u, post hash 0x%08x, output hash 0x%08x, plan hash 0x%08x, fallback 0x%08x\n",
 		GLX_PostProcess_PostOutputModeName( postprocess_.lastPostOutputGlxOwned ),
 		executor_.postNodes,
@@ -2147,7 +2586,53 @@ void RendererModule::PrintFrameCounters() const
 		stream_.streamedDrawPostProcessDraws,
 		stream_.streamedDrawFallbacks,
 		stream_.streamedDrawSkips );
-	RI().Printf( PRINT_ALL, "glx: stream categories entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, special %u/%u\n",
+	RI().Printf( PRINT_ALL, "glx: stream dlight attempts %u draws %u fallbacks %u bytes %.2fMB/%.2fMB index %.2fMB wraps %u rejects %u waits %u timeouts %u syncfail %u program binds %u/%u creates %u cache %u\n",
+		stream_.streamedDrawDynamicLightAttempts,
+		stream_.streamedDrawDynamicLightDraws,
+		stream_.streamedDrawDynamicLightFallbacks,
+		static_cast<double>( stream_.streamedDrawDynamicLightAttemptBytes ) / ( 1024.0 * 1024.0 ),
+		static_cast<double>( stream_.streamedDrawDynamicLightBytes ) / ( 1024.0 * 1024.0 ),
+		static_cast<double>( stream_.streamedDrawDynamicLightIndexBytes ) / ( 1024.0 * 1024.0 ),
+		stream_.streamedDrawDynamicLightReserveWraps,
+		stream_.streamedDrawDynamicLightSameFrameWrapRejects,
+		stream_.streamedDrawDynamicLightSyncWaits,
+		stream_.streamedDrawDynamicLightSyncTimeouts,
+		stream_.streamedDrawDynamicLightSyncFailures,
+		dlight_.binds,
+		dlight_.bindAttempts,
+		dlight_.programCreates,
+		dlight_.programCacheHits );
+	RI().Printf( PRINT_ALL, "glx: dlight state legacy %u texture %u fog %u shadowtex %u/%u fbo %u/%u changes %u\n",
+		dlight_.legacyPasses,
+		dlight_.textureBinds,
+		dlight_.fogTextureBinds,
+		dlight_.shadowTextureBinds,
+		dlight_.shadowTextureFallbackBinds,
+		dlight_.shadowFboBinds,
+		dlight_.shadowFboRestores,
+		dlight_.stateChanges );
+	RI().Printf( PRINT_ALL, "glx: dlight build legacy %u skipped %u nohit %u verts %u idx %u/%u pm %u pmverts %u pmidx %u\n",
+		dlight_.buildLegacyLights,
+		dlight_.buildLegacySkippedLights,
+		dlight_.buildLegacyNoHitLights,
+		dlight_.buildLegacyVertexes,
+		dlight_.buildLegacyIndexes,
+		dlight_.buildLegacyLitIndexes,
+		dlight_.buildPmPasses,
+		dlight_.buildPmVertexes,
+		dlight_.buildPmIndexes );
+	RI().Printf( PRINT_ALL, "glx: dlight cull legacy verts %u idx %u\n",
+		dlight_.cullLegacyVertexes,
+		dlight_.cullLegacyIndexes );
+	RI().Printf( PRINT_ALL, "glx: dlight scissor active %s candidates %u computed %u applied %u fallbacks %u pixels %llu/%llu\n",
+		BoolName( GLX_Dlight_ScissorEnabled( dlight_ ) ),
+		dlight_.scissorCandidates,
+		dlight_.scissorComputed,
+		dlight_.scissorApplied,
+		dlight_.scissorFallbacks,
+		dlight_.scissorPixels,
+		dlight_.scissorViewportPixels );
+	RI().Printf( PRINT_ALL, "glx: stream categories entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, dlight %u/%u, special %u/%u\n",
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_ENTITY],
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_ENTITY],
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_PARTICLE],
@@ -2162,8 +2647,26 @@ void RendererModule::PrintFrameCounters() const
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_UI],
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_BEAM],
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_BEAM],
+		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_DLIGHT],
+		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_DLIGHT],
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_SPECIAL],
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_SPECIAL] );
+	RI().Printf( PRINT_ALL, "glx: stream roles generic %u/%u/%u, dlight %u/%u/%u, shadow %u/%u/%u, beam %u/%u/%u, post %u/%u/%u\n",
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::Generic )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::Generic )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::Generic )],
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::DynamicLight )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::DynamicLight )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::DynamicLight )],
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::Shadow )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::Shadow )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::Shadow )],
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::Beam )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::Beam )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::Beam )],
+		stream_.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::PostProcess )],
+		stream_.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::PostProcess )],
+		stream_.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::PostProcess )] );
 	RI().Printf( PRINT_ALL, "glx: stream reservation last %u bytes at %u using %s, largest %u bytes, same-frame wrap rejects %u\n",
 		stream_.lastReservationBytes,
 		stream_.lastReservationOffset,
@@ -2352,7 +2855,15 @@ void RendererModule::StreamTest()
 qboolean RendererModule::DrawElements( unsigned int mode, int count, unsigned int type,
 	const void *indices, int legacyReason, int profilerPath )
 {
-	DynamicDraw draw = GLX_Module_IndexedDrawIR( mode, count, type, indices, legacyReason, profilerPath );
+	return DrawElementsClassified( mode, count, type, indices, legacyReason, profilerPath, 0, 0u );
+}
+
+qboolean RendererModule::DrawElementsClassified( unsigned int mode, int count, unsigned int type,
+	const void *indices, int legacyReason, int profilerPath, int materialFlags,
+	unsigned int categoryMask )
+{
+	DynamicDraw draw = GLX_Module_IndexedDrawIR( mode, count, type, indices,
+		legacyReason, profilerPath, materialFlags, categoryMask );
 
 	if ( legacyReason >= 0 ) {
 		GLX_Profiler_RecordLegacyDelegation( &profiler_, legacyReason, count );
@@ -2373,7 +2884,14 @@ qboolean RendererModule::DrawElements( unsigned int mode, int count, unsigned in
 qboolean RendererModule::DrawArrays( unsigned int mode, int first, int count,
 	int legacyReason, int profilerPath )
 {
-	DynamicDraw draw = GLX_Module_ArrayDrawIR( mode, first, count, legacyReason, profilerPath );
+	return DrawArraysClassified( mode, first, count, legacyReason, profilerPath, 0, 0u );
+}
+
+qboolean RendererModule::DrawArraysClassified( unsigned int mode, int first, int count,
+	int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask )
+{
+	DynamicDraw draw = GLX_Module_ArrayDrawIR( mode, first, count, legacyReason,
+		profilerPath, materialFlags, categoryMask );
 
 	if ( legacyReason >= 0 ) {
 		GLX_Profiler_RecordLegacyDelegation( &profiler_, legacyReason, count );
@@ -2500,6 +3018,39 @@ void RendererModule::UnbindDlightProgram()
 	GLX_Dlight_Unbind( &dlight_ );
 }
 
+qboolean RendererModule::DlightScissorEnabled() const
+{
+	return GLX_Dlight_ScissorEnabled( dlight_ );
+}
+
+void RendererModule::RecordDlightState( int event )
+{
+	GLX_Dlight_RecordState( &dlight_, event );
+}
+
+void RendererModule::RecordDlightBuild( int legacyLights, int legacySkippedLights,
+	int legacyNoHitLights, int legacyVertexes, int legacyIndexes,
+	int legacyLitIndexes, int pmPasses, int pmVertexes, int pmIndexes )
+{
+	GLX_Dlight_RecordBuild( &dlight_, legacyLights, legacySkippedLights,
+		legacyNoHitLights, legacyVertexes, legacyIndexes, legacyLitIndexes,
+		pmPasses, pmVertexes, pmIndexes );
+}
+
+void RendererModule::RecordDlightCull( int legacyVertexes, int legacyIndexes )
+{
+	GLX_Dlight_RecordCull( &dlight_, legacyVertexes, legacyIndexes );
+}
+
+void RendererModule::RecordDlightScissor( qboolean computed, qboolean applied,
+	int x, int y, int width, int height, int viewportWidth, int viewportHeight )
+{
+	(void)x;
+	(void)y;
+	GLX_Dlight_RecordScissor( &dlight_, computed, applied, width, height,
+		viewportWidth, viewportHeight );
+}
+
 qboolean RendererModule::StreamDrawEnabled() const
 {
 	return GLX_Stream_DrawEnabled( stream_ );
@@ -2595,6 +3146,18 @@ void RendererModule::StreamCommit( glxStreamReservation_t *reservation )
 	streamReservation = GLX_Module_FromPublicReservation( *reservation );
 	GLX_Stream_Commit( &stream_, &streamReservation );
 	GLX_Module_ToPublicReservation( streamReservation, reservation );
+}
+
+void RendererModule::RecordStreamDlightReservation( const glxStreamReservation_t *reservation )
+{
+	StreamReservation streamReservation;
+
+	if ( !reservation ) {
+		return;
+	}
+
+	streamReservation = GLX_Module_FromPublicReservation( *reservation );
+	GLX_Stream_RecordDlightReservation( &stream_, streamReservation );
 }
 
 GLuint RendererModule::BindStreamArrayBuffer( GLuint buffer )
@@ -3096,6 +3659,21 @@ extern "C" qboolean GLX_Renderer_DrawArrays( unsigned int mode, int first, int c
 	return glx::g_module.DrawArrays( mode, first, count, legacyReason, profilerPath );
 }
 
+extern "C" qboolean GLX_Renderer_DrawElementsClassified( unsigned int mode, int count,
+	unsigned int type, const void *indices, int legacyReason, int profilerPath,
+	int materialFlags, unsigned int categoryMask )
+{
+	return glx::g_module.DrawElementsClassified( mode, count, type, indices, legacyReason,
+		profilerPath, materialFlags, categoryMask );
+}
+
+extern "C" qboolean GLX_Renderer_DrawArraysClassified( unsigned int mode, int first, int count,
+	int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask )
+{
+	return glx::g_module.DrawArraysClassified( mode, first, count, legacyReason, profilerPath,
+		materialFlags, categoryMask );
+}
+
 extern "C" void GLX_Renderer_RecordDraw( int indexes, int path )
 {
 	glx::g_module.RecordDraw( indexes, path );
@@ -3177,6 +3755,40 @@ extern "C" void GLX_Renderer_UnbindDlightProgram( void )
 	glx::g_module.UnbindDlightProgram();
 }
 
+extern "C" qboolean GLX_Renderer_DlightScissorEnabled( void )
+{
+	return glx::g_module.DlightScissorEnabled();
+}
+
+extern "C" void GLX_Renderer_RecordDlightState( int event )
+{
+	glx::g_module.RecordDlightState( event );
+}
+
+extern "C" void GLX_Renderer_RecordDlightBuild( int legacyLights,
+	int legacySkippedLights, int legacyNoHitLights, int legacyVertexes,
+	int legacyIndexes, int legacyLitIndexes, int pmPasses, int pmVertexes,
+	int pmIndexes )
+{
+	glx::g_module.RecordDlightBuild( legacyLights, legacySkippedLights,
+		legacyNoHitLights, legacyVertexes, legacyIndexes, legacyLitIndexes,
+		pmPasses, pmVertexes, pmIndexes );
+}
+
+extern "C" void GLX_Renderer_RecordDlightCull( int legacyVertexes,
+	int legacyIndexes )
+{
+	glx::g_module.RecordDlightCull( legacyVertexes, legacyIndexes );
+}
+
+extern "C" void GLX_Renderer_RecordDlightScissor( qboolean computed,
+	qboolean applied, int x, int y, int width, int height, int viewportWidth,
+	int viewportHeight )
+{
+	glx::g_module.RecordDlightScissor( computed, applied, x, y, width, height,
+		viewportWidth, viewportHeight );
+}
+
 extern "C" qboolean GLX_Renderer_StreamDrawEnabled( void )
 {
 	return glx::g_module.StreamDrawEnabled();
@@ -3240,6 +3852,11 @@ extern "C" qboolean GLX_Renderer_StreamUploadAt( glxStreamReservation_t *reserva
 extern "C" void GLX_Renderer_StreamCommit( glxStreamReservation_t *reservation )
 {
 	glx::g_module.StreamCommit( reservation );
+}
+
+extern "C" void GLX_Renderer_RecordStreamDlightReservation( const glxStreamReservation_t *reservation )
+{
+	glx::g_module.RecordStreamDlightReservation( reservation );
 }
 
 extern "C" unsigned int GLX_Renderer_BindStreamArrayBuffer( unsigned int buffer )

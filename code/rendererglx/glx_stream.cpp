@@ -237,8 +237,15 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	state->streamedDrawEnvironmentAccepted = 0;
 	state->streamedDrawEnvironmentRejected = 0;
 	state->streamedDrawDynamicLightDraws = 0;
+	state->streamedDrawDynamicLightAttempts = 0;
+	state->streamedDrawDynamicLightFallbacks = 0;
 	state->streamedDrawDynamicLightAccepted = 0;
 	state->streamedDrawDynamicLightRejected = 0;
+	state->streamedDrawDynamicLightReserveWraps = 0;
+	state->streamedDrawDynamicLightSameFrameWrapRejects = 0;
+	state->streamedDrawDynamicLightSyncWaits = 0;
+	state->streamedDrawDynamicLightSyncTimeouts = 0;
+	state->streamedDrawDynamicLightSyncFailures = 0;
 	state->streamedDrawScreenMapDraws = 0;
 	state->streamedDrawScreenMapAccepted = 0;
 	state->streamedDrawScreenMapRejected = 0;
@@ -248,6 +255,12 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	state->streamedDrawShadowDraws = 0;
 	state->streamedDrawBeamDraws = 0;
 	state->streamedDrawPostProcessDraws = 0;
+	std::memset( state->streamedDrawCategoryAttempts, 0, sizeof( state->streamedDrawCategoryAttempts ) );
+	std::memset( state->streamedDrawCategoryDraws, 0, sizeof( state->streamedDrawCategoryDraws ) );
+	std::memset( state->streamedDrawCategoryFallbacks, 0, sizeof( state->streamedDrawCategoryFallbacks ) );
+	std::memset( state->streamedDrawRoleAttempts, 0, sizeof( state->streamedDrawRoleAttempts ) );
+	std::memset( state->streamedDrawRoleDraws, 0, sizeof( state->streamedDrawRoleDraws ) );
+	std::memset( state->streamedDrawRoleFallbacks, 0, sizeof( state->streamedDrawRoleFallbacks ) );
 	state->streamedDrawVertexes = 0;
 	state->streamedDrawIndexes = 0;
 	state->largestReservationBytes = 0;
@@ -259,6 +272,10 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	state->streamedDrawBytes = 0;
 	state->streamedDrawIndexBytes = 0;
 	state->streamedDrawTexcoord1Bytes = 0;
+	state->streamedDrawDynamicLightAttemptBytes = 0;
+	state->streamedDrawDynamicLightBytes = 0;
+	state->streamedDrawDynamicLightIndexBytes = 0;
+	state->streamedDrawDynamicLightTexcoord1Bytes = 0;
 	state->frames = 0;
 }
 
@@ -802,7 +819,7 @@ void GLX_Stream_RegisterCvars( StreamState *state )
 
 	state->r_glxStreamDrawDynamicLights = RI().Cvar_Get( "r_glxStreamDrawDynamicLights", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawDynamicLights,
-		"Allow experimental GLx streamed draws for dynamic-light map stages when GLx stream drawing is enabled." );
+		"Allow GLx streamed draws for dynamic-light map stages: 0 off, 1 forced, auto on GL3X+ when the stream is ready." );
 
 	state->r_glxStreamDrawScreenMaps = RI().Cvar_Get( "r_glxStreamDrawScreenMaps", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamDrawScreenMaps,
@@ -900,6 +917,11 @@ qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment,
 {
 	GLuint oldArrayBuffer = 0;
 	size_t offset = 0;
+	unsigned int wrapsBefore = 0;
+	unsigned int sameFrameWrapRejectsBefore = 0;
+	unsigned int syncWaitsBefore = 0;
+	unsigned int syncTimeoutsBefore = 0;
+	unsigned int syncFailuresBefore = 0;
 
 	if ( !reservation ) {
 		if ( state ) {
@@ -909,6 +931,14 @@ qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment,
 	}
 
 	*reservation = {};
+
+	if ( state ) {
+		wrapsBefore = state->wraps;
+		sameFrameWrapRejectsBefore = state->sameFrameWrapRejects;
+		syncWaitsBefore = state->syncWaits;
+		syncTimeoutsBefore = state->syncTimeouts;
+		syncFailuresBefore = state->syncFailures;
+	}
 
 	if ( state && state->writeOffset == 0 && state->frameSync && !GLX_Stream_WaitFrameFence( state ) ) {
 		state->reserveFailures++;
@@ -923,6 +953,11 @@ qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment,
 	reservation->offset = offset;
 	reservation->bytes = bytes;
 	reservation->strategy = state->strategy;
+	reservation->reserveWraps = state->wraps - wrapsBefore;
+	reservation->reserveSameFrameWrapRejects = state->sameFrameWrapRejects - sameFrameWrapRejectsBefore;
+	reservation->reserveSyncWaits = state->syncWaits - syncWaitsBefore;
+	reservation->reserveSyncTimeouts = state->syncTimeouts - syncTimeoutsBefore;
+	reservation->reserveSyncFailures = state->syncFailures - syncFailuresBefore;
 	state->frameTouched = qtrue;
 	state->lastReservationBytes = static_cast<unsigned int>( bytes > ~0u ? ~0u : bytes );
 	state->lastReservationOffset = static_cast<unsigned int>( offset > ~0u ? ~0u : offset );
@@ -1033,6 +1068,19 @@ void GLX_Stream_Commit( StreamState *state, StreamReservation *reservation )
 	state->commits++;
 }
 
+void GLX_Stream_RecordDlightReservation( StreamState *state, const StreamReservation &reservation )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->streamedDrawDynamicLightReserveWraps += reservation.reserveWraps;
+	state->streamedDrawDynamicLightSameFrameWrapRejects += reservation.reserveSameFrameWrapRejects;
+	state->streamedDrawDynamicLightSyncWaits += reservation.reserveSyncWaits;
+	state->streamedDrawDynamicLightSyncTimeouts += reservation.reserveSyncTimeouts;
+	state->streamedDrawDynamicLightSyncFailures += reservation.reserveSyncFailures;
+}
+
 GLuint GLX_Stream_BindArrayBufferCached( StreamState *state, GLuint buffer )
 {
 	if ( !state || !s_fns.BindBuffer ) {
@@ -1120,8 +1168,16 @@ qboolean GLX_Stream_DrawEnvironmentEnabled( const StreamState &state )
 
 qboolean GLX_Stream_DrawDynamicLightsEnabled( const StreamState &state )
 {
-	return GLX_Stream_DrawEnabled( state ) &&
-		state.r_glxStreamDrawDynamicLights && state.r_glxStreamDrawDynamicLights->integer ? qtrue : qfalse;
+	const cvar_t *cvar = state.r_glxStreamDrawDynamicLights;
+	StreamDynamicLightGateConfig config {};
+
+	config.streamDraw = GLX_Stream_DrawEnabled( state );
+	config.streamReady = state.ready;
+	config.tier = state.tier;
+	config.mode = GLX_Stream_ParseDynamicLightGateMode(
+		cvar ? cvar->string : nullptr,
+		cvar ? cvar->integer : 0 );
+	return GLX_Stream_EvaluateDynamicLightGate( config );
 }
 
 qboolean GLX_Stream_DrawScreenMapsEnabled( const StreamState &state )
@@ -1255,19 +1311,46 @@ static void GLX_Stream_RecordDynamicCategoryResult( StreamState *state, unsigned
 	}
 }
 
+static void GLX_Stream_RecordDynamicRoleResult( StreamState *state, DynamicDrawRole role,
+	qboolean success )
+{
+	const int index = static_cast<int>( role );
+
+	if ( !state || !GLX_RenderIR_DynamicDrawRoleImplemented( role ) ||
+		index < 0 || index >= GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT ) {
+		return;
+	}
+
+	state->streamedDrawRoleAttempts[index]++;
+	if ( success ) {
+		state->streamedDrawRoleDraws[index]++;
+	} else {
+		state->streamedDrawRoleFallbacks[index]++;
+	}
+}
+
 void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIndexes,
 	int totalBytes, int indexBytes, int texcoord1Bytes, qboolean multitexture, qboolean fog,
 	qboolean depthFragment, int materialFlags, unsigned int categoryMask, qboolean success )
 {
 	const unsigned int normalizedCategoryMask =
 		GLX_Stream_NormalizeDynamicCategoryMask( categoryMask, materialFlags );
+	const DynamicDrawRole role =
+		GLX_RenderIR_ClassifyDynamicDrawRole( materialFlags, normalizedCategoryMask );
 
 	if ( !state ) {
 		return;
 	}
 
+	if ( materialFlags & GLX_STAGE_DLIGHT_MAP ) {
+		state->streamedDrawDynamicLightAttempts++;
+		if ( totalBytes > 0 ) {
+			state->streamedDrawDynamicLightAttemptBytes += static_cast<unsigned long long>( totalBytes );
+		}
+	}
 	state->streamedDrawAttempts++;
 	GLX_Stream_RecordDynamicCategoryResult( state, normalizedCategoryMask, success );
+	GLX_Stream_RecordDynamicRoleResult( state, role, success );
 	if ( success ) {
 		state->streamedDraws++;
 		if ( numVertexes > 0 ) {
@@ -1302,6 +1385,15 @@ void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIn
 		}
 		if ( materialFlags & GLX_STAGE_DLIGHT_MAP ) {
 			state->streamedDrawDynamicLightDraws++;
+			if ( totalBytes > 0 ) {
+				state->streamedDrawDynamicLightBytes += static_cast<unsigned long long>( totalBytes );
+			}
+			if ( indexBytes > 0 ) {
+				state->streamedDrawDynamicLightIndexBytes += static_cast<unsigned long long>( indexBytes );
+			}
+			if ( texcoord1Bytes > 0 ) {
+				state->streamedDrawDynamicLightTexcoord1Bytes += static_cast<unsigned long long>( texcoord1Bytes );
+			}
 		}
 		if ( materialFlags & GLX_STAGE_SCREEN_MAP ) {
 			state->streamedDrawScreenMapDraws++;
@@ -1320,6 +1412,9 @@ void GLX_Stream_RecordDrawResult( StreamState *state, int numVertexes, int numIn
 		}
 	} else {
 		state->streamedDrawFallbacks++;
+		if ( materialFlags & GLX_STAGE_DLIGHT_MAP ) {
+			state->streamedDrawDynamicLightFallbacks++;
+		}
 	}
 }
 
@@ -1486,6 +1581,19 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 	RI().Printf( PRINT_ALL, "  dynamic stream dynamic-light gate: %s, accepted %u, rejected %u\n",
 		BoolName( GLX_Stream_DrawDynamicLightsEnabled( state ) ),
 		state.streamedDrawDynamicLightAccepted, state.streamedDrawDynamicLightRejected );
+	RI().Printf( PRINT_ALL, "  dynamic stream dynamic-light telemetry: attempts %u, draws %u, fallbacks %u, attempt %.2f MB, draw %.2f MB, index %.2f MB, tex1 %.2f MB, wraps %u, same-frame rejects %u, waits %u, timeouts %u, sync failures %u\n",
+		state.streamedDrawDynamicLightAttempts,
+		state.streamedDrawDynamicLightDraws,
+		state.streamedDrawDynamicLightFallbacks,
+		static_cast<double>( state.streamedDrawDynamicLightAttemptBytes ) / ( 1024.0 * 1024.0 ),
+		static_cast<double>( state.streamedDrawDynamicLightBytes ) / ( 1024.0 * 1024.0 ),
+		static_cast<double>( state.streamedDrawDynamicLightIndexBytes ) / ( 1024.0 * 1024.0 ),
+		static_cast<double>( state.streamedDrawDynamicLightTexcoord1Bytes ) / ( 1024.0 * 1024.0 ),
+		state.streamedDrawDynamicLightReserveWraps,
+		state.streamedDrawDynamicLightSameFrameWrapRejects,
+		state.streamedDrawDynamicLightSyncWaits,
+		state.streamedDrawDynamicLightSyncTimeouts,
+		state.streamedDrawDynamicLightSyncFailures );
 	RI().Printf( PRINT_ALL, "  dynamic stream screen-map gate: %s, accepted %u, rejected %u\n",
 		BoolName( GLX_Stream_DrawScreenMapsEnabled( state ) ),
 		state.streamedDrawScreenMapAccepted, state.streamedDrawScreenMapRejected );
@@ -1519,7 +1627,7 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 		state.streamedDrawBeamDraws,
 		state.streamedDrawPostProcessDraws,
 		state.streamedDrawFallbacks );
-	RI().Printf( PRINT_ALL, "  dynamic stream categories: entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, special %u/%u\n",
+	RI().Printf( PRINT_ALL, "  dynamic stream categories: entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, dlight %u/%u, special %u/%u\n",
 		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_ENTITY],
 		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_ENTITY],
 		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_PARTICLE],
@@ -1534,9 +1642,11 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_UI],
 		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_BEAM],
 		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_BEAM],
+		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_DLIGHT],
+		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_DLIGHT],
 		state.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_SPECIAL],
 		state.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_SPECIAL] );
-	RI().Printf( PRINT_ALL, "  dynamic stream category fallbacks: entity %u, particle %u, poly %u, mark %u, weapon %u, ui %u, beam %u, special %u\n",
+	RI().Printf( PRINT_ALL, "  dynamic stream category fallbacks: entity %u, particle %u, poly %u, mark %u, weapon %u, ui %u, beam %u, dlight %u, special %u\n",
 		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_ENTITY],
 		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_PARTICLE],
 		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_POLY],
@@ -1544,7 +1654,24 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_WEAPON],
 		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_UI],
 		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_BEAM],
+		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_DLIGHT],
 		state.streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_SPECIAL] );
+	RI().Printf( PRINT_ALL, "  dynamic stream IR roles: generic %u/%u/%u, dlight %u/%u/%u, shadow %u/%u/%u, beam %u/%u/%u, post %u/%u/%u\n",
+		state.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::Generic )],
+		state.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::Generic )],
+		state.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::Generic )],
+		state.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::DynamicLight )],
+		state.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::DynamicLight )],
+		state.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::DynamicLight )],
+		state.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::Shadow )],
+		state.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::Shadow )],
+		state.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::Shadow )],
+		state.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::Beam )],
+		state.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::Beam )],
+		state.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::Beam )],
+		state.streamedDrawRoleDraws[static_cast<int>( DynamicDrawRole::PostProcess )],
+		state.streamedDrawRoleAttempts[static_cast<int>( DynamicDrawRole::PostProcess )],
+		state.streamedDrawRoleFallbacks[static_cast<int>( DynamicDrawRole::PostProcess )] );
 	RI().Printf( PRINT_ALL, "  dynamic stream draw skips: %u (bind %u, input %u, mt %u, depthfrag %u, texcoord %u, empty %u, key %u, fog %u, program %u)\n",
 		state.streamedDrawSkips,
 		state.streamedDrawSkipReasons[GLX_STREAM_SKIP_NO_BIND_BUFFER],

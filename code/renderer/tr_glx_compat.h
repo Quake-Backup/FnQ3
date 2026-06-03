@@ -111,6 +111,9 @@ static ID_INLINE unsigned int GLX_CompatDynamicCategoryMaskForTess( const shader
 	if ( materialFlags & ( GLX_STAGE_SHADOW_PASS | GLX_STAGE_POSTPROCESS_PASS ) ) {
 		categoryMask |= GLX_DYNAMIC_CATEGORY_MASK_SPECIAL;
 	}
+	if ( materialFlags & GLX_STAGE_DLIGHT_MAP ) {
+		categoryMask |= GLX_DYNAMIC_CATEGORY_MASK_DLIGHT;
+	}
 	if ( backEnd.currentEntity == &backEnd.entity2D || backEnd.projection2D ) {
 		categoryMask |= GLX_DYNAMIC_CATEGORY_MASK_UI;
 	} else if ( backEnd.currentEntity && backEnd.currentEntity != &tr.worldEntity ) {
@@ -118,9 +121,6 @@ static ID_INLINE unsigned int GLX_CompatDynamicCategoryMaskForTess( const shader
 	}
 	if ( input && input->surfType == SF_POLY ) {
 		categoryMask |= GLX_CompatPolyDynamicCategoryMask( input );
-	}
-	if ( !categoryMask && ( materialFlags & GLX_STAGE_DLIGHT_MAP ) ) {
-		categoryMask |= GLX_DYNAMIC_CATEGORY_MASK_SPECIAL;
 	}
 	if ( !categoryMask ) {
 		categoryMask = GLX_DYNAMIC_CATEGORY_MASK_SPECIAL;
@@ -191,8 +191,8 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayPass( int vertexCount,
 	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, xyzStride, (const GLvoid *)(intptr_t)( reservation.offset ) );
 
-	if ( !GLX_CompatDrawArrays( primitive, 0, vertexCount,
-		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+	if ( !GLX_CompatDrawArraysClassified( primitive, 0, vertexCount,
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, materialFlags, categoryMask ) ) {
 		ok = qfalse;
 	}
 
@@ -276,8 +276,8 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordPass( int vertexCo
 	qglTexCoordPointer( 2, GL_FLOAT, texcoordStride,
 		(const GLvoid *)(intptr_t)( reservation.offset + texcoordOffset ) );
 
-	if ( !GLX_CompatDrawArrays( primitive, 0, vertexCount,
-		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+	if ( !GLX_CompatDrawArraysClassified( primitive, 0, vertexCount,
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, materialFlags, categoryMask ) ) {
 		ok = qfalse;
 	}
 
@@ -396,8 +396,8 @@ static ID_INLINE qboolean GLX_CompatTryStreamDrawArrayTexcoordColorPass( int ver
 	qglColorPointer( colorComponents, colorType, colorStride,
 		(const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
 
-	if ( !GLX_CompatDrawArrays( primitive, 0, vertexCount,
-		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC ) ) {
+	if ( !GLX_CompatDrawArraysClassified( primitive, 0, vertexCount,
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, materialFlags, categoryMask ) ) {
 		ok = qfalse;
 	}
 

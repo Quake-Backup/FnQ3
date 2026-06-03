@@ -16,6 +16,11 @@ struct StreamReservation {
 	StreamStrategy strategy;
 	qboolean mapped;
 	qboolean committed;
+	unsigned int reserveWraps;
+	unsigned int reserveSameFrameWrapRejects;
+	unsigned int reserveSyncWaits;
+	unsigned int reserveSyncTimeouts;
+	unsigned int reserveSyncFailures;
 };
 
 struct StreamState {
@@ -101,8 +106,15 @@ struct StreamState {
 	unsigned int streamedDrawEnvironmentAccepted;
 	unsigned int streamedDrawEnvironmentRejected;
 	unsigned int streamedDrawDynamicLightDraws;
+	unsigned int streamedDrawDynamicLightAttempts;
+	unsigned int streamedDrawDynamicLightFallbacks;
 	unsigned int streamedDrawDynamicLightAccepted;
 	unsigned int streamedDrawDynamicLightRejected;
+	unsigned int streamedDrawDynamicLightReserveWraps;
+	unsigned int streamedDrawDynamicLightSameFrameWrapRejects;
+	unsigned int streamedDrawDynamicLightSyncWaits;
+	unsigned int streamedDrawDynamicLightSyncTimeouts;
+	unsigned int streamedDrawDynamicLightSyncFailures;
 	unsigned int streamedDrawScreenMapDraws;
 	unsigned int streamedDrawScreenMapAccepted;
 	unsigned int streamedDrawScreenMapRejected;
@@ -115,6 +127,9 @@ struct StreamState {
 	unsigned int streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_COUNT];
 	unsigned int streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_COUNT];
 	unsigned int streamedDrawCategoryFallbacks[GLX_DYNAMIC_CATEGORY_COUNT];
+	unsigned int streamedDrawRoleAttempts[GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT];
+	unsigned int streamedDrawRoleDraws[GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT];
+	unsigned int streamedDrawRoleFallbacks[GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT];
 	unsigned int streamedDrawVertexes;
 	unsigned int streamedDrawIndexes;
 	unsigned int largestReservationBytes;
@@ -128,6 +143,10 @@ struct StreamState {
 	unsigned long long streamedDrawBytes;
 	unsigned long long streamedDrawIndexBytes;
 	unsigned long long streamedDrawTexcoord1Bytes;
+	unsigned long long streamedDrawDynamicLightAttemptBytes;
+	unsigned long long streamedDrawDynamicLightBytes;
+	unsigned long long streamedDrawDynamicLightIndexBytes;
+	unsigned long long streamedDrawDynamicLightTexcoord1Bytes;
 	unsigned int frames;
 };
 
@@ -141,6 +160,7 @@ qboolean GLX_Stream_Upload( StreamState *state, StreamReservation *reservation, 
 qboolean GLX_Stream_UploadAt( StreamState *state, StreamReservation *reservation, size_t relativeOffset,
 	const void *data, size_t bytes );
 void GLX_Stream_Commit( StreamState *state, StreamReservation *reservation );
+void GLX_Stream_RecordDlightReservation( StreamState *state, const StreamReservation &reservation );
 GLuint GLX_Stream_BindArrayBufferCached( StreamState *state, GLuint buffer );
 void GLX_Stream_RestoreArrayBufferCached( StreamState *state, GLuint buffer );
 GLuint GLX_Stream_BindElementArrayBufferCached( StreamState *state, GLuint buffer );

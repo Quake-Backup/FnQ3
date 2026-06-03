@@ -10,10 +10,10 @@ The harness currently checks:
 - Rejection of unsupported multitexture combine modes.
 - Stream material-gate behavior for the RC allowlist, including explicit multitexture and depth-fragment gates.
 - The legacy shader collapse path not blocking compatible `depthFragment` base stages from becoming multitexture stages.
-- Explicit dynamic-light, screen-map, and video-map stream gate behavior outside the RC allowlist.
+- Explicit dynamic-light, screen-map, and video-map stream gate behavior, including RC-profile dynamic-light/scissor `auto` promotion and screen/video guard coverage.
 - Explicit shadow-volume, beam, and fullscreen postprocess draw-array stream gate behavior outside the material-key system.
 - Dynamic-scene stream category normalization for entity, particle, poly, mark, weapon, UI, beam, and special-pass metrics.
-- RC runtime-sweep profiles enabling those state-only dynamic submission gates while keeping dynamic-light, screen-map, and video-map material gates off.
+- RC runtime-sweep profiles enabling state-only dynamic submission gates and the dynamic-light `auto` gate while keeping screen-map and video-map material gates off.
 - The frozen RC/stress sweep profiles matching the runtime `r_glxProfile` table in `code/rendererglx/glx_module.cpp`.
 - The RC profile promoting shipped static-world arena, dispatcher, packet-batch, multidraw, and capability-gated indirect/MDI span paths while leaving compact MDI uploads in the stress profile.
 - The checked-in GLx feature-closure matrix using only exact `covered`, `partially covered`, and `missing` statuses with no ambiguous rows.

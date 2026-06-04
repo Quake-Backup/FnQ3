@@ -125,6 +125,7 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxStreamDrawEnvironment", "0", "1", "1" },
 	{ "r_glxStreamDrawDynamicLights", "0", "auto", "auto" },
 	{ "r_glxDlightScissor", "0", "auto", "auto" },
+	{ "r_glxDlightProjectedProgram", "0", "0", "0" },
 	{ "r_glxStreamDrawScreenMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawVideoMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawShadows", "0", "1", "1" },
@@ -197,13 +198,26 @@ struct DlightProgram {
 	GLint shadowAtlasUniform;
 	GLint shadowDepthUniform;
 	GLint shadowFilterUniform;
+	GLint projectedControlUniform;
+	GLint projectedOriginRadiusUniform;
+	GLint projectedColorFlagsUniform;
 };
 
 static constexpr int GLX_DLIGHT_PROGRAM_LIMIT = 24;
+static constexpr int GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT = 3;
+static constexpr int GLX_PROJECTED_DLIGHT_STREAM_ALIGNMENT = 64;
+static constexpr int GLX_PROJECTED_DLIGHT_LIST_ARENA_LIMIT =
+	GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT;
+
+struct ProjectedDlightStreamRecord {
+	float originRadius[4];
+	float colorFlags[4];
+};
 
 struct DlightState {
 	cvar_t *enabled;
 	cvar_t *scissor;
+	cvar_t *projectedProgram;
 	DlightFns fns;
 	DlightProgram programs[GLX_DLIGHT_PROGRAM_LIMIT];
 	int programCount;
@@ -248,6 +262,73 @@ struct DlightState {
 	unsigned int scissorFallbacks;
 	unsigned long long scissorPixels;
 	unsigned long long scissorViewportPixels;
+	ProjectedDlightRecord projectedSourceRecords[GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT];
+	ProjectedDlightRecord projectedListRecords[GLX_PROJECTED_DLIGHT_LIST_ARENA_LIMIT];
+	ProjectedDlightListRef projectedPacketListRefs[GLX_STATIC_WORLD_PACKET_LIMIT];
+	unsigned int projectedPacketLightMasks[GLX_STATIC_WORLD_PACKET_LIMIT];
+	int projectedSourceRecordCount;
+	int projectedListRecordCount;
+	unsigned int projectedPacketActivePackets;
+	unsigned int projectedPacketCopiedMask;
+	unsigned int projectedPacketDroppedMask;
+	unsigned int projectedSourceFrames;
+	unsigned int projectedSourceRecordCopies;
+	unsigned int projectedSourceDropped;
+	unsigned int projectedListBuilds;
+	unsigned int projectedListComplete;
+	unsigned int projectedListIncomplete;
+	unsigned int projectedListRecordCopies;
+	unsigned int projectedListDropped;
+	unsigned int projectedListCopiedMask;
+	unsigned int projectedListDroppedMask;
+	unsigned int projectedPacketItemLookups;
+	unsigned int projectedPacketItemLookupHits;
+	unsigned int projectedPacketItemLookupMisses;
+	unsigned int projectedPacketItemLookupOverflows;
+	unsigned int projectedPacketListBuilds;
+	unsigned int projectedPacketListComplete;
+	unsigned int projectedPacketListIncomplete;
+	unsigned int projectedPacketListRecordCopies;
+	unsigned int projectedPacketListDropped;
+	unsigned int projectedPacketIRProducts;
+	unsigned int projectedPacketIRRejected;
+	unsigned int projectedDynamicListBuilds;
+	unsigned int projectedDynamicListComplete;
+	unsigned int projectedDynamicListIncomplete;
+	unsigned int projectedDynamicListRecordCopies;
+	unsigned int projectedDynamicListDropped;
+	unsigned int projectedDynamicIRProducts;
+	unsigned int projectedDynamicIRRejected;
+	unsigned int projectedShaderInputs;
+	unsigned int projectedShaderInputRecords;
+	unsigned int projectedShaderWorldPackets;
+	unsigned int projectedShaderDynamicDraws;
+	unsigned int projectedShaderProgrammableInputs;
+	unsigned int projectedShaderFallbackInputs;
+	unsigned int projectedShaderInvalidInputs;
+	unsigned int projectedShaderUniformAttempts;
+	unsigned int projectedShaderUniformBinds;
+	unsigned int projectedShaderUniformFailures;
+	unsigned int projectedShaderUniformRecords;
+	unsigned int projectedShaderUniformTruncated;
+	unsigned int projectedShaderUniformExecutableBinds;
+	unsigned int projectedShaderUniformSuppressedBinds;
+	unsigned int projectedShaderUniformWorldBinds;
+	unsigned int projectedShaderUniformWorldExecutableBinds;
+	unsigned int projectedShaderUniformDynamicBinds;
+	unsigned int projectedShaderUniformDynamicExecutableBinds;
+	unsigned int projectedShaderUniformLimitSuppressions;
+	unsigned int projectedShaderStreamAttempts;
+	unsigned int projectedShaderStreamUploads;
+	unsigned int projectedShaderStreamFailures;
+	unsigned int projectedShaderStreamSkips;
+	unsigned int projectedShaderStreamRecords;
+	unsigned int projectedShaderStreamPersistentUploads;
+	unsigned int projectedShaderStreamWorldUploads;
+	unsigned int projectedShaderStreamDynamicUploads;
+	unsigned int projectedShaderStreamLastOffset;
+	unsigned int projectedShaderStreamLastBytes;
+	unsigned long long projectedShaderStreamBytes;
 };
 
 static int GLX_Dlight_ClampFogMode( int fogMode )
@@ -323,6 +404,87 @@ static void GLX_Dlight_ResetCounters( DlightState *state )
 	state->scissorFallbacks = 0;
 	state->scissorPixels = 0;
 	state->scissorViewportPixels = 0;
+	state->projectedSourceFrames = 0;
+	state->projectedSourceRecordCopies = 0;
+	state->projectedSourceDropped = 0;
+	state->projectedListBuilds = 0;
+	state->projectedListComplete = 0;
+	state->projectedListIncomplete = 0;
+	state->projectedListRecordCopies = 0;
+	state->projectedListDropped = 0;
+	state->projectedListCopiedMask = 0;
+	state->projectedListDroppedMask = 0;
+	state->projectedPacketItemLookups = 0;
+	state->projectedPacketItemLookupHits = 0;
+	state->projectedPacketItemLookupMisses = 0;
+	state->projectedPacketItemLookupOverflows = 0;
+	state->projectedPacketListBuilds = 0;
+	state->projectedPacketListComplete = 0;
+	state->projectedPacketListIncomplete = 0;
+	state->projectedPacketListRecordCopies = 0;
+	state->projectedPacketListDropped = 0;
+	state->projectedPacketIRProducts = 0;
+	state->projectedPacketIRRejected = 0;
+	state->projectedDynamicListBuilds = 0;
+	state->projectedDynamicListComplete = 0;
+	state->projectedDynamicListIncomplete = 0;
+	state->projectedDynamicListRecordCopies = 0;
+	state->projectedDynamicListDropped = 0;
+	state->projectedDynamicIRProducts = 0;
+	state->projectedDynamicIRRejected = 0;
+	state->projectedShaderInputs = 0;
+	state->projectedShaderInputRecords = 0;
+	state->projectedShaderWorldPackets = 0;
+	state->projectedShaderDynamicDraws = 0;
+	state->projectedShaderProgrammableInputs = 0;
+	state->projectedShaderFallbackInputs = 0;
+	state->projectedShaderInvalidInputs = 0;
+	state->projectedShaderUniformAttempts = 0;
+	state->projectedShaderUniformBinds = 0;
+	state->projectedShaderUniformFailures = 0;
+	state->projectedShaderUniformRecords = 0;
+	state->projectedShaderUniformTruncated = 0;
+	state->projectedShaderUniformExecutableBinds = 0;
+	state->projectedShaderUniformSuppressedBinds = 0;
+	state->projectedShaderUniformWorldBinds = 0;
+	state->projectedShaderUniformWorldExecutableBinds = 0;
+	state->projectedShaderUniformDynamicBinds = 0;
+	state->projectedShaderUniformDynamicExecutableBinds = 0;
+	state->projectedShaderUniformLimitSuppressions = 0;
+	state->projectedShaderStreamAttempts = 0;
+	state->projectedShaderStreamUploads = 0;
+	state->projectedShaderStreamFailures = 0;
+	state->projectedShaderStreamSkips = 0;
+	state->projectedShaderStreamRecords = 0;
+	state->projectedShaderStreamPersistentUploads = 0;
+	state->projectedShaderStreamWorldUploads = 0;
+	state->projectedShaderStreamDynamicUploads = 0;
+	state->projectedShaderStreamLastOffset = 0;
+	state->projectedShaderStreamLastBytes = 0;
+	state->projectedShaderStreamBytes = 0;
+	state->projectedSourceRecordCount = 0;
+	state->projectedListRecordCount = 0;
+	state->projectedPacketActivePackets = 0;
+	state->projectedPacketCopiedMask = 0;
+	state->projectedPacketDroppedMask = 0;
+}
+
+static void GLX_Dlight_ClearProjectedFrame( DlightState *state )
+{
+	if ( !state ) {
+		return;
+	}
+	state->projectedSourceRecordCount = 0;
+	state->projectedListRecordCount = 0;
+	state->projectedListCopiedMask = 0;
+	state->projectedListDroppedMask = 0;
+	state->projectedPacketActivePackets = 0;
+	state->projectedPacketCopiedMask = 0;
+	state->projectedPacketDroppedMask = 0;
+	for ( int i = 0; i < GLX_STATIC_WORLD_PACKET_LIMIT; i++ ) {
+		state->projectedPacketListRefs[i] = {};
+		state->projectedPacketLightMasks[i] = 0u;
+	}
 }
 
 static void GLX_Dlight_RecordState( DlightState *state, int event )
@@ -412,6 +574,11 @@ static qboolean GLX_Dlight_ScissorEnabled( const DlightState &state )
 	return qfalse;
 }
 
+static qboolean GLX_Dlight_ProjectedProgramEnabled( const DlightState &state )
+{
+	return state.projectedProgram && state.projectedProgram->integer ? qtrue : qfalse;
+}
+
 static void GLX_Dlight_RecordScissor( DlightState *state, qboolean computed,
 	qboolean applied, int width, int height, int viewportWidth, int viewportHeight )
 {
@@ -439,6 +606,253 @@ static void GLX_Dlight_RecordScissor( DlightState *state, qboolean computed,
 	if ( applied ) {
 		state->scissorApplied++;
 	}
+}
+
+static ProjectedDlightRecord GLX_Dlight_ProjectRecordFromPublic(
+	const glxProjectedDlightRecord_t &source )
+{
+	ProjectedDlightRecord record {};
+
+	for ( int i = 0; i < 3; i++ ) {
+		record.origin[i] = source.origin[i];
+		record.color[i] = source.color[i];
+	}
+	record.radius = source.radius;
+	if ( source.flags & GLX_PROJECTED_DLIGHT_FLAG_ADDITIVE ) {
+		record.flags |= GLX_PROJECTED_DLIGHT_ADDITIVE;
+	}
+	if ( source.flags & GLX_PROJECTED_DLIGHT_FLAG_LINEAR ) {
+		record.flags |= GLX_PROJECTED_DLIGHT_LINEAR;
+	}
+	record.flags |= ( source.flags &
+		~( GLX_PROJECTED_DLIGHT_FLAG_ADDITIVE | GLX_PROJECTED_DLIGHT_FLAG_LINEAR ) );
+	return record;
+}
+
+static void GLX_Dlight_RecordProjectedDlights( DlightState *state,
+	const glxProjectedDlightRecord_t *records, int count )
+{
+	if ( !state ) {
+		return;
+	}
+
+	GLX_Dlight_ClearProjectedFrame( state );
+	state->projectedSourceFrames++;
+	if ( count <= 0 || !records ) {
+		return;
+	}
+
+	if ( count > GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT ) {
+		state->projectedSourceDropped +=
+			static_cast<unsigned int>( count - GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT );
+		count = GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT;
+	}
+
+	for ( int i = 0; i < count; i++ ) {
+		const ProjectedDlightRecord record = GLX_Dlight_ProjectRecordFromPublic( records[i] );
+
+		if ( !GLX_RenderIR_ValidateProjectedDlightRecord( record ) ) {
+			state->projectedSourceDropped++;
+			continue;
+		}
+		state->projectedSourceRecords[state->projectedSourceRecordCount++] = record;
+		state->projectedSourceRecordCopies++;
+	}
+}
+
+static ProjectedDlightListBuildResult GLX_Dlight_CopyProjectedDlightList(
+	DlightState *state, unsigned int lightMask )
+{
+	ProjectedDlightListBuildResult result {};
+
+	result.complete = qtrue;
+	if ( !state || !lightMask ) {
+		return result;
+	}
+
+	if ( state->projectedSourceRecordCount <= 0 ||
+		state->projectedListRecordCount >= GLX_PROJECTED_DLIGHT_LIST_ARENA_LIMIT ) {
+		result.droppedMask = lightMask;
+		result.complete = qfalse;
+		return result;
+	}
+
+	result = GLX_RenderIR_BuildProjectedDlightList( state->projectedSourceRecords,
+		state->projectedSourceRecordCount, lightMask, state->projectedListRecords,
+		GLX_PROJECTED_DLIGHT_LIST_ARENA_LIMIT, state->projectedListRecordCount );
+
+	state->projectedListRecordCount += result.ref.recordCount;
+	state->projectedListRecordCopies += static_cast<unsigned int>( result.ref.recordCount );
+	state->projectedListCopiedMask |= result.copiedMask;
+	state->projectedListDroppedMask |= result.droppedMask;
+	return result;
+}
+
+static int GLX_Dlight_StaticPacketForItem( DlightState *state,
+	const StaticWorldStats *staticWorld, int itemIndex )
+{
+	int packetIndex;
+
+	if ( state ) {
+		state->projectedPacketItemLookups++;
+	}
+	if ( !staticWorld || itemIndex <= 0 ) {
+		if ( state ) {
+			state->projectedPacketItemLookupMisses++;
+		}
+		return -1;
+	}
+	if ( itemIndex > GLX_STATIC_WORLD_ITEM_LOOKUP_LIMIT ) {
+		if ( state ) {
+			state->projectedPacketItemLookupOverflows++;
+		}
+		return -1;
+	}
+
+	packetIndex = staticWorld->itemToPacket[itemIndex];
+	if ( packetIndex < 0 || packetIndex >= staticWorld->packetCount ||
+		packetIndex >= GLX_STATIC_WORLD_PACKET_LIMIT ) {
+		if ( state ) {
+			state->projectedPacketItemLookupMisses++;
+		}
+		return -1;
+	}
+
+	if ( state ) {
+		state->projectedPacketItemLookupHits++;
+	}
+	return packetIndex;
+}
+
+static void GLX_Dlight_RecordProjectedPacketDlightList( DlightState *state,
+	const StaticWorldStats *staticWorld, int itemIndex, unsigned int lightMask )
+{
+	ProjectedDlightListBuildResult result;
+	unsigned int mergedMask;
+	int packetIndex;
+
+	if ( !state || !lightMask ) {
+		return;
+	}
+
+	packetIndex = GLX_Dlight_StaticPacketForItem( state, staticWorld, itemIndex );
+	if ( packetIndex < 0 ) {
+		return;
+	}
+
+	mergedMask = state->projectedPacketLightMasks[packetIndex] | lightMask;
+	if ( mergedMask == state->projectedPacketLightMasks[packetIndex] ) {
+		return;
+	}
+
+	state->projectedPacketListBuilds++;
+	result = GLX_Dlight_CopyProjectedDlightList( state, mergedMask );
+	if ( result.ref.recordCount > 0 ) {
+		if ( state->projectedPacketLightMasks[packetIndex] == 0u ) {
+			state->projectedPacketActivePackets++;
+		}
+		state->projectedPacketLightMasks[packetIndex] = result.copiedMask;
+		state->projectedPacketListRefs[packetIndex] = result.ref;
+		state->projectedPacketCopiedMask |= result.copiedMask;
+		state->projectedPacketListRecordCopies +=
+			static_cast<unsigned int>( result.ref.recordCount );
+	}
+	state->projectedPacketDroppedMask |= result.droppedMask;
+	if ( result.droppedMask ) {
+		state->projectedPacketListDropped++;
+	}
+	if ( result.complete ) {
+		state->projectedPacketListComplete++;
+	} else {
+		state->projectedPacketListIncomplete++;
+	}
+}
+
+static void GLX_Dlight_RecordProjectedDlightList( DlightState *state,
+	const StaticWorldStats *staticWorld, int itemIndex, unsigned int lightMask )
+{
+	ProjectedDlightListBuildResult result;
+
+	if ( !state || !lightMask ) {
+		return;
+	}
+
+	state->projectedListBuilds++;
+	result = GLX_Dlight_CopyProjectedDlightList( state, lightMask );
+	if ( result.droppedMask ) {
+		state->projectedListDropped++;
+	}
+	if ( result.complete ) {
+		state->projectedListComplete++;
+	} else {
+		state->projectedListIncomplete++;
+	}
+
+	GLX_Dlight_RecordProjectedPacketDlightList( state, staticWorld, itemIndex,
+		result.copiedMask );
+}
+
+static qboolean GLX_Dlight_Active( const DlightState &state );
+
+static qboolean GLX_Dlight_ProjectedShaderProgrammable(
+	const DlightState &state, RenderProductTier tier )
+{
+	const TierExecutionPolicy policy = GLX_RenderIR_TierExecutionPolicy( tier );
+
+	return GLX_Dlight_Active( state ) && policy.materialCompiler &&
+		policy.dynamicLights ? qtrue : qfalse;
+}
+
+static qboolean GLX_Dlight_RecordProjectedShaderInput( DlightState *state,
+	const ProjectedDlightShaderInput &input )
+{
+	if ( !state ) {
+		return qfalse;
+	}
+
+	if ( !GLX_RenderIR_ValidateProjectedDlightShaderInput( input ) ) {
+		state->projectedShaderInvalidInputs++;
+		return qfalse;
+	}
+
+	state->projectedShaderInputs++;
+	state->projectedShaderInputRecords +=
+		static_cast<unsigned int>( input.projectedDlights.recordCount );
+	if ( input.target == ProjectedDlightShaderTarget::WorldPacket ) {
+		state->projectedShaderWorldPackets++;
+	} else if ( input.target == ProjectedDlightShaderTarget::DynamicDraw ) {
+		state->projectedShaderDynamicDraws++;
+	}
+	if ( input.programmable ) {
+		state->projectedShaderProgrammableInputs++;
+	} else {
+		state->projectedShaderFallbackInputs++;
+	}
+	return input.programmable;
+}
+
+static ProjectedDlightListRef GLX_Dlight_BuildProjectedDynamicDlightList(
+	DlightState *state, unsigned int lightMask )
+{
+	ProjectedDlightListBuildResult result;
+
+	if ( !state || !lightMask ) {
+		return {};
+	}
+
+	state->projectedDynamicListBuilds++;
+	result = GLX_Dlight_CopyProjectedDlightList( state, lightMask );
+	state->projectedDynamicListRecordCopies +=
+		static_cast<unsigned int>( result.ref.recordCount );
+	if ( result.droppedMask ) {
+		state->projectedDynamicListDropped++;
+	}
+	if ( result.complete ) {
+		state->projectedDynamicListComplete++;
+	} else {
+		state->projectedDynamicListIncomplete++;
+	}
+	return result.ref;
 }
 
 static void *GLX_Dlight_GetProc( const char *name )
@@ -497,6 +911,22 @@ static qboolean GLX_Dlight_SourceFits( int written, size_t capacity )
 	return written > 0 && static_cast<size_t>( written ) < capacity ? qtrue : qfalse;
 }
 
+static GLint GLX_Dlight_GetUniformLocationAny( const DlightState *state, GLuint program,
+	const char *primaryName, const char *fallbackName )
+{
+	GLint location;
+
+	if ( !state || !state->fns.GetUniformLocation || !program || !primaryName ) {
+		return -1;
+	}
+
+	location = state->fns.GetUniformLocation( program, primaryName );
+	if ( location < 0 && fallbackName ) {
+		location = state->fns.GetUniformLocation( program, fallbackName );
+	}
+	return location;
+}
+
 static qboolean GLX_Dlight_VertexSource( const DlightProgramKey &key,
 	char *out, size_t outSize )
 {
@@ -510,6 +940,7 @@ static qboolean GLX_Dlight_VertexSource( const DlightProgramKey &key,
 		"uniform vec4 u_FogDepthVector;\n"
 		"uniform float u_FogEyeT;\n"
 		"varying vec2 v_TexCoord;\n"
+		"varying vec3 v_LocalPos;\n"
 		"varying vec3 v_LightVector;\n"
 		"varying vec3 v_ViewVector;\n"
 		"varying vec3 v_Normal;\n"
@@ -520,6 +951,7 @@ static qboolean GLX_Dlight_VertexSource( const DlightProgramKey &key,
 		"    vec4 pos = gl_Vertex;\n"
 		"    gl_Position = ftransform();\n"
 		"    v_TexCoord = gl_MultiTexCoord0.xy;\n"
+		"    v_LocalPos = pos.xyz;\n"
 		"    v_LightVector = u_LightPos.xyz - pos.xyz;\n"
 		"    v_ViewVector = u_EyePos.xyz - pos.xyz;\n"
 		"    v_Normal = gl_Normal.xyz;\n"
@@ -552,6 +984,7 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"#define GLX_DLIGHT_FOG %i\n"
 		"#define GLX_DLIGHT_ABS_LIGHT %i\n"
 		"#define GLX_DLIGHT_SHADOW %i\n"
+		"#define GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT %i\n"
 		"uniform sampler2D u_Texture0;\n"
 		"uniform sampler2D u_FogTexture;\n"
 		"uniform sampler2D u_ShadowTexture;\n"
@@ -563,7 +996,11 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"uniform vec4 u_ShadowAtlas;\n"
 		"uniform vec4 u_ShadowDepth;\n"
 		"uniform vec4 u_ShadowFilter;\n"
+		"uniform vec4 u_ProjectedDlightControl;\n"
+		"uniform vec4 u_ProjectedDlightOriginRadius[GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT];\n"
+		"uniform vec4 u_ProjectedDlightColorFlags[GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT];\n"
 		"varying vec2 v_TexCoord;\n"
+		"varying vec3 v_LocalPos;\n"
 		"varying vec3 v_LightVector;\n"
 		"varying vec3 v_ViewVector;\n"
 		"varying vec3 v_Normal;\n"
@@ -573,10 +1010,70 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"vec3 safeNormalize(vec3 value) {\n"
 		"    return value * inversesqrt(max(dot(value, value), 0.00000001));\n"
 		"}\n"
+		"vec3 evaluateProjectedDlights(vec3 localPos, vec3 normal) {\n"
+		"    vec3 accum = vec3(0.0);\n"
+		"    for (int i = 0; i < GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT; i++) {\n"
+		"        if (float(i) >= u_ProjectedDlightControl.x) {\n"
+		"            break;\n"
+		"        }\n"
+		"        vec4 originRadius = u_ProjectedDlightOriginRadius[i];\n"
+		"        vec4 colorFlags = u_ProjectedDlightColorFlags[i];\n"
+		"        vec3 delta = originRadius.xyz - localPos;\n"
+		"        float invRadius = 1.0 / max(originRadius.w, 0.0001);\n"
+		"        vec2 st = vec2(0.5) + delta.xy * invRadius;\n"
+		"        vec2 clipped = step(vec2(0.0), st) * step(st, vec2(1.0));\n"
+		"        float front = step(0.0, dot(delta, normal));\n"
+		"        float zDistance = abs(delta.z);\n"
+		"        float zAtten = max(1.0 - max(zDistance - originRadius.w * 0.5, 0.0) * 2.0 * invRadius, 0.0);\n"
+		"        accum += colorFlags.rgb * clipped.x * clipped.y * front * zAtten;\n"
+		"    }\n"
+		"    return accum;\n"
+		"}\n"
 		"#if GLX_DLIGHT_SHADOW\n"
-		"float dlightShadowFactor(vec3 dnLV, vec3 nn, vec3 lv) {\n"
-		"    if (u_DlightShadow.z <= 0.0 || u_ShadowAtlas.x <= 0.0 || u_ShadowAtlas.z <= 0.0) {\n"
+		"float dlightShadowFactor(vec3 dnLV, vec3 rawLV, vec3 nn, vec3 lv) {\n"
+		"    bool spotShadow = u_ShadowFilter.z > 0.5;\n"
+		"    if (u_DlightShadow.z <= 0.0 || u_ShadowAtlas.z <= 0.0 || (!spotShadow && u_ShadowAtlas.x <= 0.0)) {\n"
 		"        return 1.0;\n"
+		"    }\n"
+		"    if (spotShadow) {\n"
+		"        vec3 lightToFrag = -rawLV;\n"
+		"        vec3 spotDir = safeNormalize(u_LightVector.xyz);\n"
+		"        float spotDist = dot(lightToFrag, spotDir);\n"
+		"        float tanHalfFov = max(u_ShadowDepth.w, 0.0001);\n"
+		"        if (spotDist <= u_ShadowDepth.z) {\n"
+		"            return 1.0;\n"
+		"        }\n"
+		"        vec3 spotRightBase = vec3(spotDir.z, -spotDir.x, spotDir.y);\n"
+		"        vec3 spotRight = safeNormalize(spotRightBase - spotDir * dot(spotRightBase, spotDir));\n"
+		"        vec3 spotUp = cross(spotRight, spotDir);\n"
+		"        vec2 uv = vec2(-dot(lightToFrag, spotRight), -dot(lightToFrag, spotUp)) / (spotDist * tanHalfFov);\n"
+		"        float coneRadius2 = dot(uv, uv);\n"
+		"        if (coneRadius2 > 1.0) {\n"
+		"            return 1.0;\n"
+		"        }\n"
+		"        uv = vec2(0.5) + uv * 0.5;\n"
+		"        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {\n"
+		"            return 1.0;\n"
+		"        }\n"
+		"        float tileSize = u_ShadowAtlas.z;\n"
+		"        float inset = 1.0 / tileSize;\n"
+		"        uv = clamp(uv, vec2(inset), vec2(1.0 - inset));\n"
+		"        float slope = 1.0 - abs(dot(nn, lv));\n"
+		"        float bias = u_DlightShadow.w * (0.125 + 0.375 * slope);\n"
+		"        float texelBias = max(2.0 * spotDist * tanHalfFov / tileSize, 0.125);\n"
+		"        float receiver = max(spotDist - min(bias, texelBias), u_ShadowDepth.z);\n"
+		"        float receiverDepth = u_ShadowDepth.x - u_ShadowDepth.y / receiver;\n"
+		"        vec2 atlasPx = vec2(u_ShadowAtlas.x + uv.x * tileSize,\n"
+		"            u_ShadowAtlas.w - (u_ShadowAtlas.y + tileSize) + uv.y * tileSize);\n"
+		"        vec2 tc = atlasPx * u_DlightShadow.xy;\n"
+		"        vec2 inner = u_DlightShadow.xy * u_ShadowFilter.x;\n"
+		"        vec2 outer = u_DlightShadow.xy * u_ShadowFilter.y;\n"
+		"        float occ = 0.0;\n"
+		"        occ += texture2D(u_ShadowTexture, tc + vec2(-outer.x, -inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"        occ += texture2D(u_ShadowTexture, tc + vec2( inner.x, -outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"        occ += texture2D(u_ShadowTexture, tc + vec2(-inner.x,  outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"        occ += texture2D(u_ShadowTexture, tc + vec2( outer.x,  inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"        return 1.0 - occ * 0.25 * u_DlightShadow.z;\n"
 		"    }\n"
 		"    vec3 shadowVec = -dnLV;\n"
 		"    vec3 absVec = abs(shadowVec);\n"
@@ -637,7 +1134,7 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"    vec3 lv = safeNormalize(dnLV);\n"
 		"    float shadowFactor = 1.0;\n"
 		"#if GLX_DLIGHT_SHADOW\n"
-		"    shadowFactor = dlightShadowFactor(dnLV, nn, lv);\n"
+		"    shadowFactor = dlightShadowFactor(dnLV, v_LightVector, nn, lv);\n"
 		"#endif\n"
 		"    vec3 ev = safeNormalize(v_ViewVector);\n"
 		"    vec3 halfVector = safeNormalize(lv + ev);\n"
@@ -663,12 +1160,15 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"    vec4 fog = texture2D(u_FogTexture, v_FogTexCoord);\n"
 		"    lit *= 1.0 - fog.a;\n"
 		"#endif\n"
-		"    gl_FragColor = lit * vec4(u_LightColor.rgb * intensity * shadowFactor, intensity * shadowFactor);\n"
+		"    vec4 currentLight = lit * vec4(u_LightColor.rgb * intensity * shadowFactor, intensity * shadowFactor);\n"
+		"    vec3 projectedLight = evaluateProjectedDlights(v_LocalPos, nn);\n"
+		"    gl_FragColor = currentLight + vec4(base.rgb * projectedLight, 0.0) * u_ProjectedDlightControl.z;\n"
 		"}\n",
 		key.linear ? 1 : 0,
 		key.fogMode != 0 ? 1 : 0,
 		key.absLight ? 1 : 0,
-		key.shadow ? 1 : 0 );
+		key.shadow ? 1 : 0,
+		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT );
 	return GLX_Dlight_SourceFits( written, outSize );
 }
 
@@ -731,7 +1231,7 @@ static DlightProgram *GLX_Dlight_CreateProgram( DlightState *state,
 {
 	DlightProgram *program;
 	char vertexSource[4096];
-	char fragmentSource[16384];
+	char fragmentSource[24576];
 	GLuint vertexShader;
 	GLuint fragmentShader;
 	GLint ok = 0;
@@ -802,6 +1302,14 @@ static DlightProgram *GLX_Dlight_CreateProgram( DlightState *state,
 	program->shadowAtlasUniform = state->fns.GetUniformLocation( program->program, "u_ShadowAtlas" );
 	program->shadowDepthUniform = state->fns.GetUniformLocation( program->program, "u_ShadowDepth" );
 	program->shadowFilterUniform = state->fns.GetUniformLocation( program->program, "u_ShadowFilter" );
+	program->projectedControlUniform = state->fns.GetUniformLocation( program->program,
+		"u_ProjectedDlightControl" );
+	program->projectedOriginRadiusUniform = GLX_Dlight_GetUniformLocationAny( state,
+		program->program, "u_ProjectedDlightOriginRadius[0]",
+		"u_ProjectedDlightOriginRadius" );
+	program->projectedColorFlagsUniform = GLX_Dlight_GetUniformLocationAny( state,
+		program->program, "u_ProjectedDlightColorFlags[0]",
+		"u_ProjectedDlightColorFlags" );
 
 	state->programCount++;
 	state->programCreates++;
@@ -814,6 +1322,20 @@ static DlightProgram *GLX_Dlight_FindProgram( DlightState *state,
 {
 	for ( int i = 0; i < state->programCount; i++ ) {
 		if ( GLX_Dlight_KeyEquals( state->programs[i].key, key ) ) {
+			return &state->programs[i];
+		}
+	}
+	return nullptr;
+}
+
+static DlightProgram *GLX_Dlight_CurrentProgram( DlightState *state )
+{
+	if ( !state || !state->currentProgram ) {
+		return nullptr;
+	}
+
+	for ( int i = 0; i < state->programCount; i++ ) {
+		if ( state->programs[i].program == state->currentProgram ) {
 			return &state->programs[i];
 		}
 	}
@@ -860,6 +1382,149 @@ static void GLX_Dlight_SetUniform4fv( DlightState *state, GLint location,
 	}
 }
 
+static void GLX_Dlight_SetUniform4fvCount( DlightState *state, GLint location,
+	int count, const float *value )
+{
+	if ( location >= 0 && count > 0 && value ) {
+		state->fns.Uniform4fv( location, count, value );
+		state->uniformUpdates += static_cast<unsigned int>( count );
+	}
+}
+
+static qboolean GLX_Dlight_FillProjectedStreamRecords( DlightState *state,
+	const ProjectedDlightShaderInput &input, ProjectedDlightStreamRecord *records )
+{
+	if ( !state || !records ||
+		!GLX_RenderIR_ValidateProjectedDlightShaderInput( input ) ) {
+		return qfalse;
+	}
+
+	for ( int i = 0; i < input.projectedDlights.recordCount; i++ ) {
+		const ProjectedDlightRecord &record =
+			state->projectedListRecords[input.projectedDlights.firstRecord + i];
+		ProjectedDlightStreamRecord &out = records[i];
+
+		if ( !GLX_RenderIR_ValidateProjectedDlightRecord( record ) ) {
+			return qfalse;
+		}
+
+		out.originRadius[0] = record.origin[0];
+		out.originRadius[1] = record.origin[1];
+		out.originRadius[2] = record.origin[2];
+		out.originRadius[3] = record.radius;
+		out.colorFlags[0] = record.color[0];
+		out.colorFlags[1] = record.color[1];
+		out.colorFlags[2] = record.color[2];
+		out.colorFlags[3] = static_cast<float>( record.flags & GLX_PROJECTED_DLIGHT_FLAGS_ALL );
+	}
+	return qtrue;
+}
+
+static qboolean GLX_Dlight_BindProjectedShaderInput( DlightState *state,
+	const ProjectedDlightShaderInput &input )
+{
+	DlightProgram *program;
+	ProjectedDlightShaderUniformPlan uniformPlan {};
+	int count;
+	float control[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	float originRadius[GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT * 4] {};
+	float colorFlags[GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT * 4] {};
+
+	if ( !state || !input.programmable ) {
+		return qfalse;
+	}
+
+	state->projectedShaderUniformAttempts++;
+	uniformPlan = GLX_RenderIR_PlanProjectedDlightUniformWindow( input,
+		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT,
+		GLX_Dlight_ProjectedProgramEnabled( *state ) );
+	if ( !uniformPlan.valid ) {
+		state->projectedShaderUniformFailures++;
+		return qfalse;
+	}
+
+	program = GLX_Dlight_CurrentProgram( state );
+	if ( !program || program->projectedControlUniform < 0 ||
+		program->projectedOriginRadiusUniform < 0 ||
+		program->projectedColorFlagsUniform < 0 ) {
+		state->projectedShaderUniformFailures++;
+		return qfalse;
+	}
+
+	count = uniformPlan.uploadRecords;
+	if ( uniformPlan.truncatedRecords > 0 ) {
+		state->projectedShaderUniformTruncated += uniformPlan.truncatedRecords;
+	}
+
+	for ( int i = 0; i < count; i++ ) {
+		const ProjectedDlightRecord &record =
+			state->projectedListRecords[input.projectedDlights.firstRecord + i];
+		float *originOut = &originRadius[i * 4];
+		float *colorOut = &colorFlags[i * 4];
+
+		if ( !GLX_RenderIR_ValidateProjectedDlightRecord( record ) ) {
+			state->projectedShaderUniformFailures++;
+			return qfalse;
+		}
+
+		originOut[0] = record.origin[0];
+		originOut[1] = record.origin[1];
+		originOut[2] = record.origin[2];
+		originOut[3] = record.radius;
+		colorOut[0] = record.color[0];
+		colorOut[1] = record.color[1];
+		colorOut[2] = record.color[2];
+		colorOut[3] = static_cast<float>( record.flags & GLX_PROJECTED_DLIGHT_FLAGS_ALL );
+	}
+
+	control[0] = static_cast<float>( count );
+	control[1] = static_cast<float>( input.projectedDlights.firstRecord );
+	control[2] = uniformPlan.execute ? 1.0f : 0.0f;
+	control[3] = 0.0f;
+	GLX_Dlight_SetUniform4fvCount( state, program->projectedControlUniform, 1,
+		control );
+	GLX_Dlight_SetUniform4fvCount( state, program->projectedOriginRadiusUniform,
+		count, originRadius );
+	GLX_Dlight_SetUniform4fvCount( state, program->projectedColorFlagsUniform,
+		count, colorFlags );
+	state->projectedShaderUniformBinds++;
+	state->projectedShaderUniformRecords += static_cast<unsigned int>( count );
+	if ( uniformPlan.execute ) {
+		state->projectedShaderUniformExecutableBinds++;
+	} else {
+		state->projectedShaderUniformSuppressedBinds++;
+	}
+	if ( uniformPlan.limitSuppressed ) {
+		state->projectedShaderUniformLimitSuppressions++;
+	}
+	if ( input.target == ProjectedDlightShaderTarget::WorldPacket ) {
+		state->projectedShaderUniformWorldBinds++;
+		if ( uniformPlan.execute ) {
+			state->projectedShaderUniformWorldExecutableBinds++;
+		}
+	} else if ( input.target == ProjectedDlightShaderTarget::DynamicDraw ) {
+		state->projectedShaderUniformDynamicBinds++;
+		if ( uniformPlan.execute ) {
+			state->projectedShaderUniformDynamicExecutableBinds++;
+		}
+	}
+	return qtrue;
+}
+
+static qboolean GLX_Dlight_ClearProjectedShaderInput( DlightState *state )
+{
+	DlightProgram *program = GLX_Dlight_CurrentProgram( state );
+	const float noProjectedDlights[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+	if ( !program || program->projectedControlUniform < 0 ) {
+		return qfalse;
+	}
+
+	GLX_Dlight_SetUniform4fv( state, program->projectedControlUniform,
+		noProjectedDlights );
+	return qtrue;
+}
+
 static void GLX_Dlight_RegisterCvars( DlightState *state )
 {
 	if ( !state ) {
@@ -872,6 +1537,10 @@ static void GLX_Dlight_RegisterCvars( DlightState *state )
 	state->scissor = RI().Cvar_Get( "r_glxDlightScissor", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->scissor,
 		"Restrict legacy projected dynamic-light overlay draws to computed screen-space scissor rectangles; auto enables this in GLx RC/stress profiles." );
+	state->projectedProgram = RI().Cvar_Get( "r_glxDlightProjectedProgram", "0",
+		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->projectedProgram,
+		"Evaluate compact projected-light uniform records in the GLx GLSL dlight program; experimental and off by default while legacy projected-light fallback remains authoritative." );
 }
 
 static void GLX_Dlight_Shutdown( DlightState *state, qboolean deletePrograms )
@@ -995,6 +1664,7 @@ static qboolean GLX_Dlight_BindProgram( DlightState *state, qboolean linear,
 	GLX_Dlight_SetUniform4fv( state, program->shadowAtlasUniform, shadowAtlas );
 	GLX_Dlight_SetUniform4fv( state, program->shadowDepthUniform, shadowDepth );
 	GLX_Dlight_SetUniform4fv( state, program->shadowFilterUniform, shadowFilter );
+	GLX_Dlight_ClearProjectedShaderInput( state );
 	if ( program->fogEyeTUniform >= 0 ) {
 		state->fns.Uniform1f( program->fogEyeTUniform, fogEyeT );
 	}
@@ -1056,6 +1726,58 @@ static void GLX_Dlight_PrintInfo( const DlightState &state )
 		state.scissorFallbacks,
 		state.scissorPixels,
 		state.scissorViewportPixels );
+	RI().Printf( PRINT_ALL, "  dlight projected lists: sources %i/%u frames, surface builds %u complete/%u incomplete, packet lists %u active, lookups %u/%u hits, packet builds %u complete/%u incomplete, packet IR %u/%u rejected, dynamic builds %u complete/%u incomplete, dynamic IR %u/%u rejected, dropped masks 0x%08x/0x%08x\n",
+		state.projectedSourceRecordCount,
+		state.projectedSourceFrames,
+		state.projectedListComplete,
+		state.projectedListIncomplete,
+		state.projectedPacketActivePackets,
+		state.projectedPacketItemLookupHits,
+		state.projectedPacketItemLookups,
+		state.projectedPacketListComplete,
+		state.projectedPacketListIncomplete,
+		state.projectedPacketIRProducts,
+		state.projectedPacketIRRejected,
+		state.projectedDynamicListComplete,
+		state.projectedDynamicListIncomplete,
+		state.projectedDynamicIRProducts,
+		state.projectedDynamicIRRejected,
+		state.projectedListDroppedMask,
+		state.projectedPacketDroppedMask );
+	RI().Printf( PRINT_ALL, "  dlight projected shader inputs: inputs %u/%u records, world %u, dynamic %u, programmable %u, fallback %u, invalid %u\n",
+		state.projectedShaderInputs,
+		state.projectedShaderInputRecords,
+		state.projectedShaderWorldPackets,
+		state.projectedShaderDynamicDraws,
+		state.projectedShaderProgrammableInputs,
+		state.projectedShaderFallbackInputs,
+		state.projectedShaderInvalidInputs );
+	RI().Printf( PRINT_ALL, "  dlight projected shader uniforms: attempts %u, binds %u, failures %u, records %u, truncated %u, executable %u, suppressed %u, world %u/%u, dynamic %u/%u, limit-suppressed %u, limit %i\n",
+		state.projectedShaderUniformAttempts,
+		state.projectedShaderUniformBinds,
+		state.projectedShaderUniformFailures,
+		state.projectedShaderUniformRecords,
+		state.projectedShaderUniformTruncated,
+		state.projectedShaderUniformExecutableBinds,
+		state.projectedShaderUniformSuppressedBinds,
+		state.projectedShaderUniformWorldExecutableBinds,
+		state.projectedShaderUniformWorldBinds,
+		state.projectedShaderUniformDynamicExecutableBinds,
+		state.projectedShaderUniformDynamicBinds,
+		state.projectedShaderUniformLimitSuppressions,
+		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT );
+	RI().Printf( PRINT_ALL, "  dlight projected shader stream: attempts %u, uploads %u, failures %u, skipped %u, records %u, bytes %llu, persistent %u, world %u, dynamic %u, last %u/%u\n",
+		state.projectedShaderStreamAttempts,
+		state.projectedShaderStreamUploads,
+		state.projectedShaderStreamFailures,
+		state.projectedShaderStreamSkips,
+		state.projectedShaderStreamRecords,
+		state.projectedShaderStreamBytes,
+		state.projectedShaderStreamPersistentUploads,
+		state.projectedShaderStreamWorldUploads,
+		state.projectedShaderStreamDynamicUploads,
+		state.projectedShaderStreamLastOffset,
+		state.projectedShaderStreamLastBytes );
 }
 
 static const char *GLX_Module_ProfileName( GlxProfile profile )
@@ -1331,6 +2053,46 @@ static WorldPacket GLX_Module_WorldPacketIR( int packetIndex, int sort,
 	return packet;
 }
 
+static WorldPacket GLX_Module_StaticWorldPacketIR(
+	const StaticWorldPacketStats &staticPacket, int packetIndex,
+	const ProjectedDlightListRef &projectedDlights )
+{
+	WorldPacket packet = GLX_Module_WorldPacketIR( packetIndex, staticPacket.sort,
+		staticPacket.surfaces, staticPacket.vertexes, staticPacket.indexes,
+		staticPacket.firstItem, staticPacket.itemCount, staticPacket.vertexOffset,
+		staticPacket.vertexBytes, staticPacket.indexOffset, staticPacket.indexBytes,
+		staticPacket.shaderStagePasses, staticPacket.flags );
+
+	packet.projectedDlights = projectedDlights;
+	return packet;
+}
+
+static int GLX_Module_StaticWorldPacketForItemRange(
+	const StaticWorldStats &staticWorld, int firstItem, int itemCount )
+{
+	int packetIndex;
+	const long long lastItem =
+		static_cast<long long>( firstItem ) + static_cast<long long>( itemCount ) - 1;
+
+	if ( firstItem <= 0 || itemCount <= 0 || lastItem < firstItem ||
+		lastItem > GLX_STATIC_WORLD_ITEM_LOOKUP_LIMIT ) {
+		return -1;
+	}
+
+	packetIndex = staticWorld.itemToPacket[firstItem];
+	if ( packetIndex < 0 || packetIndex >= staticWorld.packetCount ||
+		packetIndex >= GLX_STATIC_WORLD_PACKET_LIMIT ) {
+		return -1;
+	}
+
+	for ( int item = firstItem + 1; item <= static_cast<int>( lastItem ); item++ ) {
+		if ( staticWorld.itemToPacket[item] != packetIndex ) {
+			return -1;
+		}
+	}
+	return packetIndex;
+}
+
 static OutputTransform GLX_Module_OutputTransformIR( const PostProcessState &postprocess )
 {
 	if ( GLX_RenderIR_ValidateOutputTransform( postprocess.lastOutput ) ) {
@@ -1409,6 +2171,9 @@ public:
 	qboolean DrawElementsClassified( unsigned int mode, int count, unsigned int type,
 		const void *indices, int legacyReason, int profilerPath,
 		int materialFlags, unsigned int categoryMask );
+	qboolean DrawElementsClassifiedProjectedDlights( unsigned int mode, int count,
+		unsigned int type, const void *indices, int legacyReason, int profilerPath,
+		int materialFlags, unsigned int categoryMask, unsigned int lightMask );
 	qboolean DrawArraysClassified( unsigned int mode, int first, int count,
 		int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask );
 	void RecordDraw( int indexes, int path );
@@ -1449,6 +2214,8 @@ public:
 	void RecordDlightCull( int legacyVertexes, int legacyIndexes );
 	void RecordDlightScissor( qboolean computed, qboolean applied, int x, int y,
 		int width, int height, int viewportWidth, int viewportHeight );
+	void RecordProjectedDlights( const glxProjectedDlightRecord_t *records, int count );
+	void RecordProjectedDlightList( int itemIndex, unsigned int lightMask );
 	qboolean StreamDrawEnabled() const;
 	qboolean StreamDrawMultitextureEnabled() const;
 	qboolean StreamDrawFogEnabled() const;
@@ -1529,6 +2296,19 @@ public:
 		unsigned int indexType, int indexBytes, const char *shaderName, int sort, qboolean arenaBound );
 	int StaticWorldDrawDeviceRunsFiltered( int runCount, const int *counts, const void *const *offsets,
 		const int *firstItems, const int *itemCounts, int *drawnRuns, unsigned int indexType, int indexBytes,
+		const char *shaderName, int sort, qboolean arenaBound );
+	qboolean PrepareStaticWorldProjectedDlightRun( int firstItem, int itemCount,
+		WorldPacket *packet, ProjectedDlightShaderInput *shaderInput );
+	void StageProjectedDlightShaderInput( const ProjectedDlightShaderInput &shaderInput );
+	void BindStaticWorldProjectedDlightRun( const WorldPacket &packet,
+		const ProjectedDlightShaderInput &shaderInput );
+	void ConsumeStaticWorldProjectedDlightRun( const WorldPacket &packet,
+		const ProjectedDlightShaderInput &shaderInput );
+	void ConsumeStaticWorldProjectedDlightRun( int firstItem, int itemCount );
+	qboolean StaticWorldProjectedDlightSplitActive();
+	int StaticWorldDrawProjectedDlightRunsFiltered( int runCount, const int *counts,
+		const void *const *offsets, const int *firstItems, const int *itemCounts,
+		int *drawnRuns, unsigned int indexType, int indexBytes,
 		const char *shaderName, int sort, qboolean arenaBound );
 	void RecordStaticWorldQueue( int queuedItems, int queuedVertexes, int queuedIndexes,
 		int deviceRuns, int deviceIndexes, int softIndexes, int largestDeviceRunIndexes );
@@ -1724,6 +2504,7 @@ void RendererModule::FrameComplete()
 	GLX_Material_FrameComplete( &material_ );
 	GLX_PostShader_FrameComplete( &postShader_ );
 	GLX_Stream_FrameComplete( &stream_ );
+	GLX_Dlight_ClearProjectedFrame( &dlight_ );
 	GLX_Debug_UpdateCvars( &debug_, caps_ );
 	GLX_Stream_UpdateCvars( &stream_, caps_ );
 }
@@ -2056,6 +2837,57 @@ void RendererModule::PrintCaps() const
 		dlight_.scissorFallbacks,
 		dlight_.scissorPixels,
 		dlight_.scissorViewportPixels );
+	RI().Printf( PRINT_ALL, "  dlight projected lists compact: sources %i, surface %u/%u, packet active %u, lookup %u/%u, packet %u/%u, packet IR %u/%u rejected, dynamic %u/%u, dynamic IR %u/%u rejected, dropped 0x%08x/0x%08x\n",
+		dlight_.projectedSourceRecordCount,
+		dlight_.projectedListComplete,
+		dlight_.projectedListIncomplete,
+		dlight_.projectedPacketActivePackets,
+		dlight_.projectedPacketItemLookupHits,
+		dlight_.projectedPacketItemLookups,
+		dlight_.projectedPacketListComplete,
+		dlight_.projectedPacketListIncomplete,
+		dlight_.projectedPacketIRProducts,
+		dlight_.projectedPacketIRRejected,
+		dlight_.projectedDynamicListComplete,
+		dlight_.projectedDynamicListIncomplete,
+		dlight_.projectedDynamicIRProducts,
+		dlight_.projectedDynamicIRRejected,
+		dlight_.projectedListDroppedMask,
+		dlight_.projectedPacketDroppedMask );
+	RI().Printf( PRINT_ALL, "  dlight projected shader compact: inputs %u/%u, world %u, dynamic %u, programmable %u, fallback %u, invalid %u\n",
+		dlight_.projectedShaderInputs,
+		dlight_.projectedShaderInputRecords,
+		dlight_.projectedShaderWorldPackets,
+		dlight_.projectedShaderDynamicDraws,
+		dlight_.projectedShaderProgrammableInputs,
+		dlight_.projectedShaderFallbackInputs,
+		dlight_.projectedShaderInvalidInputs );
+	RI().Printf( PRINT_ALL, "  dlight projected shader uniform compact: attempts %u, binds %u, failures %u, records %u, truncated %u, executable %u, suppressed %u, world %u/%u, dynamic %u/%u, limit-suppressed %u, limit %i\n",
+		dlight_.projectedShaderUniformAttempts,
+		dlight_.projectedShaderUniformBinds,
+		dlight_.projectedShaderUniformFailures,
+		dlight_.projectedShaderUniformRecords,
+		dlight_.projectedShaderUniformTruncated,
+		dlight_.projectedShaderUniformExecutableBinds,
+		dlight_.projectedShaderUniformSuppressedBinds,
+		dlight_.projectedShaderUniformWorldExecutableBinds,
+		dlight_.projectedShaderUniformWorldBinds,
+		dlight_.projectedShaderUniformDynamicExecutableBinds,
+		dlight_.projectedShaderUniformDynamicBinds,
+		dlight_.projectedShaderUniformLimitSuppressions,
+		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT );
+	RI().Printf( PRINT_ALL, "  dlight projected shader stream compact: attempts %u, uploads %u, failures %u, skipped %u, records %u, bytes %llu, persistent %u, world %u, dynamic %u, last %u/%u\n",
+		dlight_.projectedShaderStreamAttempts,
+		dlight_.projectedShaderStreamUploads,
+		dlight_.projectedShaderStreamFailures,
+		dlight_.projectedShaderStreamSkips,
+		dlight_.projectedShaderStreamRecords,
+		dlight_.projectedShaderStreamBytes,
+		dlight_.projectedShaderStreamPersistentUploads,
+		dlight_.projectedShaderStreamWorldUploads,
+		dlight_.projectedShaderStreamDynamicUploads,
+		dlight_.projectedShaderStreamLastOffset,
+		dlight_.projectedShaderStreamLastBytes );
 }
 
 void RendererModule::PrintInfo() const
@@ -2262,12 +3094,16 @@ void RendererModule::PrintFrameCounters() const
 		profiler_.blendMaterialStages,
 		profiler_.texmodMaterialStages,
 		profiler_.environmentMaterialStages );
-	RI().Printf( PRINT_ALL, "glx: render IR executor %s/%s passes %u world %u dynamic %u draws/%u idx/%u verts materials %u uploads %u post %u outputs %u rejects %u\n",
+	RI().Printf( PRINT_ALL, "glx: render IR executor %s/%s passes %u world %u projected %u/%u dynamic %u projected dynamic %u/%u draws/%u idx/%u verts materials %u uploads %u post %u outputs %u rejects %u\n",
 		GLX_Executor_TierName( executor_ ),
 		GLX_Executor_ModeName( executor_ ),
 		executor_.framePasses,
 		executor_.worldPackets,
+		executor_.worldPacketsWithProjectedDlights,
+		executor_.worldPacketProjectedDlightRecords,
 		executor_.dynamicDraws,
+		executor_.dynamicDrawsWithProjectedDlights,
+		executor_.dynamicDrawProjectedDlightRecords,
 		executor_.dynamicIndexes,
 		executor_.dynamicVertices,
 		executor_.materialPlans,
@@ -2632,6 +3468,60 @@ void RendererModule::PrintFrameCounters() const
 		dlight_.scissorFallbacks,
 		dlight_.scissorPixels,
 		dlight_.scissorViewportPixels );
+	RI().Printf( PRINT_ALL, "glx: dlight projected lists sources %i/%u surface %u/%u packet active %u lookup %u/%u packet %u/%u copied %u dropped %u ir %u/%u dynamic %u/%u dynir %u/%u masks 0x%08x/0x%08x\n",
+		dlight_.projectedSourceRecordCount,
+		dlight_.projectedSourceFrames,
+		dlight_.projectedListComplete,
+		dlight_.projectedListIncomplete,
+		dlight_.projectedPacketActivePackets,
+		dlight_.projectedPacketItemLookupHits,
+		dlight_.projectedPacketItemLookups,
+		dlight_.projectedPacketListComplete,
+		dlight_.projectedPacketListIncomplete,
+		dlight_.projectedPacketListRecordCopies,
+		dlight_.projectedPacketListDropped,
+		dlight_.projectedPacketIRProducts,
+		dlight_.projectedPacketIRRejected,
+		dlight_.projectedDynamicListComplete,
+		dlight_.projectedDynamicListIncomplete,
+		dlight_.projectedDynamicIRProducts,
+		dlight_.projectedDynamicIRRejected,
+		dlight_.projectedListDroppedMask,
+		dlight_.projectedPacketDroppedMask );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader inputs %u/%u world %u dynamic %u programmable %u fallback %u invalid %u\n",
+		dlight_.projectedShaderInputs,
+		dlight_.projectedShaderInputRecords,
+		dlight_.projectedShaderWorldPackets,
+		dlight_.projectedShaderDynamicDraws,
+		dlight_.projectedShaderProgrammableInputs,
+		dlight_.projectedShaderFallbackInputs,
+		dlight_.projectedShaderInvalidInputs );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader uniforms attempts %u binds %u failures %u records %u truncated %u executable %u suppressed %u world %u/%u dynamic %u/%u limit-suppressed %u limit %i\n",
+		dlight_.projectedShaderUniformAttempts,
+		dlight_.projectedShaderUniformBinds,
+		dlight_.projectedShaderUniformFailures,
+		dlight_.projectedShaderUniformRecords,
+		dlight_.projectedShaderUniformTruncated,
+		dlight_.projectedShaderUniformExecutableBinds,
+		dlight_.projectedShaderUniformSuppressedBinds,
+		dlight_.projectedShaderUniformWorldExecutableBinds,
+		dlight_.projectedShaderUniformWorldBinds,
+		dlight_.projectedShaderUniformDynamicExecutableBinds,
+		dlight_.projectedShaderUniformDynamicBinds,
+		dlight_.projectedShaderUniformLimitSuppressions,
+		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader stream attempts %u uploads %u failures %u skipped %u records %u bytes %llu persistent %u world %u dynamic %u last %u/%u\n",
+		dlight_.projectedShaderStreamAttempts,
+		dlight_.projectedShaderStreamUploads,
+		dlight_.projectedShaderStreamFailures,
+		dlight_.projectedShaderStreamSkips,
+		dlight_.projectedShaderStreamRecords,
+		dlight_.projectedShaderStreamBytes,
+		dlight_.projectedShaderStreamPersistentUploads,
+		dlight_.projectedShaderStreamWorldUploads,
+		dlight_.projectedShaderStreamDynamicUploads,
+		dlight_.projectedShaderStreamLastOffset,
+		dlight_.projectedShaderStreamLastBytes );
 	RI().Printf( PRINT_ALL, "glx: stream categories entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, dlight %u/%u, special %u/%u\n",
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_ENTITY],
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_ENTITY],
@@ -2862,8 +3752,25 @@ qboolean RendererModule::DrawElementsClassified( unsigned int mode, int count, u
 	const void *indices, int legacyReason, int profilerPath, int materialFlags,
 	unsigned int categoryMask )
 {
+	return DrawElementsClassifiedProjectedDlights( mode, count, type, indices,
+		legacyReason, profilerPath, materialFlags, categoryMask, 0u );
+}
+
+qboolean RendererModule::DrawElementsClassifiedProjectedDlights( unsigned int mode,
+	int count, unsigned int type, const void *indices, int legacyReason,
+	int profilerPath, int materialFlags, unsigned int categoryMask,
+	unsigned int lightMask )
+{
 	DynamicDraw draw = GLX_Module_IndexedDrawIR( mode, count, type, indices,
 		legacyReason, profilerPath, materialFlags, categoryMask );
+	ProjectedDlightShaderInput projectedShaderInput {};
+	qboolean hasProjectedShaderInput = qfalse;
+	qboolean projectedProgrammable = qfalse;
+
+	if ( draw.role == DynamicDrawRole::DynamicLight && lightMask ) {
+		draw.projectedDlights = GLX_Dlight_BuildProjectedDynamicDlightList(
+			&dlight_, lightMask );
+	}
 
 	if ( legacyReason >= 0 ) {
 		GLX_Profiler_RecordLegacyDelegation( &profiler_, legacyReason, count );
@@ -2872,8 +3779,32 @@ qboolean RendererModule::DrawElementsClassified( unsigned int mode, int count, u
 		}
 	}
 
+	if ( draw.projectedDlights.recordCount > 0 ) {
+		projectedProgrammable = GLX_Dlight_ProjectedShaderProgrammable( dlight_,
+			caps_.tier );
+		projectedShaderInput = GLX_RenderIR_MakeProjectedDlightShaderInput( draw,
+			projectedProgrammable );
+		hasProjectedShaderInput = qtrue;
+		if ( projectedProgrammable &&
+			GLX_RenderIR_TierSupportsDynamicDraw( caps_.tier, draw ) ) {
+			if ( GLX_Dlight_BindProjectedShaderInput( &dlight_,
+					projectedShaderInput ) ) {
+				StageProjectedDlightShaderInput( projectedShaderInput );
+			}
+		}
+	}
+
 	if ( !GLX_Executor_ExecuteDynamicDraw( &executor_, draw ) ) {
+		if ( draw.projectedDlights.recordCount > 0 ) {
+			dlight_.projectedDynamicIRRejected++;
+		}
 		return qfalse;
+	}
+	if ( draw.projectedDlights.recordCount > 0 ) {
+		dlight_.projectedDynamicIRProducts++;
+		if ( hasProjectedShaderInput ) {
+			GLX_Dlight_RecordProjectedShaderInput( &dlight_, projectedShaderInput );
+		}
 	}
 	if ( profilerPath >= 0 ) {
 		GLX_Profiler_RecordDraw( &profiler_, count, profilerPath );
@@ -3049,6 +3980,18 @@ void RendererModule::RecordDlightScissor( qboolean computed, qboolean applied,
 	(void)y;
 	GLX_Dlight_RecordScissor( &dlight_, computed, applied, width, height,
 		viewportWidth, viewportHeight );
+}
+
+void RendererModule::RecordProjectedDlights( const glxProjectedDlightRecord_t *records,
+	int count )
+{
+	GLX_Dlight_RecordProjectedDlights( &dlight_, records, count );
+}
+
+void RendererModule::RecordProjectedDlightList( int itemIndex, unsigned int lightMask )
+{
+	GLX_Dlight_RecordProjectedDlightList( &dlight_, &staticWorld_, itemIndex,
+		lightMask );
 }
 
 qboolean RendererModule::StreamDrawEnabled() const
@@ -3470,13 +4413,212 @@ GLuint RendererModule::StaticWorldArenaIndexBuffer()
 	return GLX_StaticWorld_ArenaIndexBufferForDraw( &staticWorld_ );
 }
 
+qboolean RendererModule::PrepareStaticWorldProjectedDlightRun( int firstItem,
+	int itemCount, WorldPacket *packet, ProjectedDlightShaderInput *shaderInput )
+{
+	int packetIndex;
+	ProjectedDlightListRef projectedDlights {};
+
+	if ( packet ) {
+		*packet = {};
+	}
+	if ( shaderInput ) {
+		*shaderInput = {};
+	}
+	if ( !packet || !shaderInput ) {
+		return qfalse;
+	}
+
+	packetIndex = GLX_Module_StaticWorldPacketForItemRange( staticWorld_, firstItem,
+		itemCount );
+	if ( packetIndex < 0 ) {
+		return qfalse;
+	}
+
+	projectedDlights = dlight_.projectedPacketListRefs[packetIndex];
+	if ( projectedDlights.recordCount <= 0 ) {
+		return qfalse;
+	}
+
+	*packet = GLX_Module_StaticWorldPacketIR( staticWorld_.packets[packetIndex],
+		packetIndex, projectedDlights );
+	*shaderInput = GLX_RenderIR_MakeProjectedDlightShaderInput( *packet,
+		GLX_Dlight_ProjectedShaderProgrammable( dlight_, caps_.tier ) );
+	return GLX_RenderIR_ValidateProjectedDlightShaderInput( *shaderInput );
+}
+
+void RendererModule::StageProjectedDlightShaderInput(
+	const ProjectedDlightShaderInput &shaderInput )
+{
+	ProjectedDlightStreamRecord records[GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT] {};
+	StreamReservation reservation {};
+	ProjectedDlightShaderStreamPlan streamPlan {};
+
+	if ( !GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) ||
+		!shaderInput.programmable || !GLX_Dlight_ProjectedProgramEnabled( dlight_ ) ) {
+		return;
+	}
+
+	dlight_.projectedShaderStreamAttempts++;
+	streamPlan = GLX_RenderIR_PlanProjectedDlightStreamUpload( shaderInput,
+		caps_.tier,
+		stream_.ready && stream_.persistentMapped &&
+			stream_.strategy == StreamStrategy::PersistentMapped ? qtrue : qfalse,
+		static_cast<unsigned int>( sizeof( ProjectedDlightStreamRecord ) ),
+		GLX_PROJECTED_DLIGHT_STREAM_ALIGNMENT );
+	if ( !streamPlan.upload ) {
+		dlight_.projectedShaderStreamSkips++;
+		return;
+	}
+
+	if ( !GLX_Dlight_FillProjectedStreamRecords( &dlight_, shaderInput, records ) ) {
+		dlight_.projectedShaderStreamFailures++;
+		return;
+	}
+
+	if ( !GLX_Stream_Reserve( &stream_, streamPlan.uploadPlan.bytes,
+			static_cast<size_t>( streamPlan.uploadPlan.alignment ), &reservation ) ) {
+		dlight_.projectedShaderStreamFailures++;
+		return;
+	}
+
+	if ( !GLX_Stream_Upload( &stream_, &reservation, records,
+			streamPlan.uploadPlan.bytes ) ) {
+		dlight_.projectedShaderStreamFailures++;
+		GLX_Stream_Commit( &stream_, &reservation );
+		GLX_Stream_RecordDlightReservation( &stream_, reservation );
+		return;
+	}
+
+	GLX_Stream_Commit( &stream_, &reservation );
+	GLX_Stream_RecordDlightReservation( &stream_, reservation );
+	dlight_.projectedShaderStreamUploads++;
+	dlight_.projectedShaderStreamRecords +=
+		static_cast<unsigned int>( shaderInput.projectedDlights.recordCount );
+	dlight_.projectedShaderStreamBytes +=
+		static_cast<unsigned long long>( streamPlan.uploadPlan.bytes );
+	dlight_.projectedShaderStreamLastOffset =
+		static_cast<unsigned int>( reservation.offset > ~0u ? ~0u : reservation.offset );
+	dlight_.projectedShaderStreamLastBytes =
+		static_cast<unsigned int>( reservation.bytes > ~0u ? ~0u : reservation.bytes );
+	if ( reservation.strategy == StreamStrategy::PersistentMapped ) {
+		dlight_.projectedShaderStreamPersistentUploads++;
+	}
+	if ( shaderInput.target == ProjectedDlightShaderTarget::WorldPacket ) {
+		dlight_.projectedShaderStreamWorldUploads++;
+	} else if ( shaderInput.target == ProjectedDlightShaderTarget::DynamicDraw ) {
+		dlight_.projectedShaderStreamDynamicUploads++;
+	}
+}
+
+void RendererModule::BindStaticWorldProjectedDlightRun( const WorldPacket &packet,
+	const ProjectedDlightShaderInput &shaderInput )
+{
+	if ( !GLX_Dlight_CurrentProgram( &dlight_ ) ) {
+		return;
+	}
+	if ( !GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) ||
+		!shaderInput.programmable ||
+		!GLX_RenderIR_TierSupportsWorldPacket( caps_.tier, packet ) ) {
+		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+		return;
+	}
+
+	if ( !GLX_Dlight_BindProjectedShaderInput( &dlight_, shaderInput ) ) {
+		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+	} else {
+		StageProjectedDlightShaderInput( shaderInput );
+	}
+}
+
+void RendererModule::ConsumeStaticWorldProjectedDlightRun( const WorldPacket &packet,
+	const ProjectedDlightShaderInput &shaderInput )
+{
+	if ( !GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) ) {
+		return;
+	}
+
+	if ( GLX_Executor_ConsumeWorldPacket( &executor_, packet ) ) {
+		dlight_.projectedPacketIRProducts++;
+		GLX_Dlight_RecordProjectedShaderInput( &dlight_, shaderInput );
+	} else {
+		dlight_.projectedPacketIRRejected++;
+	}
+}
+
+void RendererModule::ConsumeStaticWorldProjectedDlightRun( int firstItem, int itemCount )
+{
+	WorldPacket packet {};
+	ProjectedDlightShaderInput shaderInput {};
+
+	if ( PrepareStaticWorldProjectedDlightRun( firstItem, itemCount, &packet,
+		&shaderInput ) ) {
+		ConsumeStaticWorldProjectedDlightRun( packet, shaderInput );
+	}
+}
+
+qboolean RendererModule::StaticWorldProjectedDlightSplitActive()
+{
+	return GLX_Dlight_CurrentProgram( &dlight_ ) &&
+		GLX_Dlight_ProjectedProgramEnabled( dlight_ ) &&
+		GLX_Dlight_ProjectedShaderProgrammable( dlight_, caps_.tier ) ? qtrue : qfalse;
+}
+
+int RendererModule::StaticWorldDrawProjectedDlightRunsFiltered( int runCount,
+	const int *counts, const void *const *offsets, const int *firstItems,
+	const int *itemCounts, int *drawnRuns, unsigned int indexType, int indexBytes,
+	const char *shaderName, int sort, qboolean arenaBound )
+{
+	int drawnCount = 0;
+
+	if ( runCount <= 0 || !counts || !offsets || !firstItems || !itemCounts ||
+		!drawnRuns || !StaticWorldProjectedDlightSplitActive() ) {
+		return 0;
+	}
+
+	for ( int i = 0; i < runCount; i++ ) {
+		WorldPacket projectedPacket {};
+		ProjectedDlightShaderInput projectedShaderInput {};
+		const int offsetBytes = static_cast<int>(
+			reinterpret_cast<intptr_t>( offsets[i] ) );
+
+		if ( drawnRuns[i] || counts[i] <= 0 ||
+			!PrepareStaticWorldProjectedDlightRun( firstItems[i], itemCounts[i],
+				&projectedPacket, &projectedShaderInput ) ) {
+			continue;
+		}
+
+		if ( StaticWorldDrawDeviceRun( counts[i], offsetBytes, firstItems[i],
+			itemCounts[i], indexType, indexBytes, shaderName, sort, arenaBound ) ) {
+			drawnRuns[i] = 1;
+			drawnCount++;
+		}
+	}
+
+	return drawnCount;
+}
+
 qboolean RendererModule::StaticWorldDrawDeviceRun( int indexes, int offsetBytes,
 	int firstItem, int itemCount, unsigned int indexType, int indexBytes,
 	const char *shaderName, int sort, qboolean arenaBound )
 {
+	WorldPacket projectedPacket {};
+	ProjectedDlightShaderInput projectedShaderInput {};
+	qboolean hasProjectedShaderInput = PrepareStaticWorldProjectedDlightRun(
+		firstItem, itemCount, &projectedPacket, &projectedShaderInput );
+
+	if ( hasProjectedShaderInput ) {
+		BindStaticWorldProjectedDlightRun( projectedPacket, projectedShaderInput );
+	} else if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {
+		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+	}
+
 	if ( GLX_StaticWorld_DrawDeviceRun( &staticWorld_, indexes, offsetBytes,
 		firstItem, itemCount, static_cast<GLenum>( indexType ), indexBytes,
 		shaderName, sort, arenaBound ) ) {
+		if ( hasProjectedShaderInput ) {
+			ConsumeStaticWorldProjectedDlightRun( projectedPacket, projectedShaderInput );
+		}
 		GLX_Profiler_RecordDraw( &profiler_, indexes, GLX_DRAW_VBO_DEVICE );
 		return qtrue;
 	}
@@ -3490,11 +4632,18 @@ qboolean RendererModule::StaticWorldDrawDeviceRuns( int runCount, const int *cou
 {
 	unsigned int totalIndexes = 0;
 
+	if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {
+		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+	}
+
 	if ( GLX_StaticWorld_DrawDeviceRuns( &staticWorld_, runCount, counts, offsets, firstItems, itemCounts,
 		static_cast<GLenum>( indexType ), indexBytes, shaderName, sort, arenaBound ) ) {
 		for ( int i = 0; i < runCount; i++ ) {
 			if ( counts && counts[i] > 0 ) {
 				totalIndexes += static_cast<unsigned int>( counts[i] );
+			}
+			if ( firstItems && itemCounts ) {
+				ConsumeStaticWorldProjectedDlightRun( firstItems[i], itemCounts[i] );
 			}
 		}
 		GLX_Profiler_RecordDraw( &profiler_, static_cast<int>( totalIndexes ), GLX_DRAW_VBO_DEVICE );
@@ -3523,6 +4672,17 @@ int RendererModule::StaticWorldDrawDeviceRunsFiltered( int runCount, const int *
 	int drawnIndexes = 0;
 	int drawnRunsCount;
 
+	drawnRunsCount = StaticWorldDrawProjectedDlightRunsFiltered( runCount, counts,
+		offsets, firstItems, itemCounts, drawnRuns, indexType, indexBytes,
+		shaderName, sort, arenaBound );
+	if ( drawnRunsCount > 0 ) {
+		return drawnRunsCount;
+	}
+
+	if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {
+		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+	}
+
 	drawnRunsCount = GLX_StaticWorld_DrawDeviceRunsFiltered( &staticWorld_, runCount, counts, offsets,
 		firstItems, itemCounts, drawnRuns, static_cast<GLenum>( indexType ), indexBytes,
 		shaderName, sort, arenaBound );
@@ -3535,6 +4695,9 @@ int RendererModule::StaticWorldDrawDeviceRunsFiltered( int runCount, const int *
 	for ( int i = 0; i < runCount; i++ ) {
 		if ( drawnRuns && drawnRuns[i] && counts && counts[i] > 0 ) {
 			drawnIndexes += counts[i];
+			if ( firstItems && itemCounts ) {
+				ConsumeStaticWorldProjectedDlightRun( firstItems[i], itemCounts[i] );
+			}
 		}
 	}
 	GLX_Profiler_RecordDraw( &profiler_, drawnIndexes, GLX_DRAW_VBO_DEVICE );
@@ -3667,6 +4830,15 @@ extern "C" qboolean GLX_Renderer_DrawElementsClassified( unsigned int mode, int 
 		profilerPath, materialFlags, categoryMask );
 }
 
+extern "C" qboolean GLX_Renderer_DrawElementsClassifiedProjectedDlights(
+	unsigned int mode, int count, unsigned int type, const void *indices,
+	int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask,
+	unsigned int lightMask )
+{
+	return glx::g_module.DrawElementsClassifiedProjectedDlights( mode, count, type,
+		indices, legacyReason, profilerPath, materialFlags, categoryMask, lightMask );
+}
+
 extern "C" qboolean GLX_Renderer_DrawArraysClassified( unsigned int mode, int first, int count,
 	int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask )
 {
@@ -3787,6 +4959,18 @@ extern "C" void GLX_Renderer_RecordDlightScissor( qboolean computed,
 {
 	glx::g_module.RecordDlightScissor( computed, applied, x, y, width, height,
 		viewportWidth, viewportHeight );
+}
+
+extern "C" void GLX_Renderer_RecordProjectedDlights(
+	const glxProjectedDlightRecord_t *records, int count )
+{
+	glx::g_module.RecordProjectedDlights( records, count );
+}
+
+extern "C" void GLX_Renderer_RecordProjectedDlightList( int itemIndex,
+	unsigned int lightMask )
+{
+	glx::g_module.RecordProjectedDlightList( itemIndex, lightMask );
 }
 
 extern "C" qboolean GLX_Renderer_StreamDrawEnabled( void )

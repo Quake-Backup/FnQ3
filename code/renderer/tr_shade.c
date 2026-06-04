@@ -389,7 +389,8 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 }
 
 static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input,
-	int numIndexes, const glIndex_t *indexes, const float *texCoords, const float *colors )
+	int numIndexes, const glIndex_t *indexes, const float *texCoords,
+	const float *colors, unsigned int lightMask )
 {
 	glxStreamReservation_t reservation;
 	qboolean ok = qtrue;
@@ -479,9 +480,11 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 	qglColorPointer( 4, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
 
-	if ( !GLX_CompatDrawElementsClassified( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
+	if ( !GLX_CompatDrawElementsClassifiedProjectedDlights( GL_TRIANGLES,
+		numIndexes, GL_INDEX_TYPE,
 		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
-		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, materialFlags, categoryMask ) ) {
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, materialFlags,
+		categoryMask, lightMask ) ) {
 		ok = qfalse;
 	}
 
@@ -929,7 +932,7 @@ static void DrawMultitextured( const shaderCommands_t *input, int stage ) {
 #ifdef USE_LEGACY_DLIGHTS
 #ifdef RENDERER_GLX
 static qboolean GLX_ProjectDlightScissorRect( const glIndex_t *indexes,
-	int numIndexes, int *x, int *y, int *width, int *height )
+	int numIndexes, byte *visited, int *x, int *y, int *width, int *height )
 {
 	int i;
 	int minX = 0x7fffffff;
@@ -940,11 +943,12 @@ static qboolean GLX_ProjectDlightScissorRect( const glIndex_t *indexes,
 	int scissorX1, scissorY1;
 	vec4_t eye, clip, normalized, window;
 
-	if ( !indexes || numIndexes <= 0 || !x || !y || !width || !height ||
+	if ( !indexes || numIndexes <= 0 || !visited || !x || !y || !width || !height ||
 		backEnd.viewParms.scissorWidth <= 0 ||
 		backEnd.viewParms.scissorHeight <= 0 ) {
 		return qfalse;
 	}
+	Com_Memset( visited, 0, tess.numVertexes * sizeof( *visited ) );
 
 	for ( i = 0; i < numIndexes; i++ ) {
 		unsigned int idx = indexes[i];
@@ -953,6 +957,10 @@ static qboolean GLX_ProjectDlightScissorRect( const glIndex_t *indexes,
 		if ( idx >= (unsigned int)tess.numVertexes ) {
 			return qfalse;
 		}
+		if ( visited[idx] ) {
+			continue;
+		}
+		visited[idx] = 1;
 
 		R_TransformModelToClip( tess.xyz[idx], backEnd.or.modelMatrix,
 			backEnd.viewParms.projectionMatrix, eye, clip );
@@ -1021,11 +1029,10 @@ static void ProjectDlightTexture( void ) {
 	float	*texCoords;
 	float	*colors;
 	qboolean glxStreamedDraw;
-	byte	clipBits[SHADER_MAX_VERTEXES];
-	float	texCoordsArray[SHADER_MAX_VERTEXES][2];
-	float	colorArray[SHADER_MAX_VERTEXES][4];
-	glIndex_t hitIndexes[SHADER_MAX_INDEXES];
+	byte	*clipBits;
+	glIndex_t *hitIndexes;
 	int		numIndexes;
+	int		lightBit;
 	int		glxLegacyLights = 0;
 	int		glxLegacySkippedLights = 0;
 	int		glxLegacyNoHitLights = 0;
@@ -1036,42 +1043,55 @@ static void ProjectDlightTexture( void ) {
 	int		glxLegacyCullIndexes = 0;
 	float	scale;
 	float	radius;
+	float	radiusHalf;
+	float	color0, color1, color2;
 	float	modulate = 0.0f;
 	const dlight_t *dl;
+	qboolean cullBackFaces;
+	qboolean legacyDlightArraysBound = qfalse;
+#ifdef RENDERER_GLX
+	qboolean glxScissorEnabled = qfalse;
+#endif
 
 	if ( !backEnd.refdef.num_dlights ) {
 		return;
 	}
+	clipBits = tess.dlightClipBits;
+	hitIndexes = tess.dlightIndexes;
+	cullBackFaces = !r_dlightBacks->integer;
+#ifdef RENDERER_GLX
+	glxScissorEnabled = GLX_CompatDlightScissorEnabled();
+#endif
 
 	for ( l = 0 ; l < backEnd.refdef.num_dlights ; l++ ) {
+		lightBit = 1 << l;
 
-		if ( !( tess.dlightBits & ( 1 << l ) ) ) {
+		if ( !( tess.dlightBits & lightBit ) ) {
 			glxLegacySkippedLights++;
 			continue;	// this surface definitely doesn't have any of this light
 		}
 		glxLegacyLights++;
 		glxLegacyVertexes += tess.numVertexes;
 		glxLegacyIndexes += tess.numIndexes;
-		texCoords = texCoordsArray[0];
-		colors = colorArray[0];
+		texCoords = (float *)tess.svars.texcoords[0];
+		tess.svars.texcoordPtr[0] = tess.svars.texcoords[0];
+		colors = tess.dlightColors[0];
 
 		dl = &backEnd.refdef.dlights[l];
 		VectorCopy( dl->transformed, origin );
 		radius = dl->radius;
+		radiusHalf = radius * 0.5f;
 		scale = 1.0f / radius;
+		color0 = dl->color[0];
+		color1 = dl->color[1];
+		color2 = dl->color[2];
 
 		for ( i = 0 ; i < tess.numVertexes ; i++, texCoords += 2, colors += 4 ) {
 			int		clip = 0;
 			vec3_t	dist;
 
-			if ( !( tess.vertexDlightBits[i] & ( 1 << l ) ) ) {
+			if ( !( tess.vertexDlightBits[i] & lightBit ) ) {
 				clipBits[i] = 63;
-				texCoords[0] = 0.0f;
-				texCoords[1] = 0.0f;
-				colors[0] = 0.0f;
-				colors[1] = 0.0f;
-				colors[2] = 0.0f;
-				colors[3] = 1.0f;
 				glxLegacyCullVertexes++;
 				continue;
 			}
@@ -1083,7 +1103,7 @@ static void ProjectDlightTexture( void ) {
 			texCoords[0] = 0.5f + dist[0] * scale;
 			texCoords[1] = 0.5f + dist[1] * scale;
 
-			if ( !r_dlightBacks->integer &&
+			if ( cullBackFaces &&
 					// dist . tess.normal[i]
 					( dist[0] * tess.normal[i][0] +
 					dist[1] * tess.normal[i][1] +
@@ -1111,7 +1131,7 @@ static void ProjectDlightTexture( void ) {
 				} else {
 					//*((int*)&dist[2]) &= 0x7FFFFFFF;
 					dist[2] = fabsf( dist[2] );
-					if ( dist[2] < radius * 0.5f ) {
+					if ( dist[2] < radiusHalf ) {
 						modulate = 1.0f;
 					} else {
 						modulate = 2.0f * (radius - dist[2]) * scale;
@@ -1119,9 +1139,9 @@ static void ProjectDlightTexture( void ) {
 				}
 			}
 			clipBits[i] = clip;
-			colors[0] = dl->color[0] * modulate;
-			colors[1] = dl->color[1] * modulate;
-			colors[2] = dl->color[2] * modulate;
+			colors[0] = color0 * modulate;
+			colors[1] = color1 * modulate;
+			colors[2] = color2 * modulate;
 			colors[3] = 1.0f;
 		}
 
@@ -1134,7 +1154,7 @@ static void ProjectDlightTexture( void ) {
 			b = tess.indexes[i+1];
 			c = tess.indexes[i+2];
 			if ( !( tess.vertexDlightBits[a] & tess.vertexDlightBits[b] &
-				tess.vertexDlightBits[c] & ( 1 << l ) ) ) {
+				tess.vertexDlightBits[c] & lightBit ) ) {
 				glxLegacyCullIndexes += 3;
 				continue;
 			}
@@ -1162,27 +1182,25 @@ static void ProjectDlightTexture( void ) {
 			int glxScissorWidth = 0;
 			int glxScissorHeight = 0;
 
-			glxScissorComputed = GLX_ProjectDlightScissorRect( hitIndexes,
-				numIndexes, &glxScissorX, &glxScissorY,
-				&glxScissorWidth, &glxScissorHeight );
-			glxScissorApplied = glxScissorComputed &&
-				GLX_CompatDlightScissorEnabled();
-			GLX_CompatRecordDlightScissor( glxScissorComputed,
-				glxScissorApplied, glxScissorX, glxScissorY,
-				glxScissorWidth, glxScissorHeight,
-				backEnd.viewParms.scissorWidth,
-				backEnd.viewParms.scissorHeight );
-			if ( glxScissorApplied ) {
-				qglScissor( glxScissorX, glxScissorY,
-					glxScissorWidth, glxScissorHeight );
+			glxScissorComputed = qfalse;
+			glxScissorApplied = qfalse;
+			if ( glxScissorEnabled ) {
+				glxScissorComputed = GLX_ProjectDlightScissorRect( hitIndexes,
+					numIndexes, clipBits, &glxScissorX, &glxScissorY,
+					&glxScissorWidth, &glxScissorHeight );
+				glxScissorApplied = glxScissorComputed;
+				GLX_CompatRecordDlightScissor( glxScissorComputed,
+					glxScissorApplied, glxScissorX, glxScissorY,
+					glxScissorWidth, glxScissorHeight,
+					backEnd.viewParms.scissorWidth,
+					backEnd.viewParms.scissorHeight );
+				if ( glxScissorApplied ) {
+					qglScissor( glxScissorX, glxScissorY,
+						glxScissorWidth, glxScissorHeight );
+				}
 			}
 #endif
 		GLX_CompatRecordDlightState( GLX_DLIGHT_STATE_LEGACY_PASS );
-		GL_ClientState( 1, CLS_NONE );
-		GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
-
-		qglTexCoordPointer( 2, GL_FLOAT, 0, texCoordsArray[0] );
-		qglColorPointer( 4, GL_FLOAT, 0, colorArray );
 
 		GL_Bind( tr.dlightImage );
 		GLX_CompatRecordDlightState( GLX_DLIGHT_STATE_TEXTURE_BIND );
@@ -1200,9 +1218,19 @@ static void ProjectDlightTexture( void ) {
 		glxStreamedDraw = qfalse;
 #ifdef RENDERER_GLX
 		glxStreamedDraw = GLX_TryStreamDrawDynamicLightPass( &tess, numIndexes,
-			hitIndexes, texCoordsArray[0], colorArray[0] );
+			hitIndexes, (const float *)tess.svars.texcoords[0],
+			tess.dlightColors[0], (unsigned int)lightBit );
 #endif
-		if ( !glxStreamedDraw ) {
+		if ( glxStreamedDraw ) {
+			legacyDlightArraysBound = qtrue;
+		} else {
+			if ( !legacyDlightArraysBound ) {
+				GL_ClientState( 1, CLS_NONE );
+				GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+				qglTexCoordPointer( 2, GL_FLOAT, 0, tess.svars.texcoords[0] );
+				qglColorPointer( 4, GL_FLOAT, 0, tess.dlightColors );
+				legacyDlightArraysBound = qtrue;
+			}
 			R_DrawElements( numIndexes, hitIndexes );
 		}
 #ifdef RENDERER_GLX

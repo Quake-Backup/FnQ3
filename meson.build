@@ -962,6 +962,18 @@ if get_option('glx-tests')
   test('fnq3_glx_header_boundary', python,
     args: files('tests/glx/glx_header_boundary_tests.py'),
   )
+  test('fnq3_glx_spot_shadow_source', python,
+    args: files('tests/glx/glx_spot_shadow_source_tests.py'),
+  )
+  test('fnq3_static_map_lights_source', python,
+    args: files('tests/static_map_lights_source_tests.py'),
+  )
+  test('fnq3_csm_shadow_cache_source', python,
+    args: files('tests/csm_shadow_cache_source_tests.py'),
+  )
+  test('fnq3_csm_plan_source', python,
+    args: files('tests/csm_plan_source_tests.py'),
+  )
 endif
 
 curl_summary = 'disabled'

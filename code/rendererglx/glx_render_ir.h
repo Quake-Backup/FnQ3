@@ -135,6 +135,37 @@ struct MaterialParameterBlock {
 	MaterialStageParameters material;
 };
 
+static constexpr int GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT = MAX_DLIGHTS;
+static constexpr int GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT =
+	GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT * 512;
+
+enum ProjectedDlightFlags : unsigned int {
+	GLX_PROJECTED_DLIGHT_ADDITIVE = 0x00000001u,
+	GLX_PROJECTED_DLIGHT_LINEAR = 0x00000002u
+};
+
+static constexpr unsigned int GLX_PROJECTED_DLIGHT_FLAGS_ALL =
+	GLX_PROJECTED_DLIGHT_ADDITIVE | GLX_PROJECTED_DLIGHT_LINEAR;
+
+struct ProjectedDlightRecord {
+	float origin[3];
+	float radius;
+	float color[3];
+	unsigned int flags;
+};
+
+struct ProjectedDlightListRef {
+	int firstRecord;
+	int recordCount;
+};
+
+struct ProjectedDlightListBuildResult {
+	ProjectedDlightListRef ref;
+	unsigned int copiedMask;
+	unsigned int droppedMask;
+	qboolean complete;
+};
+
 struct WorldPacket {
 	int packetIndex;
 	FramePassKind pass;
@@ -145,6 +176,7 @@ struct WorldPacket {
 	int itemCount;
 	int vertexOffset;
 	int indexOffset;
+	ProjectedDlightListRef projectedDlights;
 	MaterialIR material;
 	UploadPlan upload;
 };
@@ -175,8 +207,41 @@ struct DynamicDraw {
 	const void *indices;
 	int legacyReason;
 	int profilerPath;
+	ProjectedDlightListRef projectedDlights;
 	MaterialIR material;
 	UploadPlan upload;
+};
+
+enum class ProjectedDlightShaderTarget {
+	WorldPacket,
+	DynamicDraw
+};
+
+struct ProjectedDlightShaderInput {
+	ProjectedDlightShaderTarget target;
+	FramePassKind pass;
+	int packetIndex;
+	DynamicDrawRole dynamicRole;
+	ProjectedDlightListRef projectedDlights;
+	qboolean programmable;
+};
+
+struct ProjectedDlightShaderUniformPlan {
+	qboolean valid;
+	qboolean execute;
+	qboolean limitSuppressed;
+	int requestedRecords;
+	int uploadRecords;
+	unsigned int truncatedRecords;
+};
+
+struct ProjectedDlightShaderStreamPlan {
+	qboolean valid;
+	qboolean eligible;
+	qboolean upload;
+	int recordCount;
+	unsigned int bytes;
+	UploadPlan uploadPlan;
 };
 
 enum class OutputTransfer {
@@ -386,6 +451,8 @@ struct FrameProducts {
 	int worldPacketCount;
 	const DynamicDraw *dynamicDraws;
 	int dynamicDrawCount;
+	const ProjectedDlightRecord *projectedDlights;
+	int projectedDlightCount;
 	const PostNode *postNodes;
 	int postNodeCount;
 	OutputTransform output;
@@ -1357,6 +1424,151 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateMaterialParameterBlock(
 		block.material.texMods1 >= 0 ? qtrue : qfalse;
 }
 
+static ID_INLINE qboolean GLX_RenderIR_ValidateProjectedDlightRecord(
+	const ProjectedDlightRecord &record )
+{
+	if ( record.radius <= 0.0f || !std::isfinite( record.radius ) ||
+		( record.flags & ~GLX_PROJECTED_DLIGHT_FLAGS_ALL ) != 0u ) {
+		return qfalse;
+	}
+	for ( int i = 0; i < 3; i++ ) {
+		if ( !std::isfinite( record.origin[i] ) ||
+			!std::isfinite( record.color[i] ) ||
+			record.color[i] < 0.0f ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+static ID_INLINE ProjectedDlightRecord GLX_RenderIR_MakeProjectedDlightRecord(
+	const float *origin, float radius, const float *color, unsigned int flags )
+{
+	ProjectedDlightRecord record {};
+
+	if ( origin ) {
+		for ( int i = 0; i < 3; i++ ) {
+			record.origin[i] = origin[i];
+		}
+	}
+	record.radius = radius;
+	if ( color ) {
+		for ( int i = 0; i < 3; i++ ) {
+			record.color[i] = color[i];
+		}
+	}
+	record.flags = flags;
+	return record;
+}
+
+static ID_INLINE qboolean GLX_RenderIR_ValidateProjectedDlightRecords(
+	const ProjectedDlightRecord *records, int count )
+{
+	if ( count < 0 || count > GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT ) {
+		return qfalse;
+	}
+	if ( count == 0 ) {
+		return qtrue;
+	}
+	if ( !records ) {
+		return qfalse;
+	}
+	for ( int i = 0; i < count; i++ ) {
+		if ( !GLX_RenderIR_ValidateProjectedDlightRecord( records[i] ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+static ID_INLINE qboolean GLX_RenderIR_ValidateProjectedDlightListRef(
+	const ProjectedDlightListRef &ref )
+{
+	if ( ref.firstRecord < 0 || ref.recordCount < 0 ||
+		ref.recordCount > GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT ) {
+		return qfalse;
+	}
+	if ( ref.recordCount == 0 ) {
+		return ref.firstRecord == 0 ? qtrue : qfalse;
+	}
+	if ( ref.firstRecord >= GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT ||
+		ref.firstRecord > GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT - ref.recordCount ) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static ID_INLINE ProjectedDlightListBuildResult GLX_RenderIR_BuildProjectedDlightList(
+	const ProjectedDlightRecord *sourceRecords, int sourceCount, unsigned int lightMask,
+	ProjectedDlightRecord *recordArena, int recordArenaCapacity, int firstRecord )
+{
+	ProjectedDlightListBuildResult result {};
+	int copied = 0;
+	int available;
+	int scanCount;
+
+	result.complete = qtrue;
+
+	if ( !lightMask ) {
+		return result;
+	}
+	if ( !sourceRecords || !recordArena || sourceCount <= 0 ||
+		recordArenaCapacity <= 0 || firstRecord < 0 ||
+		firstRecord >= recordArenaCapacity ||
+		firstRecord >= GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT ) {
+		result.droppedMask = lightMask;
+		result.complete = qfalse;
+		return result;
+	}
+
+	scanCount = sourceCount;
+	if ( scanCount > GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT ) {
+		scanCount = GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT;
+	}
+	available = recordArenaCapacity - firstRecord;
+	if ( available > GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT - firstRecord ) {
+		available = GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT - firstRecord;
+	}
+
+	for ( int i = 0; i < scanCount; i++ ) {
+		const unsigned int bit = 1u << i;
+
+		if ( !( lightMask & bit ) ) {
+			continue;
+		}
+		if ( !GLX_RenderIR_ValidateProjectedDlightRecord( sourceRecords[i] ) ) {
+			result.droppedMask |= bit;
+			result.complete = qfalse;
+			continue;
+		}
+		if ( copied >= available ) {
+			result.droppedMask |= bit;
+			result.complete = qfalse;
+			continue;
+		}
+		recordArena[firstRecord + copied] = sourceRecords[i];
+		result.copiedMask |= bit;
+		copied++;
+	}
+
+	if ( sourceCount < GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT ) {
+		const unsigned int scannedMask = ( sourceCount <= 0 ) ? 0u :
+			( sourceCount >= 32 ? ~0u : ( ( 1u << sourceCount ) - 1u ) );
+		const unsigned int unscannedMask = lightMask & ~scannedMask;
+
+		if ( unscannedMask ) {
+			result.droppedMask |= unscannedMask;
+			result.complete = qfalse;
+		}
+	}
+
+	if ( copied > 0 ) {
+		result.ref.firstRecord = firstRecord;
+		result.ref.recordCount = copied;
+	}
+	return result;
+}
+
 static ID_INLINE unsigned int GLX_RenderIR_HashMaterialParameterValue(
 	unsigned int hash, unsigned int value )
 {
@@ -1491,6 +1703,7 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateWorldPacket( const WorldPacket &p
 {
 	return packet.surfaces >= 0 && packet.vertexes >= 0 && packet.indexes >= 0 &&
 		packet.itemCount >= 0 &&
+		GLX_RenderIR_ValidateProjectedDlightListRef( packet.projectedDlights ) &&
 		GLX_RenderIR_ValidateMaterial( packet.material ) &&
 		GLX_RenderIR_ValidateUploadPlan( packet.upload ) ? qtrue : qfalse;
 }
@@ -1576,8 +1789,88 @@ static ID_INLINE qboolean GLX_RenderIR_ValidateDynamicDraw( const DynamicDraw &d
 	if ( !GLX_RenderIR_DynamicDrawRoleImplemented( draw.role ) ) {
 		return qfalse;
 	}
-	return GLX_RenderIR_ValidateMaterial( draw.material ) &&
+	return GLX_RenderIR_ValidateProjectedDlightListRef( draw.projectedDlights ) &&
+		GLX_RenderIR_ValidateMaterial( draw.material ) &&
 		GLX_RenderIR_ValidateUploadPlan( draw.upload ) ? qtrue : qfalse;
+}
+
+static ID_INLINE ProjectedDlightShaderInput
+GLX_RenderIR_MakeProjectedDlightShaderInput( const WorldPacket &packet,
+	qboolean programmable )
+{
+	ProjectedDlightShaderInput input {};
+
+	input.target = ProjectedDlightShaderTarget::WorldPacket;
+	input.pass = packet.pass;
+	input.packetIndex = packet.packetIndex;
+	input.dynamicRole = DynamicDrawRole::Generic;
+	input.projectedDlights = packet.projectedDlights;
+	input.programmable = programmable;
+	return input;
+}
+
+static ID_INLINE ProjectedDlightShaderInput
+GLX_RenderIR_MakeProjectedDlightShaderInput( const DynamicDraw &draw,
+	qboolean programmable )
+{
+	ProjectedDlightShaderInput input {};
+
+	input.target = ProjectedDlightShaderTarget::DynamicDraw;
+	input.pass = draw.pass;
+	input.packetIndex = -1;
+	input.dynamicRole = draw.role;
+	input.projectedDlights = draw.projectedDlights;
+	input.programmable = programmable;
+	return input;
+}
+
+static ID_INLINE qboolean GLX_RenderIR_ValidateProjectedDlightShaderInput(
+	const ProjectedDlightShaderInput &input )
+{
+	const int pass = static_cast<int>( input.pass );
+
+	if ( pass < 0 || pass >= GLX_RENDER_IR_PASS_COUNT ||
+		!GLX_RenderIR_ValidateProjectedDlightListRef( input.projectedDlights ) ||
+		input.projectedDlights.recordCount <= 0 ) {
+		return qfalse;
+	}
+
+	switch ( input.target ) {
+	case ProjectedDlightShaderTarget::WorldPacket:
+		return input.packetIndex >= 0 ? qtrue : qfalse;
+	case ProjectedDlightShaderTarget::DynamicDraw:
+		return GLX_RenderIR_DynamicDrawRoleImplemented( input.dynamicRole );
+	default:
+		return qfalse;
+	}
+}
+
+static ID_INLINE ProjectedDlightShaderUniformPlan
+GLX_RenderIR_PlanProjectedDlightUniformWindow(
+	const ProjectedDlightShaderInput &input, int uniformLimit,
+	qboolean projectedProgramEnabled )
+{
+	ProjectedDlightShaderUniformPlan plan {};
+
+	plan.valid = GLX_RenderIR_ValidateProjectedDlightShaderInput( input );
+	if ( !plan.valid ) {
+		return plan;
+	}
+
+	plan.requestedRecords = input.projectedDlights.recordCount;
+	if ( uniformLimit < 0 ) {
+		uniformLimit = 0;
+	}
+	plan.uploadRecords = plan.requestedRecords < uniformLimit ?
+		plan.requestedRecords : uniformLimit;
+	if ( plan.requestedRecords > plan.uploadRecords ) {
+		plan.truncatedRecords =
+			static_cast<unsigned int>( plan.requestedRecords - plan.uploadRecords );
+		plan.limitSuppressed = qtrue;
+	}
+	plan.execute = input.programmable && projectedProgramEnabled &&
+		!plan.limitSuppressed && plan.uploadRecords > 0 ? qtrue : qfalse;
+	return plan;
 }
 
 static ID_INLINE qboolean GLX_RenderIR_ValidateOutputTransform( const OutputTransform &transform )
@@ -1744,6 +2037,37 @@ static ID_INLINE qboolean GLX_RenderIR_TierSupportsUploadPlan( RenderProductTier
 	}
 }
 
+static ID_INLINE ProjectedDlightShaderStreamPlan
+GLX_RenderIR_PlanProjectedDlightStreamUpload(
+	const ProjectedDlightShaderInput &input, RenderProductTier tier,
+	qboolean persistentStreamReady, unsigned int streamRecordBytes, int alignment )
+{
+	ProjectedDlightShaderStreamPlan plan {};
+	unsigned long long bytes;
+
+	plan.valid = GLX_RenderIR_ValidateProjectedDlightShaderInput( input );
+	if ( !plan.valid || !input.programmable || streamRecordBytes == 0 ) {
+		return plan;
+	}
+
+	plan.recordCount = input.projectedDlights.recordCount;
+	bytes = static_cast<unsigned long long>( plan.recordCount ) *
+		static_cast<unsigned long long>( streamRecordBytes );
+	if ( bytes == 0 || bytes > ~0u ) {
+		return plan;
+	}
+
+	plan.bytes = static_cast<unsigned int>( bytes );
+	plan.uploadPlan.kind = UploadPlanKind::TransientStream;
+	plan.uploadPlan.strategy = static_cast<int>( StreamStrategy::PersistentMapped );
+	plan.uploadPlan.bytes = plan.bytes;
+	plan.uploadPlan.alignment = alignment;
+	plan.uploadPlan.sync = UploadSyncPolicy::PersistentFence;
+	plan.eligible = GLX_RenderIR_TierSupportsUploadPlan( tier, plan.uploadPlan );
+	plan.upload = plan.eligible && persistentStreamReady ? qtrue : qfalse;
+	return plan;
+}
+
 static ID_INLINE qboolean GLX_RenderIR_TierSupportsMaterial( RenderProductTier tier,
 	const MaterialIR &material )
 {
@@ -1754,8 +2078,10 @@ static ID_INLINE qboolean GLX_RenderIR_TierSupportsMaterial( RenderProductTier t
 static ID_INLINE qboolean GLX_RenderIR_TierSupportsWorldPacket( RenderProductTier tier,
 	const WorldPacket &packet )
 {
-	return packet.surfaces >= 0 && packet.vertexes >= 0 && packet.indexes >= 0 &&
-		packet.itemCount >= 0 &&
+	if ( !GLX_RenderIR_ValidateWorldPacket( packet ) ) {
+		return qfalse;
+	}
+	return
 		GLX_RenderIR_TierSupportsMaterial( tier, packet.material ) &&
 		GLX_RenderIR_TierSupportsUploadPlan( tier, packet.upload ) ? qtrue : qfalse;
 }

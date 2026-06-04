@@ -58,6 +58,69 @@ float DlightShadowFactor()
 	if (dlight_shadow == 0 || dlightFactors.y <= 0.0 || depthFadeScale.w <= 0.0)
 		return 1.0;
 
+	if (depthFadeBias.y > 0.5) {
+		vec3 lightToFrag = -L.xyz;
+		vec3 spotDir = normalize(lightVector.xyz);
+		float spotDist = dot(lightToFrag, spotDir);
+		float zNear = depthFadeInfo.x;
+		float zFar = depthFadeInfo.y;
+		float tanHalfFov = max(depthFadeInfo.w, 0.0001);
+
+		if (spotDist <= zNear || spotDist >= zFar)
+			return 1.0;
+
+		vec3 spotRight = vec3(spotDir.z, -spotDir.x, spotDir.y);
+		spotRight = normalize(spotRight - spotDir * dot(spotRight, spotDir));
+		vec3 spotUp = cross(spotRight, spotDir);
+		vec2 projected = vec2(
+			-dot(lightToFrag, spotRight),
+			-dot(lightToFrag, spotUp)) / (spotDist * tanHalfFov);
+		float coneRadius2 = dot(projected, projected);
+		if (coneRadius2 > 1.0)
+			return 1.0;
+		vec2 localUV = vec2(0.5) + projected * 0.5;
+
+		if (any(lessThan(localUV, vec2(0.0))) || any(greaterThan(localUV, vec2(1.0))))
+			return 1.0;
+
+		float tileSize = depthFadeScale.z;
+		vec2 atlasSize = vec2(textureSize(dlight_shadow_texture, 0));
+		float texelInset = 1.0 / tileSize;
+		localUV = clamp(localUV, vec2(texelInset), vec2(1.0 - texelInset));
+		vec2 atlasUV = (depthFadeScale.xy + localUV * tileSize) / atlasSize;
+
+		float depthRange = max(zFar - zNear, 1.0);
+		float receiverNDotL = clamp(abs(dot(normalize(N), normalize(L.xyz))), 0.0, 1.0);
+		float receiverSlope = 1.0 - receiverNDotL;
+		float receiverBias = depthFadeInfo.z * (0.125 + 0.375 * receiverSlope);
+		float texelWorldBias = max(2.0 * spotDist * tanHalfFov / tileSize, 0.125);
+		receiverBias = min(receiverBias, texelWorldBias);
+		float biasedDist = max(spotDist - receiverBias, zNear);
+		float forwardDepth = zFar / depthRange - (zFar * zNear) / (depthRange * biasedDist);
+		float reversedDepth = (zFar * zNear) / (depthRange * biasedDist) - zNear / depthRange;
+		float receiverDepth = mix(forwardDepth, reversedDepth, depthFadeBias.x);
+		vec2 shadowTexel = 1.0 / atlasSize;
+		float filterInner = dlightFactors.z;
+		float filterOuter = dlightFactors.w;
+		float sampleDepth0 = texture(dlight_shadow_texture, atlasUV + shadowTexel * vec2(-filterOuter, -filterInner)).r;
+		float sampleDepth1 = texture(dlight_shadow_texture, atlasUV + shadowTexel * vec2( filterInner, -filterOuter)).r;
+		float sampleDepth2 = texture(dlight_shadow_texture, atlasUV + shadowTexel * vec2(-filterInner,  filterOuter)).r;
+		float sampleDepth3 = texture(dlight_shadow_texture, atlasUV + shadowTexel * vec2( filterOuter,  filterInner)).r;
+		float forwardOcclusion =
+			(1.0 - step(receiverDepth, sampleDepth0)) +
+			(1.0 - step(receiverDepth, sampleDepth1)) +
+			(1.0 - step(receiverDepth, sampleDepth2)) +
+			(1.0 - step(receiverDepth, sampleDepth3));
+		float reversedOcclusion =
+			step(receiverDepth, sampleDepth0) +
+			step(receiverDepth, sampleDepth1) +
+			step(receiverDepth, sampleDepth2) +
+			step(receiverDepth, sampleDepth3);
+		float occlusion = 0.25 * mix(forwardOcclusion, reversedOcclusion, depthFadeBias.x);
+
+		return clamp(1.0 - occlusion * dlightFactors.y, 0.0, 1.0);
+	}
+
 	vec3 shadowVec = -L.xyz;
 	vec3 absVec = abs(shadowVec);
 	float faceDist = max(max(absVec.x, absVec.y), absVec.z);

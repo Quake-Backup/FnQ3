@@ -1407,6 +1407,195 @@ bool RenderIRProductsValidate()
 	return true;
 }
 
+bool RenderIRProjectedDlightRecordsValidate()
+{
+	const float origin[3] = { 128.0f, -64.0f, 32.0f };
+	const float color[3] = { 1.0f, 0.5f, 0.25f };
+	glx::ProjectedDlightRecord records[2] = {
+		glx::GLX_RenderIR_MakeProjectedDlightRecord(
+			origin, 320.0f, color, glx::GLX_PROJECTED_DLIGHT_ADDITIVE ),
+		glx::GLX_RenderIR_MakeProjectedDlightRecord(
+			origin, 96.0f, color, glx::GLX_PROJECTED_DLIGHT_LINEAR )
+	};
+
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightRecord( records[0] ) == qtrue );
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightRecords( records, 2 ) == qtrue );
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightRecords( nullptr, 0 ) == qtrue );
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightRecords( nullptr, 1 ) == qfalse );
+
+	glx::ProjectedDlightRecord invalid = records[0];
+	invalid.radius = 0.0f;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightRecord( invalid ) == qfalse );
+	invalid = records[0];
+	invalid.color[1] = -0.1f;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightRecord( invalid ) == qfalse );
+	invalid = records[0];
+	invalid.flags = 0x80000000u;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightRecord( invalid ) == qfalse );
+
+	glx::ProjectedDlightListRef noLights {};
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightListRef( noLights ) == qtrue );
+	glx::ProjectedDlightListRef packetLights {};
+	packetLights.firstRecord = 1;
+	packetLights.recordCount = 1;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightListRef( packetLights ) == qtrue );
+	packetLights.firstRecord = glx::GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightListRef( packetLights ) == qtrue );
+	packetLights.firstRecord = glx::GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightListRef( packetLights ) == qfalse );
+	packetLights.firstRecord = 2;
+	packetLights.recordCount = glx::GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightListRef( packetLights ) == qtrue );
+	packetLights.firstRecord = glx::GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT -
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT + 1;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightListRef( packetLights ) == qfalse );
+	packetLights.firstRecord = 4;
+	packetLights.recordCount = 0;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightListRef( packetLights ) == qfalse );
+
+	glx::ProjectedDlightRecord arena[4] {};
+	glx::ProjectedDlightListBuildResult list = glx::GLX_RenderIR_BuildProjectedDlightList(
+		records, 2, 0x3u, arena, 4, 1 );
+	CHECK( list.complete == qtrue );
+	CHECK( list.ref.firstRecord == 1 );
+	CHECK( list.ref.recordCount == 2 );
+	CHECK( list.copiedMask == 0x3u );
+	CHECK( list.droppedMask == 0u );
+	CHECK( arena[1].radius == records[0].radius );
+	CHECK( arena[2].radius == records[1].radius );
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightListRef( list.ref ) == qtrue );
+
+	list = glx::GLX_RenderIR_BuildProjectedDlightList( records, 2, 0x3u, arena, 2, 1 );
+	CHECK( list.complete == qfalse );
+	CHECK( list.ref.firstRecord == 1 );
+	CHECK( list.ref.recordCount == 1 );
+	CHECK( list.copiedMask == 0x1u );
+	CHECK( list.droppedMask == 0x2u );
+
+	glx::ProjectedDlightRecord wideArena[glx::GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT + 4] {};
+	list = glx::GLX_RenderIR_BuildProjectedDlightList( records, 2, 0x3u, wideArena,
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT + 4,
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT );
+	CHECK( list.complete == qtrue );
+	CHECK( list.ref.firstRecord == glx::GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT );
+	CHECK( list.ref.recordCount == 2 );
+	CHECK( list.copiedMask == 0x3u );
+	CHECK( list.droppedMask == 0u );
+
+	list = glx::GLX_RenderIR_BuildProjectedDlightList( records, 2, 0x4u, arena, 4, 0 );
+	CHECK( list.complete == qfalse );
+	CHECK( list.ref.firstRecord == 0 );
+	CHECK( list.ref.recordCount == 0 );
+	CHECK( list.droppedMask == 0x4u );
+
+	records[1].color[0] = -1.0f;
+	list = glx::GLX_RenderIR_BuildProjectedDlightList( records, 2, 0x3u, arena, 4, 0 );
+	CHECK( list.complete == qfalse );
+	CHECK( list.ref.firstRecord == 0 );
+	CHECK( list.ref.recordCount == 1 );
+	CHECK( list.copiedMask == 0x1u );
+	CHECK( list.droppedMask == 0x2u );
+	records[1].color[0] = color[0];
+
+	glx::UploadPlan staticUpload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::StaticWorld, -1, 512, 384, 128 );
+	glx::MaterialIR material = glx::GLX_RenderIR_MakeMaterial(
+		0, GLX_STAGE_LIGHTMAP, GLX_MATERIAL_STATE_DEPTHMASK_TRUE, 1 );
+	glx::WorldPacket packet {};
+	packet.pass = glx::FramePassKind::SkyAndOpaqueWorld;
+	packet.surfaces = 1;
+	packet.vertexes = 8;
+	packet.indexes = 12;
+	packet.itemCount = 1;
+	packet.projectedDlights.firstRecord = 0;
+	packet.projectedDlights.recordCount = 2;
+	packet.material = material;
+	packet.upload = staticUpload;
+	CHECK( glx::GLX_RenderIR_ValidateWorldPacket( packet ) == qtrue );
+	CHECK( glx::GLX_RenderIR_TierSupportsWorldPacket( glx::RenderProductTier::GL46, packet ) == qtrue );
+	packet.projectedDlights.firstRecord = glx::GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT;
+	CHECK( glx::GLX_RenderIR_ValidateWorldPacket( packet ) == qfalse );
+	CHECK( glx::GLX_RenderIR_TierSupportsWorldPacket( glx::RenderProductTier::GL46, packet ) == qfalse );
+
+	glx::DynamicDraw draw {};
+	draw.kind = glx::DynamicDrawKind::Indexed;
+	draw.role = glx::DynamicDrawRole::DynamicLight;
+	draw.pass = glx::FramePassKind::DynamicLights;
+	draw.primitive = 0x0004;
+	draw.count = 6;
+	draw.indexType = 0x1403;
+	draw.projectedDlights.firstRecord = 0;
+	draw.projectedDlights.recordCount = 1;
+	draw.material = material;
+	draw.upload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::ClientMemory, -1, 0, 0, 0 );
+	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qtrue );
+	glx::ProjectedDlightShaderInput shaderInput =
+		glx::GLX_RenderIR_MakeProjectedDlightShaderInput( draw, qtrue );
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) == qtrue );
+	CHECK( shaderInput.programmable == qtrue );
+	CHECK( shaderInput.target == glx::ProjectedDlightShaderTarget::DynamicDraw );
+	CHECK( shaderInput.dynamicRole == glx::DynamicDrawRole::DynamicLight );
+	glx::ProjectedDlightShaderUniformPlan uniformPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightUniformWindow( shaderInput, 3, qtrue );
+	CHECK( uniformPlan.valid == qtrue );
+	CHECK( uniformPlan.requestedRecords == 1 );
+	CHECK( uniformPlan.uploadRecords == 1 );
+	CHECK( uniformPlan.truncatedRecords == 0u );
+	CHECK( uniformPlan.limitSuppressed == qfalse );
+	CHECK( uniformPlan.execute == qtrue );
+	glx::ProjectedDlightShaderStreamPlan streamPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightStreamUpload(
+			shaderInput, glx::RenderProductTier::GL46, qtrue, 32u, 64 );
+	CHECK( streamPlan.valid == qtrue );
+	CHECK( streamPlan.eligible == qtrue );
+	CHECK( streamPlan.upload == qtrue );
+	CHECK( streamPlan.recordCount == 1 );
+	CHECK( streamPlan.bytes == 32u );
+	streamPlan = glx::GLX_RenderIR_PlanProjectedDlightStreamUpload(
+		shaderInput, glx::RenderProductTier::GL41, qtrue, 32u, 64 );
+	CHECK( streamPlan.valid == qtrue );
+	CHECK( streamPlan.eligible == qfalse );
+	CHECK( streamPlan.upload == qfalse );
+	shaderInput.projectedDlights.recordCount = 4;
+	uniformPlan = glx::GLX_RenderIR_PlanProjectedDlightUniformWindow(
+		shaderInput, 3, qtrue );
+	CHECK( uniformPlan.valid == qtrue );
+	CHECK( uniformPlan.requestedRecords == 4 );
+	CHECK( uniformPlan.uploadRecords == 3 );
+	CHECK( uniformPlan.truncatedRecords == 1u );
+	CHECK( uniformPlan.limitSuppressed == qtrue );
+	CHECK( uniformPlan.execute == qfalse );
+	streamPlan = glx::GLX_RenderIR_PlanProjectedDlightStreamUpload(
+		shaderInput, glx::RenderProductTier::GL46, qtrue, 32u, 64 );
+	CHECK( streamPlan.valid == qtrue );
+	CHECK( streamPlan.eligible == qtrue );
+	CHECK( streamPlan.upload == qtrue );
+	CHECK( streamPlan.recordCount == 4 );
+	CHECK( streamPlan.bytes == 128u );
+	draw.projectedDlights.firstRecord = glx::GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT;
+	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qfalse );
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightShaderInput(
+		glx::GLX_RenderIR_MakeProjectedDlightShaderInput( draw, qtrue ) ) == qfalse );
+
+	packet.projectedDlights.firstRecord = 0;
+	packet.projectedDlights.recordCount = 2;
+	shaderInput = glx::GLX_RenderIR_MakeProjectedDlightShaderInput( packet, qfalse );
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) == qtrue );
+	CHECK( shaderInput.programmable == qfalse );
+	CHECK( shaderInput.target == glx::ProjectedDlightShaderTarget::WorldPacket );
+	shaderInput.projectedDlights.recordCount = 0;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) == qfalse );
+
+	glx::FrameProducts products {};
+	products.projectedDlights = records;
+	products.projectedDlightCount = 2;
+	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightRecords(
+		products.projectedDlights, products.projectedDlightCount ) == qtrue );
+
+	return true;
+}
+
 bool RenderIRTierMappingKeepsSingleProductContract()
 {
 	glx::FeatureSet features {};
@@ -2846,6 +3035,7 @@ int main()
 		{ "StaticWorldPacketLogicClassifiesRunsAndPolicies", StaticWorldPacketLogicClassifiesRunsAndPolicies },
 		{ "RenderIRDefaultPassScheduleIsDeterministic", RenderIRDefaultPassScheduleIsDeterministic },
 		{ "RenderIRProductsValidate", RenderIRProductsValidate },
+		{ "RenderIRProjectedDlightRecordsValidate", RenderIRProjectedDlightRecordsValidate },
 		{ "RenderIRTierMappingKeepsSingleProductContract", RenderIRTierMappingKeepsSingleProductContract },
 		{ "GL12ExecutorPolicyIsFixedFunctionAndSdrOnly", GL12ExecutorPolicyIsFixedFunctionAndSdrOnly },
 		{ "GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements", GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements },

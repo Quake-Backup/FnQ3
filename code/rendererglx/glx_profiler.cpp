@@ -56,6 +56,8 @@ const char *GLX_Profiler_GpuPassName( int pass )
 		return "flare";
 	case GLX_GPU_PASS_DLIGHT_SHADOW:
 		return "dlight-shadow-atlas";
+	case GLX_GPU_PASS_CSM_SHADOW:
+		return "csm-shadow-atlas";
 	default:
 		return "unknown";
 	}

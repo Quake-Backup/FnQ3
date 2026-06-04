@@ -12,6 +12,47 @@ For an elegant long-term subsystem, FnQ3 should converge on a three-part shadow 
 
 My recommended implementation order is: stabilize skies first, formalize the unified shadow manager second, add an external static lights file third, and only then add surfacelight proxies. That ordering delivers visible wins quickly, reuses the working point-light path, and delays the hardest content-side problem until the renderer-side abstractions are settled. citeturn35view4turn39view0turn41view0
 
+## Implementation progress
+
+- [x] Stabilized sky sun handoff with explicit `worldSun_t` state, active sky shader promotion, and incoming-light direction for CSM planning.
+- [x] Added unified shadow manager summary/debug counters for CSM and point-light shadow planning.
+- [x] Added hot-reloadable external point lights through `maps/<mapname>.lights.json`, with renderer-only cvars, budgets, PVS filtering, and point-shadow planner integration.
+- [x] Added surfacelight proxy extraction from `q3map_surfaceLight` shader metadata for world faces, grids, and triangle surfaces.
+- [x] Added surfacelight proxy color fallback from explicit shader color, lightmap averages, area-weighted vertex colors, and default shader color.
+- [x] Added view/PVS/hemisphere/projected-view weighting so renderer-owned static and surfacelight proxy lights do not flood the shadow budget.
+- [x] Added precomputed world leaf cluster/area metadata for static sidecar lights and surfacelight proxies, with bounded PVS sample fallback for large lights.
+- [x] Added sidecar `spot` parsing and unshadowed directional/linear preview promotion, with true spot shadows still reserved for the spotlight atlas path.
+- [x] Added `q3map_lightImage` surfacelight color derivation using alpha-weighted image averages.
+- [x] Classified surfacelight proxies as point-capable or spot-pending; planar spot proxies now use linear preview lights and defer shadowing until the spotlight atlas exists.
+- [x] Added bounded `q3map_lightSubdivide` emitter subdivision so oversized surfacelight surfaces produce multiple ranked proxy lights without exceeding the proxy cap.
+- [x] Started shadow manager ownership by retaining point-light shadow candidate and chosen atlas records in `shadowManager_t` while preserving current `dlight_t` compatibility fields.
+- [x] Moved point-light shadow selection and atlas tile assignment onto manager-owned records before syncing the existing `dlight_t` backend fields.
+- [x] Moved point-light shadow atlas layout ownership into `shadowManager_t`, including atlas fit, tile geometry, and fill calculations.
+- [x] Published per-view shadow manager schedules through draw commands and made backend point/CSM shadow gates consult the scheduled manager state.
+- [x] Routed point-light shadow atlas rendering and cache slot identity through manager-owned point plan records, with the existing `dlight_t` fields kept as fallback mirrors.
+- [x] Routed point-light shadow sampling metadata through manager-owned point plan records for Vulkan and OpenGL light passes.
+- [x] Added manager-owned point/CSM atlas publication state so backend render/cache paths publish sampleable atlas generations before receiver and light-pass sampling.
+- [x] Added the disabled-by-default spotlight atlas planning foundation with cvars, 2D tile layout fitting, manager state, and debug reporting for future sidecar/surfacelight spot shadows.
+- [x] Added manager-owned spotlight candidate and plan records with priority selection and 2D tile assignment for static sidecar spots and surfacelight spot proxies, while keeping backend scheduling passive.
+- [x] Added passive Vulkan/OpenGL spotlight atlas resource scaffolding with sampled depth atlas allocation, framebuffer/render-pass accessors, generation counters, and manager debug publication hooks.
+- [x] Added scheduled Vulkan/OpenGL spotlight atlas producer passes that render planned spot tiles as depth-only cone views and publish the atlas generation without receiver sampling yet.
+- [x] Connected spotlight preview lights to their manager spot plans with source identity and staged Vulkan/OpenGL spot atlas binding, without enabling receiver sampling yet.
+- [x] Added Vulkan spotlight receiver sampling for planned linear spot lights, including 2D atlas projection, PCF taps, depth biasing, and regenerated embedded SPIR-V.
+- [x] Added OpenGL GLX spotlight receiver sampling for planned linear spot lights using the staged 2D atlas binding, while leaving the legacy ARB assembly fallback unsampled.
+- [x] Added GLX spotlight source-contract coverage so the spot atlas shader mode, raw light-vector projection, C-side mode upload, and texture binding stay in sync.
+- [x] Added circular cone gating to Vulkan and GLX spotlight receivers so atlas sampling rejects square-frustum corners outside each planned spot cone.
+- [x] Honored per-light spotlight resolution requests by assigning each planned spot an effective tile size inside the stable atlas grid and reporting fill from actual planned tile area.
+- [x] Added surfacelight spotlight per-emitter LOD so weak, edge-of-view, or small proxy emitters request lower-resolution tiles while high-importance large emitters can request promoted tiles within the atlas cap.
+- [x] Added static map light sidecar source-contract coverage for malformed roots, forward-compatible key skipping, unsupported/invalid/overflow counters, parser defaults, and parse-failed reset behavior.
+- [x] Added CSM cache telemetry/source-contract coverage for hit, miss, and uncacheable paths, cascade signature inputs, deformed-surface invalidation, cache publication, and receiver publication gates.
+- [x] Added CSM atlas profiling counters/debug output, plus a GLX GPU timing pass for CSM atlas rendering.
+- [x] Added CSM cascade stability coverage and snapped the light-depth coordinate with half-texel padded extents to reduce atlas cache churn and shimmer from small sun-axis camera movement.
+- [ ] Promote `shadowManager_t` from a summary/debug container into the owner of shadow candidates, atlas allocation, descriptor publication, and render scheduling.
+- [ ] Add the dedicated 2D spotlight atlas path for planar surfacelight and sidecar spot shadows.
+- [ ] Add true atlas-backed sidecar spot shadows, per-light resolution, cone-angle sampling, and spotlight atlas integration.
+- [ ] Finish atlas-backed surfacelight projection validation for large planar emitters, including emitter footprint tuning, caster coverage, and runtime LOD smoke coverage.
+- [ ] Add CSM runtime shimmer validation and runtime smoke coverage for sidecar and shadow atlas behavior.
+
 ## Repository findings and current behavior
 
 FnQ3’s Vulkan backend already defines distinct render-pass roles for the main pass, screen map, post-bloom, dynamic-light shadows, and CSM shadows; it also exposes Vulkan-side hooks such as `vk_begin_dlight_shadow_render_pass`, `vk_end_dlight_shadow_render_pass`, `vk_begin_csm_shadow_render_pass`, `vk_end_csm_shadow_render_pass`, and descriptor accessors for the CSM atlas. The Vulkan instance state stores separate shadow images, image views, descriptors, framebuffer handles, atlas dimensions, and generation counters for both dynamic-light and CSM shadows. That is the right primitive set for a modern subsystem and means the missing work is mostly policy, correctness, and content integration. citeturn43view0turn45view0turn46view0

@@ -160,6 +160,28 @@ static ID_INLINE qboolean GLX_CompatDrawElementsClassified( unsigned int mode, i
 #endif
 }
 
+static ID_INLINE qboolean GLX_CompatDrawElementsClassifiedProjectedDlights(
+	unsigned int mode, int count, unsigned int type, const void *indices,
+	int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask,
+	unsigned int lightMask )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_DrawElementsClassifiedProjectedDlights( mode, count, type,
+		indices, legacyReason, profilerPath, materialFlags, categoryMask, lightMask );
+#else
+	(void)mode;
+	(void)count;
+	(void)type;
+	(void)indices;
+	(void)legacyReason;
+	(void)profilerPath;
+	(void)materialFlags;
+	(void)categoryMask;
+	(void)lightMask;
+	return qfalse;
+#endif
+}
+
 static ID_INLINE qboolean GLX_CompatDrawArrays( unsigned int mode, int first, int count,
 	int legacyReason, int profilerPath )
 {
@@ -384,6 +406,28 @@ static ID_INLINE void GLX_CompatRecordDlightScissor( qboolean computed,
 	(void)height;
 	(void)viewportWidth;
 	(void)viewportHeight;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordProjectedDlights(
+	const glxProjectedDlightRecord_t *records, int count )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordProjectedDlights( records, count );
+#else
+	(void)records;
+	(void)count;
+#endif
+}
+
+static ID_INLINE void GLX_CompatRecordProjectedDlightList( int itemIndex,
+	unsigned int lightMask )
+{
+#ifdef RENDERER_GLX
+	GLX_Renderer_RecordProjectedDlightList( itemIndex, lightMask );
+#else
+	(void)itemIndex;
+	(void)lightMask;
 #endif
 }
 

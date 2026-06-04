@@ -131,6 +131,8 @@ typedef struct dlight_s {
 	int shadowReceiverCount;
 	float shadowPriority;
 	float shadowPriorityMultiplier;
+	int shadowSpotSource;
+	int shadowSpotSourceIndex;
 #endif
 } dlight_t;
 
@@ -151,6 +153,19 @@ typedef struct {
 	int width;
 	int height;
 } csmShadowAtlasLayout_t;
+
+#define SPOT_SHADOW_MIN_TILE_SIZE 64
+#define SPOT_SHADOW_MAX_TILE_SIZE 1024
+#define SPOT_SHADOW_MAX_LIGHTS 64
+
+typedef struct {
+	int maxLights;
+	int tileSize;
+	int columns;
+	int rows;
+	int width;
+	int height;
+} spotShadowAtlasLayout_t;
 #endif
 
 
@@ -501,6 +516,8 @@ typedef struct shader_s {
 	float		surfaceLightSubdivide;
 	qboolean	surfaceLightColorValid;
 	vec3_t		surfaceLightColor;
+	qboolean	surfaceLightImageColorValid;
+	vec3_t		surfaceLightImageColor;
 	fogParms_t	fogParms;
 
 	float		portalRange;			// distance to fog out at
@@ -817,7 +834,8 @@ typedef struct {
 #define MAX_SURFACELIGHT_PROXIES 256
 
 typedef enum {
-	MAP_LIGHT_POINT
+	MAP_LIGHT_POINT,
+	MAP_LIGHT_SPOT
 } mapLightType_t;
 
 typedef struct {
@@ -826,6 +844,8 @@ typedef struct {
 	vec3_t		origin;
 	vec3_t		direction;
 	vec3_t		color;
+	int			leafCluster;
+	int			leafArea;
 	float		intensity;
 	float		radius;
 	float		innerAngle;
@@ -842,6 +862,10 @@ typedef struct {
 	char		filename[MAX_QPATH];
 	int			version;
 	int			count;
+	int			pointCount;
+	int			spotCount;
+	int			spatialized;
+	int			spatialFallback;
 	int			skippedUnsupported;
 	int			skippedInvalid;
 	int			skippedOverflow;
@@ -853,12 +877,20 @@ typedef struct {
 	mapLightDef_t lights[MAX_STATIC_MAP_LIGHTS];
 } staticMapLights_t;
 
+typedef enum {
+	SURFACE_LIGHT_PROXY_POINT,
+	SURFACE_LIGHT_PROXY_SPOT
+} surfaceLightProxyProjection_t;
+
 typedef struct {
 	int			sourceSurface;
 	char		shaderName[MAX_QPATH];
+	surfaceLightProxyProjection_t projection;
 	vec3_t		origin;
 	vec3_t		normal;
 	vec3_t		color;
+	int			leafCluster;
+	int			leafArea;
 	float		intensity;
 	float		radius;
 	float		area;
@@ -870,16 +902,64 @@ typedef struct {
 	qboolean	built;
 	int			count;
 	int			sourceSurfaces;
+	int			pointProjectionCount;
+	int			spotProjectionCount;
+	int			subdividedSurfaces;
+	int			subdivisionProxies;
+	int			spatialized;
+	int			spatialFallback;
 	int			skippedSky;
 	int			skippedInvalid;
 	int			skippedOverflow;
 	int			promotedThisFrame;
 	int			shadowEligibleThisFrame;
+	int			spotShadowDeferredThisFrame;
 	int			skippedDisabledThisFrame;
 	int			skippedPVSThisFrame;
 	int			skippedBudgetThisFrame;
 	surfaceLightProxy_t proxies[MAX_SURFACELIGHT_PROXIES];
 } surfaceLightProxies_t;
+
+#ifdef USE_PMLIGHT
+typedef struct {
+	int			dlightIndex;
+	int			shadowIndex;
+	int			atlasBaseFace;
+	int			atlasFaceSize;
+	int			atlasX[DLIGHT_SHADOW_FACES];
+	int			atlasY[DLIGHT_SHADOW_FACES];
+	int			receiverCount;
+	float		priority;
+	vec3_t		origin;
+	vec3_t		color;
+	float		radius;
+	qboolean	atlasAllocated;
+} shadowPointLightPlan_t;
+
+typedef enum {
+	SHADOW_SPOT_SOURCE_STATIC_MAP,
+	SHADOW_SPOT_SOURCE_SURFACELIGHT_PROXY
+} shadowSpotLightSource_t;
+
+typedef struct {
+	shadowSpotLightSource_t source;
+	int			sourceIndex;
+	int			shadowIndex;
+	int			atlasX;
+	int			atlasY;
+	int			atlasTileSize;
+	int			requestedTileSize;
+	float		priority;
+	vec3_t		origin;
+	vec3_t		direction;
+	vec3_t		color;
+	float		radius;
+	float		intensity;
+	float		innerAngle;
+	float		outerAngle;
+	qboolean	atlasAllocated;
+} shadowSpotLightPlan_t;
+#endif
 
 typedef struct {
 	qboolean	planned;
@@ -894,6 +974,14 @@ typedef struct {
 	int			csmAtlasWidth;
 	int			csmAtlasHeight;
 	qboolean	dlightPlanned;
+	qboolean	pointAtlasScheduled;
+	qboolean	csmAtlasScheduled;
+	qboolean	csmReceiverScheduled;
+	int			scheduledPasses;
+	qboolean	pointAtlasPublished;
+	qboolean	csmAtlasPublished;
+	unsigned int	pointAtlasGeneration;
+	unsigned int	csmAtlasGeneration;
 	int			dlightConsidered;
 	int			dlightCandidates;
 	int			dlightPlannedCount;
@@ -901,7 +989,84 @@ typedef struct {
 	int			dlightAtlasHeight;
 	int			dlightAtlasFaceSize;
 	int			dlightAtlasFill;
+#ifdef USE_PMLIGHT
+	int			pointCandidateCount;
+	int			pointPlanCount;
+	qboolean	pointAtlasReady;
+	dlightShadowAtlasLayout_t pointAtlasLayout;
+	shadowPointLightPlan_t pointCandidates[MAX_REAL_DLIGHTS];
+	shadowPointLightPlan_t pointPlans[MAX_DLIGHTS];
+	int			spotCandidateCount;
+	int			spotPlanCount;
+	qboolean	spotAtlasReady;
+	qboolean	spotAtlasScheduled;
+	qboolean	spotAtlasPublished;
+	unsigned int	spotAtlasGeneration;
+	int			spotAtlasWidth;
+	int			spotAtlasHeight;
+	int			spotAtlasTileSize;
+	int			spotAtlasFill;
+	spotShadowAtlasLayout_t spotAtlasLayout;
+	shadowSpotLightPlan_t spotCandidates[MAX_STATIC_MAP_LIGHTS + MAX_SURFACELIGHT_PROXIES];
+	shadowSpotLightPlan_t spotPlans[SPOT_SHADOW_MAX_LIGHTS];
+#endif
 } shadowManager_t;
+
+#ifdef USE_PMLIGHT
+static ID_INLINE const shadowPointLightPlan_t *R_ShadowManagerPointPlanForDlight(
+	const shadowManager_t *manager, const viewParms_t *viewParms, const dlight_t *dl )
+{
+	unsigned int dlightIndex;
+	int planIndex;
+
+	if ( !manager || !viewParms || !dl || !manager->planned || !viewParms->dlights ) {
+		return NULL;
+	}
+
+	for ( dlightIndex = 0; dlightIndex < viewParms->num_dlights; dlightIndex++ ) {
+		if ( &viewParms->dlights[dlightIndex] == dl ) {
+			break;
+		}
+	}
+	if ( dlightIndex >= viewParms->num_dlights ) {
+		return NULL;
+	}
+
+	for ( planIndex = 0; planIndex < manager->pointPlanCount; planIndex++ ) {
+		const shadowPointLightPlan_t *plan = &manager->pointPlans[planIndex];
+
+		if ( plan->dlightIndex == (int)dlightIndex &&
+			plan->atlasAllocated && plan->atlasFaceSize > 0 && plan->atlasBaseFace >= 0 ) {
+			return plan;
+		}
+	}
+
+	return NULL;
+}
+
+static ID_INLINE const shadowSpotLightPlan_t *R_ShadowManagerSpotPlanForDlight(
+	const shadowManager_t *manager, const dlight_t *dl )
+{
+	int planIndex;
+
+	if ( !manager || !dl || !manager->planned || !dl->linear ||
+		dl->shadowSpotSource < 0 || dl->shadowSpotSourceIndex < 0 ) {
+		return NULL;
+	}
+
+	for ( planIndex = 0; planIndex < manager->spotPlanCount; planIndex++ ) {
+		const shadowSpotLightPlan_t *plan = &manager->spotPlans[planIndex];
+
+		if ( (int)plan->source == dl->shadowSpotSource &&
+			plan->sourceIndex == dl->shadowSpotSourceIndex &&
+			plan->atlasAllocated && plan->atlasTileSize > 0 ) {
+			return plan;
+		}
+	}
+
+	return NULL;
+}
+#endif
 
 static ID_INLINE void R_FinalizeViewPassFlags( viewParms_t *viewParms ) {
 	viewParms->passFlags |= VPF_CLEAR_DEPTH;
@@ -1408,6 +1573,10 @@ typedef struct {
 	int		c_dlightShadowAtlasSurfaces;
 	int		c_dlightShadowAtlasMsec;
 	int		c_csmShadowAtlasSurfaces;
+	int		c_csmShadowAtlasCacheHits;
+	int		c_csmShadowAtlasCacheMisses;
+	int		c_csmShadowAtlasCacheUncacheable;
+	int		c_csmShadowAtlasMsec;
 	int		c_csmShadowReceiverWorldSurfaces;
 	int		c_csmShadowReceiverEntitySurfaces;
 #endif
@@ -1676,6 +1845,10 @@ extern cvar_t	*r_dlightShadowFilter;		// 0 - 2
 extern cvar_t	*r_dlightShadowMaxLights;	// 0 - MAX_DLIGHTS
 extern cvar_t	*r_dlightShadowResolution;	// 64 - 1024
 extern cvar_t	*r_dlightShadowDebug;		// 0 - 1
+extern cvar_t	*r_spotShadows;			// 0 - 1
+extern cvar_t	*r_spotShadowMaxLights;	// 0 - SPOT_SHADOW_MAX_LIGHTS
+extern cvar_t	*r_spotShadowResolution;	// 64 - 1024
+extern cvar_t	*r_spotShadowDebug;		// 0 - 1
 extern cvar_t	*r_dlightScale;			// 0.1 - 1.0
 extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
@@ -1952,6 +2125,7 @@ int R_ComputeLOD( trRefEntity_t *ent );
 const void *RB_TakeVideoFrameCmd( const void *data );
 
 float R_ClampDenorm( float v );
+qboolean R_ImageAverageColor( const char *name, vec3_t color );
 
 //
 // tr_shader.c
@@ -2074,6 +2248,8 @@ WORLD MAP
 void R_AddBrushModelSurfaces( trRefEntity_t *e );
 void R_AddWorldSurfaces( void );
 qboolean R_inPVS( const vec3_t p1, const vec3_t p2 );
+qboolean R_PointLeafClusterArea( const vec3_t point, int *cluster, int *area );
+qboolean R_LeafClusterInCurrentPVS( const vec3_t vieworg, int cluster, int area );
 qboolean R_PointInCurrentPVS( const vec3_t vieworg, const vec3_t point );
 
 
@@ -2108,6 +2284,7 @@ void VK_LightingPass( void );
 void VK_CSMShadowPass( void );
 qboolean R_LightCullBounds( const dlight_t* dl, const vec3_t mins, const vec3_t maxs );
 qboolean R_DlightShadowAtlasLayout( int maxLights, int requestedFaceSize, int maxTextureSize, dlightShadowAtlasLayout_t *layout );
+qboolean R_SpotShadowAtlasLayout( int maxLights, int requestedTileSize, int maxTextureSize, spotShadowAtlasLayout_t *layout );
 qboolean R_CSMShadowAtlasLayout( int cascadeCount, int requestedCascadeSize, int maxTextureSize, csmShadowAtlasLayout_t *layout );
 #endif // USE_PMLIGHT
 
@@ -2332,6 +2509,7 @@ typedef struct drawSurfsCommand_s {
 	trRefdef_t	refdef;
 	viewParms_t	viewParms;
 	csmPlan_t	csm;
+	shadowManager_t	shadowManager;
 	drawSurf_t *drawSurfs;
 	int		numDrawSurfs;
 } drawSurfsCommand_t;

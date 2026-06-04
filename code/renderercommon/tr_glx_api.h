@@ -41,6 +41,10 @@ qboolean GLX_Renderer_DrawArrays( unsigned int mode, int first, int count,
 qboolean GLX_Renderer_DrawElementsClassified( unsigned int mode, int count,
 	unsigned int type, const void *indices, int legacyReason, int profilerPath,
 	int materialFlags, unsigned int categoryMask );
+qboolean GLX_Renderer_DrawElementsClassifiedProjectedDlights( unsigned int mode,
+	int count, unsigned int type, const void *indices, int legacyReason,
+	int profilerPath, int materialFlags, unsigned int categoryMask,
+	unsigned int lightMask );
 qboolean GLX_Renderer_DrawArraysClassified( unsigned int mode, int first, int count,
 	int legacyReason, int profilerPath, int materialFlags, unsigned int categoryMask );
 void GLX_Renderer_RecordDraw( int indexes, int path );
@@ -81,6 +85,8 @@ void GLX_Renderer_RecordDlightBuild( int legacyLights, int legacySkippedLights,
 void GLX_Renderer_RecordDlightCull( int legacyVertexes, int legacyIndexes );
 void GLX_Renderer_RecordDlightScissor( qboolean computed, qboolean applied,
 	int x, int y, int width, int height, int viewportWidth, int viewportHeight );
+void GLX_Renderer_RecordProjectedDlights( const glxProjectedDlightRecord_t *records, int count );
+void GLX_Renderer_RecordProjectedDlightList( int itemIndex, unsigned int lightMask );
 qboolean GLX_Renderer_StreamDrawEnabled( void );
 qboolean GLX_Renderer_StreamDrawMultitextureEnabled( void );
 qboolean GLX_Renderer_StreamDrawFogEnabled( void );

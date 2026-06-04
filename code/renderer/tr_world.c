@@ -20,7 +20,67 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 #include "tr_local.h"
+#include "tr_glx_compat.h"
 
+#ifdef USE_LEGACY_DLIGHTS
+static void R_GLXRecordProjectedDlights( const dlight_t *dlights, int count )
+{
+#ifdef RENDERER_GLX
+	glxProjectedDlightRecord_t records[MAX_DLIGHTS];
+	int i;
+
+	if ( count <= 0 || !dlights ) {
+		GLX_CompatRecordProjectedDlights( NULL, 0 );
+		return;
+	}
+	if ( count > MAX_DLIGHTS ) {
+		count = MAX_DLIGHTS;
+	}
+
+	for ( i = 0; i < count; i++ ) {
+		VectorCopy( dlights[i].transformed, records[i].origin );
+		records[i].radius = dlights[i].radius;
+		VectorCopy( dlights[i].color, records[i].color );
+		records[i].flags = 0u;
+		if ( dlights[i].additive ) {
+			records[i].flags |= GLX_PROJECTED_DLIGHT_FLAG_ADDITIVE;
+		}
+		if ( dlights[i].linear ) {
+			records[i].flags |= GLX_PROJECTED_DLIGHT_FLAG_LINEAR;
+		}
+	}
+
+	GLX_CompatRecordProjectedDlights( records, count );
+#else
+	(void)dlights;
+	(void)count;
+#endif
+}
+
+static int R_GLXStaticSurfaceItemIndex( const msurface_t *surf )
+{
+#ifdef RENDERER_GLX
+	if ( !surf || !surf->data ) {
+		return 0;
+	}
+
+	if ( *surf->data == SF_FACE ) {
+		const srfSurfaceFace_t *face = (const srfSurfaceFace_t *)surf->data;
+		return face->vboItemIndex;
+	} else if ( *surf->data == SF_TRIANGLES ) {
+		const srfTriangles_t *tris = (const srfTriangles_t *)surf->data;
+		return tris->vboItemIndex;
+	} else if ( *surf->data == SF_GRID ) {
+		const srfGridMesh_t *grid = (const srfGridMesh_t *)surf->data;
+		return grid->vboItemIndex;
+	}
+#else
+	(void)surf;
+#endif
+
+	return 0;
+}
+#endif
 
 
 /*
@@ -501,6 +561,10 @@ static void R_AddWorldSurface( msurface_t *surf, int dlightBits, unsigned int pm
 	if ( dlightBits ) {
 		if ( R_LegacyDlightShaderAllowed( surf->shader ) ) {
 			dlightBits = R_DlightSurface( surf, dlightBits );
+			if ( dlightBits && tr.currentEntityNum == REFENTITYNUM_WORLD ) {
+				GLX_CompatRecordProjectedDlightList( R_GLXStaticSurfaceItemIndex( surf ),
+					(unsigned int)dlightBits );
+			}
 			dlightBits = ( dlightBits != 0 );
 		} else {
 			dlightBits = 0;
@@ -946,6 +1010,35 @@ static const byte *R_ClusterPVS (int cluster) {
 }
 
 /*
+=====================
+R_PointLeafClusterArea
+=====================
+*/
+qboolean R_PointLeafClusterArea( const vec3_t point, int *cluster, int *area ) {
+	const mnode_t *leaf;
+
+	if ( cluster ) {
+		*cluster = -1;
+	}
+	if ( area ) {
+		*area = -1;
+	}
+	if ( !tr.world || !tr.world->nodes ) {
+		return qfalse;
+	}
+
+	leaf = R_PointInLeaf( point );
+	if ( cluster ) {
+		*cluster = leaf->cluster;
+	}
+	if ( area ) {
+		*area = leaf->area;
+	}
+
+	return ( leaf->cluster >= 0 && leaf->cluster < tr.world->numClusters ) ? qtrue : qfalse;
+}
+
+/*
 =================
 R_inPVS
 =================
@@ -966,24 +1059,20 @@ qboolean R_inPVS( const vec3_t p1, const vec3_t p2 ) {
 
 /*
 =====================
-R_PointInCurrentPVS
+R_LeafClusterInCurrentPVS
 =====================
 */
-qboolean R_PointInCurrentPVS( const vec3_t vieworg, const vec3_t point ) {
+qboolean R_LeafClusterInCurrentPVS( const vec3_t vieworg, int cluster, int area ) {
 	const mnode_t *viewLeaf;
-	const mnode_t *leaf;
 	const byte *vis;
 	int viewCluster;
-	int cluster;
 
 	if ( !tr.world || !tr.world->nodes || ( r_novis && r_novis->integer ) ) {
 		return qtrue;
 	}
 
 	viewLeaf = R_PointInLeaf( vieworg );
-	leaf = R_PointInLeaf( point );
 	viewCluster = viewLeaf->cluster;
-	cluster = leaf->cluster;
 	if ( viewCluster < 0 || cluster < 0 ||
 		viewCluster >= tr.world->numClusters || cluster >= tr.world->numClusters ) {
 		return qtrue;
@@ -994,12 +1083,28 @@ qboolean R_PointInCurrentPVS( const vec3_t vieworg, const vec3_t point ) {
 		return qfalse;
 	}
 
-	if ( leaf->area >= 0 && leaf->area < MAX_MAP_AREA_BYTES * 8 &&
-		( tr.refdef.areamask[leaf->area >> 3] & ( 1 << ( leaf->area & 7 ) ) ) ) {
+	if ( area >= 0 && area < MAX_MAP_AREA_BYTES * 8 &&
+		( tr.refdef.areamask[area >> 3] & ( 1 << ( area & 7 ) ) ) ) {
 		return qfalse;
 	}
 
 	return qtrue;
+}
+
+/*
+=====================
+R_PointInCurrentPVS
+=====================
+*/
+qboolean R_PointInCurrentPVS( const vec3_t vieworg, const vec3_t point ) {
+	const mnode_t *leaf;
+
+	if ( !tr.world || !tr.world->nodes || ( r_novis && r_novis->integer ) ) {
+		return qtrue;
+	}
+
+	leaf = R_PointInLeaf( point );
+	return R_LeafClusterInCurrentPVS( vieworg, leaf->cluster, leaf->area );
 }
 
 /*
@@ -1148,6 +1253,7 @@ void R_AddWorldSurfaces( void ) {
 
 #ifdef USE_LEGACY_DLIGHTS
 	dlightBits = 0;
+	R_GLXRecordProjectedDlights( NULL, 0 );
 #ifdef USE_PMLIGHT
 	if ( !R_GetDlightMode() )
 #endif
@@ -1156,6 +1262,7 @@ void R_AddWorldSurfaces( void ) {
 		int lightIndex;
 
 		R_TransformDlights( tr.refdef.num_dlights, tr.refdef.dlights, &tr.viewParms.world );
+		R_GLXRecordProjectedDlights( tr.refdef.dlights, tr.refdef.num_dlights );
 		for ( lightIndex = 0; lightIndex < tr.refdef.num_dlights && lightIndex < MAX_DLIGHTS; lightIndex++ ) {
 			if ( R_CullDlight( &tr.refdef.dlights[lightIndex] ) == CULL_OUT ) {
 				tr.pc.c_light_cull_out++;

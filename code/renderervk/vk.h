@@ -180,6 +180,7 @@ typedef enum {
 	RENDER_PASS_SCREENMAP,
 	RENDER_PASS_POST_BLOOM,
 	RENDER_PASS_DLIGHT_SHADOW,
+	RENDER_PASS_SPOT_SHADOW,
 	RENDER_PASS_CSM_SHADOW,
 	RENDER_PASS_COUNT
 } renderPass_t;
@@ -344,6 +345,16 @@ void vk_end_dlight_shadow_render_pass( void );
 int vk_dlight_shadow_atlas_height( void );
 int vk_dlight_shadow_atlas_columns( void );
 uint32_t vk_dlight_shadow_atlas_generation( void );
+qboolean vk_spot_shadow_atlas_available( void );
+qboolean vk_spot_shadow_atlas_ready( void );
+qboolean vk_begin_spot_shadow_render_pass( void );
+void vk_end_spot_shadow_render_pass( void );
+void vk_mark_spot_shadow_atlas_rendered( void );
+int vk_spot_shadow_atlas_width( void );
+int vk_spot_shadow_atlas_height( void );
+int vk_spot_shadow_tile_size( void );
+uint32_t vk_spot_shadow_atlas_generation( void );
+VkDescriptorSet vk_spot_shadow_descriptor( void );
 qboolean vk_csm_shadow_atlas_available( void );
 qboolean vk_csm_shadow_atlas_ready( void );
 qboolean vk_begin_csm_shadow_render_pass( void );
@@ -539,6 +550,17 @@ typedef struct {
 	uint32_t dlight_shadow_atlas_rows;
 	uint32_t dlight_shadow_max_lights;
 	uint32_t dlight_shadow_generation;
+	VkImage spot_shadow_image;
+	VkImageView spot_shadow_image_view;
+	VkDescriptorSet spot_shadow_descriptor;
+	qboolean spot_shadow_rendered;
+	uint32_t spot_shadow_atlas_width;
+	uint32_t spot_shadow_atlas_height;
+	uint32_t spot_shadow_tile_size;
+	uint32_t spot_shadow_atlas_columns;
+	uint32_t spot_shadow_atlas_rows;
+	uint32_t spot_shadow_max_lights;
+	uint32_t spot_shadow_generation;
 	VkImage csm_shadow_image;
 	VkImageView csm_shadow_image_view;
 	VkDescriptorSet csm_shadow_descriptor;
@@ -580,6 +602,7 @@ typedef struct {
 		VkFramebuffer screenmap;
 		VkFramebuffer capture;
 		VkFramebuffer dlight_shadow;
+		VkFramebuffer spot_shadow;
 		VkFramebuffer csm_shadow;
 	} framebuffers;
 

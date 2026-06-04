@@ -74,6 +74,16 @@ any later version.
 #define GLX_DLIGHT_STATE_GL_STATE 7
 #define GLX_DLIGHT_STATE_COUNT 8
 
+#define GLX_PROJECTED_DLIGHT_FLAG_ADDITIVE 0x00000001u
+#define GLX_PROJECTED_DLIGHT_FLAG_LINEAR 0x00000002u
+
+typedef struct glxProjectedDlightRecord_s {
+	float origin[3];
+	float radius;
+	float color[3];
+	unsigned int flags;
+} glxProjectedDlightRecord_t;
+
 #define GLX_DYNAMIC_CATEGORY_ENTITY 0
 #define GLX_DYNAMIC_CATEGORY_PARTICLE 1
 #define GLX_DYNAMIC_CATEGORY_POLY 2
@@ -301,7 +311,8 @@ any later version.
 #define GLX_GPU_PASS_COPY_SCREEN 12
 #define GLX_GPU_PASS_FLARE 13
 #define GLX_GPU_PASS_DLIGHT_SHADOW 14
-#define GLX_GPU_PASS_COUNT 15
+#define GLX_GPU_PASS_CSM_SHADOW 15
+#define GLX_GPU_PASS_COUNT 16
 
 typedef struct glxStreamReservation_s {
 	unsigned int buffer;

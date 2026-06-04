@@ -1257,6 +1257,66 @@ static const char *R_LoadImage( const char *name, byte **pic, int *width, int *h
 	return localName;
 }
 
+qboolean R_ImageAverageColor( const char *name, vec3_t color )
+{
+	byte *pic;
+	const byte *pixel;
+	double rgbSum[3];
+	double alphaRgbSum[3];
+	double alphaSum;
+	int width;
+	int height;
+	int pixels;
+	int i;
+
+	VectorClear( color );
+	if ( !name || !name[0] ) {
+		return qfalse;
+	}
+
+	R_LoadImage( name, &pic, &width, &height );
+	if ( !pic || width <= 0 || height <= 0 ) {
+		if ( pic ) {
+			ri.Free( pic );
+		}
+		return qfalse;
+	}
+
+	rgbSum[0] = rgbSum[1] = rgbSum[2] = 0.0;
+	alphaRgbSum[0] = alphaRgbSum[1] = alphaRgbSum[2] = 0.0;
+	alphaSum = 0.0;
+	pixels = width * height;
+	pixel = pic;
+	for ( i = 0; i < pixels; i++, pixel += 4 ) {
+		double alpha;
+
+		alpha = pixel[3] / 255.0;
+		rgbSum[0] += pixel[0];
+		rgbSum[1] += pixel[1];
+		rgbSum[2] += pixel[2];
+		alphaRgbSum[0] += pixel[0] * alpha;
+		alphaRgbSum[1] += pixel[1] * alpha;
+		alphaRgbSum[2] += pixel[2] * alpha;
+		alphaSum += alpha;
+	}
+
+	if ( alphaSum > 0.001 ) {
+		color[0] = (float)( alphaRgbSum[0] / ( alphaSum * 255.0 ) );
+		color[1] = (float)( alphaRgbSum[1] / ( alphaSum * 255.0 ) );
+		color[2] = (float)( alphaRgbSum[2] / ( alphaSum * 255.0 ) );
+	} else {
+		color[0] = (float)( rgbSum[0] / ( pixels * 255.0 ) );
+		color[1] = (float)( rgbSum[1] / ( pixels * 255.0 ) );
+		color[2] = (float)( rgbSum[2] / ( pixels * 255.0 ) );
+	}
+
+	color[0] = Com_Clamp( 0.0f, 1.0f, color[0] );
+	color[1] = Com_Clamp( 0.0f, 1.0f, color[1] );
+	color[2] = Com_Clamp( 0.0f, 1.0f, color[2] );
+	ri.Free( pic );
+	return qtrue;
+}
+
 
 /*
 ===============

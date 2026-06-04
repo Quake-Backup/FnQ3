@@ -16,7 +16,11 @@ struct ExecutorState {
 	char frameScheduleText[GLX_RENDER_IR_PASS_SCHEDULE_TEXT_BYTES];
 	unsigned int framePasses;
 	unsigned int worldPackets;
+	unsigned int worldPacketsWithProjectedDlights;
+	unsigned int worldPacketProjectedDlightRecords;
 	unsigned int dynamicDraws;
+	unsigned int dynamicDrawsWithProjectedDlights;
+	unsigned int dynamicDrawProjectedDlightRecords;
 	unsigned int dynamicIndexes;
 	unsigned int dynamicVertices;
 	unsigned int dynamicDrawRoleDraws[GLX_RENDER_IR_DYNAMIC_DRAW_ROLE_COUNT];

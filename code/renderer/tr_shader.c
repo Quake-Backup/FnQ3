@@ -1963,6 +1963,33 @@ static void ParseQ3MapLightRGB( const char **text )
 	shader.surfaceLightColorValid = qtrue;
 }
 
+static void ParseQ3MapLightImage( const char **text )
+{
+	const char *token;
+	vec3_t color;
+	float maxColor;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return;
+	}
+
+	if ( !R_ImageAverageColor( token, color ) ) {
+		ri.Printf( PRINT_DEVELOPER,
+			"WARNING: q3map_lightImage '%s' could not be loaded in shader '%s'\n",
+			token, shader.name );
+		return;
+	}
+
+	maxColor = MAX( color[0], MAX( color[1], color[2] ) );
+	if ( maxColor <= 0.0f ) {
+		return;
+	}
+
+	VectorCopy( color, shader.surfaceLightImageColor );
+	shader.surfaceLightImageColorValid = qtrue;
+}
+
 
 /*
 =================
@@ -2078,6 +2105,11 @@ static qboolean ParseShader( const char **text )
 		else if ( !Q_stricmp( token, "q3map_lightRGB" ) ||
 			!Q_stricmp( token, "q3map_lightColor" ) ) {
 			ParseQ3MapLightRGB( text );
+			SkipRestOfLine( text );
+			continue;
+		}
+		else if ( !Q_stricmp( token, "q3map_lightImage" ) ) {
+			ParseQ3MapLightImage( text );
 			SkipRestOfLine( text );
 			continue;
 		}
@@ -2946,6 +2978,7 @@ static void InitShader( const char *name, int lightmapIndex ) {
 	Q_strncpyz( shader.name, name, sizeof( shader.name ) );
 	shader.lightmapIndex = lightmapIndex;
 	VectorSet( shader.surfaceLightColor, 1.0f, 1.0f, 1.0f );
+	VectorSet( shader.surfaceLightImageColor, 1.0f, 1.0f, 1.0f );
 	R_ApplyShaderPicMipFilter();
 
 	// we need to know original (unmodified) lightmap index

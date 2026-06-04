@@ -1389,18 +1389,27 @@ void VK_SetFogParams( vkUniform_t *uniform, int *fogStage )
 
 
 #ifdef USE_PMLIGHT
-static qboolean VK_DlightShadowParams( const dlight_t *dl, vec4_t shadowInfo, vec4_t shadowAtlas, vec4_t shadowMode, float *strength )
+static qboolean VK_DlightShadowParams( const dlight_t *dl,
+	const shadowPointLightPlan_t *plan, vec4_t shadowInfo, vec4_t shadowAtlas,
+	vec4_t shadowMode, float *strength )
 {
 	int columns;
+	int atlasBaseFace;
+	int atlasFaceSize;
 	float zNear;
 	float zFar;
 	float s;
 
-	if ( !dl || dl->linear || !dl->shadowPlanned || dl->shadowAtlasFaceSize <= 0 ||
-		dl->shadowAtlasBaseFace < 0 ||
+	atlasBaseFace = plan ? plan->atlasBaseFace : ( dl ? dl->shadowAtlasBaseFace : -1 );
+	atlasFaceSize = plan ? plan->atlasFaceSize : ( dl ? dl->shadowAtlasFaceSize : 0 );
+	if ( ( tr.shadowManager.planned && !plan ) ||
+		!dl || dl->linear || ( !tr.shadowManager.planned && !dl->shadowPlanned ) ||
+		atlasFaceSize <= 0 || atlasBaseFace < 0 ||
 		!r_dlightShadows || !r_dlightShadows->integer ||
 		!r_dlightMode || !r_dlightMode->integer ||
-		!vk_dlight_shadow_atlas_ready() || vk.renderPassIndex != RENDER_PASS_MAIN ||
+		( tr.shadowManager.planned ?
+			!tr.shadowManager.pointAtlasPublished : !vk_dlight_shadow_atlas_ready() ) ||
+		vk.renderPassIndex != RENDER_PASS_MAIN ||
 		backEnd.currentEntity != &tr.worldEntity ||
 		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
 		backEnd.viewParms.zFar <= 0.0f ) {
@@ -1424,8 +1433,8 @@ static qboolean VK_DlightShadowParams( const dlight_t *dl, vec4_t shadowInfo, ve
 	shadowInfo[1] = zFar;
 	shadowInfo[2] = R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f );
 	shadowInfo[3] = 0.0f;
-	shadowAtlas[0] = (float)dl->shadowAtlasFaceSize;
-	shadowAtlas[1] = (float)dl->shadowAtlasBaseFace;
+	shadowAtlas[0] = (float)atlasFaceSize;
+	shadowAtlas[1] = (float)atlasBaseFace;
 	shadowAtlas[2] = (float)columns;
 	shadowAtlas[3] = 1.0f;
 #ifdef USE_REVERSED_DEPTH
@@ -1462,12 +1471,70 @@ static void VK_DlightShadowFilterOffsets( float *inner, float *outer )
 	}
 }
 
+static qboolean VK_SpotShadowParams( const dlight_t *dl, const shadowSpotLightPlan_t *plan,
+	vec4_t shadowInfo, vec4_t shadowAtlas, vec4_t shadowMode, float *strength )
+{
+	float zNear;
+	float zFar;
+	float fov;
+	float tanHalfFov;
+	float s;
+
+	if ( !dl || !dl->linear || !plan || !plan->atlasAllocated ||
+		plan->atlasTileSize <= 0 || plan->radius <= 0.0f ||
+		!r_spotShadows || !r_spotShadows->integer ||
+		!tr.shadowManager.planned || !tr.shadowManager.spotAtlasPublished ||
+		!vk_spot_shadow_atlas_ready() ||
+		vk.renderPassIndex != RENDER_PASS_MAIN ||
+		backEnd.currentEntity != &tr.worldEntity ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		backEnd.viewParms.zFar <= 0.0f ) {
+		return qfalse;
+	}
+
+	if ( vk_spot_shadow_atlas_width() <= 0 || vk_spot_shadow_atlas_height() <= 0 ) {
+		return qfalse;
+	}
+
+	s = r_dlightShadowStrength ? Com_Clamp( 0.0f, 1.0f, r_dlightShadowStrength->value ) : 0.6f;
+	if ( s <= 0.0f ) {
+		return qfalse;
+	}
+
+	zNear = 1.0f;
+	zFar = MAX( plan->radius, 64.0f );
+	fov = Com_Clamp( 5.0f, 170.0f, ( plan->outerAngle > 0.0f ? plan->outerAngle : 75.0f ) * 2.0f );
+	tanHalfFov = tanf( fov * (float)M_PI / 360.0f );
+
+	shadowInfo[0] = zNear;
+	shadowInfo[1] = zFar;
+	shadowInfo[2] = R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f );
+	shadowInfo[3] = tanHalfFov;
+	shadowAtlas[0] = (float)plan->atlasX;
+	shadowAtlas[1] = (float)plan->atlasY;
+	shadowAtlas[2] = (float)plan->atlasTileSize;
+	shadowAtlas[3] = 1.0f;
+#ifdef USE_REVERSED_DEPTH
+	shadowMode[0] = 1.0f;
+#else
+	shadowMode[0] = 0.0f;
+#endif
+	shadowMode[1] = 1.0f;
+	shadowMode[2] = 0.0f;
+	shadowMode[3] = 0.0f;
+
+	*strength = s;
+	return qtrue;
+}
+
 static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	float radius;
 	vec4_t shadowInfo = { 0.0f, 0.0f, 0.0f, 0.0f };
 	vec4_t shadowAtlas = { 0.0f, 0.0f, 0.0f, 0.0f };
 	vec4_t shadowMode = { 0.0f, 0.0f, 0.0f, 0.0f };
 	float shadowStrength = 0.0f;
+	const shadowPointLightPlan_t *shadowPlan;
+	const shadowSpotLightPlan_t *spotPlan;
 	qboolean dlightShadow;
 
 #ifdef USE_VULKAN
@@ -1488,7 +1555,14 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	// fragment data
 	uniform->light.color[3] = 1.0f / Square( radius );
 	uniform->dlightFactors[0] = r_dlightFalloff ? r_dlightFalloff->value : 1.0f;
-	dlightShadow = VK_DlightShadowParams( dl, shadowInfo, shadowAtlas, shadowMode, &shadowStrength );
+	shadowPlan = R_ShadowManagerPointPlanForDlight( &tr.shadowManager, &backEnd.viewParms, dl );
+	spotPlan = R_ShadowManagerSpotPlanForDlight( &tr.shadowManager, dl );
+	dlightShadow = VK_DlightShadowParams( dl, shadowPlan, shadowInfo, shadowAtlas, shadowMode,
+		&shadowStrength );
+	if ( !dlightShadow ) {
+		dlightShadow = VK_SpotShadowParams( dl, spotPlan, shadowInfo, shadowAtlas,
+			shadowMode, &shadowStrength );
+	}
 	uniform->dlightFactors[1] = dlightShadow ? shadowStrength : 0.0f;
 	if ( dlightShadow ) {
 		VK_DlightShadowFilterOffsets( &uniform->dlightFactors[2], &uniform->dlightFactors[3] );
@@ -1563,7 +1637,8 @@ void VK_CSMShadowPass( void )
 	int atlasHeight;
 	vk_material_t material;
 
-	if ( !vk_csm_shadow_atlas_ready() ||
+	if ( ( tr.shadowManager.planned ?
+			!tr.shadowManager.csmAtlasPublished : !vk_csm_shadow_atlas_ready() ) ||
 		!tr.csm.enabled || tess.csmCascade < 0 ||
 		tess.csmCascade >= tr.csm.cascadeCount ) {
 		return;
@@ -1646,6 +1721,8 @@ void VK_LightingPass( void )
 	static int fog_stage;
 	uint32_t pipeline;
 	const shaderStage_t *pStage;
+	const shadowSpotLightPlan_t *spotPlan;
+	VkDescriptorSet shadowDescriptor = VK_NULL_HANDLE;
 	cullType_t cull;
 	int abs_light;
 
@@ -1658,6 +1735,7 @@ void VK_LightingPass( void )
 	VK_SetFogParams( &uniform, &fog_stage );
 	VK_SetLightParams( &uniform, tess.light );
 	VK_SetTextureFactors( &uniform, pStage, tess.shader->lightingBundle );
+	spotPlan = R_ShadowManagerSpotPlanForDlight( &tr.shadowManager, tess.light );
 
 	uniform_offset = VK_PushUniform( &uniform );
 	tess.dlightUpdateParams = qfalse;
@@ -1681,14 +1759,23 @@ void VK_LightingPass( void )
 	else
 		pipeline = vk.dlight_pipelines_x[cull][tess.shader->polygonOffset][fog_stage][abs_light];
 
+	if ( tr.shadowManager.planned ) {
+		if ( spotPlan && tr.shadowManager.spotAtlasPublished ) {
+			shadowDescriptor = vk_spot_shadow_descriptor();
+		} else if ( tr.shadowManager.pointAtlasPublished ) {
+			shadowDescriptor = vk.dlight_shadow_descriptor;
+		}
+	} else if ( vk_dlight_shadow_atlas_available() ) {
+		shadowDescriptor = vk.dlight_shadow_descriptor;
+	}
+
 	GL_SelectTexture( 0 );
 	{
 		vk_material_t material;
 
 		vk_material_init( &material );
 		vk_material_set_descriptor( &material, VK_DESC_TEXTURE0, R_AnimatedImageDescriptor( &pStage->bundle[ tess.shader->lightingBundle ] ) );
-		vk_material_set_descriptor( &material, VK_DESC_TEXTURE2,
-			vk_dlight_shadow_atlas_available() ? vk.dlight_shadow_descriptor : VK_NULL_HANDLE );
+		vk_material_set_descriptor( &material, VK_DESC_TEXTURE2, shadowDescriptor );
 		if ( fog_stage ) {
 			vk_material_set_descriptor( &material, VK_DESC_FOG_DLIGHT, tr.fogImage->descriptor );
 		}

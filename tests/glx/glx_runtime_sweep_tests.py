@@ -779,6 +779,13 @@ def locked_performance_sample(row: dict[str, object] | None = None) -> dict[str,
             "renderIRPassOtherDraws": 0,
             "renderIRPassOtherIndexes": 0,
             "renderIRPassOtherVertices": 0,
+            "dlightScissorActive": 1,
+            "dlightScissorCandidates": 4,
+            "dlightScissorComputed": 3,
+            "dlightScissorApplied": 2,
+            "dlightScissorFallbacks": 1,
+            "dlightScissorPixels": 1200,
+            "dlightScissorViewportPixels": 4800,
             "materialRenderer": "enabled",
             "materialReady": "ready",
             "materialPrograms": 3,
@@ -1879,11 +1886,14 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         compat = (ROOT / "code" / "renderer" / "tr_glx_compat.h").read_text(encoding="utf-8")
         tr_arb = (ROOT / "code" / "renderer" / "tr_arb.c").read_text(encoding="utf-8")
         tr_backend = (ROOT / "code" / "renderer" / "tr_backend.c").read_text(encoding="utf-8")
+        tr_local = (ROOT / "code" / "renderer" / "tr_local.h").read_text(encoding="utf-8")
         tr_shade = (ROOT / "code" / "renderer" / "tr_shade.c").read_text(encoding="utf-8")
         tr_shadows = (ROOT / "code" / "renderer" / "tr_shadows.c").read_text(encoding="utf-8")
         tr_vbo = (ROOT / "code" / "renderer" / "tr_vbo.c").read_text(encoding="utf-8")
+        tr_world = (ROOT / "code" / "renderer" / "tr_world.c").read_text(encoding="utf-8")
         bridge = (ROOT / "code" / "renderercommon" / "tr_glx_bridge.h").read_text(encoding="utf-8")
         api = (ROOT / "code" / "renderercommon" / "tr_glx_api.h").read_text(encoding="utf-8")
+        public = (ROOT / "code" / "renderercommon" / "tr_glx_public.h").read_text(encoding="utf-8")
         glx_module = (ROOT / "code" / "rendererglx" / "glx_module.cpp").read_text(encoding="utf-8")
         glx_stream = (ROOT / "code" / "rendererglx" / "glx_stream.cpp").read_text(encoding="utf-8")
         glx_static_world = (ROOT / "code" / "rendererglx" / "glx_static_world.cpp").read_text(encoding="utf-8")
@@ -1932,11 +1942,93 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("GLX_Renderer_RecordStreamBufferBind", api)
         self.assertIn("VBO_BindBufferTracked", tr_vbo)
         self.assertIn("GLX_CompatRecordStreamBufferBind", tr_vbo)
+        self.assertIn("dlightClipBits[SHADER_MAX_VERTEXES]", tr_local)
+        self.assertIn("dlightIndexes[SHADER_MAX_INDEXES]", tr_local)
+        self.assertIn("dlightColors[SHADER_MAX_VERTEXES]", tr_local)
+        self.assertIn("texCoords = (float *)tess.svars.texcoords[0];", tr_shade)
+        self.assertIn("colors = tess.dlightColors[0];", tr_shade)
+        self.assertIn("int numIndexes, byte *visited", tr_shade)
+        self.assertIn("Com_Memset( visited, 0, tess.numVertexes * sizeof( *visited ) );", tr_shade)
+        self.assertIn("if ( visited[idx] )", tr_shade)
+        self.assertIn("glxScissorEnabled = GLX_CompatDlightScissorEnabled();", tr_shade)
+        self.assertEqual(tr_shade.count("GLX_CompatDlightScissorEnabled()"), 1)
+        self.assertIn("if ( glxScissorEnabled ) {", tr_shade)
+        self.assertIn("numIndexes, clipBits, &glxScissorX", tr_shade)
+        self.assertIn("cullBackFaces = !r_dlightBacks->integer;", tr_shade)
+        self.assertEqual(tr_shade.count("r_dlightBacks->integer"), 1)
+        self.assertIn("lightBit = 1 << l;", tr_shade)
+        self.assertIn("tess.dlightBits & lightBit", tr_shade)
+        self.assertIn("tess.vertexDlightBits[i] & lightBit", tr_shade)
+        self.assertIn("tess.vertexDlightBits[c] & lightBit", tr_shade)
+        self.assertIn("radiusHalf = radius * 0.5f;", tr_shade)
+        self.assertIn("colors[0] = color0 * modulate;", tr_shade)
+        self.assertEqual(tr_shade.count("1 << l"), 1)
+        self.assertIn("qboolean legacyDlightArraysBound = qfalse;", tr_shade)
+        self.assertIn("if ( glxStreamedDraw ) {\n\t\t\tlegacyDlightArraysBound = qtrue;", tr_shade)
+        self.assertIn("if ( !legacyDlightArraysBound ) {\n\t\t\t\tGL_ClientState( 1, CLS_NONE );", tr_shade)
+        self.assertIn("if ( !legacyDlightArraysBound ) {\n\t\t\t\tGL_ClientState( 1, CLS_NONE );\n\t\t\t\tGL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );\n\t\t\t\tqglTexCoordPointer", tr_shade)
+        self.assertNotIn("glxScissorApplied = glxScissorComputed &&", tr_shade)
+        self.assertNotIn("texCoords[0] = 0.0f;", tr_shade)
+        self.assertNotIn("colors[0] = 0.0f;", tr_shade)
+        self.assertNotIn("texCoordsArray[SHADER_MAX_VERTEXES]", tr_shade)
+        self.assertNotIn("colorArray[SHADER_MAX_VERTEXES]", tr_shade)
         self.assertIn("post/output ownership", glx_module)
         self.assertIn("GLX_RenderIR_BuildPostOutputPlan", glx_module)
         self.assertIn("GLX_Executor_ConsumeOutputTransform", glx_module)
         self.assertIn("DrawElementsClassified", glx_module)
         self.assertIn("GLX_RenderIR_ClassifyDynamicDrawRole", glx_module)
+        self.assertIn("ProjectedDlightRecord", glx_ir)
+        self.assertIn("ProjectedDlightListRef projectedDlights", glx_ir)
+        self.assertGreaterEqual(glx_ir.count("ProjectedDlightListRef projectedDlights"), 2)
+        self.assertIn("GLX_RenderIR_ValidateProjectedDlightRecord", glx_ir)
+        self.assertIn("GLX_RenderIR_ValidateProjectedDlightListRef", glx_ir)
+        self.assertIn("GLX_RenderIR_BuildProjectedDlightList", glx_ir)
+        self.assertIn("ProjectedDlightListBuildResult", glx_ir)
+        self.assertIn("ProjectedDlightShaderInput", glx_ir)
+        self.assertIn("GLX_RenderIR_ValidateProjectedDlightShaderInput", glx_ir)
+        self.assertIn("result.copiedMask |= bit;", glx_ir)
+        self.assertIn("result.droppedMask |= bit;", glx_ir)
+        self.assertIn("glxProjectedDlightRecord_t", public)
+        self.assertIn("GLX_PROJECTED_DLIGHT_FLAG_ADDITIVE", public)
+        self.assertIn("GLX_Renderer_RecordProjectedDlights", api)
+        self.assertIn("GLX_Renderer_RecordProjectedDlightList", api)
+        self.assertIn("GLX_Renderer_DrawElementsClassifiedProjectedDlights", api)
+        self.assertIn("GLX_CompatRecordProjectedDlights", bridge)
+        self.assertIn("GLX_CompatRecordProjectedDlightList", bridge)
+        self.assertIn("GLX_CompatDrawElementsClassifiedProjectedDlights", bridge)
+        self.assertIn("(unsigned int)lightBit", tr_shade)
+        self.assertIn("GLX_PMLightMaskForCurrentLight", (ROOT / "code" / "renderer" / "tr_arb.c").read_text(encoding="utf-8"))
+        self.assertIn("R_GLXRecordProjectedDlights", tr_world)
+        self.assertIn("R_GLXStaticSurfaceItemIndex", tr_world)
+        self.assertIn("VectorCopy( dlights[i].transformed, records[i].origin );", tr_world)
+        self.assertIn("GLX_CompatRecordProjectedDlightList( R_GLXStaticSurfaceItemIndex( surf ),", tr_world)
+        self.assertIn("GLX_Dlight_RecordProjectedDlights", glx_module)
+        self.assertIn("GLX_Dlight_RecordProjectedDlightList", glx_module)
+        self.assertIn("GLX_Dlight_RecordProjectedPacketDlightList", glx_module)
+        self.assertIn("GLX_Dlight_RecordProjectedShaderInput", glx_module)
+        self.assertIn("GLX_Dlight_ProjectedShaderProgrammable", glx_module)
+        self.assertIn("GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT", glx_module)
+        self.assertIn("u_ProjectedDlightOriginRadius", glx_module)
+        self.assertIn("varying vec3 v_LocalPos;", glx_module)
+        self.assertIn("evaluateProjectedDlights", glx_module)
+        self.assertIn("r_glxDlightProjectedProgram", glx_module)
+        self.assertIn("GLX_Dlight_ProjectedProgramEnabled", glx_module)
+        self.assertIn("GLX_Dlight_BindProjectedShaderInput", glx_module)
+        self.assertIn("GLX_Dlight_ClearProjectedShaderInput", glx_module)
+        self.assertIn("dlight projected shader inputs", glx_module)
+        self.assertIn("dlight projected shader uniforms", glx_module)
+        self.assertIn("projectedPacketListRefs", glx_module)
+        self.assertIn("PrepareStaticWorldProjectedDlightRun", glx_module)
+        self.assertIn("BindStaticWorldProjectedDlightRun", glx_module)
+        self.assertIn("BindStaticWorldProjectedDlightRun( projectedPacket, projectedShaderInput );", glx_module)
+        self.assertIn("StaticWorldProjectedDlightSplitActive", glx_module)
+        self.assertIn("StaticWorldDrawProjectedDlightRunsFiltered", glx_module)
+        self.assertIn("GLX_Dlight_ProjectedProgramEnabled( dlight_ )", glx_module)
+        self.assertIn("ConsumeStaticWorldProjectedDlightRun", glx_module)
+        self.assertIn("GLX_Module_StaticWorldPacketForItemRange", glx_module)
+        self.assertIn("worldPacketsWithProjectedDlights", (ROOT / "code" / "rendererglx" / "glx_executor.h").read_text(encoding="utf-8"))
+        self.assertIn("dynamicDrawsWithProjectedDlights", (ROOT / "code" / "rendererglx" / "glx_executor.h").read_text(encoding="utf-8"))
+        self.assertIn("GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT", glx_ir)
         self.assertIn("MaterialParameterBlock", glx_ir)
         self.assertIn("PostOutputPlan", glx_ir)
         self.assertIn("GLX_POST_OUTPUT_FALLBACK_EXECUTOR_REJECT", glx_ir)
@@ -1957,6 +2049,8 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("lastPostNodeHash", glx_module)
         self.assertIn("lastOutputTransformHash", glx_module)
         self.assertIn("MATERIAL_PARAMETER_BLOCKS_RE", SWEEP_PATH.read_text(encoding="utf-8"))
+        self.assertIn("GLX_DLIGHT_PROJECTED_SHADER_INPUTS_RE", SWEEP_PATH.read_text(encoding="utf-8"))
+        self.assertIn("GLX_DLIGHT_PROJECTED_SHADER_UNIFORMS_RE", SWEEP_PATH.read_text(encoding="utf-8"))
 
     def test_keep_window_renderer_restart_reinitializes_glx_caps(self) -> None:
         source = (ROOT / "code" / "renderer" / "tr_init.c").read_text(encoding="utf-8")
@@ -2335,6 +2429,45 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
 
 class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
+    def write_projected_dlight_shader_profile_log(
+        self,
+        log: Path,
+        *,
+        binds: int = 1,
+        failures: int = 0,
+        executable: int = 1,
+        suppressed: int = 0,
+        world_inputs: int = 0,
+        dynamic_inputs: int = 1,
+        world_executable: int = 0,
+        world_binds: int = 0,
+        dynamic_executable: int | None = None,
+        dynamic_binds: int | None = None,
+        truncated: int = 0,
+        limit_suppressed: int = 0,
+    ) -> None:
+        if dynamic_executable is None:
+            dynamic_executable = executable
+        if dynamic_binds is None:
+            dynamic_binds = binds
+        input_count = world_inputs + dynamic_inputs
+        log.write_text(
+            "\n".join(
+                [
+                    f"  GLx pass schedule: valid {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
+                    "  render IR dynamic roles: generic 0/0/0, dlight 1/6/0, shadow 0/0/0, beam 0/0/0, post 0/0/0",
+                    "  render IR dynamic passes: dlight 1/6/0, scene 0/0/0, post 0/0/0, other 0/0/0",
+                    f"  dlight projected shader inputs: inputs {input_count}/{input_count} records, world {world_inputs}, dynamic {dynamic_inputs}, programmable {input_count}, fallback 0, invalid 0",
+                    f"  dlight projected shader uniforms: attempts 1, binds {binds}, failures {failures}, records {input_count}, truncated {truncated}, executable {executable}, suppressed {suppressed}, world {world_executable}/{world_binds}, dynamic {dynamic_executable}/{dynamic_binds}, limit-suppressed {limit_suppressed}, limit 3",
+                    "  dlight projected shader stream: attempts 0, uploads 0, failures 0, skipped 0, records 0, bytes 0, persistent 0, world 0, dynamic 0, last 0/0",
+                    "  dynamic stream categories: entity 0/0, particle 0/0, poly 0/0, mark 0/0, weapon 0/0, ui 0/0, beam 0/0, dlight 1/1, special 0/0",
+                    "  static world GLx renderer: yes, arena upload yes, arena draw yes",
+                    "  static world GLx packet batches: yes, attempts 1, batches 1, packet runs 1/3 indexes, fallback runs 0, singles 0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
     def test_glx_diagnostics_accept_clean_rc_log(self) -> None:
         self.assertEqual(glx_runtime_sweep.normalize_tone_map_name("aces"), "aces-fitted")
         self.assertEqual(glx_runtime_sweep.normalize_tone_map_name("reinhard"), "reinhard-simple")
@@ -2355,9 +2488,12 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "  glx: ownership legacy delegation 0 calls/0 items, generic 0, vbo-device 0, vbo-soft 0, arrays 0",
                         f"  GLx pass schedule: valid {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
                         "  pass schedule: invalid 0/00000000 none",
-                        f"  render IR products: passes {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}, world packets 1, dynamic draws 2, materials 3, uploads 4, post nodes 1, outputs 1, rejects 0",
+                        f"  render IR products: passes {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}, world packets 1, projected world packets 1/2 lights, dynamic draws 2, projected dynamic draws 1/1 lights, materials 3, uploads 4, post nodes 1, outputs 1, rejects 0",
                         "  render IR dynamic roles: generic 1/12/0, dlight 1/6/0, shadow 0/0/0, beam 0/0/0, post 0/0/0",
                         "  render IR dynamic passes: dlight 1/6/0, scene 1/12/0, post 0/0/0, other 0/0/0",
+                        "  dlight projected shader inputs: inputs 2/3 records, world 1, dynamic 1, programmable 2, fallback 0, invalid 0",
+                        "  dlight projected shader uniforms: attempts 1, binds 1, failures 0, records 3, truncated 0, executable 0, suppressed 1, world 0/1, dynamic 0/0, limit-suppressed 0, limit 3",
+                        "  dlight projected shader stream: attempts 0, uploads 0, failures 0, skipped 0, records 0, bytes 0, persistent 0, world 0, dynamic 0, last 0/0",
                         "  post/output ownership: mode legacy-fallback, post nodes 1, outputs 1, legacy fallback yes, executable nodes 0, executable outputs 0, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000001",
                         "  post shader plan: valid yes, features 0x000000de, hash 0x0badcafe, textures 2, uniforms 12, frames 3, invalid 0",
                         "  post shader cache: ready yes, programs 3/32, plans 4 valid/0 invalid, cache 2 hits/3 misses, compile 3 attempts/0 failures, link failures 0, source failures 0, source hash 0x12345678, program 99",
@@ -2565,6 +2701,12 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             )
             self.assertEqual(pass_schedule["hash"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH)
             self.assertEqual(pass_schedule["order"], glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE)
+            render_ir_products = diagnostics["metrics"]["renderIRProducts"]
+            self.assertEqual(render_ir_products["worldPackets"], 1)
+            self.assertEqual(render_ir_products["projectedWorldPackets"], 1)
+            self.assertEqual(render_ir_products["projectedWorldPacketDlights"], 2)
+            self.assertEqual(render_ir_products["projectedDynamicDraws"], 1)
+            self.assertEqual(render_ir_products["projectedDynamicDlights"], 1)
             render_ir_roles = diagnostics["metrics"]["renderIRDynamicRoles"]
             self.assertEqual(render_ir_roles["genericDraws"], 1)
             self.assertEqual(render_ir_roles["dlightDraws"], 1)
@@ -2573,6 +2715,34 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(render_ir_passes["dlightDraws"], 1)
             self.assertEqual(render_ir_passes["sceneDraws"], 1)
             self.assertEqual(render_ir_passes["sceneIndexes"], 12)
+            projected_shader_inputs = diagnostics["metrics"]["dlightProjectedShaderInputs"]
+            self.assertEqual(projected_shader_inputs["inputs"], 2)
+            self.assertEqual(projected_shader_inputs["records"], 3)
+            self.assertEqual(projected_shader_inputs["world"], 1)
+            self.assertEqual(projected_shader_inputs["dynamic"], 1)
+            self.assertEqual(projected_shader_inputs["programmable"], 2)
+            self.assertEqual(projected_shader_inputs["fallback"], 0)
+            self.assertEqual(projected_shader_inputs["invalid"], 0)
+            projected_shader_uniforms = diagnostics["metrics"]["dlightProjectedShaderUniforms"]
+            self.assertEqual(projected_shader_uniforms["attempts"], 1)
+            self.assertEqual(projected_shader_uniforms["binds"], 1)
+            self.assertEqual(projected_shader_uniforms["failures"], 0)
+            self.assertEqual(projected_shader_uniforms["records"], 3)
+            self.assertEqual(projected_shader_uniforms["truncated"], 0)
+            self.assertEqual(projected_shader_uniforms["executable"], 0)
+            self.assertEqual(projected_shader_uniforms["suppressed"], 1)
+            self.assertEqual(projected_shader_uniforms["worldExecutable"], 0)
+            self.assertEqual(projected_shader_uniforms["worldBinds"], 1)
+            self.assertEqual(projected_shader_uniforms["dynamicExecutable"], 0)
+            self.assertEqual(projected_shader_uniforms["dynamicBinds"], 0)
+            self.assertEqual(projected_shader_uniforms["limitSuppressed"], 0)
+            self.assertEqual(projected_shader_uniforms["limit"], 3)
+            projected_shader_stream = diagnostics["metrics"]["dlightProjectedShaderStream"]
+            self.assertEqual(projected_shader_stream["attempts"], 0)
+            self.assertEqual(projected_shader_stream["uploads"], 0)
+            self.assertEqual(projected_shader_stream["records"], 0)
+            self.assertEqual(projected_shader_stream["bytes"], 0)
+            self.assertEqual(projected_shader_stream["persistent"], 0)
             color_pipeline = diagnostics["metrics"]["colorPipeline"]
             self.assertEqual(color_pipeline["space"], "scene-linear")
             self.assertEqual(color_pipeline["transfer"], "sdr-srgb")
@@ -2681,6 +2851,78 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(display_state["flags"], 0x000000FE)
             self.assertEqual(display_state["hash"], 0x12345678)
             self.assertEqual(display_state["previous"], 0x01020304)
+
+    def test_projected_dlight_shader_profile_accepts_executable_uniforms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-shader.log"
+            self.write_projected_dlight_shader_profile_log(log)
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-shader")
+
+            self.assertTrue(diagnostics["found"])
+            self.assertEqual(diagnostics["failures"], [])
+            uniforms = diagnostics["metrics"]["dlightProjectedShaderUniforms"]
+            self.assertEqual(uniforms["binds"], 1)
+            self.assertEqual(uniforms["executable"], 1)
+            self.assertEqual(uniforms["suppressed"], 0)
+            self.assertEqual(uniforms["dynamicExecutable"], 1)
+            self.assertEqual(uniforms["dynamicBinds"], 1)
+
+    def test_projected_dlight_shader_profile_rejects_suppressed_uniforms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-shader-suppressed.log"
+            self.write_projected_dlight_shader_profile_log(
+                log,
+                executable=0,
+                suppressed=1,
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-shader")
+            failures = "\n".join(diagnostics["failures"])
+
+            self.assertIn("did not execute projected uniform binds", failures)
+            self.assertIn("did not execute projected uniform binds for dynamic draws", failures)
+            self.assertIn("still suppressed projected uniform binds", failures)
+
+    def test_projected_dlight_shader_profile_rejects_truncated_uniforms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-shader-truncated.log"
+            self.write_projected_dlight_shader_profile_log(
+                log,
+                binds=1,
+                executable=0,
+                suppressed=1,
+                dynamic_executable=0,
+                dynamic_binds=1,
+                truncated=1,
+                limit_suppressed=1,
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-shader")
+            failures = "\n".join(diagnostics["failures"])
+
+            self.assertIn("truncated projected uniform input", failures)
+            self.assertIn("suppressed over-limit projected uniform binds", failures)
+
+    def test_projected_dlight_shader_profile_rejects_missing_world_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-shader-world-missing.log"
+            self.write_projected_dlight_shader_profile_log(
+                log,
+                binds=2,
+                executable=1,
+                world_inputs=1,
+                dynamic_inputs=1,
+                world_executable=0,
+                world_binds=1,
+                dynamic_executable=1,
+                dynamic_binds=1,
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-shader")
+            failures = "\n".join(diagnostics["failures"])
+
+            self.assertIn("did not execute projected uniform binds for world packets", failures)
 
     def test_glx_diagnostics_reject_stream_dlights_without_ir_ownership(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3682,6 +3924,9 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertGreater(evidence["renderIRDlightOwnership"]["streamDraws"], 0)
         self.assertGreater(evidence["renderIRDlightOwnership"]["role"]["draws"], 0)
         self.assertGreater(evidence["renderIRDlightOwnership"]["pass"]["draws"], 0)
+        self.assertGreater(evidence["dlightScissor"]["active"], 0)
+        self.assertGreater(evidence["dlightScissor"]["computed"], 0)
+        self.assertGreater(evidence["dlightScissor"]["applied"], 0)
         self.assertIn("GL2X", evidence["tierSupport"]["dynamicEntities"])
         self.assertIn("GL12", evidence["tierSupport"]["dynamicLights"])
         self.assertGreater(evidence["streamGuards"]["dynamicLight"]["accepted"], 0)
@@ -3708,6 +3953,29 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         failures = glx_runtime_sweep.evaluate_gate(manifest)
 
         self.assertTrue(any("No dynamic proof evidence" in failure for failure in failures))
+
+    def test_dynamic_proof_rejects_stale_or_missing_scissor_evidence(self) -> None:
+        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
+        evidence = copy.deepcopy(manifest["dynamicProofEvidence"])
+        evidence["version"] = 1
+        evidence.pop("dlightScissor", None)
+        evidence["status"] = "passed"
+        evidence["failures"] = []
+        manifest["dynamicProofEvidence"] = evidence
+
+        failures = glx_runtime_sweep.evaluate_dynamic_proof(manifest, requirements)
+        text = "\n".join(failures)
+
+        self.assertIn("unsupported version 1", text)
+        self.assertIn("projected-dlight scissor evidence", text)
+
+        evidence["version"] = glx_runtime_sweep.GLX_DYNAMIC_PROOF_VERSION
+        failures = glx_runtime_sweep.evaluate_dynamic_proof(manifest, requirements)
+        text = "\n".join(failures)
+
+        self.assertNotIn("unsupported version", text)
+        self.assertIn("projected-dlight scissor evidence", text)
 
     def test_dynamic_proof_rejects_stale_version_and_unsafe_counters(self) -> None:
         manifest = release_proof_manifest("rc-proof", "windows-x64")
@@ -3777,6 +4045,18 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                             "dlightVertices": 0,
                         }
                     )
+                if isinstance(metrics.get("dlightScissor"), dict):
+                    metrics["dlightScissor"].update(  # type: ignore[index, union-attr]
+                        {
+                            "active": 0,
+                            "candidates": 0,
+                            "computed": 0,
+                            "applied": 0,
+                            "fallbacks": 0,
+                            "pixels": 0,
+                            "viewportPixels": 0,
+                        }
+                    )
 
             performance = run.get("performance")
             if isinstance(performance, dict) and isinstance(performance.get("latest"), dict):
@@ -3799,6 +4079,13 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "renderIRPassDlightDraws": 0,
                         "renderIRPassDlightIndexes": 0,
                         "renderIRPassDlightVertices": 0,
+                        "dlightScissorActive": 0,
+                        "dlightScissorCandidates": 0,
+                        "dlightScissorComputed": 0,
+                        "dlightScissorApplied": 0,
+                        "dlightScissorFallbacks": 0,
+                        "dlightScissorPixels": 0,
+                        "dlightScissorViewportPixels": 0,
                     }
                 )
 
@@ -3817,6 +4104,9 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertIn("tier-support evidence", text)
         self.assertIn("render-IR dlight role ownership", text)
         self.assertIn("render-IR dynamic-lights pass ownership", text)
+        self.assertIn("projected-dlight scissor active state", text)
+        self.assertIn("computed projected-dlight scissor", text)
+        self.assertIn("applied projected-dlight scissor", text)
         self.assertIn("dynamic stream draw attempts", text)
         self.assertIn("submitted dynamic stream indexes or draws", text)
         self.assertIn("stream draw fallbacks", text)
@@ -4064,6 +4354,15 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             },
         )
         self.assertEqual(
+            glx_runtime_sweep.PROFILE_CVARS["glx-dlight-shader"],
+            {
+                "r_glxProfile": "rc",
+                **glx_runtime_sweep.GLX_RC_PROFILE_CVARS,
+                "r_dynamiclight": "1",
+                "r_glxDlightProjectedProgram": "1",
+            },
+        )
+        self.assertEqual(
             glx_runtime_sweep.PROFILE_CVARS["glx-stress"],
             {"r_glxProfile": "stress", **glx_runtime_sweep.GLX_STRESS_PROFILE_CVARS},
         )
@@ -4107,6 +4406,10 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(
             glx_runtime_sweep.PROFILE_MAPS["glx-material"],
             "q3dm1,q3dm11",
+        )
+        self.assertEqual(
+            glx_runtime_sweep.corpus_scene_ids_for_profile("glx-dlight-shader"),
+            ("stock-q3dm1-hud", "timedemo-demo1"),
         )
         self.assertEqual(glx_runtime_sweep.PROFILE_CVARS["glx-color"]["r_colorGrade"], "3")
 
@@ -4382,6 +4685,18 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(profile["r_glxDlightScissor"], "auto")
         self.assertEqual(profile["r_glxStreamDrawScreenMaps"], "0")
         self.assertEqual(profile["r_glxStreamDrawVideoMaps"], "0")
+
+    def test_dlight_shader_profile_preserves_projected_program_override(self) -> None:
+        profile = dict(glx_runtime_sweep.PROFILE_CVARS["glx-dlight-shader"])
+        args = argparse.Namespace(profile="glx-dlight-shader")
+
+        startup = glx_runtime_sweep.launch_cvars(profile)
+        filtered = glx_runtime_sweep.config_cvars(args, profile)
+
+        self.assertEqual(startup["r_glxProfile"], "rc")
+        self.assertEqual(startup["r_dynamiclight"], "1")
+        self.assertNotIn("r_glxStreamDraw", filtered)
+        self.assertEqual(filtered["r_glxDlightProjectedProgram"], "1")
 
     def test_proof_dir_defaults_wire_visual_and_performance_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4944,6 +5259,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                 self.assertEqual(profile["r_glxStreamDrawPostProcess"], "1")
                 self.assertEqual(profile["r_glxStreamDrawDynamicLights"], "auto")
                 self.assertEqual(profile["r_glxDlightScissor"], "auto")
+                self.assertEqual(profile["r_glxDlightProjectedProgram"], "0")
                 self.assertEqual(profile["r_glxStreamDrawScreenMaps"], "0")
                 self.assertEqual(profile["r_glxStreamDrawVideoMaps"], "0")
 
@@ -4986,6 +5302,8 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                         "glx: dlight build legacy 9 skipped 10 nohit 2 verts 300 idx 600/450 pm 3 pmverts 240 pmidx 360",
                         "glx: dlight cull legacy verts 40 idx 90",
                         "glx: dlight scissor active yes candidates 4 computed 3 applied 2 fallbacks 1 pixels 1200/4800",
+                        "glx: dlight projected shader uniforms attempts 2 binds 1 failures 1 records 3 truncated 0 executable 1 suppressed 0 world 1/1 dynamic 0/0 limit-suppressed 0 limit 3",
+                        "glx: dlight projected shader stream attempts 2 uploads 1 failures 0 skipped 1 records 3 bytes 96 persistent 1 world 1 dynamic 0 last 1024/96",
                         "glx: stream categories entity 2/2, particle 1/1, poly 1/1, mark 1/1, weapon 1/1, ui 1/1, beam 3/3, dlight 5/6, special 4/4",
                         "glx: stream roles generic 7/8/0, dlight 5/6/1, shadow 2/2/0, beam 3/3/0, post 4/4/0",
                         "glx: stream reservation last 256 bytes at 1024 using map-range, largest 4096 bytes, same-frame wrap rejects 0",
@@ -5215,6 +5533,30 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["dlightScissorFallbacks"], 1)
             self.assertEqual(performance["latest"]["dlightScissorPixels"], 1200)
             self.assertEqual(performance["latest"]["dlightScissorViewportPixels"], 4800)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformAttempts"], 2)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformBinds"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformFailures"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformRecords"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformTruncated"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformExecutable"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformSuppressed"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformWorldExecutable"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformWorldBinds"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformDynamicExecutable"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformDynamicBinds"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformLimitSuppressed"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderUniformLimit"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamAttempts"], 2)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamUploads"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamFailures"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamSkipped"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamRecords"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamBytes"], 96)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamPersistent"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamWorld"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamDynamic"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamLastOffset"], 1024)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamLastBytes"], 96)
             self.assertEqual(performance["latest"]["streamCategoryEntityDraws"], 2)
             self.assertEqual(performance["latest"]["streamCategoryParticleDraws"], 1)
             self.assertEqual(performance["latest"]["streamCategoryPolyDraws"], 1)

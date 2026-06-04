@@ -389,6 +389,8 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	dl->shadowReceiverCount = 0;
 	dl->shadowPriority = 0.0f;
 	dl->shadowPriorityMultiplier = 1.0f;
+	dl->shadowSpotSource = -1;
+	dl->shadowSpotSourceIndex = -1;
 #endif
 }
 
@@ -447,12 +449,15 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	dl->shadowReceiverCount = 0;
 	dl->shadowPriority = 0.0f;
 	dl->shadowPriorityMultiplier = 1.0f;
+	dl->shadowSpotSource = -1;
+	dl->shadowSpotSourceIndex = -1;
 #endif
 }
 
 
 #ifdef USE_PMLIGHT
-static qboolean R_LightCandidateVisibleInPVS( const refdef_t *fd, const vec3_t origin, float radius )
+static qboolean R_LightCandidateVisibleInPVS( const refdef_t *fd, const vec3_t origin,
+	float radius, int leafCluster, int leafArea )
 {
 	vec3_t sample;
 	float sampleRadius;
@@ -461,7 +466,11 @@ static qboolean R_LightCandidateVisibleInPVS( const refdef_t *fd, const vec3_t o
 	if ( !tr.world || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
 		return qtrue;
 	}
-	if ( R_PointInCurrentPVS( fd->vieworg, origin ) ) {
+	if ( leafCluster >= 0 ) {
+		if ( R_LeafClusterInCurrentPVS( fd->vieworg, leafCluster, leafArea ) ) {
+			return qtrue;
+		}
+	} else if ( R_PointInCurrentPVS( fd->vieworg, origin ) ) {
 		return qtrue;
 	}
 	if ( radius <= 32.0f ) {
@@ -493,6 +502,7 @@ static float R_StaticMapLightScenePriority( const mapLightDef_t *light, const re
 	float brightness;
 	float dist2;
 	float radius2;
+	float directionalWeight;
 
 	brightness = light->color[0];
 	if ( light->color[1] > brightness ) {
@@ -508,9 +518,43 @@ static float R_StaticMapLightScenePriority( const mapLightDef_t *light, const re
 	VectorSubtract( light->origin, fd->vieworg, delta );
 	dist2 = DotProduct( delta, delta );
 	radius2 = Square( light->radius );
+	directionalWeight = 1.0f;
+	if ( light->type == MAP_LIGHT_SPOT ) {
+		vec3_t toView;
+		float facing;
 
-	return brightness * light->designerPriority * light->intensity * radius2 /
+		VectorSubtract( fd->vieworg, light->origin, toView );
+		if ( VectorNormalize2( toView, toView ) > 1.0f ) {
+			facing = DotProduct( light->direction, toView );
+			directionalWeight = Com_Clamp( 0.15f, 1.0f, 0.35f + 0.65f * facing );
+		}
+	}
+
+	return brightness * directionalWeight * light->designerPriority * light->intensity * radius2 /
 		( dist2 + radius2 + 1.0f );
+}
+
+static void R_StaticMapLightSpotEnd( const mapLightDef_t *light, vec3_t end )
+{
+	VectorMA( light->origin, light->radius, light->direction, end );
+}
+
+static qboolean R_StaticMapLightVisibleInPVS( const refdef_t *fd, const mapLightDef_t *light )
+{
+	if ( R_LightCandidateVisibleInPVS( fd, light->origin, light->radius,
+		light->leafCluster, light->leafArea ) ) {
+		return qtrue;
+	}
+	if ( light->type == MAP_LIGHT_SPOT ) {
+		vec3_t end;
+
+		R_StaticMapLightSpotEnd( light, end );
+		if ( R_LightCandidateVisibleInPVS( fd, end, light->radius * 0.25f, -1, -1 ) ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
 }
 
 static float R_SurfaceLightProxyHemisphereWeight( const surfaceLightProxy_t *proxy, const refdef_t *fd )
@@ -630,7 +674,7 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 	for ( i = 0; i < tr.staticMapLights.count; i++ ) {
 		const mapLightDef_t *light = &tr.staticMapLights.lights[i];
 
-		if ( R_LightCandidateVisibleInPVS( fd, light->origin, light->radius ) ) {
+		if ( R_StaticMapLightVisibleInPVS( fd, light ) ) {
 			visible[i] = qtrue;
 			visibleCount++;
 		} else {
@@ -670,14 +714,27 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 		selected[bestIndex] = qtrue;
 		light = &tr.staticMapLights.lights[bestIndex];
 		before = r_numdlights;
-		RE_AddDynamicLightToScene( light->origin, light->radius,
-			light->color[0], light->color[1], light->color[2], qfalse );
+		if ( light->type == MAP_LIGHT_SPOT ) {
+			vec3_t end;
+
+			R_StaticMapLightSpotEnd( light, end );
+			RE_AddLinearLightToScene( light->origin, end, light->radius,
+				light->color[0], light->color[1], light->color[2] );
+		} else {
+			RE_AddDynamicLightToScene( light->origin, light->radius,
+				light->color[0], light->color[1], light->color[2], qfalse );
+		}
 		if ( r_numdlights <= before ) {
 			continue;
 		}
 
 		dl = &backEndData->dlights[before];
-		dl->shadowEligible = ( r_staticLightShadows && r_staticLightShadows->integer &&
+		if ( light->type == MAP_LIGHT_SPOT ) {
+			dl->shadowSpotSource = SHADOW_SPOT_SOURCE_STATIC_MAP;
+			dl->shadowSpotSourceIndex = bestIndex;
+		}
+		dl->shadowEligible = ( light->type == MAP_LIGHT_POINT &&
+			r_staticLightShadows && r_staticLightShadows->integer &&
 			light->castsShadows && shadowPromoted < shadowBudget ) ? qtrue : qfalse;
 		dl->shadowPriorityMultiplier = light->designerPriority *
 			Com_Clamp( 0.25f, 4.0f, light->intensity / light->radius );
@@ -737,9 +794,15 @@ static void R_ResetSurfaceLightProxyFrameCounters( void )
 {
 	tr.surfaceLightProxies.promotedThisFrame = 0;
 	tr.surfaceLightProxies.shadowEligibleThisFrame = 0;
+	tr.surfaceLightProxies.spotShadowDeferredThisFrame = 0;
 	tr.surfaceLightProxies.skippedDisabledThisFrame = 0;
 	tr.surfaceLightProxies.skippedPVSThisFrame = 0;
 	tr.surfaceLightProxies.skippedBudgetThisFrame = 0;
+}
+
+static void R_SurfaceLightProxySpotEnd( const surfaceLightProxy_t *proxy, vec3_t end )
+{
+	VectorMA( proxy->origin, proxy->radius, proxy->normal, end );
 }
 
 static void R_AddSurfaceLightProxiesToScene( const refdef_t *fd )
@@ -787,7 +850,8 @@ static void R_AddSurfaceLightProxiesToScene( const refdef_t *fd )
 	for ( i = 0; i < tr.surfaceLightProxies.count; i++ ) {
 		const surfaceLightProxy_t *proxy = &tr.surfaceLightProxies.proxies[i];
 
-		if ( R_LightCandidateVisibleInPVS( fd, proxy->origin, proxy->radius ) ) {
+		if ( R_LightCandidateVisibleInPVS( fd, proxy->origin, proxy->radius,
+			proxy->leafCluster, proxy->leafArea ) ) {
 			visible[i] = qtrue;
 			visibleCount++;
 		} else {
@@ -830,18 +894,37 @@ static void R_AddSurfaceLightProxiesToScene( const refdef_t *fd )
 		selected[bestIndex] = qtrue;
 		proxy = &tr.surfaceLightProxies.proxies[bestIndex];
 		before = r_numdlights;
-		RE_AddDynamicLightToScene( proxy->origin, proxy->radius,
-			proxy->color[0], proxy->color[1], proxy->color[2], qfalse );
+		if ( proxy->projection == SURFACE_LIGHT_PROXY_SPOT ) {
+			vec3_t end;
+
+			R_SurfaceLightProxySpotEnd( proxy, end );
+			RE_AddLinearLightToScene( proxy->origin, end, proxy->radius,
+				proxy->color[0], proxy->color[1], proxy->color[2] );
+		} else {
+			RE_AddDynamicLightToScene( proxy->origin, proxy->radius,
+				proxy->color[0], proxy->color[1], proxy->color[2], qfalse );
+		}
 		if ( r_numdlights <= before ) {
 			continue;
 		}
 
 		dl = &backEndData->dlights[before];
+		if ( proxy->projection == SURFACE_LIGHT_PROXY_SPOT ) {
+			dl->shadowSpotSource = SHADOW_SPOT_SOURCE_SURFACELIGHT_PROXY;
+			dl->shadowSpotSourceIndex = bestIndex;
+		}
 		hemisphereWeight = R_SurfaceLightProxyHemisphereWeight( proxy, fd );
 		viewWeight = R_SurfaceLightProxyViewWeight( proxy, fd, tanHalfFovX, tanHalfFovY );
-		dl->shadowEligible = ( r_surfaceLightProxyShadows && r_surfaceLightProxyShadows->integer &&
+		dl->shadowEligible = qfalse;
+		if ( r_surfaceLightProxyShadows && r_surfaceLightProxyShadows->integer &&
 			proxy->castsShadows && hemisphereWeight >= 0.25f && viewWeight >= 0.25f &&
-			shadowPromoted < shadowBudget ) ? qtrue : qfalse;
+			shadowPromoted < shadowBudget ) {
+			if ( proxy->projection == SURFACE_LIGHT_PROXY_POINT ) {
+				dl->shadowEligible = qtrue;
+			} else {
+				tr.surfaceLightProxies.spotShadowDeferredThisFrame++;
+			}
+		}
 		dl->shadowPriorityMultiplier = proxy->designerPriority *
 			Com_Clamp( 0.25f, 4.0f, proxy->intensity / 400.0f ) *
 			Com_Clamp( 0.25f, 1.0f, hemisphereWeight ) *

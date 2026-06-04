@@ -886,12 +886,15 @@ static void R_CSMPlanCascade( int cascadeIndex, float splitNear, float splitFar,
 	cascade->splitFar = splitFar;
 	cascade->radius = MAX( sqrtf( radiusSquared ), 1.0f );
 	cascade->texelSize = ( cascade->radius * 2.0f ) / (float)resolution;
-	halfExtent = ceilf( cascade->radius / cascade->texelSize ) * cascade->texelSize;
+	halfExtent = ceilf( ( cascade->radius + cascade->texelSize * 0.5f ) /
+		cascade->texelSize ) * cascade->texelSize;
+	cascade->texelSize = ( halfExtent * 2.0f ) / (float)resolution;
 
 	for ( i = 0; i < 3; i++ ) {
 		lightCenter[i] = DotProduct( center, lightAxis[i] );
 		VectorCopy( lightAxis[i], cascade->axis[i] );
 	}
+	lightCenter[0] = R_CSMSnapLightCoord( lightCenter[0], cascade->texelSize );
 	lightCenter[1] = R_CSMSnapLightCoord( lightCenter[1], cascade->texelSize );
 	lightCenter[2] = R_CSMSnapLightCoord( lightCenter[2], cascade->texelSize );
 
@@ -1399,6 +1402,67 @@ qboolean R_DlightShadowAtlasLayout( int maxLights, int requestedFaceSize, int ma
 }
 
 
+qboolean R_SpotShadowAtlasLayout( int maxLights, int requestedTileSize, int maxTextureSize, spotShadowAtlasLayout_t *layout )
+{
+	int tileSize;
+
+	if ( layout ) {
+		Com_Memset( layout, 0, sizeof( *layout ) );
+	}
+	if ( !layout || maxTextureSize < SPOT_SHADOW_MIN_TILE_SIZE ) {
+		return qfalse;
+	}
+
+	maxLights = Com_Clamp( 0, SPOT_SHADOW_MAX_LIGHTS, maxLights );
+	if ( maxLights <= 0 ) {
+		return qfalse;
+	}
+
+	if ( requestedTileSize <= 0 ) {
+		requestedTileSize = 256;
+	}
+	requestedTileSize = Com_Clamp( SPOT_SHADOW_MIN_TILE_SIZE, SPOT_SHADOW_MAX_TILE_SIZE, requestedTileSize );
+	requestedTileSize = MIN( requestedTileSize, maxTextureSize );
+	tileSize = R_DlightShadowFloorPowerOfTwo( requestedTileSize );
+	if ( tileSize < SPOT_SHADOW_MIN_TILE_SIZE ) {
+		tileSize = SPOT_SHADOW_MIN_TILE_SIZE;
+	}
+
+	while ( tileSize >= SPOT_SHADOW_MIN_TILE_SIZE ) {
+		int columns;
+		int rows;
+		int width;
+		int height;
+
+		columns = maxTextureSize / tileSize;
+		if ( columns <= 0 ) {
+			tileSize /= 2;
+			continue;
+		}
+		if ( columns > maxLights ) {
+			columns = maxLights;
+		}
+		rows = ( maxLights + columns - 1 ) / columns;
+		width = columns * tileSize;
+		height = rows * tileSize;
+
+		if ( width <= maxTextureSize && height <= maxTextureSize ) {
+			layout->maxLights = maxLights;
+			layout->tileSize = tileSize;
+			layout->columns = columns;
+			layout->rows = rows;
+			layout->width = width;
+			layout->height = height;
+			return qtrue;
+		}
+
+		tileSize /= 2;
+	}
+
+	return qfalse;
+}
+
+
 static void R_ClearDlightShadowPlan( dlight_t *dl )
 {
 	dl->shadowPlanned = qfalse;
@@ -1469,24 +1533,597 @@ static float R_DlightShadowPriority( const dlight_t *dl, int receivers )
 	return brightness * receiverScale * radius2 * priorityMultiplier / ( dist2 + radius2 + 1.0f );
 }
 
+static void R_ShadowManagerStorePointLightRecord( shadowPointLightPlan_t *record,
+	int dlightIndex, const dlight_t *dl )
+{
+	Com_Memset( record, 0, sizeof( *record ) );
+	record->dlightIndex = dlightIndex;
+	record->shadowIndex = dl->shadowIndex;
+	record->atlasBaseFace = dl->shadowAtlasBaseFace;
+	record->atlasFaceSize = dl->shadowAtlasFaceSize;
+	Com_Memcpy( record->atlasX, dl->shadowAtlasX, sizeof( record->atlasX ) );
+	Com_Memcpy( record->atlasY, dl->shadowAtlasY, sizeof( record->atlasY ) );
+	record->receiverCount = dl->shadowReceiverCount;
+	record->priority = dl->shadowPriority;
+	VectorCopy( dl->origin, record->origin );
+	VectorCopy( dl->color, record->color );
+	record->radius = dl->radius;
+	record->atlasAllocated = ( dl->shadowAtlasFaceSize > 0 && dl->shadowAtlasBaseFace >= 0 ) ? qtrue : qfalse;
+}
+
+static void R_ShadowManagerAddPointCandidate( int dlightIndex, const dlight_t *dl )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+
+	if ( manager->pointCandidateCount >= ARRAY_LEN( manager->pointCandidates ) ) {
+		return;
+	}
+
+	R_ShadowManagerStorePointLightRecord( &manager->pointCandidates[manager->pointCandidateCount++],
+		dlightIndex, dl );
+}
+
+static shadowPointLightPlan_t *R_ShadowManagerAddPointPlan( const shadowPointLightPlan_t *source )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+	shadowPointLightPlan_t *record;
+
+	if ( manager->pointPlanCount >= ARRAY_LEN( manager->pointPlans ) ) {
+		return NULL;
+	}
+
+	record = &manager->pointPlans[manager->pointPlanCount++];
+	Com_Memcpy( record, source, sizeof( *record ) );
+	return record;
+}
+
+static void R_ShadowManagerAssignPointAtlas( shadowPointLightPlan_t *record, int shadowIndex,
+	const dlightShadowAtlasLayout_t *atlasLayout )
+{
+	int face;
+
+	record->shadowIndex = shadowIndex;
+	record->atlasBaseFace = -1;
+	record->atlasFaceSize = 0;
+	record->atlasAllocated = qfalse;
+	Com_Memset( record->atlasX, 0, sizeof( record->atlasX ) );
+	Com_Memset( record->atlasY, 0, sizeof( record->atlasY ) );
+
+	if ( !atlasLayout || atlasLayout->faceSize <= 0 || atlasLayout->columns <= 0 ) {
+		return;
+	}
+
+	record->atlasBaseFace = record->shadowIndex * DLIGHT_SHADOW_FACES;
+	record->atlasFaceSize = atlasLayout->faceSize;
+	for ( face = 0; face < DLIGHT_SHADOW_FACES; face++ ) {
+		int tile = record->atlasBaseFace + face;
+		record->atlasX[face] = ( tile % atlasLayout->columns ) * atlasLayout->faceSize;
+		record->atlasY[face] = ( tile / atlasLayout->columns ) * atlasLayout->faceSize;
+	}
+	record->atlasAllocated = qtrue;
+}
+
+static void R_ShadowManagerApplyPointPlanToDlight( const shadowPointLightPlan_t *record, dlight_t *dl )
+{
+	dl->shadowPlanned = qtrue;
+	dl->shadowIndex = record->shadowIndex;
+	dl->shadowAtlasBaseFace = record->atlasBaseFace;
+	dl->shadowAtlasFaceSize = record->atlasFaceSize;
+	Com_Memcpy( dl->shadowAtlasX, record->atlasX, sizeof( dl->shadowAtlasX ) );
+	Com_Memcpy( dl->shadowAtlasY, record->atlasY, sizeof( dl->shadowAtlasY ) );
+}
+
+static qboolean R_ShadowManagerPlanPointAtlas( int maxLights, int requestedFaceSize, int maxTextureSize )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+
+	manager->pointAtlasReady = R_DlightShadowAtlasLayout( maxLights, requestedFaceSize,
+		maxTextureSize, &manager->pointAtlasLayout );
+	if ( manager->pointAtlasReady ) {
+		tr.pc.c_dlightShadowAtlasWidth = manager->pointAtlasLayout.width;
+		tr.pc.c_dlightShadowAtlasHeight = manager->pointAtlasLayout.height;
+		tr.pc.c_dlightShadowAtlasFaceSize = manager->pointAtlasLayout.faceSize;
+	}
+	return manager->pointAtlasReady;
+}
+
+static qboolean R_ShadowManagerPlanSpotAtlas( int maxLights, int requestedTileSize, int maxTextureSize )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+
+	manager->spotAtlasReady = R_SpotShadowAtlasLayout( maxLights, requestedTileSize,
+		maxTextureSize, &manager->spotAtlasLayout );
+	return manager->spotAtlasReady;
+}
+
+#define SPOT_SHADOW_SURFACELIGHT_INNER_ANGLE 0.0f
+#define SPOT_SHADOW_SURFACELIGHT_OUTER_ANGLE 75.0f
+
+static float R_ShadowSpotBrightness( const vec3_t color )
+{
+	float brightness;
+
+	brightness = color[0];
+	if ( color[1] > brightness ) {
+		brightness = color[1];
+	}
+	if ( color[2] > brightness ) {
+		brightness = color[2];
+	}
+	return brightness;
+}
+
+static qboolean R_ShadowSpotVisibleInPVS( const vec3_t origin, float radius,
+	int leafCluster, int leafArea )
+{
+	vec3_t sample;
+	float sampleRadius;
+	int axis;
+
+	if ( !tr.world || ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		return qtrue;
+	}
+	if ( leafCluster >= 0 ) {
+		if ( R_LeafClusterInCurrentPVS( tr.refdef.vieworg, leafCluster, leafArea ) ) {
+			return qtrue;
+		}
+	} else if ( R_PointInCurrentPVS( tr.refdef.vieworg, origin ) ) {
+		return qtrue;
+	}
+	if ( radius <= 32.0f ) {
+		return qfalse;
+	}
+	if ( radius > 1024.0f ) {
+		return qtrue;
+	}
+
+	sampleRadius = Com_Clamp( 32.0f, 512.0f, radius );
+	for ( axis = 0; axis < 3; axis++ ) {
+		VectorCopy( origin, sample );
+		sample[axis] += sampleRadius;
+		if ( R_PointInCurrentPVS( tr.refdef.vieworg, sample ) ) {
+			return qtrue;
+		}
+		sample[axis] -= sampleRadius * 2.0f;
+		if ( R_PointInCurrentPVS( tr.refdef.vieworg, sample ) ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static void R_ShadowSpotStaticEnd( const mapLightDef_t *light, vec3_t end )
+{
+	VectorMA( light->origin, light->radius, light->direction, end );
+}
+
+static qboolean R_ShadowSpotStaticVisible( const mapLightDef_t *light )
+{
+	vec3_t end;
+
+	if ( R_ShadowSpotVisibleInPVS( light->origin, light->radius,
+		light->leafCluster, light->leafArea ) ) {
+		return qtrue;
+	}
+
+	R_ShadowSpotStaticEnd( light, end );
+	return R_ShadowSpotVisibleInPVS( end, light->radius * 0.25f, -1, -1 );
+}
+
+static float R_ShadowSpotStaticPriority( const mapLightDef_t *light )
+{
+	vec3_t delta;
+	vec3_t toView;
+	float brightness;
+	float dist2;
+	float radius2;
+	float directionalWeight;
+
+	brightness = R_ShadowSpotBrightness( light->color );
+	if ( brightness <= 0.0f || light->radius <= 0.0f ||
+		light->intensity <= 0.0f || light->designerPriority <= 0.0f ) {
+		return 0.0f;
+	}
+
+	VectorSubtract( light->origin, tr.refdef.vieworg, delta );
+	dist2 = DotProduct( delta, delta );
+	radius2 = Square( light->radius );
+	directionalWeight = 1.0f;
+	VectorSubtract( tr.refdef.vieworg, light->origin, toView );
+	if ( VectorNormalize2( toView, toView ) > 1.0f ) {
+		float facing = DotProduct( light->direction, toView );
+		directionalWeight = Com_Clamp( 0.15f, 1.0f, 0.35f + 0.65f * facing );
+	}
+
+	return brightness * directionalWeight * light->designerPriority * light->intensity * radius2 /
+		( dist2 + radius2 + 1.0f );
+}
+
+static float R_ShadowSpotSurfaceHemisphereWeight( const surfaceLightProxy_t *proxy )
+{
+	vec3_t toView;
+	float facing;
+
+	if ( proxy->area <= Square( 64.0f ) ) {
+		return 1.0f;
+	}
+
+	VectorSubtract( tr.refdef.vieworg, proxy->origin, toView );
+	if ( VectorNormalize2( toView, toView ) <= 1.0f ) {
+		return 1.0f;
+	}
+
+	facing = DotProduct( proxy->normal, toView );
+	if ( facing <= -0.35f ) {
+		return 0.05f;
+	}
+
+	return Com_Clamp( 0.15f, 1.0f, 0.35f + 0.65f * facing );
+}
+
+static float R_ShadowSpotSurfaceViewWeight( const surfaceLightProxy_t *proxy,
+	float tanHalfFovX, float tanHalfFovY )
+{
+	vec3_t delta;
+	float forward;
+	float side;
+	float up;
+	float radius;
+	float sideLimit;
+	float upLimit;
+	float sideRatio;
+	float upRatio;
+	float edgeRatio;
+
+	VectorSubtract( proxy->origin, tr.refdef.vieworg, delta );
+	forward = DotProduct( delta, tr.refdef.viewaxis[0] );
+	radius = Com_Clamp( 32.0f, 1024.0f, proxy->radius );
+	if ( forward <= -radius ) {
+		return 0.08f;
+	}
+	if ( forward <= radius ) {
+		return 0.75f;
+	}
+
+	side = fabsf( DotProduct( delta, tr.refdef.viewaxis[1] ) );
+	up = fabsf( DotProduct( delta, tr.refdef.viewaxis[2] ) );
+	sideLimit = forward * tanHalfFovX + radius;
+	upLimit = forward * tanHalfFovY + radius;
+	if ( sideLimit <= 1.0f || upLimit <= 1.0f ) {
+		return 1.0f;
+	}
+
+	sideRatio = side / sideLimit;
+	upRatio = up / upLimit;
+	edgeRatio = MAX( sideRatio, upRatio );
+	if ( edgeRatio <= 1.0f ) {
+		return 1.0f;
+	}
+	if ( edgeRatio >= 2.0f ) {
+		return 0.12f;
+	}
+
+	return Com_Clamp( 0.12f, 1.0f, 1.0f - ( edgeRatio - 1.0f ) * 0.65f );
+}
+
+static float R_ShadowSpotSurfacePriority( const surfaceLightProxy_t *proxy,
+	float tanHalfFovX, float tanHalfFovY, float *hemisphereWeight, float *viewWeight )
+{
+	vec3_t delta;
+	float brightness;
+	float dist2;
+	float radius2;
+
+	*hemisphereWeight = R_ShadowSpotSurfaceHemisphereWeight( proxy );
+	*viewWeight = R_ShadowSpotSurfaceViewWeight( proxy, tanHalfFovX, tanHalfFovY );
+
+	brightness = R_ShadowSpotBrightness( proxy->color );
+	if ( brightness <= 0.0f || proxy->radius <= 0.0f ||
+		proxy->intensity <= 0.0f || proxy->designerPriority <= 0.0f ||
+		*hemisphereWeight <= 0.0f || *viewWeight <= 0.0f ) {
+		return 0.0f;
+	}
+
+	VectorSubtract( proxy->origin, tr.refdef.vieworg, delta );
+	dist2 = DotProduct( delta, delta );
+	radius2 = Square( proxy->radius );
+
+	return brightness * proxy->designerPriority * proxy->intensity *
+		*hemisphereWeight * *viewWeight * radius2 / ( dist2 + radius2 + 1.0f );
+}
+
+static int R_ShadowSpotSurfaceRequestedTileSize( const surfaceLightProxy_t *proxy,
+	float hemisphereWeight, float viewWeight )
+{
+	int tileSize;
+	float importance;
+
+	tileSize = r_spotShadowResolution ? r_spotShadowResolution->integer : 256;
+	if ( !proxy ) {
+		return tileSize;
+	}
+
+	importance = Com_Clamp( 0.0f, 1.0f, hemisphereWeight ) *
+		Com_Clamp( 0.0f, 1.0f, viewWeight );
+	if ( importance < 0.45f || proxy->designerPriority < 0.75f ||
+		proxy->radius <= 384.0f || proxy->area <= Square( 192.0f ) ) {
+		tileSize = MIN( tileSize, 128 );
+	} else if ( importance >= 0.85f && proxy->designerPriority >= 1.0f &&
+		( proxy->radius >= 768.0f || proxy->area >= Square( 384.0f ) ) ) {
+		tileSize = MAX( tileSize, 512 );
+	}
+
+	return Com_Clamp( SPOT_SHADOW_MIN_TILE_SIZE, SPOT_SHADOW_MAX_TILE_SIZE, tileSize );
+}
+
+static void R_ShadowManagerStoreSpotRecord( shadowSpotLightPlan_t *record,
+	shadowSpotLightSource_t source, int sourceIndex, const vec3_t origin, const vec3_t direction,
+	const vec3_t color, float radius, float intensity, float innerAngle, float outerAngle,
+	int requestedTileSize, float priority )
+{
+	Com_Memset( record, 0, sizeof( *record ) );
+	record->source = source;
+	record->sourceIndex = sourceIndex;
+	record->shadowIndex = -1;
+	record->atlasTileSize = 0;
+	record->requestedTileSize = Com_Clamp( SPOT_SHADOW_MIN_TILE_SIZE,
+		SPOT_SHADOW_MAX_TILE_SIZE, requestedTileSize );
+	record->priority = priority;
+	VectorCopy( origin, record->origin );
+	VectorCopy( direction, record->direction );
+	if ( VectorNormalize2( record->direction, record->direction ) <= 0.0f ) {
+		VectorSet( record->direction, 0.0f, 0.0f, -1.0f );
+	}
+	VectorCopy( color, record->color );
+	record->radius = radius;
+	record->intensity = intensity;
+	record->innerAngle = innerAngle;
+	record->outerAngle = outerAngle;
+	record->atlasAllocated = qfalse;
+}
+
+static void R_ShadowManagerAddSpotCandidate( shadowSpotLightSource_t source, int sourceIndex,
+	const vec3_t origin, const vec3_t direction, const vec3_t color, float radius,
+	float intensity, float innerAngle, float outerAngle, int requestedTileSize, float priority )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+
+	if ( manager->spotCandidateCount >= ARRAY_LEN( manager->spotCandidates ) ) {
+		return;
+	}
+
+	R_ShadowManagerStoreSpotRecord( &manager->spotCandidates[manager->spotCandidateCount++],
+		source, sourceIndex, origin, direction, color, radius, intensity, innerAngle,
+		outerAngle, requestedTileSize, priority );
+}
+
+static shadowSpotLightPlan_t *R_ShadowManagerAddSpotPlan( const shadowSpotLightPlan_t *source )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+	shadowSpotLightPlan_t *record;
+
+	if ( manager->spotPlanCount >= ARRAY_LEN( manager->spotPlans ) ) {
+		return NULL;
+	}
+
+	record = &manager->spotPlans[manager->spotPlanCount++];
+	Com_Memcpy( record, source, sizeof( *record ) );
+	return record;
+}
+
+static int R_ShadowSpotEffectiveTileSize( int requestedTileSize,
+	const spotShadowAtlasLayout_t *atlasLayout )
+{
+	int tileSize;
+
+	if ( !atlasLayout || atlasLayout->tileSize <= 0 ) {
+		return 0;
+	}
+	if ( requestedTileSize <= 0 ) {
+		return atlasLayout->tileSize;
+	}
+
+	requestedTileSize = Com_Clamp( SPOT_SHADOW_MIN_TILE_SIZE,
+		SPOT_SHADOW_MAX_TILE_SIZE, requestedTileSize );
+	tileSize = R_DlightShadowFloorPowerOfTwo( requestedTileSize );
+	if ( tileSize < SPOT_SHADOW_MIN_TILE_SIZE ) {
+		tileSize = SPOT_SHADOW_MIN_TILE_SIZE;
+	}
+
+	return MIN( tileSize, atlasLayout->tileSize );
+}
+
+static void R_ShadowManagerAssignSpotAtlas( shadowSpotLightPlan_t *record, int shadowIndex,
+	const spotShadowAtlasLayout_t *atlasLayout )
+{
+	int cellX;
+	int cellY;
+	int tileSize;
+
+	record->shadowIndex = shadowIndex;
+	record->atlasX = 0;
+	record->atlasY = 0;
+	record->atlasTileSize = 0;
+	record->atlasAllocated = qfalse;
+
+	if ( !atlasLayout || atlasLayout->tileSize <= 0 || atlasLayout->columns <= 0 ) {
+		return;
+	}
+
+	tileSize = R_ShadowSpotEffectiveTileSize( record->requestedTileSize, atlasLayout );
+	if ( tileSize <= 0 ) {
+		return;
+	}
+
+	cellX = ( shadowIndex % atlasLayout->columns ) * atlasLayout->tileSize;
+	cellY = ( shadowIndex / atlasLayout->columns ) * atlasLayout->tileSize;
+	record->atlasX = cellX + ( atlasLayout->tileSize - tileSize ) / 2;
+	record->atlasY = cellY + ( atlasLayout->tileSize - tileSize ) / 2;
+	record->atlasTileSize = tileSize;
+	record->atlasAllocated = qtrue;
+}
+
+static void R_ShadowManagerCollectStaticSpotCandidates( void )
+{
+	int i;
+
+	if ( !r_staticLights || !r_staticLights->integer ||
+		!r_staticLightShadows || !r_staticLightShadows->integer ||
+		!tr.staticMapLights.loaded || tr.staticMapLights.parseFailed ) {
+		return;
+	}
+
+	for ( i = 0; i < tr.staticMapLights.count; i++ ) {
+		const mapLightDef_t *light = &tr.staticMapLights.lights[i];
+		float priority;
+
+		if ( light->type != MAP_LIGHT_SPOT || !light->castsShadows ||
+			!R_ShadowSpotStaticVisible( light ) ) {
+			continue;
+		}
+
+		priority = R_ShadowSpotStaticPriority( light );
+		if ( priority <= 0.0f ) {
+			continue;
+		}
+
+		R_ShadowManagerAddSpotCandidate( SHADOW_SPOT_SOURCE_STATIC_MAP, i,
+			light->origin, light->direction, light->color, light->radius, light->intensity,
+			light->innerAngle, light->outerAngle, light->resolution, priority );
+	}
+}
+
+static void R_ShadowManagerCollectSurfaceSpotCandidates( void )
+{
+	float tanHalfFovX;
+	float tanHalfFovY;
+	int i;
+
+	if ( !r_surfaceLightProxies || !r_surfaceLightProxies->integer ||
+		!r_surfaceLightProxyShadows || !r_surfaceLightProxyShadows->integer ||
+		!tr.surfaceLightProxies.built ) {
+		return;
+	}
+
+	tanHalfFovX = tanf( Com_Clamp( 30.0f, 160.0f, tr.refdef.fov_x ) * M_PI / 360.0f );
+	tanHalfFovY = tanf( Com_Clamp( 30.0f, 160.0f, tr.refdef.fov_y ) * M_PI / 360.0f );
+
+	for ( i = 0; i < tr.surfaceLightProxies.count; i++ ) {
+		const surfaceLightProxy_t *proxy = &tr.surfaceLightProxies.proxies[i];
+		float hemisphereWeight;
+		float viewWeight;
+		float priority;
+		int requestedTileSize;
+
+		if ( proxy->projection != SURFACE_LIGHT_PROXY_SPOT || !proxy->castsShadows ||
+			!R_ShadowSpotVisibleInPVS( proxy->origin, proxy->radius,
+				proxy->leafCluster, proxy->leafArea ) ) {
+			continue;
+		}
+
+		priority = R_ShadowSpotSurfacePriority( proxy, tanHalfFovX, tanHalfFovY,
+			&hemisphereWeight, &viewWeight );
+		if ( priority <= 0.0f || hemisphereWeight < 0.25f || viewWeight < 0.25f ) {
+			continue;
+		}
+
+		requestedTileSize = R_ShadowSpotSurfaceRequestedTileSize( proxy,
+			hemisphereWeight, viewWeight );
+		R_ShadowManagerAddSpotCandidate( SHADOW_SPOT_SOURCE_SURFACELIGHT_PROXY, i,
+			proxy->origin, proxy->normal, proxy->color, proxy->radius, proxy->intensity,
+			SPOT_SHADOW_SURFACELIGHT_INNER_ANGLE, SPOT_SHADOW_SURFACELIGHT_OUTER_ANGLE,
+			requestedTileSize, priority );
+	}
+}
+
+static void R_ShadowManagerSelectSpotPlans( int maxLights )
+{
+	qboolean selected[MAX_STATIC_MAP_LIGHTS + MAX_SURFACELIGHT_PROXIES];
+	int pass;
+
+	Com_Memset( selected, 0, sizeof( selected ) );
+	for ( pass = 0; pass < maxLights; pass++ ) {
+		const shadowSpotLightPlan_t *candidate;
+		shadowSpotLightPlan_t *plan;
+		float bestPriority;
+		int bestIndex;
+		int i;
+
+		bestPriority = 0.0f;
+		bestIndex = -1;
+		for ( i = 0; i < tr.shadowManager.spotCandidateCount; i++ ) {
+			candidate = &tr.shadowManager.spotCandidates[i];
+			if ( !selected[i] && candidate->priority > bestPriority ) {
+				bestPriority = candidate->priority;
+				bestIndex = i;
+			}
+		}
+
+		if ( bestIndex < 0 || bestPriority <= 0.0f ) {
+			break;
+		}
+
+		selected[bestIndex] = qtrue;
+		candidate = &tr.shadowManager.spotCandidates[bestIndex];
+		plan = R_ShadowManagerAddSpotPlan( candidate );
+		if ( !plan ) {
+			break;
+		}
+		R_ShadowManagerAssignSpotAtlas( plan, pass,
+			tr.shadowManager.spotAtlasReady ? &tr.shadowManager.spotAtlasLayout : NULL );
+	}
+}
+
+static void R_ShadowManagerCollectSpotCandidates( void )
+{
+	R_ShadowManagerCollectStaticSpotCandidates();
+	R_ShadowManagerCollectSurfaceSpotCandidates();
+}
+
+
+static void R_PlanSpotShadows( void )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+	int maxLights;
+
+	if ( !r_spotShadows || !r_spotShadows->integer ||
+		( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		return;
+	}
+
+	maxLights = r_spotShadowMaxLights ? r_spotShadowMaxLights->integer : 16;
+	maxLights = Com_Clamp( 0, SPOT_SHADOW_MAX_LIGHTS, maxLights );
+	if ( maxLights <= 0 ) {
+		return;
+	}
+
+	R_ShadowManagerPlanSpotAtlas( maxLights,
+		r_spotShadowResolution ? r_spotShadowResolution->integer : 256,
+		glConfig.maxTextureSize );
+	R_ShadowManagerCollectSpotCandidates();
+	if ( manager->spotCandidateCount <= 0 ) {
+		return;
+	}
+	R_ShadowManagerSelectSpotPlans( maxLights );
+}
+
 
 static void R_PlanDlightShadows( void )
 {
-	dlightShadowAtlasLayout_t atlasLayout;
 	dlight_t *dl;
+	qboolean selected[MAX_REAL_DLIGHTS];
 	int i, pass;
 	int maxLights;
 	int candidates;
 	int planned;
 	float strongestPriority;
 	float throttleFloor;
-	qboolean atlasReady;
 
 	candidates = 0;
 	planned = 0;
 	strongestPriority = 0.0f;
 	throttleFloor = 0.0f;
-	atlasReady = qfalse;
 	maxLights = r_dlightShadowMaxLights ? r_dlightShadowMaxLights->integer : 4;
 	if ( maxLights < 0 ) {
 		maxLights = 0;
@@ -1498,6 +2135,7 @@ static void R_PlanDlightShadows( void )
 	for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
 		R_ClearDlightShadowPlan( &tr.viewParms.dlights[i] );
 	}
+	Com_Memset( selected, 0, sizeof( selected ) );
 
 	if ( !r_dlightShadows || !r_dlightShadows->integer || !r_dlightMode || !r_dlightMode->integer ||
 		( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
@@ -1505,14 +2143,9 @@ static void R_PlanDlightShadows( void )
 		return;
 	}
 
-	atlasReady = R_DlightShadowAtlasLayout( maxLights,
+	R_ShadowManagerPlanPointAtlas( maxLights,
 		r_dlightShadowResolution ? r_dlightShadowResolution->integer : 256,
-		glConfig.maxTextureSize, &atlasLayout );
-	if ( atlasReady ) {
-		tr.pc.c_dlightShadowAtlasWidth = atlasLayout.width;
-		tr.pc.c_dlightShadowAtlasHeight = atlasLayout.height;
-		tr.pc.c_dlightShadowAtlasFaceSize = atlasLayout.faceSize;
-	}
+		glConfig.maxTextureSize );
 
 	for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
 		int receivers;
@@ -1554,6 +2187,7 @@ static void R_PlanDlightShadows( void )
 		}
 
 		tr.pc.c_dlightShadowCandidates++;
+		R_ShadowManagerAddPointCandidate( i, dl );
 		candidates++;
 	}
 
@@ -1562,15 +2196,17 @@ static void R_PlanDlightShadows( void )
 	}
 
 	for ( pass = 0; pass < maxLights; pass++ ) {
+		const shadowPointLightPlan_t *candidate;
+		shadowPointLightPlan_t *plan;
 		float bestPriority;
 		int bestIndex;
 
 		bestPriority = 0.0f;
 		bestIndex = -1;
-		for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
-			dl = &tr.viewParms.dlights[i];
-			if ( !dl->shadowPlanned && dl->shadowPriority > bestPriority ) {
-				bestPriority = dl->shadowPriority;
+		for ( i = 0; i < tr.shadowManager.pointCandidateCount; i++ ) {
+			candidate = &tr.shadowManager.pointCandidates[i];
+			if ( !selected[i] && candidate->priority > bestPriority ) {
+				bestPriority = candidate->priority;
 				bestIndex = i;
 			}
 		}
@@ -1582,20 +2218,20 @@ static void R_PlanDlightShadows( void )
 			break;
 		}
 
-		dl = &tr.viewParms.dlights[bestIndex];
-		dl->shadowPlanned = qtrue;
-		dl->shadowIndex = planned++;
-		if ( atlasReady ) {
-			int face;
-
-			dl->shadowAtlasBaseFace = dl->shadowIndex * DLIGHT_SHADOW_FACES;
-			dl->shadowAtlasFaceSize = atlasLayout.faceSize;
-			for ( face = 0; face < DLIGHT_SHADOW_FACES; face++ ) {
-				int tile = dl->shadowAtlasBaseFace + face;
-				dl->shadowAtlasX[face] = ( tile % atlasLayout.columns ) * atlasLayout.faceSize;
-				dl->shadowAtlasY[face] = ( tile / atlasLayout.columns ) * atlasLayout.faceSize;
-			}
+		selected[bestIndex] = qtrue;
+		candidate = &tr.shadowManager.pointCandidates[bestIndex];
+		if ( candidate->dlightIndex < 0 || candidate->dlightIndex >= tr.viewParms.num_dlights ) {
+			continue;
 		}
+		dl = &tr.viewParms.dlights[candidate->dlightIndex];
+		plan = R_ShadowManagerAddPointPlan( candidate );
+		if ( !plan ) {
+			break;
+		}
+		R_ShadowManagerAssignPointAtlas( plan, planned,
+			tr.shadowManager.pointAtlasReady ? &tr.shadowManager.pointAtlasLayout : NULL );
+		R_ShadowManagerApplyPointPlanToDlight( plan, dl );
+		planned++;
 		tr.pc.c_dlightShadowPlanned++;
 	}
 
@@ -1605,12 +2241,13 @@ static void R_PlanDlightShadows( void )
 
 		budgetSkipped = 0;
 		lowValueSkipped = 0;
-		for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
-			dl = &tr.viewParms.dlights[i];
-			if ( dl->shadowPlanned || dl->shadowPriority <= 0.0f ) {
+		for ( i = 0; i < tr.shadowManager.pointCandidateCount; i++ ) {
+			const shadowPointLightPlan_t *candidate = &tr.shadowManager.pointCandidates[i];
+
+			if ( selected[i] || candidate->priority <= 0.0f ) {
 				continue;
 			}
-			if ( throttleFloor > 0.0f && dl->shadowPriority < throttleFloor ) {
+			if ( throttleFloor > 0.0f && candidate->priority < throttleFloor ) {
 				lowValueSkipped++;
 			} else {
 				budgetSkipped++;
@@ -1621,14 +2258,17 @@ static void R_PlanDlightShadows( void )
 		tr.pc.c_dlightShadowSkippedLowValue += lowValueSkipped;
 	}
 
-	if ( atlasReady && atlasLayout.width > 0 && atlasLayout.height > 0 && planned > 0 ) {
+	if ( tr.shadowManager.pointAtlasReady &&
+		tr.shadowManager.pointAtlasLayout.width > 0 &&
+		tr.shadowManager.pointAtlasLayout.height > 0 && planned > 0 ) {
 		int64_t usedPixels;
 		int64_t atlasPixels;
 		int fill;
 
 		usedPixels = (int64_t)planned * DLIGHT_SHADOW_FACES *
-			atlasLayout.faceSize * atlasLayout.faceSize;
-		atlasPixels = (int64_t)atlasLayout.width * atlasLayout.height;
+			tr.shadowManager.pointAtlasLayout.faceSize * tr.shadowManager.pointAtlasLayout.faceSize;
+		atlasPixels = (int64_t)tr.shadowManager.pointAtlasLayout.width *
+			tr.shadowManager.pointAtlasLayout.height;
 		fill = (int)( usedPixels * 100 / atlasPixels );
 		tr.pc.c_dlightShadowAtlasFill = Com_Clamp( 1, 100, fill );
 	}
@@ -1657,16 +2297,65 @@ static void R_UpdateShadowManagerSummary( void )
 		manager->csmAtlasWidth = tr.csm.cascadeCount * tr.csm.resolution;
 		manager->csmAtlasHeight = tr.csm.resolution;
 	}
+	manager->scheduledPasses = 0;
+	manager->csmAtlasScheduled = manager->csmPlanned;
+	manager->csmReceiverScheduled = manager->csmPlanned;
+	if ( manager->csmAtlasScheduled ) {
+		manager->scheduledPasses++;
+	}
+	if ( manager->csmReceiverScheduled ) {
+		manager->scheduledPasses++;
+	}
 
 #ifdef USE_PMLIGHT
 	manager->dlightConsidered = tr.pc.c_dlightShadowConsidered;
-	manager->dlightCandidates = tr.pc.c_dlightShadowCandidates;
-	manager->dlightPlannedCount = tr.pc.c_dlightShadowPlanned;
-	manager->dlightPlanned = ( tr.pc.c_dlightShadowPlanned > 0 ) ? qtrue : qfalse;
-	manager->dlightAtlasWidth = tr.pc.c_dlightShadowAtlasWidth;
-	manager->dlightAtlasHeight = tr.pc.c_dlightShadowAtlasHeight;
-	manager->dlightAtlasFaceSize = tr.pc.c_dlightShadowAtlasFaceSize;
+	manager->dlightCandidates = manager->pointCandidateCount;
+	manager->dlightPlannedCount = manager->pointPlanCount;
+	manager->dlightPlanned = ( manager->pointPlanCount > 0 ) ? qtrue : qfalse;
+	if ( manager->pointAtlasReady ) {
+		manager->dlightAtlasWidth = manager->pointAtlasLayout.width;
+		manager->dlightAtlasHeight = manager->pointAtlasLayout.height;
+		manager->dlightAtlasFaceSize = manager->pointAtlasLayout.faceSize;
+	}
 	manager->dlightAtlasFill = tr.pc.c_dlightShadowAtlasFill;
+	manager->pointAtlasScheduled =
+		( manager->pointPlanCount > 0 && manager->pointAtlasReady ) ? qtrue : qfalse;
+	if ( manager->pointAtlasScheduled ) {
+		manager->scheduledPasses++;
+	}
+	if ( manager->spotAtlasReady ) {
+		manager->spotAtlasWidth = manager->spotAtlasLayout.width;
+		manager->spotAtlasHeight = manager->spotAtlasLayout.height;
+		manager->spotAtlasTileSize = manager->spotAtlasLayout.tileSize;
+	}
+	if ( vk_spot_shadow_atlas_available() ) {
+		manager->spotAtlasGeneration = vk_spot_shadow_atlas_generation();
+	}
+	if ( manager->spotAtlasReady &&
+		manager->spotAtlasLayout.width > 0 &&
+		manager->spotAtlasLayout.height > 0 &&
+		manager->spotPlanCount > 0 ) {
+		int64_t usedPixels = 0;
+		int64_t atlasPixels = (int64_t)manager->spotAtlasLayout.width *
+			manager->spotAtlasLayout.height;
+		int i;
+		int fill;
+
+		for ( i = 0; i < manager->spotPlanCount; i++ ) {
+			const shadowSpotLightPlan_t *plan = &manager->spotPlans[i];
+			if ( plan->atlasAllocated && plan->atlasTileSize > 0 ) {
+				usedPixels += (int64_t)plan->atlasTileSize * plan->atlasTileSize;
+			}
+		}
+		fill = (int)( usedPixels * 100 / atlasPixels );
+		manager->spotAtlasFill = Com_Clamp( 1, 100, fill );
+	}
+	manager->spotAtlasScheduled =
+		( manager->spotPlanCount > 0 && manager->spotAtlasReady &&
+			vk_spot_shadow_atlas_available() ) ? qtrue : qfalse;
+	if ( manager->spotAtlasScheduled ) {
+		manager->scheduledPasses++;
+	}
 #endif
 }
 
@@ -1676,6 +2365,7 @@ static void R_PlanFrameShadows( void )
 	R_PlanCascadedShadows();
 #ifdef USE_PMLIGHT
 	R_PlanDlightShadows();
+	R_PlanSpotShadows();
 #endif
 	R_UpdateShadowManagerSummary();
 }

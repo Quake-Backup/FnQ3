@@ -277,19 +277,49 @@ In practical terms, the fastest credible route is about ten to twelve weeks for 
 
 2026-06-03 completed GLX dlight groundwork:
 
-- Moved this plan into the FnQuake3 repo and used it as the active work queue.
-- Added streamed-dlight reservation telemetry, upload/result counters, dlight material/category classification, and `r_glxStreamDrawDynamicLights auto` behavior.
-- Added dlight-specific coarse culling/scissor plumbing and dlight state/build telemetry while keeping the legacy projected-light formula intact.
-- Added `DynamicDrawRole` classification, a dedicated `dynamic-lights` frame-pass slot, parser/test coverage, and executor/module reporting for role/pass draw-index-vertex totals.
-- Added classified GLX draw wrappers so stream-owned draw calls carry material flags and dynamic category masks into the final `DynamicDraw` IR product; this lets executor role/pass accounting align with stream telemetry instead of collapsing streamed dlights back into the generic bucket.
-- Updated the runtime sweep diagnostics so streamed dlights are no longer rejected as generic high-risk stream materials; instead, strict GLX profiles now require streamed dlight draws to appear in both the render-IR dlight role and `dynamic-lights` pass counters.
-- Promoted RC/stress profiles to `r_glxStreamDrawDynamicLights auto`, updated proof/performance budgets to require positive dlight stream plus render-IR ownership evidence, and kept screen-map/video-map material streams guarded.
-- Promoted projected-dlight scissoring to `r_glxDlightScissor auto` under RC/stress profiles while keeping the standalone default off; the existing scissor coverage counters now describe an active blend-overdraw reduction path in profile runs.
+- [x] Moved this plan into the FnQuake3 repo and used it as the active work queue.
+- [x] Added streamed-dlight reservation telemetry, upload/result counters, dlight material/category classification, and `r_glxStreamDrawDynamicLights auto` behavior.
+- [x] Added dlight-specific coarse culling/scissor plumbing and dlight state/build telemetry while keeping the legacy projected-light formula intact.
+- [x] Added `DynamicDrawRole` classification, a dedicated `dynamic-lights` frame-pass slot, parser/test coverage, and executor/module reporting for role/pass draw-index-vertex totals.
+- [x] Added classified GLX draw wrappers so stream-owned draw calls carry material flags and dynamic category masks into the final `DynamicDraw` IR product; this lets executor role/pass accounting align with stream telemetry instead of collapsing streamed dlights back into the generic bucket.
+- [x] Updated the runtime sweep diagnostics so streamed dlights are no longer rejected as generic high-risk stream materials; instead, strict GLX profiles now require streamed dlight draws to appear in both the render-IR dlight role and `dynamic-lights` pass counters.
+- [x] Promoted RC/stress profiles to `r_glxStreamDrawDynamicLights auto`, updated proof/performance budgets to require positive dlight stream plus render-IR ownership evidence, and kept screen-map/video-map material streams guarded.
+- [x] Promoted projected-dlight scissoring to `r_glxDlightScissor auto` under RC/stress profiles while keeping the standalone default off; the existing scissor coverage counters now describe an active blend-overdraw reduction path in profile runs.
+- [x] Moved legacy GL projected-dlight scratch storage for clip bits, hit indexes, and float colors into persistent `tess` storage and reused `tess.svars.texcoords[0]` for dlight texcoords, matching the Vulkan path's lower-churn shape without changing the projected-light formula.
+- [x] Folded projected-dlight scissor active/computed/applied counters into `dynamicProofEvidence`, so RC/stress dlight proof now fails if streamed dlights lose the active scissor path or stop applying computed scissor rectangles.
+- [x] Bumped the dynamic proof schema to version 2 and taught `evaluate_dynamic_proof` to reject stale or malformed proof artifacts that omit the projected-dlight scissor evidence section.
+- [x] Reused the persistent dlight clip scratch as a GLX scissor-projection visited bitmap after lit-index compaction, avoiding repeated model-to-clip transforms for shared triangle vertices while preserving the existing scissor fallback behavior.
+- [x] Gated GLX projected-dlight scissor rectangle projection behind `r_glxDlightScissor`, so the standalone default-off path no longer pays model-to-clip projection cost merely to record unapplied rectangles; RC/stress still compute and prove active/applied scissor evidence through the `auto` profile.
+- [x] Hoisted projected-dlight scissor enable checks out of the per-light loop and skipped texcoord/color scratch writes for vertices that cannot participate in the current dlight draw, preserving lit-index output while reducing per-light CPU stores.
+- [x] Hoisted projected-dlight per-light constants in the legacy GL path, including light bit masks, backface-cull state, half-radius, and RGB factors, so vertex and index loops reuse stable values instead of recomputing or rereading them.
+- [x] Moved legacy projected-dlight client-array state setup onto the non-streamed fallback path, so streamed dlight draws no longer pay an extra fixed-function pointer setup before the GLX stream helper replaces it.
+- [x] Cached the legacy projected-dlight client-array binding state across streamed and fallback light draws, so the pass does not keep re-emitting identical fixed-function pointer setup after the GLX stream helper or the fallback path has restored it.
+- [x] Started the shaderized projected-dlight path with compact GLX RenderIR light records and optional static-world packet light refs, preserving legacy output by leaving existing packet refs empty until list generation and shader execution are wired.
+- [x] Added a GLX RenderIR mask-to-compact-list builder for projected dlights, so static packets and dynamic entities can turn their existing dlight bit masks into contiguous shader-facing light records while reporting copied and dropped light masks.
+- [x] Wired transformed legacy world dlights into a GLX projected-dlight source-record buffer and used surviving world-surface dlight masks to build compact per-surface projected-light lists without changing the legacy projected-light draw path.
+- [x] Split projected-dlight source-record limits from the larger flattened light-list arena and threaded world-surface VBO item indexes into GLX so visible surface masks can aggregate into packet-indexed projected-light list refs.
+- [x] Emitted projected-light-aware `WorldPacket` RenderIR products for accepted visible static-world VBO runs, with executor counters for projected world packets and dlight record refs.
+- [x] Threaded compact projected-light refs through streamed legacy/promode dynamic-light `DynamicDraw` IR products, with executor and dlight diagnostics for projected dynamic draws.
+- [x] Added a gated projected-light shader-input plan for accepted static-world packet and dynamic draw refs, recording programmable consumption versus legacy fallback while preserving current rendering output.
+- [x] Added a uniform-backed projected-light resource window to the GLX dlight program, uploading compact dynamic draw refs before submission as bounded vec4 arrays while preserving current output with a zero projected-light blend scale.
+- [x] Added a default-off projected-light shader execution switch and moved the GLSL bridge to evaluate compact records against interpolated local position with legacy-style XY projection and Z falloff, while keeping RC/stress output suppressed until fallback replacement is validated.
+- [x] Added a dedicated `glx-dlight-shader` validation profile that enables `r_glxDlightProjectedProgram`, preserves the override through config filtering, covers a dynamic-light timedemo scene, and rejects diagnostics without executable projected-light uniform binds.
+- [x] Moved single-run static-world projected-light refs from evidence-only reporting to guarded pre-submit uniform binding when the GLX dlight program is current, while clearing the projected-light window for evidence-only multi-run batches so stale refs cannot leak into later draws.
+- [x] Split filtered multi-run static-world submissions into per-run draws when `r_glxDlightProjectedProgram` is actively executing under the GLX dlight program, so projected packet refs bind per submission while default-off RC/stress batching remains unchanged.
+- [x] Added target-specific projected-light shader uniform diagnostics and tightened the `glx-dlight-shader` profile so visual-parity promotion evidence must show executable world-packet and dynamic-draw binds whenever those inputs are present.
+- [x] Added high-end persistent-stream staging for projected-light shader inputs: executable projected-light binds now mirror compact light records into the persistent mapped stream arena when GL46/persistent-fence upload policy is available, with diagnostics for uploads, skips, bytes, and world/dynamic targets.
+- [x] Guarded the default-off projected-light shader execution path against over-limit uniform windows: binds that exceed the current uniform record limit now upload and report truncation but suppress shader execution until the persistent stream resource path becomes authoritative, and the `glx-dlight-shader` profile rejects truncation evidence.
+- [x] Promoted projected-light shader backend selection into GLX RenderIR plans for uniform-window execution and persistent-stream uploads, then routed the renderer through those plans with native tests for in-limit execution, over-limit suppression, and GL46-only stream eligibility.
+
+Remaining implementation checkpoints:
+
+- [ ] Promote the default-off projected-light shader loop into an authoritative fallback replacement once visual parity is proven.
+- [ ] Move high-end dlight uploads to persistent mapped light/list arenas and then batch dlight draws with MDI.
 
 Current verification:
 
-- `python -m py_compile scripts\glx_runtime_sweep.py`
-- `python tests\glx\glx_runtime_sweep_tests.py`
-- `meson test -C .tmp\meson-glx-verification-local fnq3_glx_logic fnq3_glx_header_boundary --print-errorlogs`
-- `meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64`
-- `git diff --check` (passes with existing LF-to-CRLF warnings only)
+- [x] `python -m py_compile scripts\glx_runtime_sweep.py`
+- [x] `python tests\glx\glx_runtime_sweep_tests.py`
+- [x] `meson test -C .tmp\meson-glx-verification-local fnq3_glx_logic fnq3_glx_header_boundary --print-errorlogs`
+- [x] `meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64`
+- [x] `git diff --check` (passes with existing LF-to-CRLF warnings only)

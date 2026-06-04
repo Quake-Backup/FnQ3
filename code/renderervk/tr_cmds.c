@@ -29,15 +29,17 @@ R_PerformanceCounters
 static void R_PerformanceCounters( void ) {
 	qboolean shadowDebug;
 	qboolean csmDebug;
+	qboolean spotShadowDebug;
 	qboolean staticLightDebug;
 	qboolean surfaceLightDebug;
 
 	shadowDebug = ( r_dlightShadowDebug && r_dlightShadowDebug->integer ) ? qtrue : qfalse;
 	csmDebug = ( r_csmDebug && r_csmDebug->integer ) ? qtrue : qfalse;
+	spotShadowDebug = ( r_spotShadowDebug && r_spotShadowDebug->integer ) ? qtrue : qfalse;
 	staticLightDebug = ( r_staticLightDebug && r_staticLightDebug->integer ) ? qtrue : qfalse;
 	surfaceLightDebug = ( r_surfaceLightProxyDebug && r_surfaceLightProxyDebug->integer ) ? qtrue : qfalse;
 
-	if ( !r_speeds->integer && !shadowDebug && !csmDebug && !staticLightDebug && !surfaceLightDebug ) {
+	if ( !r_speeds->integer && !shadowDebug && !csmDebug && !spotShadowDebug && !staticLightDebug && !surfaceLightDebug ) {
 		// clear the counters even if we aren't printing
 		Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 		Com_Memset( &tr.shadowManager, 0, sizeof( tr.shadowManager ) );
@@ -76,30 +78,40 @@ static void R_PerformanceCounters( void ) {
 			backEnd.pc.c_flareAdds, backEnd.pc.c_flareTests, backEnd.pc.c_flareRenders );
 	}
 
-	if ( ( r_speeds->integer == 4 || shadowDebug || csmDebug ) && tr.shadowManager.planned ) {
+	if ( ( r_speeds->integer == 4 || shadowDebug || csmDebug || spotShadowDebug ) && tr.shadowManager.planned ) {
 		const shadowManager_t *manager = &tr.shadowManager;
 
 		ri.Printf( PRINT_ALL,
-			"shadow manager view:%i frame:%i noworld:%i inputs dlight:%i point:%i/%i cand:%i atlas:%ix%i/%i fill:%i%% gen:%u csm:%i atlas:%ix%i gen:%u\n",
+			"shadow manager view:%i frame:%i noworld:%i sched:%i p:%i s:%i ca:%i cr:%i pub p:%i s:%i c:%i inputs dlight:%i point:%i/%i cand:%i records:%i/%i atlas:%ix%i/%i fill:%i%% gen:%u spot:%i/%i atlas:%ix%i/%i fill:%i%% gen:%u csm:%i atlas:%ix%i gen:%u\n",
 			manager->viewCount, manager->frameCount, manager->noWorldModel,
+			manager->scheduledPasses, manager->pointAtlasScheduled, manager->spotAtlasScheduled,
+			manager->csmAtlasScheduled, manager->csmReceiverScheduled,
+			manager->pointAtlasPublished, manager->spotAtlasPublished, manager->csmAtlasPublished,
 			manager->inputDlights,
 			manager->dlightPlannedCount, manager->dlightConsidered,
 			manager->dlightCandidates,
+			manager->pointPlanCount, manager->pointCandidateCount,
 			manager->dlightAtlasWidth, manager->dlightAtlasHeight,
 			manager->dlightAtlasFaceSize, manager->dlightAtlasFill,
-			(unsigned int)vk_dlight_shadow_atlas_generation(),
+			manager->pointAtlasGeneration,
+			manager->spotPlanCount, manager->spotCandidateCount,
+			manager->spotAtlasWidth, manager->spotAtlasHeight,
+			manager->spotAtlasTileSize, manager->spotAtlasFill,
+			manager->spotAtlasGeneration,
 			manager->csmCascadeCount,
 			manager->csmAtlasWidth, manager->csmAtlasHeight,
-			(unsigned int)vk_csm_shadow_atlas_generation() );
+			manager->csmAtlasGeneration );
 	}
 
 	if ( ( r_speeds->integer == 4 || staticLightDebug ) &&
 		( tr.staticMapLights.loaded || tr.staticMapLights.parseFailed ) ) {
 		ri.Printf( PRINT_ALL,
-			"static lights file:%s loaded:%i parsefail:%i count:%i promoted:%i shadow:%i skip disabled:%i pvs:%i budget:%i unsupported:%i invalid:%i overflow:%i\n",
+			"static lights file:%s loaded:%i parsefail:%i count:%i point:%i spot:%i spatial:%i/%i promoted:%i shadow:%i skip disabled:%i pvs:%i budget:%i unsupported:%i invalid:%i overflow:%i\n",
 			tr.staticMapLights.filename[0] ? tr.staticMapLights.filename : "<none>",
 			tr.staticMapLights.loaded, tr.staticMapLights.parseFailed,
-			tr.staticMapLights.count, tr.staticMapLights.promotedThisFrame,
+			tr.staticMapLights.count, tr.staticMapLights.pointCount,
+			tr.staticMapLights.spotCount, tr.staticMapLights.spatialized,
+			tr.staticMapLights.spatialFallback, tr.staticMapLights.promotedThisFrame,
 			tr.staticMapLights.shadowEligibleThisFrame,
 			tr.staticMapLights.skippedDisabledThisFrame,
 			tr.staticMapLights.skippedPVSThisFrame,
@@ -111,11 +123,18 @@ static void R_PerformanceCounters( void ) {
 
 	if ( ( r_speeds->integer == 4 || surfaceLightDebug ) && tr.surfaceLightProxies.built ) {
 		ri.Printf( PRINT_ALL,
-			"surfacelight proxies sources:%i built:%i promoted:%i shadow:%i skip sky:%i invalid:%i disabled:%i pvs:%i budget:%i overflow:%i\n",
+			"surfacelight proxies sources:%i built:%i point:%i spot:%i subdiv:%i/%i spatial:%i/%i promoted:%i shadow:%i spotdefer:%i skip sky:%i invalid:%i disabled:%i pvs:%i budget:%i overflow:%i\n",
 			tr.surfaceLightProxies.sourceSurfaces,
 			tr.surfaceLightProxies.count,
+			tr.surfaceLightProxies.pointProjectionCount,
+			tr.surfaceLightProxies.spotProjectionCount,
+			tr.surfaceLightProxies.subdividedSurfaces,
+			tr.surfaceLightProxies.subdivisionProxies,
+			tr.surfaceLightProxies.spatialized,
+			tr.surfaceLightProxies.spatialFallback,
 			tr.surfaceLightProxies.promotedThisFrame,
 			tr.surfaceLightProxies.shadowEligibleThisFrame,
+			tr.surfaceLightProxies.spotShadowDeferredThisFrame,
 			tr.surfaceLightProxies.skippedSky,
 			tr.surfaceLightProxies.skippedInvalid,
 			tr.surfaceLightProxies.skippedDisabledThisFrame,
@@ -163,7 +182,7 @@ static void R_PerformanceCounters( void ) {
 			skyShaderName = csm->skyShaderName[0] ? csm->skyShaderName : "<unknown>";
 
 			ri.Printf( PRINT_ALL,
-				"csm shadows sky:%s cascades:%i res:%i max:%i lambda:%.2f filter:%s strength:%.2f rbias:%.2f cbias:%.2f/%.2f/%.2f light-dir:%.2f %.2f %.2f to-sun:%.2f %.2f %.2f split far:%.0f %.0f %.0f %.0f texel:%.2f %.2f %.2f %.2f caster:%i recv world:%i ent:%i\n",
+				"csm shadows sky:%s cascades:%i res:%i max:%i lambda:%.2f filter:%s strength:%.2f rbias:%.2f cbias:%.2f/%.2f/%.2f light-dir:%.2f %.2f %.2f to-sun:%.2f %.2f %.2f split far:%.0f %.0f %.0f %.0f texel:%.2f %.2f %.2f %.2f caster:%i cache h/m/u:%i/%i/%i cpu:%ims recv world:%i ent:%i\n",
 				skyShaderName,
 				tr.pc.c_csmCascades, tr.pc.c_csmResolution, tr.pc.c_csmMaxDistance,
 				csm->splitLambda, R_ShadowFilterModeName( csm->filterMode ),
@@ -174,6 +193,10 @@ static void R_PerformanceCounters( void ) {
 				splitFar[0], splitFar[1], splitFar[2], splitFar[3],
 				texelSize[0], texelSize[1], texelSize[2], texelSize[3],
 				backEnd.pc.c_csmShadowAtlasSurfaces,
+				backEnd.pc.c_csmShadowAtlasCacheHits,
+				backEnd.pc.c_csmShadowAtlasCacheMisses,
+				backEnd.pc.c_csmShadowAtlasCacheUncacheable,
+				backEnd.pc.c_csmShadowAtlasMsec,
 				backEnd.pc.c_csmShadowReceiverWorldSurfaces,
 				backEnd.pc.c_csmShadowReceiverEntitySurfaces );
 		} else if ( tr.pc.c_csmSkippedNoSun ) {
@@ -298,6 +321,7 @@ void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	cmd->refdef = tr.refdef;
 	cmd->viewParms = tr.viewParms;
 	cmd->csm = tr.csm;
+	cmd->shadowManager = tr.shadowManager;
 
 #ifdef USE_VULKAN
 	tr.numDrawSurfCmds++;

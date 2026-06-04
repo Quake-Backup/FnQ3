@@ -1266,6 +1266,10 @@ static qboolean RB_DlightShadowsNeeded( void )
 		return qfalse;
 	}
 
+	if ( tr.shadowManager.planned ) {
+		return tr.shadowManager.pointAtlasScheduled;
+	}
+
 	for ( i = 0; i < backEnd.viewParms.num_dlights; i++ ) {
 		if ( backEnd.viewParms.dlights[i].shadowPlanned ) {
 			return qtrue;
@@ -1347,18 +1351,25 @@ static void RB_SetDlightShadowProjectionZ( viewParms_t *viewParms, float zNear, 
 #endif
 }
 
-static void RB_BuildDlightShadowView( const dlight_t *dl, int face, int atlasHeight, viewParms_t *shadowParms )
+static void RB_BuildDlightShadowView( const dlight_t *dl, const shadowPointLightPlan_t *plan,
+	int face, int atlasHeight, viewParms_t *shadowParms )
 {
 	float viewerMatrix[16];
 	float zNear;
 	float zFar;
 	vec3_t baseAxis[3];
+	int atlasX;
+	int atlasY;
+	int atlasFaceSize;
 
 	Com_Memset( shadowParms, 0, sizeof( *shadowParms ) );
-	shadowParms->viewportX = dl->shadowAtlasX[face];
-	shadowParms->viewportY = atlasHeight - dl->shadowAtlasY[face] - dl->shadowAtlasFaceSize;
-	shadowParms->viewportWidth = dl->shadowAtlasFaceSize;
-	shadowParms->viewportHeight = dl->shadowAtlasFaceSize;
+	atlasX = plan ? plan->atlasX[face] : dl->shadowAtlasX[face];
+	atlasY = plan ? plan->atlasY[face] : dl->shadowAtlasY[face];
+	atlasFaceSize = plan ? plan->atlasFaceSize : dl->shadowAtlasFaceSize;
+	shadowParms->viewportX = atlasX;
+	shadowParms->viewportY = atlasHeight - atlasY - atlasFaceSize;
+	shadowParms->viewportWidth = atlasFaceSize;
+	shadowParms->viewportHeight = atlasFaceSize;
 	shadowParms->scissorX = shadowParms->viewportX;
 	shadowParms->scissorY = shadowParms->viewportY;
 	shadowParms->scissorWidth = shadowParms->viewportWidth;
@@ -1771,17 +1782,23 @@ static unsigned int RB_DlightShadowCacheHashPtr( unsigned int hash, const void *
 	return hash;
 }
 
-static qboolean RB_DlightShadowCacheSignature( const dlight_t *dl, unsigned int *signature )
+static qboolean RB_DlightShadowCacheSignature( const dlight_t *dl,
+	const shadowPointLightPlan_t *plan, unsigned int *signature )
 {
 	const litSurf_t *litSurf;
 	shader_t *shader;
 	int entityNum;
 	int fogNum;
 	int i;
+	int atlasBaseFace;
+	int atlasFaceSize;
+	int receiverCount;
 	unsigned int hash;
 
-	if ( !dl || !signature || dl->linear || dl->shadowAtlasFaceSize <= 0 ||
-		dl->shadowAtlasBaseFace < 0 ) {
+	atlasBaseFace = plan ? plan->atlasBaseFace : ( dl ? dl->shadowAtlasBaseFace : -1 );
+	atlasFaceSize = plan ? plan->atlasFaceSize : ( dl ? dl->shadowAtlasFaceSize : 0 );
+	receiverCount = plan ? plan->receiverCount : ( dl ? dl->shadowReceiverCount : 0 );
+	if ( !dl || !signature || dl->linear || atlasFaceSize <= 0 || atlasBaseFace < 0 ) {
 		return qfalse;
 	}
 
@@ -1792,8 +1809,8 @@ static qboolean RB_DlightShadowCacheSignature( const dlight_t *dl, unsigned int 
 	}
 	hash = RB_DlightShadowCacheHashFloat( hash, dl->radius );
 	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)dl->additive );
-	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)dl->shadowReceiverCount );
-	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)dl->shadowAtlasFaceSize );
+	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)receiverCount );
+	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)atlasFaceSize );
 
 	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
 		R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
@@ -1816,15 +1833,18 @@ static qboolean RB_DlightShadowCacheSignature( const dlight_t *dl, unsigned int 
 	return qtrue;
 }
 
-static int RB_DlightShadowCacheSlot( const dlight_t *dl, int face )
+static int RB_DlightShadowCacheSlot( const dlight_t *dl, const shadowPointLightPlan_t *plan,
+	int face )
 {
 	int slot;
+	int atlasBaseFace;
 
-	if ( !dl || face < 0 || face >= DLIGHT_SHADOW_FACES ) {
+	if ( face < 0 || face >= DLIGHT_SHADOW_FACES ) {
 		return -1;
 	}
 
-	slot = dl->shadowAtlasBaseFace + face;
+	atlasBaseFace = plan ? plan->atlasBaseFace : ( dl ? dl->shadowAtlasBaseFace : -1 );
+	slot = atlasBaseFace + face;
 	if ( slot < 0 || slot >= RB_DLIGHT_SHADOW_CACHE_SLOTS ) {
 		return -1;
 	}
@@ -1832,13 +1852,14 @@ static int RB_DlightShadowCacheSlot( const dlight_t *dl, int face )
 	return slot;
 }
 
-static qboolean RB_DlightShadowCacheLookup( const dlight_t *dl, int face, unsigned int signature,
+static qboolean RB_DlightShadowCacheLookup( const dlight_t *dl,
+	const shadowPointLightPlan_t *plan, int face, unsigned int signature,
 	unsigned int generation, qboolean *hasCasters )
 {
 	int slot;
 	const dlightShadowCacheSlot_t *entry;
 
-	slot = RB_DlightShadowCacheSlot( dl, face );
+	slot = RB_DlightShadowCacheSlot( dl, plan, face );
 	if ( slot < 0 ) {
 		return qfalse;
 	}
@@ -1852,13 +1873,13 @@ static qboolean RB_DlightShadowCacheLookup( const dlight_t *dl, int face, unsign
 	return qtrue;
 }
 
-static void RB_DlightShadowCacheStore( const dlight_t *dl, int face, unsigned int signature,
-	unsigned int generation, qboolean hasCasters )
+static void RB_DlightShadowCacheStore( const dlight_t *dl, const shadowPointLightPlan_t *plan,
+	int face, unsigned int signature, unsigned int generation, qboolean hasCasters )
 {
 	int slot;
 	dlightShadowCacheSlot_t *entry;
 
-	slot = RB_DlightShadowCacheSlot( dl, face );
+	slot = RB_DlightShadowCacheSlot( dl, plan, face );
 	if ( slot < 0 ) {
 		return;
 	}
@@ -1870,11 +1891,12 @@ static void RB_DlightShadowCacheStore( const dlight_t *dl, int face, unsigned in
 	entry->hasCasters = hasCasters;
 }
 
-static void RB_DlightShadowCacheInvalidate( const dlight_t *dl, int face )
+static void RB_DlightShadowCacheInvalidate( const dlight_t *dl,
+	const shadowPointLightPlan_t *plan, int face )
 {
 	int slot;
 
-	slot = RB_DlightShadowCacheSlot( dl, face );
+	slot = RB_DlightShadowCacheSlot( dl, plan, face );
 	if ( slot >= 0 ) {
 		rb_dlightShadowCache[slot].valid = qfalse;
 	}
@@ -2279,11 +2301,13 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 	unsigned int signature = 0;
 	unsigned int generation;
 	qboolean cacheable;
+	int startMsec;
 	int cascadeIndex;
 	int surfaces;
 	double originalTime;
 
-	if ( !tr.csm.enabled || !vk_csm_shadow_atlas_available() ||
+	if ( ( tr.shadowManager.planned && !tr.shadowManager.csmAtlasScheduled ) ||
+		!tr.csm.enabled || !vk_csm_shadow_atlas_available() ||
 		RB_CSMShadowCountDrawSurfs( drawSurfs, numDrawSurfs ) <= 0 ) {
 		return;
 	}
@@ -2293,8 +2317,16 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 	if ( cacheable && rb_csmShadowCache.valid &&
 		rb_csmShadowCache.generation == generation &&
 		rb_csmShadowCache.signature == signature ) {
+		backEnd.pc.c_csmShadowAtlasCacheHits++;
 		vk_mark_csm_shadow_atlas_rendered();
+		tr.shadowManager.csmAtlasPublished = vk_csm_shadow_atlas_ready();
+		tr.shadowManager.csmAtlasGeneration = generation;
 		return;
+	}
+	if ( cacheable ) {
+		backEnd.pc.c_csmShadowAtlasCacheMisses++;
+	} else {
+		backEnd.pc.c_csmShadowAtlasCacheUncacheable++;
 	}
 
 	RB_EndSurface();
@@ -2302,6 +2334,7 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 		return;
 	}
 
+	startMsec = ri.Milliseconds();
 	savedRefdef = backEnd.refdef;
 	savedViewParms = backEnd.viewParms;
 	savedOr = backEnd.or;
@@ -2338,6 +2371,9 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 	tess.depthRange = DEPTH_RANGE_NORMAL;
 	vk_update_mvp( NULL );
 	vk_end_csm_shadow_render_pass();
+	backEnd.pc.c_csmShadowAtlasMsec += ri.Milliseconds() - startMsec;
+	tr.shadowManager.csmAtlasPublished = vk_csm_shadow_atlas_ready();
+	tr.shadowManager.csmAtlasGeneration = generation;
 
 	if ( cacheable && surfaces > 0 ) {
 		rb_csmShadowCache.valid = qtrue;
@@ -2448,7 +2484,10 @@ static void RB_CSMShadowReceiverPass( drawSurf_t *drawSurfs, int numDrawSurfs )
 	double originalTime;
 	int cascadeIndex;
 
-	if ( !tr.csm.enabled || !vk_csm_shadow_atlas_ready() ||
+	if ( ( tr.shadowManager.planned &&
+			( !tr.shadowManager.csmReceiverScheduled || !tr.shadowManager.csmAtlasPublished ) ) ||
+		!tr.csm.enabled ||
+		( !tr.shadowManager.planned && !vk_csm_shadow_atlas_ready() ) ||
 		RB_CSMShadowCountDrawSurfs( drawSurfs, numDrawSurfs ) <= 0 ) {
 		return;
 	}
@@ -2616,6 +2655,211 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 	return surfaces;
 }
 
+static float RB_SpotShadowFov( const shadowSpotLightPlan_t *plan )
+{
+	float outerAngle;
+
+	outerAngle = plan ? plan->outerAngle : 0.0f;
+	if ( outerAngle <= 0.0f ) {
+		outerAngle = 75.0f;
+	}
+	return Com_Clamp( 5.0f, 170.0f, outerAngle * 2.0f );
+}
+
+static qboolean RB_BuildSpotShadowView( const shadowSpotLightPlan_t *plan,
+	int atlasHeight, viewParms_t *shadowParms )
+{
+	float viewerMatrix[16];
+	float zNear;
+	float zFar;
+	float fov;
+
+	if ( !plan || !shadowParms || !plan->atlasAllocated ||
+		plan->atlasTileSize <= 0 || atlasHeight <= 0 || plan->radius <= 0.0f ) {
+		return qfalse;
+	}
+
+	Com_Memset( shadowParms, 0, sizeof( *shadowParms ) );
+	shadowParms->viewportX = plan->atlasX;
+	shadowParms->viewportY = atlasHeight - plan->atlasY - plan->atlasTileSize;
+	shadowParms->viewportWidth = plan->atlasTileSize;
+	shadowParms->viewportHeight = plan->atlasTileSize;
+	shadowParms->scissorX = shadowParms->viewportX;
+	shadowParms->scissorY = shadowParms->viewportY;
+	shadowParms->scissorWidth = shadowParms->viewportWidth;
+	shadowParms->scissorHeight = shadowParms->viewportHeight;
+	fov = RB_SpotShadowFov( plan );
+	shadowParms->fovX = fov;
+	shadowParms->fovY = fov;
+	shadowParms->zFar = MAX( plan->radius, 64.0f );
+	shadowParms->stereoFrame = STEREO_CENTER;
+	shadowParms->portalView = PV_NONE;
+	shadowParms->passFlags = VPF_DLIGHT_SHADOW;
+	VectorCopy( plan->origin, shadowParms->or.origin );
+	VectorCopy( plan->origin, shadowParms->pvsOrigin );
+
+	if ( VectorNormalize2( plan->direction, shadowParms->or.axis[0] ) <= 0.0f ) {
+		return qfalse;
+	}
+	MakeNormalVectors( shadowParms->or.axis[0], shadowParms->or.axis[1], shadowParms->or.axis[2] );
+
+	Com_Memset( &shadowParms->world, 0, sizeof( shadowParms->world ) );
+	shadowParms->world.axis[0][0] = 1.0f;
+	shadowParms->world.axis[1][1] = 1.0f;
+	shadowParms->world.axis[2][2] = 1.0f;
+	VectorCopy( shadowParms->or.origin, shadowParms->world.viewOrigin );
+
+	viewerMatrix[0] = shadowParms->or.axis[0][0];
+	viewerMatrix[4] = shadowParms->or.axis[0][1];
+	viewerMatrix[8] = shadowParms->or.axis[0][2];
+	viewerMatrix[12] = -plan->origin[0] * viewerMatrix[0] + -plan->origin[1] * viewerMatrix[4] + -plan->origin[2] * viewerMatrix[8];
+	viewerMatrix[1] = shadowParms->or.axis[1][0];
+	viewerMatrix[5] = shadowParms->or.axis[1][1];
+	viewerMatrix[9] = shadowParms->or.axis[1][2];
+	viewerMatrix[13] = -plan->origin[0] * viewerMatrix[1] + -plan->origin[1] * viewerMatrix[5] + -plan->origin[2] * viewerMatrix[9];
+	viewerMatrix[2] = shadowParms->or.axis[2][0];
+	viewerMatrix[6] = shadowParms->or.axis[2][1];
+	viewerMatrix[10] = shadowParms->or.axis[2][2];
+	viewerMatrix[14] = -plan->origin[0] * viewerMatrix[2] + -plan->origin[1] * viewerMatrix[6] + -plan->origin[2] * viewerMatrix[10];
+	viewerMatrix[3] = 0.0f;
+	viewerMatrix[7] = 0.0f;
+	viewerMatrix[11] = 0.0f;
+	viewerMatrix[15] = 1.0f;
+
+	RB_DlightShadowMultMatrix( viewerMatrix, rb_dlightShadowFlipMatrix, shadowParms->world.modelMatrix );
+
+	zNear = 1.0f;
+	zFar = MAX( shadowParms->zFar, zNear + 1.0f );
+	R_SetupProjection( shadowParms, zNear, qtrue );
+	RB_SetDlightShadowProjectionZ( shadowParms, zNear, zFar );
+	return qtrue;
+}
+
+static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
+	double originalTime )
+{
+	int currentEntityNum;
+	int surfaces;
+	qboolean surfaceActive;
+	int i;
+
+	currentEntityNum = -1;
+	surfaces = 0;
+	surfaceActive = qfalse;
+
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		drawSurf_t *drawSurf = &drawSurfs[i];
+		shader_t *shader;
+		int entityNum;
+		int fogNum;
+		int dlighted;
+
+		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+		if ( !RB_DlightShadowEntityCasterAllowed( entityNum ) ||
+			!RB_DlightShadowCasterAllowed( shader, drawSurf->surface ) ) {
+			continue;
+		}
+
+		if ( entityNum != currentEntityNum ) {
+			if ( surfaceActive ) {
+				RB_EndSurface();
+				surfaceActive = qfalse;
+			}
+			RB_SetDlightShadowCasterEntity( entityNum, originalTime );
+			currentEntityNum = entityNum;
+		}
+
+		if ( RB_DlightShadowSurfaceCulled( drawSurf->surface ) ) {
+			continue;
+		}
+
+		if ( !surfaceActive ) {
+			RB_BeginSurface( tr.defaultShader, 0 );
+			tess.allowVBO = qfalse;
+			surfaceActive = qtrue;
+		}
+
+		rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
+		surfaces++;
+	}
+
+	if ( surfaceActive ) {
+		RB_EndSurface();
+	}
+
+	RB_SetDlightShadowCasterEntity( REFENTITYNUM_WORLD, originalTime );
+	return surfaces;
+}
+
+static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
+{
+	trRefdef_t savedRefdef;
+	viewParms_t savedViewParms;
+	orientationr_t savedOr;
+	const trRefEntity_t *savedEntity;
+	qboolean savedProjection2D;
+#ifdef USE_VBO
+	qboolean savedAllowVBO;
+#endif
+	int atlasHeight;
+	unsigned int atlasGeneration;
+	int i;
+	double originalTime;
+
+	if ( !tr.shadowManager.planned || !tr.shadowManager.spotAtlasScheduled ||
+		tr.shadowManager.spotPlanCount <= 0 || !vk_spot_shadow_atlas_available() ) {
+		return;
+	}
+
+	RB_EndSurface();
+	if ( !vk_begin_spot_shadow_render_pass() ) {
+		return;
+	}
+
+	savedRefdef = backEnd.refdef;
+	savedViewParms = backEnd.viewParms;
+	savedOr = backEnd.or;
+	savedEntity = backEnd.currentEntity;
+	savedProjection2D = backEnd.projection2D;
+#ifdef USE_VBO
+	savedAllowVBO = tess.allowVBO;
+	tess.allowVBO = qfalse;
+#endif
+	backEnd.projection2D = qfalse;
+	atlasHeight = vk_spot_shadow_atlas_height();
+	atlasGeneration = vk_spot_shadow_atlas_generation();
+	originalTime = backEnd.refdef.floatTime;
+
+	for ( i = 0; i < tr.shadowManager.spotPlanCount; i++ ) {
+		const shadowSpotLightPlan_t *plan;
+		viewParms_t shadowParms;
+
+		plan = &tr.shadowManager.spotPlans[i];
+		if ( !RB_BuildSpotShadowView( plan, atlasHeight, &shadowParms ) ) {
+			continue;
+		}
+
+		RB_SetDlightShadowView( &shadowParms );
+		vk_clear_depth_force( qfalse );
+		RB_RenderSpotShadowCasters( drawSurfs, numDrawSurfs, originalTime );
+	}
+
+	backEnd.refdef = savedRefdef;
+	backEnd.viewParms = savedViewParms;
+	backEnd.or = savedOr;
+	backEnd.currentEntity = savedEntity;
+	backEnd.projection2D = savedProjection2D;
+#ifdef USE_VBO
+	tess.allowVBO = savedAllowVBO;
+#endif
+	Com_Memcpy( vk_world.modelview_transform, backEnd.or.modelMatrix, 64 );
+	tess.depthRange = DEPTH_RANGE_NORMAL;
+	vk_update_mvp( NULL );
+	vk_end_spot_shadow_render_pass();
+	tr.shadowManager.spotAtlasPublished = vk_spot_shadow_atlas_ready();
+	tr.shadowManager.spotAtlasGeneration = atlasGeneration;
+}
+
 static void RB_RenderDlightShadowAtlas( void )
 {
 	dlight_t *dl;
@@ -2654,18 +2898,30 @@ static void RB_RenderDlightShadowAtlas( void )
 	atlasHeight = vk_dlight_shadow_atlas_height();
 	atlasGeneration = vk_dlight_shadow_atlas_generation();
 
-	for ( i = 0; i < savedViewParms.num_dlights; i++ ) {
+	for ( i = 0; i < ( tr.shadowManager.planned ?
+		tr.shadowManager.pointPlanCount : savedViewParms.num_dlights ); i++ ) {
+		const shadowPointLightPlan_t *plan;
 		unsigned int cacheSignature;
 		qboolean cacheable;
 		qboolean lightRendered;
 
-		dl = &savedViewParms.dlights[i];
-		if ( !dl->shadowPlanned || dl->shadowAtlasFaceSize <= 0 ) {
-			continue;
+		if ( tr.shadowManager.planned ) {
+			plan = &tr.shadowManager.pointPlans[i];
+			if ( !plan->atlasAllocated || plan->atlasFaceSize <= 0 ||
+				plan->dlightIndex < 0 || plan->dlightIndex >= savedViewParms.num_dlights ) {
+				continue;
+			}
+			dl = &savedViewParms.dlights[plan->dlightIndex];
+		} else {
+			plan = NULL;
+			dl = &savedViewParms.dlights[i];
+			if ( !dl->shadowPlanned || dl->shadowAtlasFaceSize <= 0 ) {
+				continue;
+			}
 		}
 
 		cacheSignature = 0;
-		cacheable = RB_DlightShadowCacheSignature( dl, &cacheSignature );
+		cacheable = RB_DlightShadowCacheSignature( dl, plan, &cacheSignature );
 		lightRendered = qfalse;
 		for ( face = 0; face < DLIGHT_SHADOW_FACES; face++ ) {
 			viewParms_t shadowParms;
@@ -2673,30 +2929,30 @@ static void RB_RenderDlightShadowAtlas( void )
 			qboolean faceHasCasters;
 			int surfaces;
 
-			if ( cacheable && RB_DlightShadowCacheLookup( dl, face, cacheSignature, atlasGeneration, &cachedHasCasters ) ) {
+			if ( cacheable && RB_DlightShadowCacheLookup( dl, plan, face, cacheSignature, atlasGeneration, &cachedHasCasters ) ) {
 				continue;
 			}
 
-			RB_BuildDlightShadowView( dl, face, atlasHeight, &shadowParms );
+			RB_BuildDlightShadowView( dl, plan, face, atlasHeight, &shadowParms );
 			RB_SetDlightShadowView( &shadowParms );
 			vk_clear_depth_force( qfalse );
 
 			faceHasCasters = RB_DlightShadowFaceHasCasters( dl );
 			if ( !faceHasCasters ) {
 				if ( cacheable ) {
-					RB_DlightShadowCacheStore( dl, face, cacheSignature, atlasGeneration, qfalse );
+					RB_DlightShadowCacheStore( dl, plan, face, cacheSignature, atlasGeneration, qfalse );
 				} else {
-					RB_DlightShadowCacheInvalidate( dl, face );
+					RB_DlightShadowCacheInvalidate( dl, plan, face );
 				}
 				continue;
 			}
 
 			surfaces = RB_RenderDlightShadowCasters( dl );
 			if ( cacheable ) {
-				RB_DlightShadowCacheStore( dl, face, cacheSignature, atlasGeneration,
+				RB_DlightShadowCacheStore( dl, plan, face, cacheSignature, atlasGeneration,
 					surfaces > 0 ? qtrue : qfalse );
 			} else {
-				RB_DlightShadowCacheInvalidate( dl, face );
+				RB_DlightShadowCacheInvalidate( dl, plan, face );
 			}
 			if ( surfaces <= 0 ) {
 				continue;
@@ -2722,6 +2978,8 @@ static void RB_RenderDlightShadowAtlas( void )
 	tess.depthRange = DEPTH_RANGE_NORMAL;
 	vk_update_mvp( NULL );
 	vk_end_dlight_shadow_render_pass();
+	tr.shadowManager.pointAtlasPublished = vk_dlight_shadow_atlas_ready();
+	tr.shadowManager.pointAtlasGeneration = atlasGeneration;
 	backEnd.pc.c_dlightShadowAtlasMsec += ri.Milliseconds() - startMsec;
 }
 
@@ -2923,6 +3181,7 @@ static const void *RB_DrawSurfs( const void *data ) {
 	backEnd.viewParms = cmd->viewParms;
 #ifdef USE_PMLIGHT
 	tr.csm = cmd->csm;
+	tr.shadowManager = cmd->shadowManager;
 #endif
 
 #ifdef USE_VBO
@@ -2932,6 +3191,7 @@ static const void *RB_DrawSurfs( const void *data ) {
 #ifdef USE_PMLIGHT
 	RB_RenderCSMShadowAtlas( cmd->drawSurfs, cmd->numDrawSurfs );
 	RB_RenderDlightShadowAtlas();
+	RB_RenderSpotShadowAtlas( cmd->drawSurfs, cmd->numDrawSurfs );
 #endif
 
 	// clear the z buffer, set the modelview, etc

@@ -83,6 +83,9 @@ static qboolean depthFadeTextureShared;
 static GLuint dlightShadowAtlasTexture;
 static GLuint dlightShadowAtlasFbo;
 static dlightShadowAtlasLayout_t dlightShadowAtlasLayout;
+static GLuint spotShadowAtlasTexture;
+static GLuint spotShadowAtlasFbo;
+static spotShadowAtlasLayout_t spotShadowAtlasLayout;
 static GLuint csmShadowAtlasTexture;
 static GLuint csmShadowAtlasFbo;
 static csmShadowAtlasLayout_t csmShadowAtlasLayout;
@@ -90,6 +93,8 @@ static qboolean csmShadowAtlasCreateFailed;
 static qboolean depthFadeCopied;
 static qboolean dlightShadowAtlasRendered;
 static unsigned int dlightShadowAtlasGeneration;
+static qboolean spotShadowAtlasRendered;
+static unsigned int spotShadowAtlasGeneration;
 static qboolean csmShadowAtlasRendered;
 static unsigned int csmShadowAtlasGeneration;
 
@@ -777,6 +782,22 @@ void GL_ProgramEnable( void )
 
 #ifdef USE_PMLIGHT
 #ifdef RENDERER_GLX
+static unsigned int GLX_PMLightMaskForCurrentLight( void )
+{
+	int i;
+
+	if ( !tess.light ) {
+		return 0u;
+	}
+
+	for ( i = 0; i < backEnd.refdef.num_dlights && i < MAX_DLIGHTS; i++ ) {
+		if ( &backEnd.refdef.dlights[i] == tess.light ) {
+			return 1u << i;
+		}
+	}
+	return 0u;
+}
+
 static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *indexes )
 {
 	const shaderCommands_t *input;
@@ -793,6 +814,7 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 	int totalBytes;
 	int materialFlags;
 	unsigned int categoryMask;
+	unsigned int lightMask;
 	unsigned int oldArrayBuffer = 0;
 	unsigned int oldElementArrayBuffer = 0;
 
@@ -817,6 +839,7 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 
 	materialFlags = GLX_STAGE_DLIGHT_MAP | GLX_STAGE_ST0;
 	categoryMask = GLX_CompatDynamicCategoryMaskForTess( input, materialFlags );
+	lightMask = GLX_PMLightMaskForCurrentLight();
 	if ( !GLX_CompatStreamDrawAllowsMaterial( materialFlags, 0,
 		GLX_MATERIAL_RGBGEN_IDENTITY, GLX_MATERIAL_ALPHAGEN_SKIP,
 		GLX_MATERIAL_TCGEN_TEXTURE, GLX_MATERIAL_TCGEN_BAD,
@@ -872,9 +895,11 @@ static qboolean GLX_TryStreamDrawPMLightPass( int numIndexes, const glIndex_t *i
 	qglNormalPointer( GL_FLOAT, sizeof( input->normal[0] ), (const GLvoid *)(intptr_t)( reservation.offset + normalOffset ) );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
 
-	if ( !GLX_CompatDrawElementsClassified( GL_TRIANGLES, numIndexes, GL_INDEX_TYPE,
+	if ( !GLX_CompatDrawElementsClassifiedProjectedDlights( GL_TRIANGLES,
+		numIndexes, GL_INDEX_TYPE,
 		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
-		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, materialFlags, categoryMask ) ) {
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC, materialFlags,
+		categoryMask, lightMask ) ) {
 		ok = qfalse;
 	}
 
@@ -1039,19 +1064,28 @@ static float ARB_ComputeTextureIntensityScale( const image_t *image )
 	return 1.0f;
 }
 
-static qboolean ARB_DlightShadowParams( const dlight_t *dl, vec4_t shadowAtlas, vec4_t shadowDepth, float *strength )
+static qboolean ARB_DlightShadowParams( const dlight_t *dl, const shadowPointLightPlan_t *plan,
+	vec4_t shadowAtlas, vec4_t shadowDepth, float *strength )
 {
 #ifdef USE_FBO
 	int atlasWidth;
 	int atlasHeight;
 	int columns;
+	int atlasBaseFace;
+	int atlasFaceSize;
 	float zNear;
 	float zFar;
 	float depth;
 	float s;
 
-	if ( !dl || dl->linear || !dl->shadowPlanned || dl->shadowAtlasFaceSize <= 0 ||
-		dl->shadowAtlasBaseFace < 0 || !dlightShadowProgramsCompiled || !FBO_DlightShadowsReady() ||
+	atlasBaseFace = plan ? plan->atlasBaseFace : ( dl ? dl->shadowAtlasBaseFace : -1 );
+	atlasFaceSize = plan ? plan->atlasFaceSize : ( dl ? dl->shadowAtlasFaceSize : 0 );
+	if ( ( tr.shadowManager.planned && !plan ) ||
+		!dl || dl->linear || ( !tr.shadowManager.planned && !dl->shadowPlanned ) ||
+		atlasFaceSize <= 0 || atlasBaseFace < 0 ||
+		!dlightShadowProgramsCompiled ||
+		( tr.shadowManager.planned ?
+			!tr.shadowManager.pointAtlasPublished : !FBO_DlightShadowsReady() ) ||
 		backEnd.currentEntity != &tr.worldEntity ||
 		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
 		backEnd.viewParms.zFar <= 0.0f ) {
@@ -1064,7 +1098,7 @@ static qboolean ARB_DlightShadowParams( const dlight_t *dl, vec4_t shadowAtlas, 
 		return qfalse;
 	}
 
-	columns = atlasWidth / dl->shadowAtlasFaceSize;
+	columns = atlasWidth / atlasFaceSize;
 	if ( columns <= 0 ) {
 		return qfalse;
 	}
@@ -1078,8 +1112,8 @@ static qboolean ARB_DlightShadowParams( const dlight_t *dl, vec4_t shadowAtlas, 
 	zFar = MAX( dl->radius, 64.0f );
 	depth = MAX( zFar - zNear, 1.0f );
 
-	shadowAtlas[0] = (float)dl->shadowAtlasFaceSize;
-	shadowAtlas[1] = (float)dl->shadowAtlasBaseFace;
+	shadowAtlas[0] = (float)atlasFaceSize;
+	shadowAtlas[1] = (float)atlasBaseFace;
 	shadowAtlas[2] = (float)columns;
 	shadowAtlas[3] = (float)atlasHeight;
 
@@ -1117,9 +1151,74 @@ static void ARB_DlightShadowFilterOffsets( float *inner, float *outer )
 }
 
 #ifdef RENDERER_GLX
+static qboolean GLX_SpotShadowParams( const dlight_t *dl, const shadowSpotLightPlan_t *plan,
+	vec4_t dlightShadow, vec4_t shadowAtlas, vec4_t shadowDepth, vec4_t shadowFilter )
+{
+#ifdef USE_FBO
+	int atlasWidth;
+	int atlasHeight;
+	float zNear;
+	float zFar;
+	float depth;
+	float fov;
+	float s;
+
+	if ( glConfig.numTextureUnits <= 2 ||
+		!dl || !dl->linear || !plan || !plan->atlasAllocated ||
+		plan->atlasTileSize <= 0 || plan->radius <= 0.0f ||
+		!r_spotShadows || !r_spotShadows->integer ||
+		!tr.shadowManager.planned || !tr.shadowManager.spotAtlasPublished ||
+		!FBO_SpotShadowAtlasReady() ||
+		backEnd.currentEntity != &tr.worldEntity ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		backEnd.viewParms.zFar <= 0.0f ) {
+		return qfalse;
+	}
+
+	atlasWidth = FBO_SpotShadowAtlasWidth();
+	atlasHeight = FBO_SpotShadowAtlasHeight();
+	if ( atlasWidth <= 0 || atlasHeight <= 0 ) {
+		return qfalse;
+	}
+
+	s = r_dlightShadowStrength ? Com_Clamp( 0.0f, 1.0f, r_dlightShadowStrength->value ) : 0.6f;
+	if ( s <= 0.0f ) {
+		return qfalse;
+	}
+
+	zNear = 1.0f;
+	zFar = MAX( plan->radius, 64.0f );
+	depth = MAX( zFar - zNear, 1.0f );
+	fov = Com_Clamp( 5.0f, 170.0f,
+		( plan->outerAngle > 0.0f ? plan->outerAngle : 75.0f ) * 2.0f );
+
+	dlightShadow[0] = 1.0f / (float)atlasWidth;
+	dlightShadow[1] = 1.0f / (float)atlasHeight;
+	dlightShadow[2] = s;
+	dlightShadow[3] = R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f );
+	shadowAtlas[0] = (float)plan->atlasX;
+	shadowAtlas[1] = (float)plan->atlasY;
+	shadowAtlas[2] = (float)plan->atlasTileSize;
+	shadowAtlas[3] = (float)atlasHeight;
+	shadowDepth[0] = zFar / depth;
+	shadowDepth[1] = ( zFar * zNear ) / depth;
+	shadowDepth[2] = zNear;
+	shadowDepth[3] = tanf( fov * (float)M_PI / 360.0f );
+	ARB_DlightShadowFilterOffsets( &shadowFilter[0], &shadowFilter[1] );
+	shadowFilter[2] = 1.0f;
+	shadowFilter[3] = 0.0f;
+
+	return qtrue;
+#else
+	return qfalse;
+#endif
+}
+
 static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShadow,
 	vec4_t shadowAtlas, vec4_t shadowDepth, vec4_t shadowFilter )
 {
+	const shadowPointLightPlan_t *shadowPlan;
+	const shadowSpotLightPlan_t *spotPlan;
 	float shadowStrength = 0.0f;
 	float shadowReceiverBiasScale = 0.0f;
 
@@ -1128,9 +1227,12 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 	shadowDepth[0] = shadowDepth[1] = shadowDepth[2] = shadowDepth[3] = 0.0f;
 	shadowFilter[0] = shadowFilter[1] = shadowFilter[2] = shadowFilter[3] = 0.0f;
 
+	shadowPlan = R_ShadowManagerPointPlanForDlight( &tr.shadowManager, &backEnd.viewParms, dl );
 	if ( glConfig.numTextureUnits <= 2 ||
-		!ARB_DlightShadowParams( dl, shadowAtlas, shadowDepth, &shadowStrength ) ) {
-		return qfalse;
+		!ARB_DlightShadowParams( dl, shadowPlan, shadowAtlas, shadowDepth, &shadowStrength ) ) {
+		spotPlan = R_ShadowManagerSpotPlanForDlight( &tr.shadowManager, dl );
+		return GLX_SpotShadowParams( dl, spotPlan, dlightShadow, shadowAtlas,
+			shadowDepth, shadowFilter );
 	}
 	if ( shadowAtlas[0] > 0.0f ) {
 		shadowReceiverBiasScale =
@@ -1256,8 +1358,20 @@ qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage )
 	}
 	if ( dlightShadowEnabled ) {
 #ifdef USE_FBO
-		FBO_BindDlightShadowTexture( 2 );
+		if ( shadowFilter[2] > 0.5f ) {
+			FBO_BindSpotShadowTexture( 2 );
+		} else {
+			FBO_BindDlightShadowTexture( 2 );
+		}
 		GL_SelectTexture( 0 );
+#endif
+	} else {
+#ifdef USE_FBO
+		if ( glConfig.numTextureUnits > 2 && tr.shadowManager.spotAtlasPublished &&
+			R_ShadowManagerSpotPlanForDlight( &tr.shadowManager, dl ) ) {
+			FBO_BindSpotShadowTexture( 2 );
+			GL_SelectTexture( 0 );
+		}
 #endif
 	}
 
@@ -1349,7 +1463,9 @@ void ARB_CSMShadowPass( void )
 	int atlasWidth;
 	int atlasHeight;
 
-	if ( !programCompiled || !FBO_CSMShadowsReady() ||
+	if ( !programCompiled ||
+		( tr.shadowManager.planned ?
+			!tr.shadowManager.csmAtlasPublished : !FBO_CSMShadowsReady() ) ||
 		!tr.csm.enabled || tess.csmCascade < 0 ||
 		tess.csmCascade >= tr.csm.cascadeCount ) {
 		return;
@@ -1461,6 +1577,7 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	vec3_t lightRGB;
 	vec4_t shadowAtlas = { 0.0f, 0.0f, 0.0f, 0.0f };
 	vec4_t shadowDepth = { 0.0f, 0.0f, 0.0f, 0.0f };
+	const shadowPointLightPlan_t *shadowPlan;
 	float radius;
 	float textureScale;
 	float shadowFilterInner = 0.0f;
@@ -1487,7 +1604,9 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	fp = NULL;
 
 	vertexProgram = DLIGHT_VERTEX;
-	dlightShadow = ARB_DlightShadowParams( dl, shadowAtlas, shadowDepth, &shadowStrength );
+	shadowPlan = R_ShadowManagerPointPlanForDlight( &tr.shadowManager, &backEnd.viewParms, dl );
+	dlightShadow = ARB_DlightShadowParams( dl, shadowPlan, shadowAtlas, shadowDepth,
+		&shadowStrength );
 	if ( dlightShadow && shadowAtlas[0] > 0.0f ) {
 		shadowReceiverBiasScale =
 			R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0];
@@ -1545,6 +1664,14 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 #ifdef USE_FBO
 		FBO_BindDlightShadowTexture( 2 );
 		GL_SelectTexture( 0 );
+#endif
+	} else {
+#ifdef USE_FBO
+		if ( glConfig.numTextureUnits > 2 && tr.shadowManager.spotAtlasPublished &&
+			R_ShadowManagerSpotPlanForDlight( &tr.shadowManager, dl ) ) {
+			FBO_BindSpotShadowTexture( 2 );
+			GL_SelectTexture( 0 );
+		}
 #endif
 	}
 
@@ -3026,6 +3153,14 @@ static void FBO_InvalidateDlightShadowAtlasGeneration( void )
 	}
 }
 
+static void FBO_InvalidateSpotShadowAtlasGeneration( void )
+{
+	spotShadowAtlasGeneration++;
+	if ( !spotShadowAtlasGeneration ) {
+		spotShadowAtlasGeneration++;
+	}
+}
+
 static void FBO_InvalidateCSMShadowAtlasGeneration( void )
 {
 	csmShadowAtlasGeneration++;
@@ -3054,6 +3189,26 @@ static void FBO_CleanDlightShadowAtlas( void )
 	FBO_InvalidateDlightShadowAtlasGeneration();
 }
 
+static void FBO_CleanSpotShadowAtlas( void )
+{
+	if ( spotShadowAtlasFbo )
+	{
+		FBO_Bind( GL_FRAMEBUFFER, 0 );
+		qglDeleteFramebuffers( 1, &spotShadowAtlasFbo );
+		spotShadowAtlasFbo = 0;
+	}
+	if ( spotShadowAtlasTexture )
+	{
+		GL_BindTexture( 1, 0 );
+		GL_SelectTexture( 0 );
+		qglDeleteTextures( 1, &spotShadowAtlasTexture );
+		spotShadowAtlasTexture = 0;
+	}
+	Com_Memset( &spotShadowAtlasLayout, 0, sizeof( spotShadowAtlasLayout ) );
+	spotShadowAtlasRendered = qfalse;
+	FBO_InvalidateSpotShadowAtlasGeneration();
+}
+
 static void FBO_CleanCSMShadowAtlas( void )
 {
 	if ( csmShadowAtlasFbo )
@@ -3078,6 +3233,7 @@ static void FBO_CleanCSMShadowAtlas( void )
 static void FBO_CleanDepth( void )
 {
 	FBO_CleanDlightShadowAtlas();
+	FBO_CleanSpotShadowAtlas();
 	FBO_CleanCSMShadowAtlas();
 
 	if ( depthFadeTexture )
@@ -3194,6 +3350,72 @@ static qboolean FBO_CreateDlightShadowAtlas( void )
 
 	ri.Printf( PRINT_ALL, "...dynamic-light shadow atlas %ix%i (%i px faces, %i lights)\n",
 		layout.width, layout.height, layout.faceSize, layout.maxLights );
+
+	return qtrue;
+}
+
+static qboolean FBO_SpotShadowAtlasWanted( spotShadowAtlasLayout_t *layout )
+{
+#ifdef USE_PMLIGHT
+	if ( !r_spotShadows || !r_spotShadows->integer ||
+		!r_spotShadowMaxLights || r_spotShadowMaxLights->integer <= 0 ) {
+		return qfalse;
+	}
+
+	return R_SpotShadowAtlasLayout( r_spotShadowMaxLights->integer,
+		r_spotShadowResolution ? r_spotShadowResolution->integer : 256,
+		glConfig.maxTextureSize, layout );
+#else
+	return qfalse;
+#endif
+}
+
+static qboolean FBO_CreateSpotShadowAtlas( void )
+{
+	spotShadowAtlasLayout_t layout;
+	int fboStatus;
+
+	if ( !FBO_SpotShadowAtlasWanted( &layout ) ) {
+		return qfalse;
+	}
+
+	qglGenTextures( 1, &spotShadowAtlasTexture );
+	GL_BindTexture( 1, spotShadowAtlasTexture );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+	qglTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, layout.width, layout.height, 0,
+		GL_DEPTH_COMPONENT, GL_FLOAT, NULL );
+
+	qglGenFramebuffers( 1, &spotShadowAtlasFbo );
+	FBO_Bind( GL_FRAMEBUFFER, spotShadowAtlasFbo );
+	qglFramebufferTexture2D( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, spotShadowAtlasTexture, 0 );
+	qglDrawBuffer( GL_NONE );
+	qglReadBuffer( GL_NONE );
+
+	fboStatus = qglCheckFramebufferStatus( GL_FRAMEBUFFER );
+	if ( fboStatus != GL_FRAMEBUFFER_COMPLETE )
+	{
+		ri.Printf( PRINT_WARNING, "Failed to create spotlight shadow atlas FBO (status %s, error %s)\n",
+			glDefToStr( fboStatus ), glDefToStr( (int)qglGetError() ) );
+		FBO_CleanSpotShadowAtlas();
+		qglDrawBuffer( GL_BACK );
+		qglReadBuffer( GL_BACK );
+		GL_SelectTexture( 0 );
+		return qfalse;
+	}
+
+	qglClear( GL_DEPTH_BUFFER_BIT );
+	spotShadowAtlasLayout = layout;
+	FBO_InvalidateSpotShadowAtlasGeneration();
+	FBO_Bind( GL_FRAMEBUFFER, 0 );
+	qglDrawBuffer( GL_BACK );
+	qglReadBuffer( GL_BACK );
+	GL_SelectTexture( 0 );
+
+	ri.Printf( PRINT_ALL, "...spotlight shadow atlas %ix%i (%i px tiles, %i lights)\n",
+		layout.width, layout.height, layout.tileSize, layout.maxLights );
 
 	return qtrue;
 }
@@ -3867,6 +4089,76 @@ qboolean FBO_DlightShadowsReady( void )
 	return ( FBO_DlightShadowsAvailable() && dlightShadowAtlasRendered ) ? qtrue : qfalse;
 }
 
+qboolean FBO_SpotShadowAtlasAvailable( void )
+{
+	return ( qglGenFramebuffers && spotShadowAtlasTexture && spotShadowAtlasFbo &&
+		spotShadowAtlasLayout.tileSize > 0 ) ? qtrue : qfalse;
+}
+
+qboolean FBO_SpotShadowAtlasReady( void )
+{
+	return ( FBO_SpotShadowAtlasAvailable() && spotShadowAtlasRendered ) ? qtrue : qfalse;
+}
+
+qboolean FBO_BeginSpotShadowAtlas( void )
+{
+	spotShadowAtlasRendered = qfalse;
+
+	if ( !FBO_SpotShadowAtlasAvailable() ) {
+		return qfalse;
+	}
+
+	FBO_Bind( GL_FRAMEBUFFER, spotShadowAtlasFbo );
+	qglDrawBuffer( GL_NONE );
+	qglReadBuffer( GL_NONE );
+	qglViewport( 0, 0, spotShadowAtlasLayout.width, spotShadowAtlasLayout.height );
+	qglScissor( 0, 0, spotShadowAtlasLayout.width, spotShadowAtlasLayout.height );
+	GL_State( GLS_DEFAULT );
+
+	return qtrue;
+}
+
+void FBO_EndSpotShadowAtlas( void )
+{
+	if ( fboEnabled ) {
+		FBO_BindMain();
+		qglDrawBuffer( GL_COLOR_ATTACHMENT0 );
+		qglReadBuffer( GL_COLOR_ATTACHMENT0 );
+	} else {
+		FBO_Bind( GL_FRAMEBUFFER, 0 );
+		qglDrawBuffer( GL_BACK );
+		qglReadBuffer( GL_BACK );
+	}
+	spotShadowAtlasRendered = qtrue;
+}
+
+void FBO_MarkSpotShadowAtlasRendered( void )
+{
+	if ( FBO_SpotShadowAtlasAvailable() ) {
+		spotShadowAtlasRendered = qtrue;
+	}
+}
+
+int FBO_SpotShadowAtlasWidth( void )
+{
+	return spotShadowAtlasLayout.width;
+}
+
+int FBO_SpotShadowAtlasHeight( void )
+{
+	return spotShadowAtlasLayout.height;
+}
+
+int FBO_SpotShadowTileSize( void )
+{
+	return spotShadowAtlasLayout.tileSize;
+}
+
+unsigned int FBO_SpotShadowAtlasGeneration( void )
+{
+	return spotShadowAtlasGeneration;
+}
+
 qboolean FBO_CSMShadowsAvailable( void )
 {
 #ifdef USE_PMLIGHT
@@ -4006,6 +4298,15 @@ void FBO_BindDlightShadowTexture( int texUnit )
 	GLX_CompatRecordDlightState( ready ?
 		GLX_DLIGHT_STATE_SHADOW_TEXTURE_BIND :
 		GLX_DLIGHT_STATE_SHADOW_TEXTURE_FALLBACK_BIND );
+}
+
+void FBO_BindSpotShadowTexture( int texUnit )
+{
+	GLuint texnum = FBO_SpotShadowAtlasReady() ? spotShadowAtlasTexture : 0;
+
+	GL_SelectTexture( texUnit );
+	glState.currenttextures[ texUnit ] = texnum;
+	qglBindTexture( GL_TEXTURE_2D, texnum );
 }
 
 void FBO_BindCSMShadowTexture( int texUnit )
@@ -5176,6 +5477,7 @@ void QGL_InitFBO( void )
 
 	if ( !r_fbo->integer )
 	{
+		FBO_CreateSpotShadowAtlas();
 		if ( csmShadowProgramsCompiled ) {
 			FBO_CreateCSMShadowAtlas();
 		}
@@ -5234,6 +5536,7 @@ void QGL_InitFBO( void )
 		if ( !depthFadeTexture )
 			depthFadeTexture = FBO_CreateDepthFadeTexture( w, h, qfalse );
 		FBO_CreateDlightShadowAtlas();
+		FBO_CreateSpotShadowAtlas();
 		FBO_CreateCSMShadowAtlas();
 		FBO_BindMain();
 		ri.Printf( PRINT_ALL, "...using %s (%s:%s) FBO\n", glDefToStr( fboInternalFormat ),

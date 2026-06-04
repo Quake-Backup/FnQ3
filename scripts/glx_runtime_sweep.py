@@ -53,7 +53,7 @@ GLX_SWITCH_LIFECYCLE_VERSION = 1
 GLX_OWNERSHIP_PROOF_VERSION = 3
 GLX_WORLD_PROOF_VERSION = 1
 GLX_MATERIAL_PROOF_VERSION = 1
-GLX_DYNAMIC_PROOF_VERSION = 1
+GLX_DYNAMIC_PROOF_VERSION = 2
 GLX_POST_PROOF_VERSION = 2
 GLX_POST_OUTPUT_FALLBACK_EXECUTOR_NOT_IMPLEMENTED = 0x00000400
 GLX_POST_OUTPUT_FALLBACK_EXECUTOR_DISABLED = 0x00000800
@@ -772,7 +772,12 @@ GLX_PASS_SCHEDULE_RE = re.compile(
 GLX_RENDER_IR_PRODUCTS_RE = re.compile(
     r"(?:glx:\s*)?render IR products:?\s*"
     r"passes\s+(?P<passes>\d+),?\s+world packets\s+(?P<worldPackets>\d+),?\s+"
-    r"dynamic draws\s+(?P<dynamicDraws>\d+),?\s+materials\s+(?P<materials>\d+),?\s+"
+    r"(?:projected world packets\s+(?P<projectedWorldPackets>\d+)/"
+    r"(?P<projectedWorldPacketDlights>\d+)\s+lights,?\s+)?"
+    r"dynamic draws\s+(?P<dynamicDraws>\d+),?\s+"
+    r"(?:projected dynamic draws\s+(?P<projectedDynamicDraws>\d+)/"
+    r"(?P<projectedDynamicDlights>\d+)\s+lights,?\s+)?"
+    r"materials\s+(?P<materials>\d+),?\s+"
     r"uploads\s+(?P<uploads>\d+),?\s+post nodes\s+(?P<postNodes>\d+),?\s+"
     r"outputs\s+(?P<outputs>\d+),?\s+rejects\s+(?P<rejects>\d+)",
     re.IGNORECASE,
@@ -796,6 +801,35 @@ GLX_RENDER_IR_DYNAMIC_PASSES_RE = re.compile(
 )
 GLX_RENDER_IR_DYNAMIC_ROLE_KEYS = ("generic", "dlight", "shadow", "beam", "post")
 GLX_RENDER_IR_DYNAMIC_PASS_KEYS = ("dlight", "scene", "post", "other")
+GLX_DLIGHT_PROJECTED_SHADER_INPUTS_RE = re.compile(
+    r"(?:glx:\s*)?dlight projected shader(?:\s+inputs|\s+compact)?:?\s*"
+    r"(?:inputs\s+)?(?P<inputs>\d+)/(?P<records>\d+)(?:\s+records)?,?\s+"
+    r"world\s+(?P<world>\d+),?\s+dynamic\s+(?P<dynamic>\d+),?\s+"
+    r"programmable\s+(?P<programmable>\d+),?\s+fallback\s+(?P<fallback>\d+),?\s+"
+    r"invalid\s+(?P<invalid>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_PROJECTED_SHADER_UNIFORMS_RE = re.compile(
+    r"(?:glx:\s*)?dlight projected shader uniform(?:s|\s+compact)?:?\s*"
+    r"attempts\s+(?P<attempts>\d+),?\s+binds\s+(?P<binds>\d+),?\s+"
+    r"failures\s+(?P<failures>\d+),?\s+records\s+(?P<records>\d+),?\s+"
+    r"truncated\s+(?P<truncated>\d+)"
+    r"(?:,?\s+executable\s+(?P<executable>\d+),?\s+suppressed\s+(?P<suppressed>\d+))?"
+    r"(?:,?\s+world\s+(?P<worldExecutable>\d+)/(?P<worldBinds>\d+),?\s+"
+    r"dynamic\s+(?P<dynamicExecutable>\d+)/(?P<dynamicBinds>\d+))?"
+    r"(?:,?\s+limit-suppressed\s+(?P<limitSuppressed>\d+))?"
+    r",?\s+limit\s+(?P<limit>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_PROJECTED_SHADER_STREAM_RE = re.compile(
+    r"(?:glx:\s*)?dlight projected shader stream(?:\s+compact)?:?\s*"
+    r"attempts\s+(?P<attempts>\d+),?\s+uploads\s+(?P<uploads>\d+),?\s+"
+    r"failures\s+(?P<failures>\d+),?\s+skipped\s+(?P<skipped>\d+),?\s+"
+    r"records\s+(?P<records>\d+),?\s+bytes\s+(?P<bytes>\d+),?\s+"
+    r"persistent\s+(?P<persistent>\d+),?\s+world\s+(?P<world>\d+),?\s+"
+    r"dynamic\s+(?P<dynamic>\d+),?\s+last\s+(?P<lastOffset>\d+)/(?P<lastBytes>\d+)",
+    re.IGNORECASE,
+)
 GLX_POST_OUTPUT_OWNERSHIP_RE = re.compile(
     r"(?:glx:\s*)?post/output ownership:?\s*"
     r"mode\s+(?P<mode>[A-Za-z0-9_-]+),?\s+post nodes\s+(?P<postNodes>\d+),?\s+"
@@ -1574,6 +1608,7 @@ GLX_RC_PROFILE_CVARS = {
     "r_glxStreamDrawEnvironment": "1",
     "r_glxStreamDrawDynamicLights": "auto",
     "r_glxDlightScissor": "auto",
+    "r_glxDlightProjectedProgram": "0",
     "r_glxStreamDrawScreenMaps": "0",
     "r_glxStreamDrawVideoMaps": "0",
     "r_glxStreamDrawShadows": "1",
@@ -1664,11 +1699,29 @@ PROFILE_CVARS = {
         **GLX_RC_PROFILE_CVARS,
         "r_glxRequireOwnership": "1",
     },
+    "glx-dlight-shader": {
+        "r_glxProfile": "rc",
+        **GLX_RC_PROFILE_CVARS,
+        "r_dynamiclight": "1",
+        "r_glxDlightProjectedProgram": "1",
+    },
     "glx-stress": {
         "r_glxProfile": "stress",
         **GLX_STRESS_PROFILE_CVARS,
     },
 }
+
+GLX_STARTUP_PROFILE_CVARS = {
+    "rc": GLX_RC_PROFILE_CVARS,
+    "stress": GLX_STRESS_PROFILE_CVARS,
+}
+GLX_RC_DIAGNOSTIC_PROFILES = frozenset(
+    {"glx-parity", "glx-ownership", "glx-stress", "glx-material", "glx-dlight-shader"}
+)
+GLX_STATIC_WORLD_PACKET_PROFILES = frozenset(
+    {"glx-parity", "glx-ownership", "glx-stress", "glx-dlight-shader"}
+)
+GLX_PROJECTED_DLIGHT_SHADER_PROFILES = frozenset({"glx-dlight-shader"})
 
 GLX_PROOF_CORPUS_VERSION = "2026-05-12-image-evidence-v1"
 GLX_PROOF_CORPUS_DOC = "docs/fnquake3/GLX_PROOF_CORPUS.md"
@@ -2037,6 +2090,7 @@ GLX_PROFILE_CORPUS_SCENES = {
     "glx-color": ("stock-q3dm17-open", "stock-q3dm11-shader", "stock-q3dm15-fog"),
     "glx-parity": ("stock-q3dm1-hud",),
     "glx-ownership": ("stock-q3dm1-hud", "stock-q3dm17-open"),
+    "glx-dlight-shader": ("stock-q3dm1-hud", "timedemo-demo1"),
     "glx-stress": GLX_GATE_CORPUS_SCENES["rc-stress"],
 }
 
@@ -2630,9 +2684,9 @@ STARTUP_CVARS = {
 
 GLX_PROFILE_FORCED_CVARS = {
     name
-    for profile in ("glx-parity", "glx-ownership", "glx-stress")
-    for name in PROFILE_CVARS[profile]
-    if name.startswith("r_glx") and name not in {"r_glxProfile", "r_glxRequireOwnership"}
+    for profile in GLX_STARTUP_PROFILE_CVARS.values()
+    for name in profile
+    if name.startswith("r_glx")
 }
 
 RC_GATE_PRESETS = {
@@ -3550,10 +3604,11 @@ def launch_cvars(cvars: dict[str, str]) -> dict[str, str]:
 def config_cvars(args: argparse.Namespace, cvars: dict[str, str]) -> dict[str, str]:
     filtered = dict(cvars)
     profile_values = PROFILE_CVARS.get(args.profile, {})
+    startup_values = GLX_STARTUP_PROFILE_CVARS.get(profile_values.get("r_glxProfile", ""), {})
 
-    if profile_values.get("r_glxProfile"):
+    if startup_values:
         for name in GLX_PROFILE_FORCED_CVARS:
-            if filtered.get(name) == profile_values.get(name):
+            if filtered.get(name) == startup_values.get(name):
                 filtered.pop(name, None)
 
     return filtered
@@ -4716,11 +4771,19 @@ def q3_bool(value: object) -> bool:
 
 
 def rc_profile_requires_glx_paths(profile: str) -> bool:
-    return profile in {"glx-parity", "glx-ownership", "glx-stress", "glx-material"}
+    return profile in GLX_RC_DIAGNOSTIC_PROFILES
 
 
 def profile_requires_glx_ownership(profile: str) -> bool:
     return profile in {"glx-ownership", "glx-final"}
+
+
+def profile_requires_static_world_packets(profile: str) -> bool:
+    return profile in GLX_STATIC_WORLD_PACKET_PROFILES
+
+
+def profile_requires_projected_dlight_shader(profile: str) -> bool:
+    return profile in GLX_PROJECTED_DLIGHT_SHADER_PROFILES
 
 
 def metric_section(metrics: dict[str, object], name: str) -> dict[str, object]:
@@ -4930,6 +4993,8 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
     text = log_path.read_text(encoding="utf-8", errors="replace")
     requires_glx_paths = rc_profile_requires_glx_paths(profile)
     requires_glx_ownership = profile_requires_glx_ownership(profile)
+    requires_static_world_packets = profile_requires_static_world_packets(profile)
+    requires_projected_dlight_shader = profile_requires_projected_dlight_shader(profile)
     requires_tier_contract = profile != "glx-color"
     saw_ownership = False
     saw_stream_categories = False
@@ -5392,6 +5457,15 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 "rejects",
             ):
                 record_metric_max(metrics, "renderIRProducts", key, int_group(match, key))
+            for key in (
+                "projectedWorldPackets",
+                "projectedWorldPacketDlights",
+                "projectedDynamicDraws",
+                "projectedDynamicDlights",
+            ):
+                value = match.group(key)
+                if value is not None:
+                    record_metric_max(metrics, "renderIRProducts", key, int(value))
             continue
 
         match = GLX_RENDER_IR_DYNAMIC_ROLES_RE.search(line)
@@ -5416,6 +5490,73 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                         f"{pass_name}{field}",
                         int_group(match, f"{pass_name}{field}"),
                     )
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_INPUTS_RE.search(line)
+        if match:
+            for key in (
+                "inputs",
+                "records",
+                "world",
+                "dynamic",
+                "programmable",
+                "fallback",
+                "invalid",
+            ):
+                record_metric_max(
+                    metrics,
+                    "dlightProjectedShaderInputs",
+                    key,
+                    int_group(match, key),
+                )
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_UNIFORMS_RE.search(line)
+        if match:
+            for key in (
+                "attempts",
+                "binds",
+                "failures",
+                "records",
+                "truncated",
+                "executable",
+                "suppressed",
+                "worldExecutable",
+                "worldBinds",
+                "dynamicExecutable",
+                "dynamicBinds",
+                "limitSuppressed",
+                "limit",
+            ):
+                record_metric_max(
+                    metrics,
+                    "dlightProjectedShaderUniforms",
+                    key,
+                    int_group_default(match, key),
+                )
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_STREAM_RE.search(line)
+        if match:
+            for key in (
+                "attempts",
+                "uploads",
+                "failures",
+                "skipped",
+                "records",
+                "bytes",
+                "persistent",
+                "world",
+                "dynamic",
+                "lastOffset",
+                "lastBytes",
+            ):
+                record_metric_max(
+                    metrics,
+                    "dlightProjectedShaderStream",
+                    key,
+                    int_group(match, key),
+                )
             continue
 
         match = GLX_POST_OUTPUT_OWNERSHIP_RE.search(line)
@@ -6093,9 +6234,8 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         match = STATIC_RENDERER_RE.search(line)
         if match:
             renderer_enabled = q3_bool(match.group("renderer"))
-            packet_profile = profile in {"glx-parity", "glx-ownership", "glx-stress"}
             record_metric_max(metrics, "staticWorld", "rendererEnabled", 1 if renderer_enabled else 0)
-            if packet_profile and not renderer_enabled:
+            if requires_static_world_packets and not renderer_enabled:
                 failures.append("GLx static world renderer is not enabled under the RC profile.")
             continue
 
@@ -6123,7 +6263,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             record_metric_max(metrics, "staticWorld", "packetBatchEnabled", 1 if enabled else 0)
             for key in ("attempts", "batches", "fallbackRuns"):
                 record_metric_max(metrics, "staticWorld", f"packetBatch{key[0].upper()}{key[1:]}", int_group(match, key))
-            if profile in {"glx-parity", "glx-ownership", "glx-stress"} and not enabled:
+            if requires_static_world_packets and not enabled:
                 failures.append("GLx static world packet batching is not enabled under the RC profile.")
             continue
 
@@ -6160,6 +6300,45 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
         )
         if schedule_failure:
             failures.append(schedule_failure)
+
+    if requires_projected_dlight_shader:
+        projected_inputs = metric_section(metrics, "dlightProjectedShaderInputs")
+        projected_uniforms = metric_section(metrics, "dlightProjectedShaderUniforms")
+        if int_metric(projected_uniforms.get("binds")) <= 0:
+            failures.append("GLx projected dlight shader profile did not bind projected uniform input.")
+        if int_metric(projected_uniforms.get("executable")) <= 0:
+            failures.append("GLx projected dlight shader profile did not execute projected uniform binds.")
+        if int_metric(projected_uniforms.get("truncated")) > 0:
+            failures.append(
+                "GLx projected dlight shader profile truncated projected uniform input: "
+                f"{int_metric(projected_uniforms.get('truncated'))} records."
+            )
+        if int_metric(projected_uniforms.get("limitSuppressed")) > 0:
+            failures.append(
+                "GLx projected dlight shader profile suppressed over-limit projected uniform binds: "
+                f"{int_metric(projected_uniforms.get('limitSuppressed'))}."
+            )
+        if (
+            int_metric(projected_inputs.get("world")) > 0
+            and int_metric(projected_uniforms.get("worldExecutable")) <= 0
+        ):
+            failures.append(
+                "GLx projected dlight shader profile did not execute projected uniform binds for world packets."
+            )
+        if (
+            int_metric(projected_inputs.get("dynamic")) > 0
+            and int_metric(projected_uniforms.get("dynamicExecutable")) <= 0
+        ):
+            failures.append(
+                "GLx projected dlight shader profile did not execute projected uniform binds for dynamic draws."
+            )
+        if int_metric(projected_uniforms.get("suppressed")) > 0:
+            failures.append("GLx projected dlight shader profile still suppressed projected uniform binds.")
+        if int_metric(projected_uniforms.get("failures")) > 0:
+            failures.append(
+                "GLx projected dlight shader profile reported projected uniform bind failures: "
+                f"{int_metric(projected_uniforms.get('failures'))}."
+            )
 
     product_tier = metric_section(metrics, "productTier").get("tier")
     if requires_tier_contract and product_tier == "GL12":
@@ -7083,6 +7262,44 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 ("fallbacks", "dlightScissorFallbacks"),
                 ("pixels", "dlightScissorPixels"),
                 ("viewportPixels", "dlightScissorViewportPixels"),
+            ):
+                perf_record_numeric(performance, key, int_group(match, group))
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_UNIFORMS_RE.search(line)
+        if match:
+            for group, key in (
+                ("attempts", "dlightProjectedShaderUniformAttempts"),
+                ("binds", "dlightProjectedShaderUniformBinds"),
+                ("failures", "dlightProjectedShaderUniformFailures"),
+                ("records", "dlightProjectedShaderUniformRecords"),
+                ("truncated", "dlightProjectedShaderUniformTruncated"),
+                ("executable", "dlightProjectedShaderUniformExecutable"),
+                ("suppressed", "dlightProjectedShaderUniformSuppressed"),
+                ("worldExecutable", "dlightProjectedShaderUniformWorldExecutable"),
+                ("worldBinds", "dlightProjectedShaderUniformWorldBinds"),
+                ("dynamicExecutable", "dlightProjectedShaderUniformDynamicExecutable"),
+                ("dynamicBinds", "dlightProjectedShaderUniformDynamicBinds"),
+                ("limitSuppressed", "dlightProjectedShaderUniformLimitSuppressed"),
+                ("limit", "dlightProjectedShaderUniformLimit"),
+            ):
+                perf_record_numeric(performance, key, int_group_default(match, group))
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_STREAM_RE.search(line)
+        if match:
+            for group, key in (
+                ("attempts", "dlightProjectedShaderStreamAttempts"),
+                ("uploads", "dlightProjectedShaderStreamUploads"),
+                ("failures", "dlightProjectedShaderStreamFailures"),
+                ("skipped", "dlightProjectedShaderStreamSkipped"),
+                ("records", "dlightProjectedShaderStreamRecords"),
+                ("bytes", "dlightProjectedShaderStreamBytes"),
+                ("persistent", "dlightProjectedShaderStreamPersistent"),
+                ("world", "dlightProjectedShaderStreamWorld"),
+                ("dynamic", "dlightProjectedShaderStreamDynamic"),
+                ("lastOffset", "dlightProjectedShaderStreamLastOffset"),
+                ("lastBytes", "dlightProjectedShaderStreamLastBytes"),
             ):
                 perf_record_numeric(performance, key, int_group(match, group))
             continue
@@ -9561,6 +9778,15 @@ def dynamic_proof_evidence(
     }
     render_ir_dlight_role = {"draws": 0, "indexes": 0, "vertices": 0}
     render_ir_dlight_pass = {"draws": 0, "indexes": 0, "vertices": 0}
+    dlight_scissor = {
+        "active": 0,
+        "candidates": 0,
+        "computed": 0,
+        "applied": 0,
+        "fallbacks": 0,
+        "pixels": 0,
+        "viewportPixels": 0,
+    }
     stream_draws = 0
     stream_attempts = 0
     stream_indexes = 0
@@ -9588,6 +9814,10 @@ def dynamic_proof_evidence(
         target["draws"] = max(target["draws"], int_metric(section.get("dlightDraws")))
         target["indexes"] = max(target["indexes"], int_metric(section.get("dlightIndexes")))
         target["vertices"] = max(target["vertices"], int_metric(section.get("dlightVertices")))
+
+    def record_dlight_scissor_section(section: dict[str, object]) -> None:
+        for key in dlight_scissor:
+            dlight_scissor[key] = max(dlight_scissor[key], int_metric(section.get(key)))
 
     def record_dynamic_metrics(metrics: dict[str, object], run_label: str) -> None:
         nonlocal stream_draws, stream_attempts, stream_indexes
@@ -9652,6 +9882,10 @@ def dynamic_proof_evidence(
         render_ir_passes = metrics.get("renderIRDynamicPasses")
         if isinstance(render_ir_passes, dict):
             record_render_ir_dlight_section(render_ir_dlight_pass, render_ir_passes)
+
+        dlight_scissor_section = metrics.get("dlightScissor")
+        if isinstance(dlight_scissor_section, dict):
+            record_dlight_scissor_section(dlight_scissor_section)
 
         gates = metrics.get("streamMaterialGate")
         if isinstance(gates, dict):
@@ -9723,6 +9957,34 @@ def dynamic_proof_evidence(
         render_ir_dlight_pass["vertices"] = max(
             render_ir_dlight_pass["vertices"],
             performance_numeric_value(performance, "renderIRPassDlightVertices"),
+        )
+        dlight_scissor["active"] = max(
+            dlight_scissor["active"],
+            performance_numeric_value(performance, "dlightScissorActive"),
+        )
+        dlight_scissor["candidates"] = max(
+            dlight_scissor["candidates"],
+            performance_numeric_value(performance, "dlightScissorCandidates"),
+        )
+        dlight_scissor["computed"] = max(
+            dlight_scissor["computed"],
+            performance_numeric_value(performance, "dlightScissorComputed"),
+        )
+        dlight_scissor["applied"] = max(
+            dlight_scissor["applied"],
+            performance_numeric_value(performance, "dlightScissorApplied"),
+        )
+        dlight_scissor["fallbacks"] = max(
+            dlight_scissor["fallbacks"],
+            performance_numeric_value(performance, "dlightScissorFallbacks"),
+        )
+        dlight_scissor["pixels"] = max(
+            dlight_scissor["pixels"],
+            performance_numeric_value(performance, "dlightScissorPixels"),
+        )
+        dlight_scissor["viewportPixels"] = max(
+            dlight_scissor["viewportPixels"],
+            performance_numeric_value(performance, "dlightScissorViewportPixels"),
         )
 
     runs = manifest.get("runs", [])
@@ -9822,6 +10084,21 @@ def dynamic_proof_evidence(
         and stream_dlight_draws > 0
         and render_ir_dlight_pass["draws"] < stream_dlight_draws
     )
+    missing_dlight_scissor_active = (
+        require_dlight_ownership
+        and stream_dlight_draws > 0
+        and dlight_scissor["active"] <= 0
+    )
+    missing_dlight_scissor_computed = (
+        require_dlight_ownership
+        and stream_dlight_draws > 0
+        and dlight_scissor["computed"] <= 0
+    )
+    missing_dlight_scissor_applied = (
+        require_dlight_ownership
+        and stream_dlight_draws > 0
+        and dlight_scissor["applied"] <= 0
+    )
 
     failures: list[str] = []
     if require_dynamic and not dry_run:
@@ -9874,6 +10151,12 @@ def dynamic_proof_evidence(
                 "Dynamic proof streamed dlights are missing render-IR dynamic-lights pass ownership: "
                 f"stream={stream_dlight_draws}, pass={render_ir_dlight_pass['draws']}."
             )
+        if missing_dlight_scissor_active:
+            failures.append("Dynamic proof did not observe projected-dlight scissor active state.")
+        if missing_dlight_scissor_computed:
+            failures.append("Dynamic proof did not observe computed projected-dlight scissor rectangles.")
+        if missing_dlight_scissor_applied:
+            failures.append("Dynamic proof did not observe applied projected-dlight scissor rectangles.")
         if stream_attempts <= 0 and stream_draws <= 0:
             failures.append("Dynamic proof did not observe dynamic stream draw attempts.")
         if stream_indexes <= 0 and stream_draws <= 0:
@@ -9927,6 +10210,7 @@ def dynamic_proof_evidence(
             "role": dict(render_ir_dlight_role),
             "pass": dict(render_ir_dlight_pass),
         },
+        "dlightScissor": dict(dlight_scissor),
         "streamCategories": dynamic_categories,
         "streamFeatures": dict(stream_features),
         "streamGuards": stream_gate_records,
@@ -9962,6 +10246,27 @@ def evaluate_dynamic_proof(
             "Dynamic proof evidence status is "
             f"{evidence.get('status')!r}, expected 'passed'."
         )
+    required_tags = {
+        str(tag)
+        for tag in requirements.get("required_dynamic_tags", ())
+        if str(tag).strip()
+    }
+    required_stream_features = {
+        str(feature)
+        for feature in requirements.get("required_dynamic_stream_features", ())
+        if str(feature).strip()
+    }
+    if "dynamic-light" in required_tags or "dynamicLight" in required_stream_features:
+        dlight_scissor = evidence.get("dlightScissor")
+        if not isinstance(dlight_scissor, dict):
+            failures.append("Dynamic proof evidence is missing projected-dlight scissor evidence.")
+        else:
+            for key in ("active", "computed", "applied"):
+                if int_metric(dlight_scissor.get(key)) <= 0:
+                    failures.append(
+                        "Dynamic proof evidence has non-positive projected-dlight "
+                        f"scissor {key} counter."
+                    )
     for failure in evidence.get("failures", []):
         if str(failure).strip():
             failures.append(str(failure))

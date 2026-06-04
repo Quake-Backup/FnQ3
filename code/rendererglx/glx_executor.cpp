@@ -539,6 +539,11 @@ qboolean GLX_Executor_ConsumeWorldPacket( ExecutorState *state, const WorldPacke
 	}
 
 	state->worldPackets++;
+	if ( packet.projectedDlights.recordCount > 0 ) {
+		state->worldPacketsWithProjectedDlights++;
+		state->worldPacketProjectedDlightRecords +=
+			static_cast<unsigned int>( packet.projectedDlights.recordCount );
+	}
 	state->materialPlans++;
 	state->uploadPlans++;
 	if ( state->tier == RenderProductTier::GL2X ) {
@@ -668,6 +673,11 @@ qboolean GLX_Executor_ExecuteDynamicDraw( ExecutorState *state, const DynamicDra
 	}
 
 	state->dynamicDraws++;
+	if ( draw.projectedDlights.recordCount > 0 ) {
+		state->dynamicDrawsWithProjectedDlights++;
+		state->dynamicDrawProjectedDlightRecords +=
+			static_cast<unsigned int>( draw.projectedDlights.recordCount );
+	}
 	GLX_Executor_RecordDynamicDrawAccounting( state, draw );
 	if ( state->tier == RenderProductTier::GL12 ) {
 		state->fixedFunctionDraws++;
@@ -863,10 +873,14 @@ void GLX_Executor_PrintInfo( const ExecutorState &state )
 		state.frameScheduleCount,
 		state.frameScheduleHash,
 		state.frameScheduleText[0] ? state.frameScheduleText : "none" );
-	RI().Printf( PRINT_ALL, "  render IR products: passes %u, world packets %u, dynamic draws %u, materials %u, uploads %u, post nodes %u, outputs %u, rejects %u\n",
+	RI().Printf( PRINT_ALL, "  render IR products: passes %u, world packets %u, projected world packets %u/%u lights, dynamic draws %u, projected dynamic draws %u/%u lights, materials %u, uploads %u, post nodes %u, outputs %u, rejects %u\n",
 		state.framePasses,
 		state.worldPackets,
+		state.worldPacketsWithProjectedDlights,
+		state.worldPacketProjectedDlightRecords,
 		state.dynamicDraws,
+		state.dynamicDrawsWithProjectedDlights,
+		state.dynamicDrawProjectedDlightRecords,
 		state.materialPlans,
 		state.uploadPlans,
 		state.postNodes,

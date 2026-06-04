@@ -11,12 +11,17 @@ the Free Software Foundation; either version 2 of the License, or
 ===========================================================================
 */
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "glx_material_key.h"
 #include "glx_caps_logic.h"
 #include "glx_color_math.h"
 #include "glx_post_output_reference.h"
 #include "glx_post_shader_plan.h"
 #include "glx_post_shader_source.h"
+#include "glx_executor.h"
 #include "glx_render_ir.h"
 #include "glx_static_world_logic.h"
 #include "glx_stream_logic.h"
@@ -27,6 +32,65 @@ the Free Software Foundation; either version 2 of the License, or
 #include <cmath>
 #include <limits>
 #include <limits>
+
+namespace glx {
+
+refimport_t *g_imports = nullptr;
+int g_testDrawElementsCalls = 0;
+int g_testDrawArraysCalls = 0;
+
+refimport_t &RI()
+{
+	static refimport_t nullImports {};
+	return g_imports ? *g_imports : nullImports;
+}
+
+qboolean ImportsReady()
+{
+	return g_imports ? qtrue : qfalse;
+}
+
+const char *BoolName( qboolean value )
+{
+	return value ? "yes" : "no";
+}
+
+qboolean ToQBool( bool value )
+{
+	return value ? qtrue : qfalse;
+}
+
+void GLX_Draw_Shutdown()
+{
+}
+
+qboolean GLX_Draw_DrawElements( unsigned int mode, int count, unsigned int type,
+	const void *indices )
+{
+	(void)mode;
+	(void)count;
+	(void)type;
+	(void)indices;
+	g_testDrawElementsCalls++;
+	return qtrue;
+}
+
+qboolean GLX_Draw_DrawArrays( unsigned int mode, int first, int count )
+{
+	(void)mode;
+	(void)first;
+	(void)count;
+	g_testDrawArraysCalls++;
+	return qtrue;
+}
+
+void GLX_Test_ResetDrawStubs()
+{
+	g_testDrawElementsCalls = 0;
+	g_testDrawArraysCalls = 0;
+}
+
+} // namespace glx
 
 namespace {
 
@@ -53,6 +117,36 @@ bool VecNearlyEqual( const glx::ColorMathVec3 &lhs, const glx::ColorMathVec3 &rh
 	return NearlyEqual( lhs.r, rhs.r, epsilon ) &&
 		NearlyEqual( lhs.g, rhs.g, epsilon ) &&
 		NearlyEqual( lhs.b, rhs.b, epsilon );
+}
+
+glx::MaterialIR ProjectedDlightMdiTestMaterial()
+{
+	return glx::GLX_RenderIR_MakeMaterial(
+		0, GLX_STAGE_DLIGHT_MAP, GLX_MATERIAL_STATE_DEPTHMASK_TRUE, 1 );
+}
+
+glx::DynamicDraw ProjectedDlightMdiTestDraw( uintptr_t indexOffsetBytes,
+	int count = 6, int projectedRecordCount = 2 )
+{
+	glx::DynamicDraw draw {};
+
+	draw.kind = glx::DynamicDrawKind::Indexed;
+	draw.role = glx::DynamicDrawRole::DynamicLight;
+	draw.pass = glx::FramePassKind::DynamicLights;
+	draw.primitive = 0x0004u;
+	draw.count = count;
+	draw.indexType = 0x1403u;
+	draw.indices = reinterpret_cast<const void *>( indexOffsetBytes );
+	draw.legacyReason = GLX_LEGACY_DELEGATION_NONE;
+	draw.profilerPath = GLX_DRAW_STREAM_GENERIC;
+	draw.projectedDlights.firstRecord = 0;
+	draw.projectedDlights.recordCount = projectedRecordCount;
+	draw.material = ProjectedDlightMdiTestMaterial();
+	draw.upload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::TransientStream,
+		static_cast<int>( glx::StreamStrategy::PersistentMapped ), 160u, 96u, 48u );
+	draw.upload.sync = glx::UploadSyncPolicy::PersistentFence;
+	return draw;
 }
 
 bool MaterialKeysClassifyRcShapes()
@@ -1523,7 +1617,7 @@ bool RenderIRProjectedDlightRecordsValidate()
 	draw.pass = glx::FramePassKind::DynamicLights;
 	draw.primitive = 0x0004;
 	draw.count = 6;
-	draw.indexType = 0x1403;
+	draw.indexType = 0x1405;
 	draw.projectedDlights.firstRecord = 0;
 	draw.projectedDlights.recordCount = 1;
 	draw.material = material;
@@ -1544,6 +1638,33 @@ bool RenderIRProjectedDlightRecordsValidate()
 	CHECK( uniformPlan.truncatedRecords == 0u );
 	CHECK( uniformPlan.limitSuppressed == qfalse );
 	CHECK( uniformPlan.execute == qtrue );
+	glx::ProjectedDlightShaderExecutionPlan executionPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightShaderExecution(
+			shaderInput, 3, qtrue, qfalse, nullptr, 32u, 64 );
+	CHECK( executionPlan.valid == qtrue );
+	CHECK( executionPlan.execute == qtrue );
+	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::UniformWindow );
+	CHECK( executionPlan.resourcePromoted == qfalse );
+	CHECK( executionPlan.uniformRecords == 1 );
+	CHECK( executionPlan.streamRecords == 0u );
+	CHECK( executionPlan.limitSuppressed == qfalse );
+	glx::ProjectedDlightShaderReplacementPlan replacementPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+			shaderInput, qtrue, qtrue, executionPlan );
+	CHECK( replacementPlan.requested == qtrue );
+	CHECK( replacementPlan.replace == qtrue );
+	CHECK( replacementPlan.legacyFallback == qfalse );
+	replacementPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+		shaderInput, qfalse, qtrue, executionPlan );
+	CHECK( replacementPlan.requested == qfalse );
+	CHECK( replacementPlan.replace == qfalse );
+	CHECK( replacementPlan.legacyFallback == qfalse );
+	glx::ProjectedDlightShaderExecutionPlan emptyExecutionPlan {};
+	replacementPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+		shaderInput, qtrue, qfalse, emptyExecutionPlan );
+	CHECK( replacementPlan.requested == qtrue );
+	CHECK( replacementPlan.replace == qfalse );
+	CHECK( replacementPlan.legacyFallback == qtrue );
 	glx::ProjectedDlightShaderStreamPlan streamPlan =
 		glx::GLX_RenderIR_PlanProjectedDlightStreamUpload(
 			shaderInput, glx::RenderProductTier::GL46, qtrue, 32u, 64 );
@@ -1552,6 +1673,211 @@ bool RenderIRProjectedDlightRecordsValidate()
 	CHECK( streamPlan.upload == qtrue );
 	CHECK( streamPlan.recordCount == 1 );
 	CHECK( streamPlan.bytes == 32u );
+	glx::ProjectedDlightDynamicMdiPlan mdiPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+			draw, glx::RenderProductTier::GL46, qtrue, qtrue, 4u, 64 );
+	CHECK( mdiPlan.valid == qtrue );
+	CHECK( mdiPlan.eligible == qfalse );
+	CHECK( mdiPlan.commandReady == qfalse );
+	draw.indices = reinterpret_cast<const void *>( static_cast<uintptr_t>( 32 ) );
+	draw.legacyReason = GLX_LEGACY_DELEGATION_NONE;
+	draw.upload = glx::GLX_RenderIR_MakeUploadPlan(
+		glx::UploadPlanKind::TransientStream,
+		static_cast<int>( glx::StreamStrategy::PersistentMapped ), 96, 0, 24 );
+	mdiPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+		draw, glx::RenderProductTier::GL46, qtrue, qtrue, 4u, 64 );
+	CHECK( mdiPlan.valid == qtrue );
+	CHECK( mdiPlan.eligible == qtrue );
+	CHECK( mdiPlan.resourceReady == qtrue );
+	CHECK( mdiPlan.indexed == qtrue );
+	CHECK( mdiPlan.commandReady == qtrue );
+	CHECK( mdiPlan.drawCount == 1 );
+	CHECK( mdiPlan.indexCount == 6u );
+	CHECK( mdiPlan.projectedRecordCount == 1u );
+	CHECK( mdiPlan.commandBytes == 20u );
+	CHECK( mdiPlan.command.count == 6u );
+	CHECK( mdiPlan.command.instanceCount == 1u );
+	CHECK( mdiPlan.command.firstIndex == 8u );
+	CHECK( mdiPlan.command.baseVertex == 0 );
+	CHECK( mdiPlan.command.baseInstance == 0u );
+	CHECK( mdiPlan.commandUploadPlan.kind == glx::UploadPlanKind::TransientStream );
+	CHECK( mdiPlan.commandUploadPlan.strategy ==
+		static_cast<int>( glx::StreamStrategy::PersistentMapped ) );
+	CHECK( mdiPlan.commandUploadPlan.bytes == 20u );
+	CHECK( mdiPlan.commandUploadPlan.indexBytes == 0u );
+	CHECK( mdiPlan.commandUploadPlan.alignment == 64 );
+	CHECK( mdiPlan.commandUploadPlan.sync == glx::UploadSyncPolicy::PersistentFence );
+	glx::ProjectedDlightDynamicMdiCommandUpload commandUpload {};
+	commandUpload.valid = qtrue;
+	commandUpload.buffer = 7u;
+	commandUpload.offset = 128u;
+	commandUpload.bytes = 20u;
+	glx::ProjectedDlightResourceRange resourceRange {};
+	resourceRange.valid = qtrue;
+	resourceRange.authoritative = qtrue;
+	resourceRange.buffer = 13u;
+	resourceRange.offset = 256u;
+	resourceRange.bytes = 32u;
+	glx::ProjectedDlightDynamicMdiSubmitPlan submitPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit(
+			mdiPlan, commandUpload, draw.primitive, draw.indexType, qfalse,
+			&resourceRange, 11u );
+	CHECK( submitPlan.valid == qtrue );
+	CHECK( submitPlan.eligible == qfalse );
+	CHECK( submitPlan.commandUploaded == qtrue );
+	CHECK( submitPlan.projectedResourceBound == qtrue );
+	CHECK( submitPlan.projectedResourceAuthoritative == qtrue );
+	CHECK( submitPlan.drawCount == 1u );
+	CHECK( submitPlan.indexCount == 6u );
+	CHECK( submitPlan.projectedRecordCount == 1u );
+	CHECK( submitPlan.primitive == draw.primitive );
+	CHECK( submitPlan.indexType == draw.indexType );
+	CHECK( submitPlan.indexBuffer == 11u );
+	CHECK( submitPlan.projectedResourceBuffer == 13u );
+	CHECK( submitPlan.projectedResourceOffset == 256u );
+	CHECK( submitPlan.projectedResourceBytes == 32u );
+	CHECK( submitPlan.commandBuffer == 7u );
+	CHECK( submitPlan.commandOffset == 128u );
+	CHECK( submitPlan.commandBytes == 20u );
+	CHECK( submitPlan.commandStride == 20u );
+	submitPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit(
+		mdiPlan, commandUpload, draw.primitive, draw.indexType, qtrue,
+		&resourceRange, 11u );
+	CHECK( submitPlan.valid == qtrue );
+	CHECK( submitPlan.eligible == qtrue );
+	glx::ProjectedDlightDynamicMdiSubmitPlan batchPlans[2] {};
+	batchPlans[0] = submitPlan;
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = 148u;
+	batchPlans[1].indexCount = 4u;
+	batchPlans[1].projectedRecordCount = 2u;
+	glx::ProjectedDlightDynamicMdiBatchPlan batchPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+			batchPlans, 2, 8u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.eligible == qtrue );
+	CHECK( batchPlan.projectedResourceAuthoritative == qtrue );
+	CHECK( batchPlan.drawCount == 2u );
+	CHECK( batchPlan.indexCount == 10u );
+	CHECK( batchPlan.projectedRecordCount == 3u );
+	CHECK( batchPlan.commandBuffer == 7u );
+	CHECK( batchPlan.commandOffset == 128u );
+	CHECK( batchPlan.commandBytes == 40u );
+	CHECK( batchPlan.commandStride == 20u );
+	CHECK( batchPlan.indexBuffer == 11u );
+	CHECK( batchPlan.projectedResourceBuffer == 13u );
+	CHECK( batchPlan.projectedResourceOffset == 256u );
+	CHECK( batchPlan.projectedResourceBytes == 32u );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NONE );
+	CHECK( batchPlan.rejectIndex == -1 );
+	batchPlans[1].eligible = qfalse;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 8u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.eligible == qfalse );
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = 192u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 8u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.drawCount == 1u );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NON_CONTIGUOUS_COMMAND );
+	CHECK( batchPlan.rejectIndex == 1 );
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = 148u;
+	batchPlans[1].projectedResourceOffset = 512u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 8u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_RESOURCE );
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = 148u;
+	batchPlans[1].indexBuffer = 12u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 8u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INDEX_BUFFER );
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = 148u;
+	batchPlans[1].commandBuffer = 9u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 8u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_COMMAND_BUFFER );
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = 148u;
+	batchPlans[1].indexType = 0x1403u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 8u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_STATE );
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = 148u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 1u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_CAPACITY );
+	batchPlans[0].valid = qfalse;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 8u );
+	CHECK( batchPlan.valid == qfalse );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INVALID_PLAN );
+	commandUpload.offset = 130u;
+	submitPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit(
+		mdiPlan, commandUpload, draw.primitive, draw.indexType, qtrue,
+		&resourceRange, 11u );
+	CHECK( submitPlan.valid == qfalse );
+	CHECK( submitPlan.commandUploaded == qfalse );
+	commandUpload.offset = 128u;
+	submitPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit(
+		mdiPlan, commandUpload, draw.primitive, 0u, qtrue,
+		&resourceRange, 11u );
+	CHECK( submitPlan.valid == qfalse );
+	resourceRange.offset = 258u;
+	submitPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit(
+		mdiPlan, commandUpload, draw.primitive, draw.indexType, qtrue,
+		&resourceRange, 11u );
+	CHECK( submitPlan.valid == qfalse );
+	CHECK( submitPlan.projectedResourceBound == qfalse );
+	resourceRange.offset = 256u;
+	resourceRange.authoritative = qfalse;
+	submitPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit(
+		mdiPlan, commandUpload, draw.primitive, draw.indexType, qtrue,
+		&resourceRange, 11u );
+	CHECK( submitPlan.valid == qfalse );
+	CHECK( submitPlan.projectedResourceBound == qtrue );
+	CHECK( submitPlan.projectedResourceAuthoritative == qfalse );
+	resourceRange.authoritative = qtrue;
+	mdiPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+		draw, glx::RenderProductTier::GL46, qfalse, qtrue, 4u, 64 );
+	CHECK( mdiPlan.valid == qtrue );
+	CHECK( mdiPlan.eligible == qfalse );
+	CHECK( mdiPlan.resourceReady == qtrue );
+	CHECK( mdiPlan.commandReady == qtrue );
+	mdiPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+		draw, glx::RenderProductTier::GL46, qtrue, qfalse, 4u, 64 );
+	CHECK( mdiPlan.valid == qtrue );
+	CHECK( mdiPlan.eligible == qfalse );
+	CHECK( mdiPlan.resourceReady == qfalse );
+	CHECK( mdiPlan.commandReady == qtrue );
+	mdiPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+		draw, glx::RenderProductTier::GL41, qtrue, qtrue, 4u, 64 );
+	CHECK( mdiPlan.valid == qtrue );
+	CHECK( mdiPlan.eligible == qfalse );
+	draw.indices = reinterpret_cast<const void *>( static_cast<uintptr_t>( 34 ) );
+	mdiPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+		draw, glx::RenderProductTier::GL46, qtrue, qtrue, 4u, 64 );
+	CHECK( mdiPlan.valid == qtrue );
+	CHECK( mdiPlan.commandReady == qfalse );
+	CHECK( mdiPlan.eligible == qfalse );
 	streamPlan = glx::GLX_RenderIR_PlanProjectedDlightStreamUpload(
 		shaderInput, glx::RenderProductTier::GL41, qtrue, 32u, 64 );
 	CHECK( streamPlan.valid == qtrue );
@@ -1573,6 +1899,74 @@ bool RenderIRProjectedDlightRecordsValidate()
 	CHECK( streamPlan.upload == qtrue );
 	CHECK( streamPlan.recordCount == 4 );
 	CHECK( streamPlan.bytes == 128u );
+	resourceRange.valid = qtrue;
+	resourceRange.authoritative = qtrue;
+	resourceRange.buffer = 13u;
+	resourceRange.offset = 256u;
+	resourceRange.bytes = 128u;
+	executionPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderExecution(
+		shaderInput, 3, qtrue, qtrue, &resourceRange, 32u, 64 );
+	CHECK( executionPlan.valid == qtrue );
+	CHECK( executionPlan.execute == qtrue );
+	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::StreamResource );
+	CHECK( executionPlan.resourcePromoted == qtrue );
+	CHECK( executionPlan.limitSuppressed == qfalse );
+	CHECK( executionPlan.truncatedRecords == 0u );
+	CHECK( executionPlan.uniformRecords == 0 );
+	CHECK( executionPlan.streamRecords == 4u );
+	CHECK( executionPlan.projectedResourceBound == qtrue );
+	CHECK( executionPlan.projectedResourceAuthoritative == qtrue );
+	replacementPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+		shaderInput, qtrue, qtrue, executionPlan );
+	CHECK( replacementPlan.requested == qtrue );
+	CHECK( replacementPlan.replace == qtrue );
+	CHECK( replacementPlan.legacyFallback == qfalse );
+	resourceRange.authoritative = qfalse;
+	executionPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderExecution(
+		shaderInput, 3, qtrue, qtrue, &resourceRange, 32u, 64 );
+	CHECK( executionPlan.valid == qtrue );
+	CHECK( executionPlan.execute == qfalse );
+	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::None );
+	CHECK( executionPlan.resourcePromoted == qfalse );
+	CHECK( executionPlan.limitSuppressed == qtrue );
+	CHECK( executionPlan.projectedResourceBound == qtrue );
+	CHECK( executionPlan.projectedResourceAuthoritative == qfalse );
+	replacementPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+		shaderInput, qtrue, qtrue, executionPlan );
+	CHECK( replacementPlan.requested == qtrue );
+	CHECK( replacementPlan.replace == qfalse );
+	CHECK( replacementPlan.legacyFallback == qtrue );
+	resourceRange.authoritative = qtrue;
+	resourceRange.bytes = 64u;
+	executionPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderExecution(
+		shaderInput, 3, qtrue, qtrue, &resourceRange, 32u, 64 );
+	CHECK( executionPlan.valid == qtrue );
+	CHECK( executionPlan.execute == qfalse );
+	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::None );
+	CHECK( executionPlan.resourcePromoted == qfalse );
+	CHECK( executionPlan.limitSuppressed == qtrue );
+	CHECK( executionPlan.projectedResourceBound == qfalse );
+	CHECK( executionPlan.projectedResourceAuthoritative == qfalse );
+	replacementPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+		shaderInput, qtrue, qtrue, executionPlan );
+	CHECK( replacementPlan.requested == qtrue );
+	CHECK( replacementPlan.replace == qfalse );
+	CHECK( replacementPlan.legacyFallback == qtrue );
+	resourceRange.bytes = 128u;
+	executionPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderExecution(
+		shaderInput, 3, qtrue, qfalse, &resourceRange, 32u, 64 );
+	CHECK( executionPlan.valid == qtrue );
+	CHECK( executionPlan.execute == qfalse );
+	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::None );
+	CHECK( executionPlan.resourcePromoted == qfalse );
+	CHECK( executionPlan.limitSuppressed == qtrue );
+	CHECK( executionPlan.projectedResourceBound == qtrue );
+	CHECK( executionPlan.projectedResourceAuthoritative == qtrue );
+	replacementPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+		shaderInput, qtrue, qtrue, executionPlan );
+	CHECK( replacementPlan.requested == qtrue );
+	CHECK( replacementPlan.replace == qfalse );
+	CHECK( replacementPlan.legacyFallback == qtrue );
 	draw.projectedDlights.firstRecord = glx::GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT;
 	CHECK( glx::GLX_RenderIR_ValidateDynamicDraw( draw ) == qfalse );
 	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightShaderInput(
@@ -1580,10 +1974,28 @@ bool RenderIRProjectedDlightRecordsValidate()
 
 	packet.projectedDlights.firstRecord = 0;
 	packet.projectedDlights.recordCount = 2;
+	shaderInput = glx::GLX_RenderIR_MakeProjectedDlightShaderInput( packet, qtrue );
+	executionPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderExecution(
+		shaderInput, 3, qtrue, qfalse, nullptr, 32u, 64 );
+	replacementPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+		shaderInput, qtrue,
+		glx::GLX_RenderIR_TierSupportsWorldPacket( glx::RenderProductTier::GL46,
+			packet ),
+		executionPlan );
+	CHECK( replacementPlan.requested == qtrue );
+	CHECK( replacementPlan.replace == qtrue );
+	CHECK( replacementPlan.legacyFallback == qfalse );
 	shaderInput = glx::GLX_RenderIR_MakeProjectedDlightShaderInput( packet, qfalse );
 	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) == qtrue );
 	CHECK( shaderInput.programmable == qfalse );
 	CHECK( shaderInput.target == glx::ProjectedDlightShaderTarget::WorldPacket );
+	executionPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderExecution(
+		shaderInput, 3, qtrue, qfalse, nullptr, 32u, 64 );
+	replacementPlan = glx::GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+		shaderInput, qtrue, qtrue, executionPlan );
+	CHECK( replacementPlan.requested == qtrue );
+	CHECK( replacementPlan.replace == qfalse );
+	CHECK( replacementPlan.legacyFallback == qtrue );
 	shaderInput.projectedDlights.recordCount = 0;
 	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) == qfalse );
 
@@ -1592,6 +2004,258 @@ bool RenderIRProjectedDlightRecordsValidate()
 	products.projectedDlightCount = 2;
 	CHECK( glx::GLX_RenderIR_ValidateProjectedDlightRecords(
 		products.projectedDlights, products.projectedDlightCount ) == qtrue );
+
+	return true;
+}
+
+bool RenderIRProjectedDlightMdiBatchesValidateOffsetsAndRejects()
+{
+	const unsigned int commandStride =
+		static_cast<unsigned int>( sizeof( glx::DrawElementsIndirectCommand ) );
+	glx::DynamicDraw draw = ProjectedDlightMdiTestDraw( 64u, 6, 2 );
+	glx::DrawElementsIndirectCommand command {};
+
+	CHECK( glx::GLX_RenderIR_BuildDrawElementsIndirectCommand( draw, 2u,
+		&command ) == qtrue );
+	CHECK( command.count == 6u );
+	CHECK( command.instanceCount == 1u );
+	CHECK( command.firstIndex == 32u );
+	CHECK( command.baseVertex == 0 );
+	CHECK( command.baseInstance == 0u );
+	draw.indices = reinterpret_cast<const void *>( static_cast<uintptr_t>( 66u ) );
+	CHECK( glx::GLX_RenderIR_BuildDrawElementsIndirectCommand( draw, 4u,
+		&command ) == qfalse );
+	CHECK( command.count == 0u );
+	draw = ProjectedDlightMdiTestDraw( 64u, 6, 2 );
+
+	glx::ProjectedDlightDynamicMdiPlan mdiPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+			draw, glx::RenderProductTier::GL46, qtrue, qtrue, 2u, 256 );
+	CHECK( mdiPlan.valid == qtrue );
+	CHECK( mdiPlan.eligible == qtrue );
+	CHECK( mdiPlan.commandReady == qtrue );
+	CHECK( mdiPlan.command.firstIndex == 32u );
+	CHECK( mdiPlan.commandBytes == commandStride );
+	CHECK( mdiPlan.commandUploadPlan.alignment == 256 );
+
+	glx::ProjectedDlightDynamicMdiPlan gl3Plan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+			draw, glx::RenderProductTier::GL3X, qtrue, qtrue, 2u, 256 );
+	CHECK( gl3Plan.valid == qtrue );
+	CHECK( gl3Plan.commandReady == qtrue );
+	CHECK( gl3Plan.eligible == qfalse );
+	glx::ProjectedDlightDynamicMdiPlan disabledPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+			draw, glx::RenderProductTier::GL46, qfalse, qtrue, 2u, 256 );
+	CHECK( disabledPlan.valid == qtrue );
+	CHECK( disabledPlan.commandReady == qtrue );
+	CHECK( disabledPlan.eligible == qfalse );
+
+	glx::ProjectedDlightDynamicMdiCommandUpload commandUpload {};
+	commandUpload.valid = qtrue;
+	commandUpload.buffer = 5u;
+	commandUpload.offset = 256u;
+	commandUpload.bytes = commandStride;
+	glx::ProjectedDlightResourceRange resourceRange {};
+	resourceRange.valid = qtrue;
+	resourceRange.authoritative = qtrue;
+	resourceRange.buffer = 9u;
+	resourceRange.offset = 512u;
+	resourceRange.bytes = 64u;
+	glx::ProjectedDlightDynamicMdiSubmitPlan submitPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit(
+			mdiPlan, commandUpload, draw.primitive, draw.indexType, qtrue,
+			&resourceRange, 3u );
+	CHECK( submitPlan.valid == qtrue );
+	CHECK( submitPlan.eligible == qtrue );
+	CHECK( submitPlan.commandUploaded == qtrue );
+	CHECK( submitPlan.projectedResourceBound == qtrue );
+	CHECK( submitPlan.projectedResourceAuthoritative == qtrue );
+	CHECK( submitPlan.commandOffset == 256u );
+	CHECK( submitPlan.commandBytes == commandStride );
+	CHECK( submitPlan.commandStride == commandStride );
+
+	glx::ProjectedDlightDynamicMdiSubmitPlan fallbackSubmitPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit(
+			mdiPlan, commandUpload, draw.primitive, draw.indexType, qfalse,
+			&resourceRange, 3u );
+	CHECK( fallbackSubmitPlan.valid == qtrue );
+	CHECK( fallbackSubmitPlan.eligible == qfalse );
+
+	glx::ProjectedDlightDynamicMdiSubmitPlan batchPlans[3] {};
+	for ( unsigned int i = 0; i < 3u; i++ ) {
+		batchPlans[i] = submitPlan;
+		batchPlans[i].commandOffset = submitPlan.commandOffset + i * commandStride;
+		batchPlans[i].indexCount = 6u + i * 2u;
+		batchPlans[i].projectedRecordCount = 1u + i;
+	}
+
+	glx::ProjectedDlightDynamicMdiBatchPlan batchPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+			batchPlans, 3, 4u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.eligible == qtrue );
+	CHECK( batchPlan.drawCount == 3u );
+	CHECK( batchPlan.indexCount == 24u );
+	CHECK( batchPlan.projectedRecordCount == 6u );
+	CHECK( batchPlan.commandOffset == submitPlan.commandOffset );
+	CHECK( batchPlan.commandBytes == commandStride * 3u );
+	CHECK( batchPlan.commandStride == commandStride );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NONE );
+	CHECK( batchPlan.rejectIndex == -1 );
+
+	batchPlans[1].eligible = qfalse;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 3, 4u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.eligible == qfalse );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NONE );
+
+	CHECK( glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		nullptr, 3, 4u ).rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INVALID_INPUT );
+	batchPlans[0] = submitPlan;
+	batchPlans[0].valid = qfalse;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 3, 4u );
+	CHECK( batchPlan.valid == qfalse );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INVALID_PLAN );
+	CHECK( batchPlan.rejectIndex == 0 );
+
+	batchPlans[0] = submitPlan;
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = submitPlan.commandOffset + commandStride * 2u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 4u );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NON_CONTIGUOUS_COMMAND );
+	CHECK( batchPlan.rejectIndex == 1 );
+
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = submitPlan.commandOffset + commandStride;
+	batchPlans[1].primitive = 0x0005u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 4u );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_STATE );
+
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = submitPlan.commandOffset + commandStride;
+	batchPlans[1].projectedResourceBytes += 16u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 4u );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_RESOURCE );
+
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = submitPlan.commandOffset + commandStride;
+	batchPlans[1].indexBuffer = 4u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 4u );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INDEX_BUFFER );
+
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = submitPlan.commandOffset + commandStride;
+	batchPlans[1].commandBuffer = 6u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 4u );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_COMMAND_BUFFER );
+
+	batchPlans[1] = submitPlan;
+	batchPlans[1].commandOffset = submitPlan.commandOffset + commandStride;
+	batchPlans[1].commandBytes = commandStride * 2u;
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 2, 4u );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NON_CONTIGUOUS_COMMAND );
+
+	for ( unsigned int i = 0; i < 3u; i++ ) {
+		batchPlans[i] = submitPlan;
+		batchPlans[i].commandOffset = submitPlan.commandOffset + i * commandStride;
+	}
+	batchPlan = glx::GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+		batchPlans, 3, 2u );
+	CHECK( batchPlan.valid == qtrue );
+	CHECK( batchPlan.drawCount == 2u );
+	CHECK( batchPlan.rejectReason ==
+		glx::GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_CAPACITY );
+	CHECK( batchPlan.rejectIndex == 2 );
+
+	return true;
+}
+
+bool ExecutorConsumesProjectedDlightMdiPlansAndSubmittedDrawAccounting()
+{
+	glx::Capabilities caps {};
+	caps.tier = glx::RenderProductTier::GL46;
+	glx::ExecutorState state {};
+	glx::GLX_Executor_Init( &state, caps );
+	glx::DynamicDraw draw = ProjectedDlightMdiTestDraw( 96u, 12, 3 );
+	glx::ProjectedDlightDynamicMdiPlan mdiPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+			draw, glx::RenderProductTier::GL46, qtrue, qtrue, 2u, 64 );
+
+	CHECK( mdiPlan.valid == qtrue );
+	CHECK( mdiPlan.eligible == qtrue );
+	CHECK( glx::GLX_Executor_ConsumeProjectedDlightDynamicMdiPlan(
+		&state, mdiPlan ) == qtrue );
+	CHECK( state.highEndProjectedDlightMdiCandidates == 1u );
+	CHECK( state.highEndProjectedDlightMdiRecords == 3u );
+	CHECK( state.highEndProjectedDlightMdiIndexes == 12u );
+	CHECK( state.rejectedProducts == 0u );
+
+	glx::GLX_Test_ResetDrawStubs();
+	CHECK( glx::GLX_Executor_ConsumeDynamicDraw( &state, draw ) == qtrue );
+	CHECK( glx::g_testDrawElementsCalls == 0 );
+	CHECK( glx::g_testDrawArraysCalls == 0 );
+	CHECK( state.dynamicDraws == 1u );
+	CHECK( state.dynamicDrawsWithProjectedDlights == 1u );
+	CHECK( state.dynamicDrawProjectedDlightRecords == 3u );
+	CHECK( state.dynamicIndexes == 12u );
+	CHECK( state.dynamicVertices == 0u );
+	const int dlightRole = static_cast<int>( glx::DynamicDrawRole::DynamicLight );
+	const int dlightPass = static_cast<int>( glx::FramePassKind::DynamicLights );
+	CHECK( state.dynamicDrawRoleDraws[dlightRole] == 1u );
+	CHECK( state.dynamicDrawRoleIndexes[dlightRole] == 12u );
+	CHECK( state.dynamicDrawPassDraws[dlightPass] == 1u );
+	CHECK( state.dynamicDrawPassIndexes[dlightPass] == 12u );
+	CHECK( state.highEndDraws == 1u );
+	CHECK( state.highEndPersistentUploads == 1u );
+	CHECK( state.highEndSyncUploads == 1u );
+	CHECK( state.highEndDynamicBufferProducts == 1u );
+	CHECK( state.highEndDsaProducts == 1u );
+
+	glx::GLX_Test_ResetDrawStubs();
+	CHECK( glx::GLX_Executor_ExecuteDynamicDraw( &state, draw ) == qtrue );
+	CHECK( glx::g_testDrawElementsCalls == 1 );
+	CHECK( glx::g_testDrawArraysCalls == 0 );
+
+	glx::ExecutorState gl41State {};
+	caps.tier = glx::RenderProductTier::GL41;
+	glx::GLX_Executor_Init( &gl41State, caps );
+	CHECK( glx::GLX_Executor_ConsumeProjectedDlightDynamicMdiPlan(
+		&gl41State, mdiPlan ) == qfalse );
+	CHECK( gl41State.rejectedProducts == 1u );
+	CHECK( gl41State.highEndProjectedDlightMdiCandidates == 0u );
+
+	glx::ExecutorState fallbackState {};
+	caps.tier = glx::RenderProductTier::GL46;
+	glx::GLX_Executor_Init( &fallbackState, caps );
+	glx::ProjectedDlightDynamicMdiPlan fallbackPlan =
+		glx::GLX_RenderIR_PlanProjectedDlightDynamicMdi(
+			draw, glx::RenderProductTier::GL46, qfalse, qtrue, 2u, 64 );
+	CHECK( fallbackPlan.valid == qtrue );
+	CHECK( fallbackPlan.commandReady == qtrue );
+	CHECK( fallbackPlan.eligible == qfalse );
+	CHECK( glx::GLX_Executor_ConsumeProjectedDlightDynamicMdiPlan(
+		&fallbackState, fallbackPlan ) == qfalse );
+	CHECK( fallbackState.rejectedProducts == 1u );
+	CHECK( fallbackState.highEndProjectedDlightMdiCandidates == 0u );
 
 	return true;
 }
@@ -3036,6 +3700,8 @@ int main()
 		{ "RenderIRDefaultPassScheduleIsDeterministic", RenderIRDefaultPassScheduleIsDeterministic },
 		{ "RenderIRProductsValidate", RenderIRProductsValidate },
 		{ "RenderIRProjectedDlightRecordsValidate", RenderIRProjectedDlightRecordsValidate },
+		{ "RenderIRProjectedDlightMdiBatchesValidateOffsetsAndRejects", RenderIRProjectedDlightMdiBatchesValidateOffsetsAndRejects },
+		{ "ExecutorConsumesProjectedDlightMdiPlansAndSubmittedDrawAccounting", ExecutorConsumesProjectedDlightMdiPlansAndSubmittedDrawAccounting },
 		{ "RenderIRTierMappingKeepsSingleProductContract", RenderIRTierMappingKeepsSingleProductContract },
 		{ "GL12ExecutorPolicyIsFixedFunctionAndSdrOnly", GL12ExecutorPolicyIsFixedFunctionAndSdrOnly },
 		{ "GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements", GL2XExecutorPolicyIsProgrammableAndAvoidsLaterRequirements },

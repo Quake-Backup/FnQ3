@@ -549,6 +549,68 @@ GLX_GATE_PERFORMANCE_BUDGET_OVERRIDES = {
         },
     },
 }
+GLX_PROFILE_PERFORMANCE_BUDGET_OVERRIDES = {
+    "glx-dlight-mdi": {
+        "required": (
+            "dlightProjectedShaderMdiAttempts",
+            "dlightProjectedShaderMdiEligible",
+            "dlightProjectedShaderMdiUploads",
+            "dlightProjectedShaderMdiRecords",
+            "dlightProjectedShaderMdiIndexes",
+            "dlightProjectedShaderArenaReserves",
+            "dlightProjectedShaderArenaUploads",
+            "dlightProjectedShaderArenaLightRecords",
+            "dlightProjectedShaderArenaListRecords",
+            "dlightProjectedShaderArenaRangeBinds",
+            "dlightProjectedShaderArenaAuthoritativeBinds",
+            "dlightProjectedShaderMdiCommandRingReserves",
+            "dlightProjectedShaderMdiCommandRingCommits",
+            "dlightProjectedShaderMdiCommandRingSlots",
+            "dlightProjectedShaderMdiSubmitPlans",
+            "dlightProjectedShaderMdiSubmitReady",
+            "dlightProjectedShaderMdiBatchBatches",
+            "dlightProjectedShaderMdiBatchReady",
+            "dlightProjectedShaderMdiBatchSubmittedDraws",
+            "dlightProjectedShaderMdiBatchSubmittedIndexes",
+        ),
+        "min": {
+            "dlightProjectedShaderMdiEligible": 1,
+            "dlightProjectedShaderMdiUploads": 1,
+            "dlightProjectedShaderMdiRecords": 1,
+            "dlightProjectedShaderMdiIndexes": 1,
+            "dlightProjectedShaderArenaReserves": 1,
+            "dlightProjectedShaderArenaUploads": 1,
+            "dlightProjectedShaderArenaLightRecords": 1,
+            "dlightProjectedShaderArenaListRecords": 1,
+            "dlightProjectedShaderArenaRangeBinds": 1,
+            "dlightProjectedShaderArenaAuthoritativeBinds": 1,
+            "dlightProjectedShaderMdiCommandRingReserves": 1,
+            "dlightProjectedShaderMdiCommandRingCommits": 1,
+            "dlightProjectedShaderMdiCommandRingSlots": 1,
+            "dlightProjectedShaderMdiSubmitPlans": 1,
+            "dlightProjectedShaderMdiSubmitReady": 1,
+            "dlightProjectedShaderMdiBatchBatches": 1,
+            "dlightProjectedShaderMdiBatchReady": 1,
+            "dlightProjectedShaderMdiBatchSubmittedDraws": 1,
+            "dlightProjectedShaderMdiBatchSubmittedIndexes": 1,
+        },
+        "max": {
+            "dlightProjectedShaderMdiFailures": 0,
+            "dlightProjectedShaderArenaFailures": 0,
+            "dlightProjectedShaderArenaRejects": 0,
+            "dlightProjectedShaderArenaTimeouts": 0,
+            "dlightProjectedShaderArenaSyncFailures": 0,
+            "dlightProjectedShaderArenaRangeFailures": 0,
+            "dlightProjectedShaderArenaAuthoritativeFailures": 0,
+            "dlightProjectedShaderArenaAuthoritativeFallbacks": 0,
+            "dlightProjectedShaderMdiCommandRingFailures": 0,
+            "dlightProjectedShaderMdiSubmitFallbacks": 0,
+            "dlightProjectedShaderMdiBatchFallbacks": 0,
+            "dlightProjectedShaderMdiBatchRejects": 0,
+            "dlightProjectedShaderMdiBatchGlErrors": 0,
+        },
+    },
+}
 TIMEDEMO_FPS_RE = re.compile(
     r"(?P<frames>\d+)\s+frames[, ]+\s*"
     r"(?P<seconds>\d+(?:\.\d+)?)\s+seconds:?\s*"
@@ -782,6 +844,18 @@ GLX_RENDER_IR_PRODUCTS_RE = re.compile(
     r"outputs\s+(?P<outputs>\d+),?\s+rejects\s+(?P<rejects>\d+)",
     re.IGNORECASE,
 )
+GLX_RENDER_IR_EXECUTOR_COMPACT_RE = re.compile(
+    r"glx:\s*render IR executor\s+(?P<tier>[A-Za-z0-9_+-]+)/(?P<mode>[A-Za-z0-9_+-]+)\s+"
+    r"passes\s+(?P<passes>\d+)\s+world\s+(?P<worldPackets>\d+)\s+"
+    r"projected\s+(?P<projectedWorldPackets>\d+)/(?P<projectedWorldPacketDlights>\d+)\s+"
+    r"dynamic\s+(?P<dynamicDraws>\d+)\s+projected\s+dynamic\s+"
+    r"(?P<projectedDynamicDraws>\d+)/(?P<projectedDynamicDlights>\d+)\s+"
+    r"draws/(?P<dynamicIndexes>\d+)\s+idx/(?P<dynamicVertices>\d+)\s+verts\s+"
+    r"materials\s+(?P<materials>\d+)\s+uploads\s+(?P<uploads>\d+)\s+"
+    r"post\s+(?P<postNodes>\d+)\s+outputs\s+(?P<outputs>\d+)\s+"
+    r"rejects\s+(?P<rejects>\d+)",
+    re.IGNORECASE,
+)
 GLX_RENDER_IR_DYNAMIC_ROLES_RE = re.compile(
     r"(?:glx:\s*)?render IR dynamic roles:?\s*"
     r"generic\s+(?P<genericDraws>\d+)/(?P<genericIndexes>\d+)/(?P<genericVertices>\d+),\s*"
@@ -821,13 +895,81 @@ GLX_DLIGHT_PROJECTED_SHADER_UNIFORMS_RE = re.compile(
     r",?\s+limit\s+(?P<limit>\d+)",
     re.IGNORECASE,
 )
+GLX_DLIGHT_PROJECTED_SHADER_RESOURCE_RE = re.compile(
+    r"(?:glx:\s*)?dlight projected shader resource(?:\s+compact)?:?\s*"
+    r"attempts\s+(?P<attempts>\d+),?\s+binds\s+(?P<binds>\d+),?\s+"
+    r"executable\s+(?P<executable>\d+),?\s+suppressed\s+(?P<suppressed>\d+),?\s+"
+    r"promotions\s+(?P<promotions>\d+),?\s+failures\s+(?P<failures>\d+),?\s+"
+    r"records\s+(?P<records>\d+),?\s+world\s+(?P<worldExecutable>\d+),?\s+"
+    r"dynamic\s+(?P<dynamicExecutable>\d+),?\s+binding\s+(?P<binding>\d+)",
+    re.IGNORECASE,
+)
 GLX_DLIGHT_PROJECTED_SHADER_STREAM_RE = re.compile(
     r"(?:glx:\s*)?dlight projected shader stream(?:\s+compact)?:?\s*"
     r"attempts\s+(?P<attempts>\d+),?\s+uploads\s+(?P<uploads>\d+),?\s+"
     r"failures\s+(?P<failures>\d+),?\s+skipped\s+(?P<skipped>\d+),?\s+"
     r"records\s+(?P<records>\d+),?\s+bytes\s+(?P<bytes>\d+),?\s+"
     r"persistent\s+(?P<persistent>\d+),?\s+world\s+(?P<world>\d+),?\s+"
-    r"dynamic\s+(?P<dynamic>\d+),?\s+last\s+(?P<lastOffset>\d+)/(?P<lastBytes>\d+)",
+    r"dynamic\s+(?P<dynamic>\d+)"
+    r"(?:,?\s+range\s+(?P<rangeBinds>\d+)/(?P<rangeAttempts>\d+),?\s+"
+    r"(?:range\s+failures|rangefail)\s+(?P<rangeFailures>\d+),?\s+"
+    r"clears\s+(?P<rangeClears>\d+))?"
+    r",?\s+last\s+(?P<lastOffset>\d+)/(?P<lastBytes>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_PROJECTED_SHADER_ARENA_RE = re.compile(
+    r"(?:glx:\s*)?dlight projected shader arena(?:\s+compact)?:?\s*"
+    r"reserves\s+(?P<reserves>\d+),?\s+uploads\s+(?P<uploads>\d+),?\s+"
+    r"failures\s+(?P<failures>\d+),?\s+wraps\s+(?P<wraps>\d+),?\s+"
+    r"rejects\s+(?P<rejects>\d+),?\s+waits\s+(?P<waits>\d+),?\s+"
+    r"timeouts\s+(?P<timeouts>\d+),?\s+(?:sync\s+failures|syncfail)\s+(?P<syncFailures>\d+),?\s+"
+    r"bytes\s+(?P<bytes>\d+),?\s+light[-\s]records\s+(?P<lightRecords>\d+),?\s+"
+    r"list[-\s]records\s+(?P<listRecords>\d+),?\s+world[-\s]records\s+(?P<worldRecords>\d+),?\s+"
+    r"dynamic[-\s]records\s+(?P<dynamicRecords>\d+),?\s+range\s+(?P<rangeBinds>\d+)/(?P<rangeAttempts>\d+),?\s+"
+    r"(?:range\s+failures|rangefail)\s+(?P<rangeFailures>\d+),?\s+clears\s+(?P<rangeClears>\d+),?\s+"
+    r"(?:authoritative\s+(?P<authoritativeBinds>\d+)/(?P<authoritativeAttempts>\d+),?\s+"
+    r"(?:auth\s+failures|authfail)\s+(?P<authoritativeFailures>\d+),?\s+"
+    r"(?:auth\s+fallbacks|fallbacks)\s+(?P<authoritativeFallbacks>\d+),?\s+"
+    r"(?:auth\s+clears|auth-clears)\s+(?P<authoritativeClears>\d+),?\s+)?"
+    r"bound\s+(?P<bound>\w+),?\s+cursor\s+(?P<cursor>\d+),?\s+"
+    r"last\s+(?P<lastBuffer>\d+)/(?P<lastOffset>\d+)/(?P<lastBytes>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_PROJECTED_SHADER_MDI_RE = re.compile(
+    r"(?:glx:\s*)?dlight projected shader MDI(?:\s+commands|\s+compact)?:?\s*"
+    r"attempts\s+(?P<attempts>\d+),?\s+eligible\s+(?P<eligible>\d+),?\s+"
+    r"uploads\s+(?P<uploads>\d+),?\s+failures\s+(?P<failures>\d+),?\s+"
+    r"skipped\s+(?P<skipped>\d+),?\s+records\s+(?P<records>\d+),?\s+"
+    r"(?:indexes|idx)\s+(?P<indexes>\d+),?\s+bytes\s+(?P<bytes>\d+),?\s+"
+    r"last\s+(?P<lastOffset>\d+)/(?P<lastBytes>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_PROJECTED_SHADER_MDI_RING_RE = re.compile(
+    r"(?:glx:\s*)?dlight projected shader MDI command ring(?:\s+compact)?:?\s*"
+    r"reserves\s+(?P<reserves>\d+),?\s+commits\s+(?P<commits>\d+),?\s+"
+    r"wraps\s+(?P<wraps>\d+),?\s+failures\s+(?P<failures>\d+),?\s+"
+    r"slots\s+(?P<slots>\d+),?\s+cursor\s+(?P<cursor>\d+),?\s+"
+    r"last\s+(?P<lastSlot>\d+)/(?P<lastBuffer>\d+)/(?P<lastOffset>\d+)/(?P<lastBytes>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_PROJECTED_SHADER_MDI_SUBMIT_RE = re.compile(
+    r"(?:glx:\s*)?dlight projected shader MDI submit(?:\s+compact)?:?\s*"
+    r"attempts\s+(?P<attempts>\d+),?\s+plans\s+(?P<plans>\d+),?\s+"
+    r"ready\s+(?P<ready>\d+),?\s+fallbacks\s+(?P<fallbacks>\d+),?\s+"
+    r"skipped\s+(?P<skipped>\d+),?\s+records\s+(?P<records>\d+),?\s+"
+    r"(?:indexes|idx)\s+(?P<indexes>\d+),?\s+buffer\s+(?P<buffer>\d+),?\s+"
+    r"last\s+(?P<lastOffset>\d+)/(?P<lastBytes>\d+)",
+    re.IGNORECASE,
+)
+GLX_DLIGHT_PROJECTED_SHADER_MDI_BATCH_RE = re.compile(
+    r"(?:glx:\s*)?dlight projected shader MDI batch(?:\s+compact)?:?\s*"
+    r"attempts\s+(?P<attempts>\d+),?\s+batches\s+(?P<batches>\d+),?\s+"
+    r"ready\s+(?P<ready>\d+),?\s+fallbacks\s+(?P<fallbacks>\d+),?\s+"
+    r"rejects\s+(?P<rejects>\d+),?\s+(?:gl\s+errors|glerr)\s+(?P<glErrors>\d+),?\s+"
+    r"records\s+(?P<records>\d+),?\s+(?:indexes|idx)\s+(?P<indexes>\d+),?\s+"
+    r"submitted\s+(?P<submittedDraws>\d+)/(?P<submittedIndexes>\d+),?\s+"
+    r"largest\s+(?P<largest>\d+),?\s+reject\s+(?P<lastReject>\d+),?\s+"
+    r"buffer\s+(?P<buffer>\d+),?\s+range\s+(?P<lastOffset>\d+)/(?P<lastBytes>\d+)",
     re.IGNORECASE,
 )
 GLX_POST_OUTPUT_OWNERSHIP_RE = re.compile(
@@ -1483,6 +1625,72 @@ DLIGHT_SHADOW_PLAN_RE = re.compile(
     r"cpu:(?P<cpuMsec>\d+)ms",
     re.IGNORECASE,
 )
+SHADOW_MANAGER_RE = re.compile(
+    r"shadow manager view:(?P<view>\d+)\s+frame:(?P<frame>\d+)\s+"
+    r"noworld:(?P<noworld>\d+)\s+sched:(?P<scheduledPasses>\d+)\s+"
+    r"mask:(?P<scheduledMask>[0-9a-fA-F]+)\s+"
+    r"p:(?P<pointScheduled>\d+)\s+s:(?P<spotScheduled>\d+)\s+"
+    r"ca:(?P<csmAtlasScheduled>\d+)\s+cr:(?P<csmReceiverScheduled>\d+)\s+"
+    r"pub p:(?P<pointPublished>\d+)\s+s:(?P<spotPublished>\d+)\s+"
+    r"c:(?P<csmPublished>\d+)\s+inputs dlight:(?P<inputDlights>\d+)\s+"
+    r"point:(?P<pointPlanned>\d+)/(?P<pointConsidered>\d+)\s+"
+    r"cand:(?P<pointCandidates>\d+)\s+"
+    r"records:(?P<pointRecords>\d+)/(?P<pointCandidateRecords>\d+)\s+"
+    r"atlas:(?P<pointAtlasWidth>\d+)x(?P<pointAtlasHeight>\d+)/(?P<pointAtlasFaceSize>\d+)\s+"
+    r"fill:(?P<pointAtlasFill>\d+)%\s+gen:(?P<pointGeneration>\d+)\s+"
+    r"spot:(?P<spotPlans>\d+)/(?P<spotCandidates>\d+)\s+"
+    r"(?:src\s+static:(?P<spotStaticPlans>\d+)/(?P<spotStaticCandidates>\d+)\s+"
+    r"surface:(?P<spotSurfacePlans>\d+)/(?P<spotSurfaceCandidates>\d+)\s+)?"
+    r"atlas:(?P<spotAtlasWidth>\d+)x(?P<spotAtlasHeight>\d+)/(?P<spotAtlasTileSize>\d+)\s+"
+    r"fill:(?P<spotAtlasFill>\d+)%\s+gen:(?P<spotGeneration>\d+)\s+"
+    r"csm:(?P<csmCascadeCount>\d+)\s+"
+    r"atlas:(?P<csmAtlasWidth>\d+)x(?P<csmAtlasHeight>\d+)\s+"
+    r"gen:(?P<csmGeneration>\d+)",
+    re.IGNORECASE,
+)
+SURFACELIGHT_SPOT_PLAN_RE = re.compile(
+    r"surfacelight spot plan cand:(?P<surfaceSpotCandidates>\d+)\s+"
+    r"plan:(?P<surfaceSpotPlans>\d+)\s+"
+    r"req:(?P<surfaceSpotRequestedTileMin>\d+)-(?P<surfaceSpotRequestedTileMax>\d+)\s+"
+    r"foot:(?P<surfaceSpotFootprintMin>\d+)-(?P<surfaceSpotFootprintMax>\d+)\s+"
+    r"caster:(?P<surfaceSpotCasterRadiusMin>\d+)-(?P<surfaceSpotCasterRadiusMax>\d+)\s+"
+    r"planreq:(?P<surfaceSpotPlanRequestedTileMin>\d+)-(?P<surfaceSpotPlanRequestedTileMax>\d+)\s+"
+    r"tile:(?P<surfaceSpotTileMin>\d+)-(?P<surfaceSpotTileMax>\d+)\s+"
+    r"cone:(?P<surfaceSpotConeInnerMin>\d+)-(?P<surfaceSpotConeInnerMax>\d+)/"
+    r"(?P<surfaceSpotConeOuterMin>\d+)-(?P<surfaceSpotConeOuterMax>\d+)\s+"
+    r"alloc:(?P<surfaceSpotAllocated>\d+)\s+"
+    r"atlas:(?P<surfaceSpotAtlasWidth>\d+)x(?P<surfaceSpotAtlasHeight>\d+)/"
+    r"(?P<surfaceSpotAtlasTileSize>\d+)\s+"
+    r"fill:(?P<surfaceSpotAtlasFill>\d+)%\s+"
+    r"reject weak:(?P<surfaceSpotRejectedWeak>\d+)\s+"
+    r"offview:(?P<surfaceSpotRejectedOffView>\d+)\s+"
+    r"budget:(?P<surfaceSpotRejectedBudget>\d+)\s+"
+    r"malformed:(?P<surfaceSpotRejectedMalformed>\d+)",
+    re.IGNORECASE,
+)
+CSM_SHADOWS_RE = re.compile(
+    r"csm shadows sky:(?P<csmSky>\S+)\s+"
+    r"cascades:(?P<csmDebugCascades>\d+)\s+"
+    r"res:(?P<csmDebugResolution>\d+)\s+"
+    r"max:(?P<csmDebugMaxDistance>\d+)\s+"
+    r"lambda:\S+\s+filter:\S+\s+strength:\S+\s+rbias:\S+\s+"
+    r"cbias:\S+\s+light-dir:\S+\s+\S+\s+\S+\s+to-sun:\S+\s+\S+\s+\S+\s+"
+    r"split far:\S+\s+\S+\s+\S+\s+\S+\s+texel:\S+\s+\S+\s+\S+\s+\S+\s+"
+    r"(?:snap depth:(?P<csmSnapDepth0>-?\d+(?:\.\d+)?)\s+"
+    r"(?P<csmSnapDepth1>-?\d+(?:\.\d+)?)\s+"
+    r"(?P<csmSnapDepth2>-?\d+(?:\.\d+)?)\s+"
+    r"(?P<csmSnapDepth3>-?\d+(?:\.\d+)?)\s+)?"
+    r"caster:(?P<csmCasterSurfaces>\d+)\s+"
+    r"cache h/m/u:(?P<csmCacheHits>\d+)/(?P<csmCacheMisses>\d+)/(?P<csmCacheUncacheable>\d+)\s+"
+    r"cpu:(?P<csmCpuMsec>\d+)ms\s+"
+    r"recv world:(?P<csmReceiverWorldSurfaces>\d+)\s+ent:(?P<csmReceiverEntitySurfaces>\d+)",
+    re.IGNORECASE,
+)
+CSM_PLAN_SKIP_RE = re.compile(
+    r"csm plan cascades:(?P<csmFallbackCascades>\d+)\s+skip\s+"
+    r"(?P<csmFallbackReason>[A-Za-z0-9_-]+)",
+    re.IGNORECASE,
+)
 DLIGHT_SHADOW_SCENE_BEGIN_RE = re.compile(
     r"DLIGHT_SHADOW_SCENE_BEGIN\s+(?P<scene>[A-Za-z0-9_.-]+)",
     re.IGNORECASE,
@@ -1532,7 +1740,55 @@ DLIGHT_SHADOW_SCENE_CVARS = {
     "r_dlightShadowFilter": "2",
     "r_dlightShadowMaxLights": "8",
     "r_dlightShadowResolution": "256",
+    "r_staticLights": "1",
+    "r_staticLightDebug": "1",
+    "r_staticLightMaxLights": "8",
+    "r_staticLightShadows": "1",
+    "r_staticLightShadowMaxLights": "2",
+    "r_csmShadows": "1",
+    "r_csmDebug": "1",
+    "r_csmCascadeCount": "4",
+    "r_csmDebugFallback": "0",
+    "r_csmResolution": "512",
+    "r_csmShadowFilter": "2",
+    "r_spotShadows": "1",
+    "r_spotShadowDebug": "1",
+    "r_spotShadowMaxLights": "16",
+    "r_spotShadowResolution": "512",
+    "r_surfaceLightProxies": "1",
+    "r_surfaceLightProxyDebug": "1",
+    "r_surfaceLightProxyShadows": "1",
 }
+
+SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES = (
+    "surfacelight-large-planar",
+)
+
+CSM_SKY_SUN_EVIDENCE_CATEGORIES = (
+    "csm-sky-sun",
+)
+
+CSM_SHIMMER_EVIDENCE_CATEGORIES = (
+    "csm-shimmer-path",
+)
+
+COMBINED_SHADOW_ATLAS_SCENE_ID = "combined-shadow-atlas"
+COMBINED_SHADOW_ATLAS_EVIDENCE_CATEGORIES = (
+    COMBINED_SHADOW_ATLAS_SCENE_ID,
+)
+CSM_FALLBACK_SCENE_REASONS = {
+    "csm-fallback-no-world": "no-world",
+    "csm-fallback-no-sun": "no-sky-sun",
+    "csm-fallback-atlas-unavailable": "atlas",
+    "csm-fallback-zero-cascade": "zero-cascade",
+}
+CSM_FALLBACK_EVIDENCE_CATEGORIES = tuple(CSM_FALLBACK_SCENE_REASONS)
+CSM_FALLBACK_REQUIRED_REASONS = tuple(CSM_FALLBACK_SCENE_REASONS.values())
+
+CSM_SHADOW_EVIDENCE_CATEGORIES = (
+    *CSM_SKY_SUN_EVIDENCE_CATEGORIES,
+    *CSM_SHIMMER_EVIDENCE_CATEGORIES,
+)
 
 DLIGHT_SHADOW_EVIDENCE_CATEGORIES = (
     "world-geometry",
@@ -1541,6 +1797,66 @@ DLIGHT_SHADOW_EVIDENCE_CATEGORIES = (
     "alpha-tested-surfaces",
     "portals-mirrors",
     "stress-light-budget",
+    *CSM_SHADOW_EVIDENCE_CATEGORIES,
+    *SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES,
+    *COMBINED_SHADOW_ATLAS_EVIDENCE_CATEGORIES,
+    *CSM_FALLBACK_EVIDENCE_CATEGORIES,
+)
+
+SURFACELIGHT_SPOT_LOD_TILES = {
+    "low": 128,
+    "nominal": 256,
+    "promoted": 512,
+}
+SURFACELIGHT_SPOT_REQUESTED_TILE_CAP = 512
+SURFACELIGHT_SPOT_LOD_MAX_FILL_PERCENT = 85
+CSM_SHIMMER_MIN_SAMPLES = 4
+CSM_SHIMMER_MAX_GENERATION_DELTA = 1
+CSM_SHIMMER_MAX_SNAP_DEPTH_DELTA_MILLI = 1000
+CSM_SHIMMER_BASELINE_STEP = "baseline"
+CSM_SHIMMER_SCREENSHOT_MAX_RMS = 6.0
+CSM_SHIMMER_SCREENSHOT_MAX_CHANGED_PIXEL_RATIO = 0.10
+COMBINED_SHADOW_ATLAS_SIDECAR_LIGHTS = (
+    {
+        "name": "combined-sidecar-spot",
+        "type": "spot",
+        "origin": [0.0, 0.0, 768.0],
+        "direction": [0.0, 0.0, -1.0],
+        "color": [1.0, 0.82, 0.55],
+        "intensity": 900.0,
+        "radius": 2048.0,
+        "innerAngle": 18.0,
+        "outerAngle": 48.0,
+        "castsShadows": True,
+        "resolution": 256,
+        "priority": 8.0,
+    },
+)
+CSM_SHIMMER_CAMERA_PATH = (
+    {
+        "id": "baseline",
+        "setviewpos": "setviewpos 0.000 0.000 512.000 -10.000 90.000 0.000",
+        "originDelta": "0 0 0",
+        "axisDelta": "0 0 0",
+    },
+    {
+        "id": "nudge-forward",
+        "setviewpos": "setviewpos 0.125 0.000 512.000 -10.000 90.000 0.000",
+        "originDelta": "0.125 0 0",
+        "axisDelta": "0 0 0",
+    },
+    {
+        "id": "nudge-side",
+        "setviewpos": "setviewpos 0.000 0.125 512.000 -10.000 90.000 0.000",
+        "originDelta": "0 0.125 0",
+        "axisDelta": "0 0 0",
+    },
+    {
+        "id": "micro-yaw",
+        "setviewpos": "setviewpos 0.000 0.000 512.000 -10.000 90.030 0.000",
+        "originDelta": "0 0 0",
+        "axisDelta": "yaw +0.03",
+    },
 )
 
 DLIGHT_SHADOW_EVIDENCE_SCENES = (
@@ -1587,6 +1903,69 @@ DLIGHT_SHADOW_EVIDENCE_SCENES = (
         "description": "Over-budget dynamic-light ring to exercise atlas budget and skip logging.",
         "dlight": {"count": 16, "intensity": 900, "distance": 256, "height": 72, "seconds": 0},
     },
+    {
+        "id": "csm-sky-sun",
+        "map": "q3dm17",
+        "categories": CSM_SKY_SUN_EVIDENCE_CATEGORIES,
+        "description": "Outdoor sky-sun scene for CSM schedule, atlas publication, and cache telemetry evidence.",
+        "dlight": {"count": 8, "intensity": 720, "distance": 240, "height": 64, "seconds": 0},
+    },
+    {
+        "id": "csm-shimmer-path",
+        "map": "q3dm17",
+        "categories": CSM_SHIMMER_EVIDENCE_CATEGORIES,
+        "description": "Deterministic tiny camera path for CSM snapped-coordinate, cache, and atlas generation churn evidence.",
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+        "csmCameraPath": CSM_SHIMMER_CAMERA_PATH,
+    },
+    {
+        "id": "surfacelight-large-planar",
+        "map": "q3dm6",
+        "categories": SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES,
+        "description": "Large planar q3map_surfaceLight emitters with surfacelight proxies and the 2D spot atlas enabled.",
+        "dlight": {"count": 8, "intensity": 720, "distance": 224, "height": 64, "seconds": 0},
+    },
+    {
+        "id": COMBINED_SHADOW_ATLAS_SCENE_ID,
+        "map": "q3dm6",
+        "categories": COMBINED_SHADOW_ATLAS_EVIDENCE_CATEGORIES,
+        "description": "One-frame point, static sidecar spot, surfacelight spot, and CSM atlas publication smoke.",
+        "setviewpos": "setviewpos 0.000 0.000 512.000 -10.000 90.000 0.000",
+        "dlight": {"count": 8, "intensity": 780, "distance": 224, "height": 56, "seconds": 0},
+        "sidecarLights": COMBINED_SHADOW_ATLAS_SIDECAR_LIGHTS,
+    },
+    {
+        "id": "csm-fallback-no-world",
+        "map": "q3dm17",
+        "categories": ("csm-fallback-no-world",),
+        "description": "Forced no-world CSM fallback smoke with no CSM atlas or receiver publication.",
+        "cvars": {"r_csmDebugFallback": "1"},
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+    },
+    {
+        "id": "csm-fallback-no-sun",
+        "map": "q3dm17",
+        "categories": ("csm-fallback-no-sun",),
+        "description": "Forced no-sky-sun CSM fallback smoke with no CSM atlas or receiver publication.",
+        "cvars": {"r_csmDebugFallback": "2"},
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+    },
+    {
+        "id": "csm-fallback-atlas-unavailable",
+        "map": "q3dm17",
+        "categories": ("csm-fallback-atlas-unavailable",),
+        "description": "Forced atlas-unavailable CSM fallback smoke with no CSM receiver publication.",
+        "cvars": {"r_csmDebugFallback": "3"},
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+    },
+    {
+        "id": "csm-fallback-zero-cascade",
+        "map": "q3dm17",
+        "categories": ("csm-fallback-zero-cascade",),
+        "description": "Forced zero-cascade CSM fallback smoke with no CSM atlas or receiver publication.",
+        "cvars": {"r_csmDebugFallback": "4"},
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+    },
 )
 
 # Frozen GLx startup profiles. Keep these in sync with GLX_PROFILE_CVARS in
@@ -1609,6 +1988,7 @@ GLX_RC_PROFILE_CVARS = {
     "r_glxStreamDrawDynamicLights": "auto",
     "r_glxDlightScissor": "auto",
     "r_glxDlightProjectedProgram": "0",
+    "r_glxDlightProjectedMdi": "0",
     "r_glxStreamDrawScreenMaps": "0",
     "r_glxStreamDrawVideoMaps": "0",
     "r_glxStreamDrawShadows": "1",
@@ -1705,6 +2085,13 @@ PROFILE_CVARS = {
         "r_dynamiclight": "1",
         "r_glxDlightProjectedProgram": "1",
     },
+    "glx-dlight-mdi": {
+        "r_glxProfile": "rc",
+        **GLX_RC_PROFILE_CVARS,
+        "r_dynamiclight": "1",
+        "r_glxDlightProjectedProgram": "1",
+        "r_glxDlightProjectedMdi": "1",
+    },
     "glx-stress": {
         "r_glxProfile": "stress",
         **GLX_STRESS_PROFILE_CVARS,
@@ -1716,12 +2103,26 @@ GLX_STARTUP_PROFILE_CVARS = {
     "stress": GLX_STRESS_PROFILE_CVARS,
 }
 GLX_RC_DIAGNOSTIC_PROFILES = frozenset(
-    {"glx-parity", "glx-ownership", "glx-stress", "glx-material", "glx-dlight-shader"}
+    {
+        "glx-parity",
+        "glx-ownership",
+        "glx-stress",
+        "glx-material",
+        "glx-dlight-shader",
+        "glx-dlight-mdi",
+    }
 )
 GLX_STATIC_WORLD_PACKET_PROFILES = frozenset(
-    {"glx-parity", "glx-ownership", "glx-stress", "glx-dlight-shader"}
+    {"glx-parity", "glx-ownership", "glx-stress", "glx-dlight-shader", "glx-dlight-mdi"}
 )
-GLX_PROJECTED_DLIGHT_SHADER_PROFILES = frozenset({"glx-dlight-shader"})
+GLX_PROJECTED_DLIGHT_SHADER_PROFILES = frozenset({"glx-dlight-shader", "glx-dlight-mdi"})
+GLX_PROJECTED_DLIGHT_MDI_PROFILES = frozenset({"glx-dlight-mdi"})
+GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE = "projected-dlight-shader"
+GLX_PROJECTED_DLIGHT_SHADER_PARITY_PROFILES = frozenset({"glx-dlight-shader"})
+GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_RMS = 2.0
+GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_CHANGED_PIXEL_RATIO = 0.005
+GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE = "legacy-fallback"
+GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE = "shader-candidate"
 
 GLX_PROOF_CORPUS_VERSION = "2026-05-12-image-evidence-v1"
 GLX_PROOF_CORPUS_DOC = "docs/fnquake3/GLX_PROOF_CORPUS.md"
@@ -1743,6 +2144,8 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "dynamic-entity",
             "weapon-model",
             "greyscale-proof",
+            "projected-dlight-parity",
+            "projected-dlight-static-world",
         ),
         "description": "Small retail map used for renderer-switch, weapon/HUD, and baseline-lighting comparisons.",
     },
@@ -1863,6 +2266,9 @@ GLX_PROOF_CORPUS_SCENES: dict[str, dict[str, object]] = {
             "performance-comparison",
             "dynamic-entity",
             "dynamic-light",
+            "projected-dlight-parity",
+            "projected-dlight-dynamic",
+            "projected-dlight-resource-overlimit",
         ),
         "description": "Retail timedemo used for legacy OpenGL versus GLx performance comparisons.",
     },
@@ -2046,6 +2452,21 @@ GLX_PARITY_SUITES: dict[str, dict[str, object]] = {
         },
         "description": "Render-scale proof suite using an open retail scene and explicit custom render dimensions.",
     },
+    "projected-dlight-shader": {
+        "artifact": "screenshot+timedemo",
+        "sceneIds": ("stock-q3dm1-hud", "timedemo-demo1"),
+        "requiredTags": (
+            "projected-dlight-parity",
+            "projected-dlight-static-world",
+            "projected-dlight-dynamic",
+            "projected-dlight-resource-overlimit",
+        ),
+        "cvars": {
+            "r_dynamiclight": "1",
+            "r_glxDlightProjectedProgram": "1",
+        },
+        "description": "Projected-dlight shader parity suite requiring compared GLx screenshots against the legacy projected-light fallback and timedemo logs with executable world/dynamic shader binds.",
+    },
 }
 
 GLX_PARITY_CVAR_DEFAULTS = {
@@ -2082,6 +2503,10 @@ GLX_GATE_PARITY_SUITES = {
     ),
 }
 
+GLX_PROFILE_PARITY_SUITES = {
+    "glx-dlight-shader": (GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE,),
+}
+
 GLX_PROFILE_CORPUS_SCENES = {
     "baseline": ("stock-q3dm1-hud",),
     "glx-world": ("stock-q3dm1-hud",),
@@ -2091,6 +2516,7 @@ GLX_PROFILE_CORPUS_SCENES = {
     "glx-parity": ("stock-q3dm1-hud",),
     "glx-ownership": ("stock-q3dm1-hud", "stock-q3dm17-open"),
     "glx-dlight-shader": ("stock-q3dm1-hud", "timedemo-demo1"),
+    "glx-dlight-mdi": ("stock-q3dm1-hud", "timedemo-demo1"),
     "glx-stress": GLX_GATE_CORPUS_SCENES["rc-stress"],
 }
 
@@ -2538,6 +2964,20 @@ def corpus_scene_ids_for_profile(profile: str) -> tuple[str, ...]:
     return tuple(GLX_PROFILE_CORPUS_SCENES.get(profile, ("stock-q3dm1-hud",)))
 
 
+def profile_parity_suite_ids(profile: str) -> tuple[str, ...]:
+    return tuple(GLX_PROFILE_PARITY_SUITES.get(profile, ()))
+
+
+def combined_parity_suite_ids(
+    gate_suite_ids: Iterable[str],
+    profile: str,
+) -> list[str]:
+    return _dedupe(
+        validate_parity_suite_ids(gate_suite_ids) +
+        validate_parity_suite_ids(profile_parity_suite_ids(profile))
+    )
+
+
 def corpus_scene_ids_for_gate(gate: str | None, profile: str) -> tuple[str, ...]:
     if gate and gate in GLX_GATE_CORPUS_SCENES:
         return tuple(GLX_GATE_CORPUS_SCENES[gate])
@@ -2592,6 +3032,10 @@ def release_corpus_manifest() -> dict[str, object]:
         "gateParitySuiteIds": {
             gate: list(suite_ids)
             for gate, suite_ids in sorted(GLX_GATE_PARITY_SUITES.items())
+        },
+        "profileParitySuiteIds": {
+            profile: list(suite_ids)
+            for profile, suite_ids in sorted(GLX_PROFILE_PARITY_SUITES.items())
         },
         "imageEvidenceVersion": GLX_IMAGE_EVIDENCE_VERSION,
         "imageEvidenceSceneIds": sorted(GLX_IMAGE_EVIDENCE_CORPUS),
@@ -2680,6 +3124,24 @@ STARTUP_CVARS = {
     "r_dlightShadowFilter",
     "r_dlightShadowMaxLights",
     "r_dlightShadowResolution",
+    "r_staticLights",
+    "r_staticLightDebug",
+    "r_staticLightMaxLights",
+    "r_staticLightShadows",
+    "r_staticLightShadowMaxLights",
+    "r_csmShadows",
+    "r_csmDebug",
+    "r_csmDebugFallback",
+    "r_csmCascadeCount",
+    "r_csmResolution",
+    "r_csmShadowFilter",
+    "r_spotShadows",
+    "r_spotShadowDebug",
+    "r_spotShadowMaxLights",
+    "r_spotShadowResolution",
+    "r_surfaceLightProxies",
+    "r_surfaceLightProxyDebug",
+    "r_surfaceLightProxyShadows",
 }
 
 GLX_PROFILE_FORCED_CVARS = {
@@ -2757,6 +3219,11 @@ RC_GATE_PRESETS = {
             "require_glx_color_sweep": True,
             "require_dlight_shadow_scenes": True,
             "required_dlight_shadow_categories": DLIGHT_SHADOW_EVIDENCE_CATEGORIES,
+            "required_surface_light_spot_categories": SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES,
+            "required_csm_shadow_categories": CSM_SHADOW_EVIDENCE_CATEGORIES,
+            "require_csm_shimmer_screenshot_diff": True,
+            "require_combined_shadow_atlas_smoke": True,
+            "require_csm_fallback_smoke": True,
             "require_world_proof": True,
             "required_world_tags": (
                 "stock-map",
@@ -3370,6 +3837,13 @@ def print_profile_list() -> None:
         profile = PROFILE_CVARS[name]
         startup_profile = profile.get("r_glxProfile", "manual")
         print(f"  {name}: startup={startup_profile}")
+        parity_suite_ids = profile_parity_suite_ids(name)
+        if parity_suite_ids:
+            print(
+                "    "
+                f"parity-suites={GLX_PARITY_SUITE_VERSION} "
+                f"suites={','.join(parity_suite_ids)}"
+            )
         if not profile:
             print("    (no profile cvars)")
             continue
@@ -3563,15 +4037,28 @@ def dlight_shadow_scene_cvars(cvars: dict[str, str]) -> dict[str, str]:
 
 
 def dlight_shadow_evidence_scenes() -> list[dict[str, object]]:
-    return [
-        {
+    scenes: list[dict[str, object]] = []
+    for scene in DLIGHT_SHADOW_EVIDENCE_SCENES:
+        copied = {
             **scene,
             "categories": list(scene["categories"]),
             "cvars": dict(scene.get("cvars", {})),
             "dlight": dict(scene["dlight"]),
         }
-        for scene in DLIGHT_SHADOW_EVIDENCE_SCENES
-    ]
+        if scene.get("csmCameraPath"):
+            copied["csmCameraPath"] = [
+                dict(step)
+                for step in scene.get("csmCameraPath", [])  # type: ignore[union-attr]
+                if isinstance(step, dict)
+            ]
+        if scene.get("sidecarLights"):
+            copied["sidecarLights"] = [
+                dict(light)
+                for light in scene.get("sidecarLights", [])  # type: ignore[union-attr]
+                if isinstance(light, dict)
+            ]
+        scenes.append(copied)
+    return scenes
 
 
 def dlight_shadow_scene_categories(screenshots: list[dict[str, object]]) -> set[str]:
@@ -3584,6 +4071,521 @@ def dlight_shadow_scene_categories(screenshots: list[dict[str, object]]) -> set[
             if text:
                 categories.add(text)
     return categories
+
+
+def write_dlight_shadow_sidecar_lights(
+    homepath: Path,
+    fs_game: str,
+    scenes: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    lights_by_map: dict[str, list[dict[str, object]]] = {}
+    scene_ids_by_map: dict[str, list[str]] = {}
+    for scene in scenes:
+        sidecar_lights = scene.get("sidecarLights", [])
+        if not isinstance(sidecar_lights, list) or not sidecar_lights:
+            continue
+        map_name = str(scene.get("map", "")).strip()
+        if not map_name:
+            continue
+        lights_by_map.setdefault(map_name, []).extend(
+            dict(light) for light in sidecar_lights if isinstance(light, dict)
+        )
+        scene_ids_by_map.setdefault(map_name, []).append(str(scene.get("id", "")))
+
+    records: list[dict[str, object]] = []
+    maps_dir = homepath / game_dir(fs_game) / "maps"
+    for map_name, lights in sorted(lights_by_map.items()):
+        if not lights:
+            continue
+        path = maps_dir / f"{map_name}.lights.json"
+        payload = {
+            "version": 1,
+            "lights": lights,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        records.append(
+            {
+                "map": map_name,
+                "path": str(path),
+                "lightCount": len(lights),
+                "scenes": [scene_id for scene_id in scene_ids_by_map.get(map_name, []) if scene_id],
+            }
+        )
+    return records
+
+
+def shadow_manager_summary_active(summary: object) -> bool:
+    if not isinstance(summary, dict) or not summary.get("found"):
+        return False
+    maximum = summary.get("max")
+    if not isinstance(maximum, dict):
+        return False
+
+    def field(name: str) -> int:
+        try:
+            return int(maximum.get(name, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return (
+        field("scheduledPasses") > 0
+        and field("scheduledMask") > 0
+        and field("pointScheduled") > 0
+        and field("pointPublished") > 0
+        and field("pointPlanned") > 0
+        and field("pointRecords") > 0
+        and field("pointAtlasWidth") > 0
+        and field("pointAtlasHeight") > 0
+        and field("pointAtlasFaceSize") > 0
+    )
+
+
+def surface_light_spot_summary_active(summary: object) -> bool:
+    if not isinstance(summary, dict) or not summary.get("found"):
+        return False
+    maximum = summary.get("max")
+    if not isinstance(maximum, dict):
+        return False
+
+    def field(name: str) -> int:
+        try:
+            return int(maximum.get(name, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return (
+        field("surfaceSpotCandidates") > 0
+        and field("surfaceSpotPlans") > 0
+        and field("surfaceSpotAllocated") > 0
+        and field("surfaceSpotAtlasWidth") > 0
+        and field("surfaceSpotAtlasHeight") > 0
+        and field("surfaceSpotAtlasTileSize") > 0
+        and field("surfaceSpotFootprintMax") > 0
+        and field("surfaceSpotCasterRadiusMax") > 0
+        and field("surfaceSpotTileMax") > 0
+    )
+
+
+def surface_light_spot_lod_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def csm_shadow_runtime_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def combined_shadow_atlas_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def combined_shadow_atlas_summary(dlight_shadow: object) -> dict[str, object]:
+    if not isinstance(dlight_shadow, dict):
+        return {
+            "found": False,
+            "status": "missing",
+            "scene": COMBINED_SHADOW_ATLAS_SCENE_ID,
+            "sampleCount": 0,
+            "max": {},
+            "failures": ["Combined shadow atlas smoke is missing dlight shadow analysis."],
+        }
+
+    manager = dlight_shadow.get("shadowManager")
+    scene_summary: object = None
+    if isinstance(manager, dict) and isinstance(manager.get("scenes"), dict):
+        scene_summary = manager["scenes"].get(COMBINED_SHADOW_ATLAS_SCENE_ID)  # type: ignore[index]
+    if not isinstance(scene_summary, dict):
+        return {
+            "found": False,
+            "status": "missing",
+            "scene": COMBINED_SHADOW_ATLAS_SCENE_ID,
+            "sampleCount": 0,
+            "max": {},
+            "failures": ["Combined shadow atlas smoke is missing manager scene samples."],
+        }
+
+    maximum = scene_summary.get("max", {})
+    if not isinstance(maximum, dict):
+        maximum = {}
+
+    def field(name: str) -> int:
+        try:
+            return int(maximum.get(name, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    checks = (
+        ("scheduledPasses", 4, "scheduled all point, spot, CSM atlas, and CSM receiver passes"),
+        ("pointScheduled", 1, "scheduled the point shadow atlas"),
+        ("spotScheduled", 1, "scheduled the spot shadow atlas"),
+        ("csmAtlasScheduled", 1, "scheduled the CSM atlas"),
+        ("csmReceiverScheduled", 1, "scheduled the CSM receiver pass"),
+        ("pointPublished", 1, "published the point shadow atlas"),
+        ("spotPublished", 1, "published the spot shadow atlas"),
+        ("csmPublished", 1, "published the CSM atlas"),
+        ("pointPlanned", 1, "planned point shadow lights"),
+        ("pointRecords", 1, "recorded point shadow atlas metadata"),
+        ("pointAtlasWidth", 1, "reported point atlas width"),
+        ("pointAtlasHeight", 1, "reported point atlas height"),
+        ("pointAtlasFaceSize", 1, "reported point atlas face size"),
+        ("spotPlans", 1, "planned spot shadow lights"),
+        ("spotStaticPlans", 1, "planned static sidecar spot shadows"),
+        ("spotSurfacePlans", 1, "planned surfacelight spot proxy shadows"),
+        ("spotAtlasWidth", 1, "reported spot atlas width"),
+        ("spotAtlasHeight", 1, "reported spot atlas height"),
+        ("spotAtlasTileSize", 1, "reported spot atlas tile size"),
+        ("csmCascadeCount", 1, "reported CSM cascades"),
+        ("csmAtlasWidth", 1, "reported CSM atlas width"),
+        ("csmAtlasHeight", 1, "reported CSM atlas height"),
+        ("csmGeneration", 1, "reported CSM atlas generation"),
+    )
+    failures: list[str] = []
+    for name, minimum, label in checks:
+        if field(name) < minimum:
+            failures.append(
+                "Combined shadow atlas smoke did not "
+                f"{label}: {name}={field(name)}<{minimum}."
+            )
+    if (field("scheduledMask") & 0x0F) != 0x0F:
+        failures.append(
+            "Combined shadow atlas smoke did not report all combined shadow pass bits "
+            f"in the schedule mask: scheduledMask=0x{field('scheduledMask'):x}, expected bits 0x0f."
+        )
+
+    return {
+        "found": True,
+        "status": "failed" if failures else "passed",
+        "scene": COMBINED_SHADOW_ATLAS_SCENE_ID,
+        "sampleCount": int(scene_summary.get("sampleCount", 0)),
+        "max": {
+            name: field(name)
+            for name, _minimum, _label in checks
+        } | {"scheduledMask": field("scheduledMask")},
+        "failures": failures,
+    }
+
+
+def int_sample_field(sample: dict[str, int], name: str) -> int:
+    try:
+        return int(sample.get(name, 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def surface_light_spot_range_includes(
+    sample: dict[str, int], min_name: str, max_name: str, value: int
+) -> bool:
+    minimum = int_sample_field(sample, min_name)
+    maximum = int_sample_field(sample, max_name)
+    return minimum > 0 and minimum <= value <= maximum
+
+
+def surface_light_spot_lod_summary(samples: list[dict[str, int]]) -> dict[str, object]:
+    requested_tiles = {name: False for name in SURFACELIGHT_SPOT_LOD_TILES}
+    failures: list[str] = []
+    max_requested_tile = 0
+    max_plan_requested_tile = 0
+    max_effective_tile = 0
+    max_atlas_tile = 0
+    max_fill = 0
+
+    if not samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "sampleCount": 0,
+            "requestedTiles": requested_tiles,
+            "maxRequestedTile": 0,
+            "maxPlanRequestedTile": 0,
+            "maxEffectiveTile": 0,
+            "maxAtlasTile": 0,
+            "maxFill": 0,
+            "failures": [],
+        }
+
+    for sample in samples:
+        requested_max = int_sample_field(sample, "surfaceSpotRequestedTileMax")
+        plan_requested_max = int_sample_field(sample, "surfaceSpotPlanRequestedTileMax")
+        effective_max = int_sample_field(sample, "surfaceSpotTileMax")
+        atlas_tile = int_sample_field(sample, "surfaceSpotAtlasTileSize")
+        fill = int_sample_field(sample, "surfaceSpotAtlasFill")
+
+        max_requested_tile = max(max_requested_tile, requested_max)
+        max_plan_requested_tile = max(max_plan_requested_tile, plan_requested_max)
+        max_effective_tile = max(max_effective_tile, effective_max)
+        max_atlas_tile = max(max_atlas_tile, atlas_tile)
+        max_fill = max(max_fill, fill)
+
+        for label, tile_size in SURFACELIGHT_SPOT_LOD_TILES.items():
+            if surface_light_spot_range_includes(
+                sample,
+                "surfaceSpotRequestedTileMin",
+                "surfaceSpotRequestedTileMax",
+                tile_size,
+            ):
+                requested_tiles[label] = True
+
+        if requested_max > SURFACELIGHT_SPOT_REQUESTED_TILE_CAP:
+            failures.append(
+                "Surfacelight spot requested tile exceeded cap: "
+                f"{requested_max}>{SURFACELIGHT_SPOT_REQUESTED_TILE_CAP}."
+            )
+        if plan_requested_max > SURFACELIGHT_SPOT_REQUESTED_TILE_CAP:
+            failures.append(
+                "Surfacelight spot planned request exceeded cap: "
+                f"{plan_requested_max}>{SURFACELIGHT_SPOT_REQUESTED_TILE_CAP}."
+            )
+        if atlas_tile > 0 and effective_max > atlas_tile:
+            failures.append(
+                "Surfacelight spot effective tile exceeded atlas tile: "
+                f"{effective_max}>{atlas_tile}."
+            )
+        if fill > SURFACELIGHT_SPOT_LOD_MAX_FILL_PERCENT:
+            failures.append(
+                "Surfacelight spot atlas fill exceeded smoke bound: "
+                f"{fill}%>{SURFACELIGHT_SPOT_LOD_MAX_FILL_PERCENT}%."
+            )
+
+    missing_tiles = [
+        f"{label}({tile_size})"
+        for label, tile_size in SURFACELIGHT_SPOT_LOD_TILES.items()
+        if not requested_tiles[label]
+    ]
+    if missing_tiles:
+        failures.append(
+            "Surfacelight spot LOD smoke missing requested tile coverage: "
+            + ", ".join(missing_tiles)
+            + "."
+        )
+    if max_effective_tile > 0 and max_atlas_tile <= 0:
+        failures.append("Surfacelight spot LOD smoke has effective tiles without an atlas tile size.")
+
+    return {
+        "found": True,
+        "status": "failed" if failures else "passed",
+        "sampleCount": len(samples),
+        "requestedTiles": requested_tiles,
+        "maxRequestedTile": max_requested_tile,
+        "maxPlanRequestedTile": max_plan_requested_tile,
+        "maxEffectiveTile": max_effective_tile,
+        "maxAtlasTile": max_atlas_tile,
+        "maxFill": max_fill,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def csm_shadow_runtime_summary(
+    manager_samples: list[dict[str, int]],
+    csm_samples: list[dict[str, int]],
+) -> dict[str, object]:
+    manager_max = summarize_int_samples(manager_samples)["max"] if manager_samples else {}
+    csm_max = summarize_int_samples(csm_samples)["max"] if csm_samples else {}
+    failures: list[str] = []
+
+    def manager_field(name: str) -> int:
+        return int(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
+
+    def csm_field(name: str) -> int:
+        return int(csm_max.get(name, 0)) if isinstance(csm_max, dict) else 0
+
+    if not manager_samples and not csm_samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "managerSampleCount": 0,
+            "debugSampleCount": 0,
+            "max": {},
+            "failures": [],
+        }
+
+    if not manager_samples:
+        failures.append("CSM runtime smoke missing shadow manager samples.")
+    if not csm_samples:
+        failures.append("CSM runtime smoke missing csm debug samples.")
+    if manager_samples:
+        if manager_field("csmAtlasScheduled") <= 0:
+            failures.append("CSM runtime smoke did not schedule the CSM atlas pass.")
+        if manager_field("csmReceiverScheduled") <= 0:
+            failures.append("CSM runtime smoke did not schedule the CSM receiver pass.")
+        if manager_field("csmPublished") <= 0:
+            failures.append("CSM runtime smoke did not publish the CSM atlas.")
+        if manager_field("csmCascadeCount") <= 0:
+            failures.append("CSM runtime smoke reported zero manager cascades.")
+        if manager_field("csmAtlasWidth") <= 0 or manager_field("csmAtlasHeight") <= 0:
+            failures.append("CSM runtime smoke reported missing manager atlas dimensions.")
+        if manager_field("csmGeneration") <= 0:
+            failures.append("CSM runtime smoke reported no CSM atlas generation.")
+    if csm_samples:
+        if csm_field("csmDebugCascades") <= 0:
+            failures.append("CSM runtime smoke reported zero debug cascades.")
+        if csm_field("csmDebugResolution") <= 0:
+            failures.append("CSM runtime smoke reported missing debug resolution.")
+        cache_events = (
+            csm_field("csmCacheHits")
+            + csm_field("csmCacheMisses")
+            + csm_field("csmCacheUncacheable")
+        )
+        if cache_events <= 0:
+            failures.append("CSM runtime smoke reported no cache hit/miss/uncacheable telemetry.")
+
+    maximum = {}
+    if isinstance(manager_max, dict):
+        maximum.update(
+            {
+                "csmAtlasScheduled": manager_field("csmAtlasScheduled"),
+                "csmReceiverScheduled": manager_field("csmReceiverScheduled"),
+                "csmPublished": manager_field("csmPublished"),
+                "csmCascadeCount": manager_field("csmCascadeCount"),
+                "csmAtlasWidth": manager_field("csmAtlasWidth"),
+                "csmAtlasHeight": manager_field("csmAtlasHeight"),
+                "csmGeneration": manager_field("csmGeneration"),
+            }
+        )
+    if isinstance(csm_max, dict):
+        maximum.update(csm_max)
+        maximum["csmCacheEvents"] = (
+            csm_field("csmCacheHits")
+            + csm_field("csmCacheMisses")
+            + csm_field("csmCacheUncacheable")
+        )
+
+    return {
+        "found": bool(manager_samples or csm_samples),
+        "status": "failed" if failures else "passed",
+        "managerSampleCount": len(manager_samples),
+        "debugSampleCount": len(csm_samples),
+        "max": maximum,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def csm_generation_delta(manager_samples: list[dict[str, int]]) -> tuple[int, int, int]:
+    generations = [
+        int_sample_field(sample, "csmGeneration")
+        for sample in manager_samples
+        if int_sample_field(sample, "csmGeneration") > 0
+    ]
+    if not generations:
+        return 0, 0, 0
+    return min(generations), max(generations), max(generations) - min(generations)
+
+
+def csm_snap_depth_delta_milli(csm_samples: list[dict[str, int]]) -> int:
+    deltas: list[int] = []
+    for index in range(4):
+        name = f"csmSnapDepth{index}Milli"
+        values = [
+            int_sample_field(sample, name)
+            for sample in csm_samples
+            if int_sample_field(sample, "csmSnapDepthSamples") > 0
+        ]
+        if values:
+            deltas.append(max(values) - min(values))
+    return max(deltas) if deltas else 0
+
+
+def csm_stability_summary(
+    manager_samples: list[dict[str, int]],
+    csm_samples: list[dict[str, int]],
+) -> dict[str, object]:
+    manager_max = summarize_int_samples(manager_samples)["max"] if manager_samples else {}
+    csm_max = summarize_int_samples(csm_samples)["max"] if csm_samples else {}
+    min_generation, max_generation, generation_delta = csm_generation_delta(manager_samples)
+    max_snap_depth_delta = csm_snap_depth_delta_milli(csm_samples)
+    failures: list[str] = []
+
+    def manager_field(name: str) -> int:
+        return int(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
+
+    def csm_field(name: str) -> int:
+        return int(csm_max.get(name, 0)) if isinstance(csm_max, dict) else 0
+
+    if not manager_samples and not csm_samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "managerSampleCount": 0,
+            "debugSampleCount": 0,
+            "minGeneration": 0,
+            "maxGeneration": 0,
+            "generationDelta": 0,
+            "maxSnapDepthDeltaMilli": 0,
+            "max": {},
+            "failures": [],
+        }
+
+    if len(manager_samples) < CSM_SHIMMER_MIN_SAMPLES:
+        failures.append(
+            "CSM shimmer path manager samples below minimum: "
+            f"{len(manager_samples)}<{CSM_SHIMMER_MIN_SAMPLES}."
+        )
+    if len(csm_samples) < CSM_SHIMMER_MIN_SAMPLES:
+        failures.append(
+            "CSM shimmer path debug samples below minimum: "
+            f"{len(csm_samples)}<{CSM_SHIMMER_MIN_SAMPLES}."
+        )
+    if manager_field("csmPublished") <= 0 or manager_field("csmGeneration") <= 0:
+        failures.append("CSM shimmer path did not publish a sampleable atlas generation.")
+    if csm_field("csmDebugCascades") <= 0 or csm_field("csmDebugResolution") <= 0:
+        failures.append("CSM shimmer path did not report cascade debug telemetry.")
+    if csm_field("csmSnapDepthSamples") <= 0:
+        failures.append("CSM shimmer path is missing snapped light-depth telemetry.")
+    if (
+        csm_field("csmCacheHits")
+        + csm_field("csmCacheMisses")
+        + csm_field("csmCacheUncacheable")
+    ) <= 0:
+        failures.append("CSM shimmer path reported no cache hit/miss/uncacheable telemetry.")
+    if generation_delta > CSM_SHIMMER_MAX_GENERATION_DELTA:
+        failures.append(
+            "CSM shimmer path atlas generation churn exceeded smoke bound: "
+            f"{generation_delta}>{CSM_SHIMMER_MAX_GENERATION_DELTA}."
+        )
+    if max_snap_depth_delta > CSM_SHIMMER_MAX_SNAP_DEPTH_DELTA_MILLI:
+        failures.append(
+            "CSM shimmer path snapped light-depth delta exceeded smoke bound: "
+            f"{max_snap_depth_delta}>{CSM_SHIMMER_MAX_SNAP_DEPTH_DELTA_MILLI} milli-units."
+        )
+
+    maximum = {}
+    if isinstance(manager_max, dict):
+        maximum.update(manager_max)
+    if isinstance(csm_max, dict):
+        maximum.update(csm_max)
+        maximum["csmCacheEvents"] = (
+            csm_field("csmCacheHits")
+            + csm_field("csmCacheMisses")
+            + csm_field("csmCacheUncacheable")
+        )
+
+    return {
+        "found": bool(manager_samples or csm_samples),
+        "status": "failed" if failures else "passed",
+        "managerSampleCount": len(manager_samples),
+        "debugSampleCount": len(csm_samples),
+        "minGeneration": min_generation,
+        "maxGeneration": max_generation,
+        "generationDelta": generation_delta,
+        "maxSnapDepthDeltaMilli": max_snap_depth_delta,
+        "max": maximum,
+        "failures": list(dict.fromkeys(failures)),
+    }
 
 
 def format_dlight_test_command(dlight: dict[str, object]) -> str:
@@ -3701,6 +4703,77 @@ def build_switch_cfg(
                     f"{args.profile}-map{map_index}-{safe_map}-round{round_index}-"
                     f"step{switch_index}-{safe_renderer}"
                 )
+                projected_dlight_shader_parity = (
+                    renderer.lower() == "glx" and
+                    GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE in map_parity_suite_ids
+                )
+                if projected_dlight_shader_parity:
+                    baseline_key = (
+                        f"{args.profile}-projected-dlight-legacy-fallback-"
+                        f"{safe_map}-round{round_index}"
+                    )
+                    legacy_shot_name = validate_runtime_qpath(
+                        f"{qpath_run_token}-m{map_index}{shot_map}-"
+                        f"r{round_index}s{switch_index}-dlfb"
+                    )
+
+                    lines.append(f"renderer_switch {renderer} fast")
+                    lines.append(f"wait {args.switch_wait}")
+                    lines.append('set r_glxDlightProjectedProgram "0"')
+                    lines.append("wait 1")
+                    lines.append(f"screenshotPNG {legacy_shot_name}")
+                    lines.append(f"wait {args.screenshot_wait}")
+                    lines.append('set r_glxDlightProjectedProgram "1"')
+                    lines.append("wait 1")
+                    if not args.no_perf_samples:
+                        lines.append("set r_speeds \"7\"")
+                        lines.append(f"wait {args.perf_sample_wait}")
+                    lines.append(f"screenshotPNG {shot_name}")
+                    lines.append(f"wait {args.screenshot_wait}")
+                    if not args.no_perf_samples:
+                        lines.append("set r_speeds \"0\"")
+                        lines.append("wait 1")
+                    lines.extend(glx_diagnostic_commands())
+                    lines.append("wait 1")
+
+                    common_record = {
+                        "renderer": renderer,
+                        "map": map_name,
+                        "mapIndex": map_index,
+                        "round": round_index,
+                        "switchStep": switch_index,
+                        "corpusSceneIds": map_corpus_scene_ids,
+                        "corpusTags": corpus_tags(map_corpus_scene_ids),
+                        "paritySuiteIds": map_parity_suite_ids,
+                        "parityCvars": map_parity_cvars,
+                        "projectedDlightShaderParity": True,
+                        "legacyFallbackBaseline": "opengl-projected-light",
+                    }
+                    expected_shots.append(
+                        {
+                            **common_record,
+                            "name": legacy_shot_name,
+                            "baselineKey": f"{baseline_key}-legacy-source",
+                            "projectedDlightShaderParityRole": (
+                                GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+                            ),
+                            "skipExternalBaseline": True,
+                        }
+                    )
+                    expected_shots.append(
+                        {
+                            **common_record,
+                            "name": shot_name,
+                            "baselineKey": baseline_key,
+                            "projectedDlightShaderParityRole": (
+                                GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+                            ),
+                            "legacyFallbackCaptureName": legacy_shot_name,
+                            "baselineSourceName": legacy_shot_name,
+                            "baselineSourceRole": GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE,
+                        }
+                    )
+                    continue
 
                 lines.append(f"renderer_switch {renderer} fast")
                 lines.append(f"wait {args.switch_wait}")
@@ -3715,21 +4788,23 @@ def build_switch_cfg(
                 if renderer.lower() == "glx":
                     lines.extend(glx_diagnostic_commands())
                     lines.append("wait 1")
-                expected_shots.append(
-                    {
-                        "name": shot_name,
-                        "baselineKey": baseline_key,
-                        "renderer": renderer,
-                        "map": map_name,
-                        "mapIndex": map_index,
-                        "round": round_index,
-                        "switchStep": switch_index,
-                        "corpusSceneIds": map_corpus_scene_ids,
-                        "corpusTags": corpus_tags(map_corpus_scene_ids),
-                        "paritySuiteIds": map_parity_suite_ids,
-                        "parityCvars": map_parity_cvars,
-                    }
-                )
+                shot_record = {
+                    "name": shot_name,
+                    "baselineKey": baseline_key,
+                    "renderer": renderer,
+                    "map": map_name,
+                    "mapIndex": map_index,
+                    "round": round_index,
+                    "switchStep": switch_index,
+                    "corpusSceneIds": map_corpus_scene_ids,
+                    "corpusTags": corpus_tags(map_corpus_scene_ids),
+                    "paritySuiteIds": map_parity_suite_ids,
+                    "parityCvars": map_parity_cvars,
+                }
+                if projected_dlight_shader_parity:
+                    shot_record["projectedDlightShaderParity"] = True
+                    shot_record["legacyFallbackBaseline"] = "opengl-projected-light"
+                expected_shots.append(shot_record)
 
         lines.append("disconnect")
         lines.append("wait 30")
@@ -3757,6 +4832,11 @@ def build_dlight_shadow_cfg(
         shot_map = qpath_token(map_name, 12)
         categories = [str(category) for category in scene.get("categories", [])]
         dlight = dict(scene["dlight"])  # type: ignore[arg-type]
+        camera_path = [
+            dict(step)
+            for step in scene.get("csmCameraPath", [])  # type: ignore[union-attr]
+            if isinstance(step, dict)
+        ]
         shot_name = validate_runtime_qpath(
             f"{qpath_run_token}-dl{scene_index:02d}-{qpath_token(scene_id, 14)}-{shot_map}"
         )
@@ -3765,36 +4845,83 @@ def build_dlight_shadow_cfg(
         lines.append(f"echo DLIGHT_SHADOW_SCENE_BEGIN {scene_id}")
         lines.append(map_load_command(args, map_name))
         lines.append(f"wait {args.map_wait}")
+        if scene.get("setviewpos"):
+            lines.append(str(scene["setviewpos"]))
+            lines.append("wait 4")
         lines.append(format_dlight_test_command(dlight))
         lines.append("wait 4")
-        if not args.no_perf_samples:
-            lines.append("set r_speeds \"4\"")
-            lines.append(f"wait {args.perf_sample_wait}")
-        lines.append(f"screenshotPNG {shot_name}")
-        lines.append(f"wait {args.screenshot_wait}")
-        if not args.no_perf_samples:
-            lines.append("set r_speeds \"0\"")
-            lines.append("wait 1")
+        if camera_path:
+            for step_index, step in enumerate(camera_path, start=1):
+                step_id = sanitize(str(step["id"]))
+                step_shot_name = validate_runtime_qpath(
+                    f"{qpath_run_token}-dl{scene_index:02d}-"
+                    f"{qpath_token(scene_id, 10)}-s{step_index:02d}-"
+                    f"{qpath_token(step_id, 10)}-{shot_map}"
+                )
+                lines.append(f"echo CSM_SHIMMER_STEP_BEGIN {scene_id} {step_id}")
+                lines.append(str(step["setviewpos"]))
+                lines.append("wait 4")
+                if not args.no_perf_samples:
+                    lines.append("set r_speeds \"4\"")
+                    lines.append(f"wait {args.perf_sample_wait}")
+                lines.append(f"screenshotPNG {step_shot_name}")
+                lines.append(f"wait {args.screenshot_wait}")
+                if not args.no_perf_samples:
+                    lines.append("set r_speeds \"0\"")
+                    lines.append("wait 1")
+                lines.append(f"echo CSM_SHIMMER_STEP_END {scene_id} {step_id}")
+                expected_shots.append(
+                    {
+                        "name": step_shot_name,
+                        "baselineKey": (
+                            f"{args.profile}-dlight-shadows-{scene_id}-"
+                            f"{step_id}-{safe_map}-glx"
+                        ),
+                        "renderer": "glx",
+                        "map": map_name,
+                        "mapIndex": scene_index,
+                        "scene": scene_id,
+                        "description": scene.get("description", ""),
+                        "evidenceCategories": categories,
+                        "shadowScene": True,
+                        "dlightTest": dlight,
+                        "csmCameraPath": True,
+                        "csmPathStep": step_id,
+                        "csmPathIndex": step_index,
+                        "csmSetviewpos": str(step["setviewpos"]),
+                        "csmOriginDelta": str(step.get("originDelta", "")),
+                        "csmAxisDelta": str(step.get("axisDelta", "")),
+                    }
+                )
+        else:
+            if not args.no_perf_samples:
+                lines.append("set r_speeds \"4\"")
+                lines.append(f"wait {args.perf_sample_wait}")
+            lines.append(f"screenshotPNG {shot_name}")
+            lines.append(f"wait {args.screenshot_wait}")
+            if not args.no_perf_samples:
+                lines.append("set r_speeds \"0\"")
+                lines.append("wait 1")
+            expected_shots.append(
+                {
+                    "name": shot_name,
+                    "baselineKey": f"{args.profile}-dlight-shadows-{scene_id}-{safe_map}-glx",
+                    "renderer": "glx",
+                    "map": map_name,
+                    "mapIndex": scene_index,
+                    "scene": scene_id,
+                    "description": scene.get("description", ""),
+                    "evidenceCategories": categories,
+                    "shadowScene": True,
+                    "dlightTest": dlight,
+                }
+            )
         lines.extend(glx_diagnostic_commands())
         lines.append("wait 1")
         lines.append("r_dlightTest off")
         lines.append(f"echo DLIGHT_SHADOW_SCENE_END {scene_id}")
         lines.append("disconnect")
         lines.append("wait 30")
-        expected_shots.append(
-            {
-                "name": shot_name,
-                "baselineKey": f"{args.profile}-dlight-shadows-{scene_id}-{safe_map}-glx",
-                "renderer": "glx",
-                "map": map_name,
-                "mapIndex": scene_index,
-                "scene": scene_id,
-                "description": scene.get("description", ""),
-                "evidenceCategories": categories,
-                "shadowScene": True,
-                "dlightTest": dlight,
-            }
-        )
 
     lines.append("quit")
     lines.append("")
@@ -3844,8 +4971,101 @@ def build_color_sweep_cfg(
     ]
 
 
-def build_demo_cfg(args: argparse.Namespace, cvars: dict[str, str], demo: str) -> str:
+def build_demo_cfg(
+    args: argparse.Namespace,
+    cvars: dict[str, str],
+    demo: str,
+    renderer: str = "",
+    qpath_run_token: str = "",
+    corpus_scene_ids: Iterable[str] = (),
+    parity_suite_ids: Iterable[str] = (),
+) -> tuple[str, list[dict[str, object]]]:
     lines = cfg_preamble(cvars, f"timedemo sweep for {demo}")
+    expected_shots: list[dict[str, object]] = []
+    safe_demo = sanitize(demo)
+    demo_corpus_scene_ids = corpus_scene_ids_for_target(
+        validate_corpus_scene_ids(corpus_scene_ids),
+        "demo",
+        demo,
+    )
+    demo_parity_suite_ids = parity_suite_ids_for_scene_ids(
+        demo_corpus_scene_ids,
+        validate_parity_suite_ids(parity_suite_ids),
+    )
+    projected_dlight_shader_parity = (
+        renderer.lower() == "glx" and
+        GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE in demo_parity_suite_ids
+    )
+
+    if projected_dlight_shader_parity:
+        token = qpath_run_token or qpath_token("glxdlight", 10)
+        legacy_shot_name = validate_runtime_qpath(
+            f"{token}-td-{qpath_token(safe_demo, 12)}-dlfb"
+        )
+        candidate_shot_name = validate_runtime_qpath(
+            f"{token}-td-{qpath_token(safe_demo, 12)}-dlsh"
+        )
+        baseline_key = (
+            f"{args.profile}-projected-dlight-demo-legacy-fallback-{safe_demo}"
+        )
+        lines.extend(
+            [
+                f"wait {args.startup_wait}",
+                "set timedemo \"1\"",
+                "set r_glxDlightProjectedProgram \"0\"",
+                "set glx_dlight_demo_shader_capture " + q3_quote(
+                    f"screenshotPNG {candidate_shot_name}; wait {args.screenshot_wait}; quit"
+                ),
+                "set glx_dlight_demo_shader_run " + q3_quote(
+                    "set r_glxDlightProjectedProgram 1; "
+                    "set nextdemo \"vstr glx_dlight_demo_shader_capture\"; "
+                    f"demo {demo}"
+                ),
+                "set glx_dlight_demo_legacy_capture " + q3_quote(
+                    f"screenshotPNG {legacy_shot_name}; wait {args.screenshot_wait}; "
+                    "vstr glx_dlight_demo_shader_run"
+                ),
+                "set nextdemo \"vstr glx_dlight_demo_legacy_capture\"",
+                f"demo {demo}",
+                "",
+            ]
+        )
+        common_record = {
+            "renderer": renderer,
+            "demo": demo,
+            "corpusSceneIds": demo_corpus_scene_ids,
+            "corpusTags": corpus_tags(demo_corpus_scene_ids),
+            "paritySuiteIds": demo_parity_suite_ids,
+            "projectedDlightShaderParity": True,
+            "projectedDlightShaderTimedemoParity": True,
+            "legacyFallbackBaseline": "opengl-projected-light",
+        }
+        expected_shots.extend(
+            [
+                {
+                    **common_record,
+                    "name": legacy_shot_name,
+                    "baselineKey": f"{baseline_key}-legacy-source",
+                    "projectedDlightShaderParityRole": (
+                        GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+                    ),
+                    "skipExternalBaseline": True,
+                },
+                {
+                    **common_record,
+                    "name": candidate_shot_name,
+                    "baselineKey": baseline_key,
+                    "projectedDlightShaderParityRole": (
+                        GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+                    ),
+                    "legacyFallbackCaptureName": legacy_shot_name,
+                    "baselineSourceName": legacy_shot_name,
+                    "baselineSourceRole": GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE,
+                },
+            ]
+        )
+        return "\n".join(lines), expected_shots
+
     lines.extend(
         [
             f"wait {args.startup_wait}",
@@ -3855,7 +5075,7 @@ def build_demo_cfg(args: argparse.Namespace, cvars: dict[str, str], demo: str) -
             "",
         ]
     )
-    return "\n".join(lines)
+    return "\n".join(lines), expected_shots
 
 
 def write_cfg(homepath: Path, fs_game: str, cfg_name: str, contents: str) -> Path:
@@ -4647,6 +5867,203 @@ def screenshot_results(
     return results
 
 
+def summarize_int_samples(samples: list[dict[str, int]]) -> dict[str, object]:
+    if not samples:
+        return {
+            "found": False,
+            "sampleCount": 0,
+            "latest": {},
+            "max": {},
+        }
+
+    return {
+        "found": True,
+        "sampleCount": len(samples),
+        "latest": samples[-1],
+        "max": {
+            name: max(sample[name] for sample in samples)
+            for name in samples[0]
+        },
+    }
+
+
+def shadow_manager_sample(match: re.Match[str]) -> dict[str, int]:
+    sample: dict[str, int] = {}
+    for name, value in match.groupdict().items():
+        if value is None:
+            sample[name] = 0
+        else:
+            sample[name] = int(value, 16) if name == "scheduledMask" else int(value)
+    return sample
+
+
+def csm_shadow_sample(match: re.Match[str]) -> dict[str, int]:
+    sample: dict[str, int] = {}
+    snap_depth_present = False
+    for name, value in match.groupdict().items():
+        if name == "csmSky":
+            continue
+        if value is None:
+            if name.startswith("csmSnapDepth"):
+                sample[f"{name}Milli"] = 0
+            else:
+                sample[name] = 0
+            continue
+        if name.startswith("csmSnapDepth"):
+            sample[f"{name}Milli"] = int(round(float(value) * 1000.0))
+            snap_depth_present = True
+        else:
+            sample[name] = int(value)
+    sample["csmSnapDepthSamples"] = 1 if snap_depth_present else 0
+    return sample
+
+
+def csm_fallback_sample(match: re.Match[str]) -> dict[str, int]:
+    reason = sanitize(match.group("csmFallbackReason"))
+    sample = {
+        "csmFallbackSamples": 1,
+        "csmFallbackCascades": int(match.group("csmFallbackCascades")),
+        "csmFallbackNoWorld": 0,
+        "csmFallbackNoSun": 0,
+        "csmFallbackAtlasUnavailable": 0,
+        "csmFallbackZeroCascade": 0,
+        "csmFallbackProjection": 0,
+        "csmFallbackStrength": 0,
+        "csmFallbackDisabled": 0,
+    }
+    if reason == "no-world":
+        sample["csmFallbackNoWorld"] = 1
+    elif reason == "no-sky-sun":
+        sample["csmFallbackNoSun"] = 1
+    elif reason == "atlas":
+        sample["csmFallbackAtlasUnavailable"] = 1
+    elif reason == "zero-cascade":
+        sample["csmFallbackZeroCascade"] = 1
+    elif reason == "projection":
+        sample["csmFallbackProjection"] = 1
+    elif reason == "strength":
+        sample["csmFallbackStrength"] = 1
+    elif reason == "disabled":
+        sample["csmFallbackDisabled"] = 1
+    return sample
+
+
+def csm_fallback_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def csm_fallback_summary(
+    manager_samples: list[dict[str, int]],
+    fallback_samples: list[dict[str, int]],
+    expected_reasons: tuple[str, ...] = (),
+) -> dict[str, object]:
+    manager_max = summarize_int_samples(manager_samples)["max"] if manager_samples else {}
+    fallback_max = summarize_int_samples(fallback_samples)["max"] if fallback_samples else {}
+    failures: list[str] = []
+
+    def manager_field(name: str) -> int:
+        return int(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
+
+    def fallback_field(name: str) -> int:
+        return int(fallback_max.get(name, 0)) if isinstance(fallback_max, dict) else 0
+
+    reason_fields = {
+        "no-world": "csmFallbackNoWorld",
+        "no-sky-sun": "csmFallbackNoSun",
+        "atlas": "csmFallbackAtlasUnavailable",
+        "zero-cascade": "csmFallbackZeroCascade",
+    }
+
+    if not manager_samples and not fallback_samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "managerSampleCount": 0,
+            "fallbackSampleCount": 0,
+            "reasonCoverage": {reason: False for reason in expected_reasons},
+            "max": {},
+            "failures": [],
+        }
+
+    if not manager_samples:
+        failures.append("CSM fallback smoke missing shadow manager samples.")
+    if not fallback_samples:
+        failures.append("CSM fallback smoke missing CSM skip reason samples.")
+
+    if manager_samples:
+        blocked_fields = (
+            "csmAtlasScheduled",
+            "csmReceiverScheduled",
+            "csmPublished",
+            "csmCascadeCount",
+            "csmAtlasWidth",
+            "csmAtlasHeight",
+            "csmGeneration",
+        )
+        for name in blocked_fields:
+            if manager_field(name) > 0:
+                failures.append(
+                    "CSM fallback smoke published or scheduled invalid CSM work: "
+                    f"{name}={manager_field(name)}."
+                )
+    if fallback_field("csmFallbackCascades") > 0:
+        failures.append(
+            "CSM fallback smoke reported non-zero cascades in a skip sample: "
+            f"{fallback_field('csmFallbackCascades')}."
+        )
+
+    reason_coverage = {
+        reason: fallback_field(field) > 0
+        for reason, field in reason_fields.items()
+        if not expected_reasons or reason in expected_reasons
+    }
+    missing_reasons = [
+        reason for reason in expected_reasons
+        if not reason_coverage.get(reason, False)
+    ]
+    if missing_reasons:
+        failures.append(
+            "CSM fallback smoke missing skip reason coverage: "
+            + ", ".join(missing_reasons)
+            + "."
+        )
+    if "no-world" in expected_reasons and manager_field("noworld") <= 0:
+        failures.append("CSM fallback no-world smoke did not mark the manager noworld sample.")
+
+    maximum: dict[str, int] = {}
+    if isinstance(manager_max, dict):
+        maximum.update(
+            {
+                "noworld": manager_field("noworld"),
+                "scheduledPasses": manager_field("scheduledPasses"),
+                "scheduledMask": manager_field("scheduledMask"),
+                "csmAtlasScheduled": manager_field("csmAtlasScheduled"),
+                "csmReceiverScheduled": manager_field("csmReceiverScheduled"),
+                "csmPublished": manager_field("csmPublished"),
+                "csmCascadeCount": manager_field("csmCascadeCount"),
+                "csmAtlasWidth": manager_field("csmAtlasWidth"),
+                "csmAtlasHeight": manager_field("csmAtlasHeight"),
+                "csmGeneration": manager_field("csmGeneration"),
+            }
+        )
+    if isinstance(fallback_max, dict):
+        maximum.update(fallback_max)
+
+    return {
+        "found": bool(manager_samples or fallback_samples),
+        "status": "failed" if failures else "passed",
+        "managerSampleCount": len(manager_samples),
+        "fallbackSampleCount": len(fallback_samples),
+        "reasonCoverage": reason_coverage,
+        "max": maximum,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
 def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
     info: dict[str, object] = {
         "found": False,
@@ -4654,6 +6071,24 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
         "latest": {},
         "max": {},
         "scenes": {},
+        "shadowManager": {
+            "found": False,
+            "sampleCount": 0,
+            "latest": {},
+            "max": {},
+            "scenes": {},
+        },
+        "surfaceLightSpot": {
+            "found": False,
+            "sampleCount": 0,
+            "latest": {},
+            "max": {},
+            "scenes": {},
+        },
+        "surfaceLightSpotLod": surface_light_spot_lod_summary([]),
+        "csmShadows": csm_shadow_runtime_summary([], []),
+        "csmStability": csm_stability_summary([], []),
+        "csmFallbacks": csm_fallback_summary([], [], CSM_FALLBACK_REQUIRED_REASONS),
     }
     if not log_path.exists():
         return info
@@ -4661,15 +6096,51 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
     text = log_path.read_text(encoding="utf-8", errors="replace")
     samples: list[dict[str, int]] = []
     scene_samples: dict[str, list[dict[str, int]]] = {}
+    manager_samples: list[dict[str, int]] = []
+    manager_scene_samples: dict[str, list[dict[str, int]]] = {}
+    surface_spot_samples: list[dict[str, int]] = []
+    surface_spot_scene_samples: dict[str, list[dict[str, int]]] = {}
+    csm_samples: list[dict[str, int]] = []
+    csm_scene_samples: dict[str, list[dict[str, int]]] = {}
+    csm_fallback_samples: list[dict[str, int]] = []
+    csm_fallback_scene_samples: dict[str, list[dict[str, int]]] = {}
     current_scene = ""
     for line in text.splitlines():
         if match := DLIGHT_SHADOW_SCENE_BEGIN_RE.search(line):
             current_scene = sanitize(match.group("scene"))
             scene_samples.setdefault(current_scene, [])
+            manager_scene_samples.setdefault(current_scene, [])
+            surface_spot_scene_samples.setdefault(current_scene, [])
+            csm_scene_samples.setdefault(current_scene, [])
+            csm_fallback_scene_samples.setdefault(current_scene, [])
             continue
         if match := DLIGHT_SHADOW_SCENE_END_RE.search(line):
             if sanitize(match.group("scene")) == current_scene:
                 current_scene = ""
+            continue
+        if match := SHADOW_MANAGER_RE.search(line):
+            sample = shadow_manager_sample(match)
+            manager_samples.append(sample)
+            if current_scene:
+                manager_scene_samples.setdefault(current_scene, []).append(sample)
+            continue
+        if match := SURFACELIGHT_SPOT_PLAN_RE.search(line):
+            sample = {name: int(value) for name, value in match.groupdict().items()}
+            surface_spot_samples.append(sample)
+            if current_scene:
+                surface_spot_scene_samples.setdefault(current_scene, []).append(sample)
+            continue
+        if match := CSM_SHADOWS_RE.search(line):
+            sample = csm_shadow_sample(match)
+            csm_samples.append(sample)
+            if current_scene:
+                csm_scene_samples.setdefault(current_scene, []).append(sample)
+            continue
+        if match := CSM_PLAN_SKIP_RE.search(line):
+            sample = csm_fallback_sample(match)
+            csm_fallback_samples.append(sample)
+            if current_scene:
+                csm_fallback_scene_samples.setdefault(current_scene, []).append(sample)
             continue
         if match := DLIGHT_SHADOW_PLAN_RE.search(line):
             sample = {name: int(value) for name, value in match.groupdict().items()}
@@ -4677,31 +6148,116 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
             if current_scene:
                 scene_samples.setdefault(current_scene, []).append(sample)
 
+    if manager_samples:
+        manager_summary = summarize_int_samples(manager_samples)
+        manager_summary["scenes"] = {
+            scene_id: {
+                **summarize_int_samples(records),
+            }
+            for scene_id, records in sorted(manager_scene_samples.items())
+            if records
+        }
+        info["shadowManager"] = manager_summary
+    if surface_spot_samples:
+        surface_spot_summary = summarize_int_samples(surface_spot_samples)
+        surface_spot_summary["scenes"] = {
+            scene_id: {
+                **summarize_int_samples(records),
+            }
+            for scene_id, records in sorted(surface_spot_scene_samples.items())
+            if records
+        }
+        info["surfaceLightSpot"] = surface_spot_summary
+        surface_spot_lod = surface_light_spot_lod_summary(surface_spot_samples)
+        surface_spot_lod["scenes"] = {
+            scene_id: surface_light_spot_lod_summary(records)
+            for scene_id, records in sorted(surface_spot_scene_samples.items())
+            if records
+        }
+        info["surfaceLightSpotLod"] = surface_spot_lod
+    if manager_samples or csm_samples:
+        csm_runtime = csm_shadow_runtime_summary(manager_samples, csm_samples)
+        csm_runtime["scenes"] = {
+            scene_id: csm_shadow_runtime_summary(
+                manager_scene_samples.get(scene_id, []),
+                csm_scene_samples.get(scene_id, []),
+            )
+            for scene_id in sorted(set(manager_scene_samples) | set(csm_scene_samples))
+            if manager_scene_samples.get(scene_id) or csm_scene_samples.get(scene_id)
+        }
+        info["csmShadows"] = csm_runtime
+        stability_scene_ids = sorted(
+            scene_id
+            for scene_id in set(manager_scene_samples) | set(csm_scene_samples)
+            if scene_id in CSM_SHIMMER_EVIDENCE_CATEGORIES
+        )
+        stability_manager_samples = [
+            sample
+            for scene_id in stability_scene_ids
+            for sample in manager_scene_samples.get(scene_id, [])
+        ]
+        stability_csm_samples = [
+            sample
+            for scene_id in stability_scene_ids
+            for sample in csm_scene_samples.get(scene_id, [])
+        ]
+        csm_stability = csm_stability_summary(stability_manager_samples, stability_csm_samples)
+        csm_stability["scenes"] = {
+            scene_id: csm_stability_summary(
+                manager_scene_samples.get(scene_id, []),
+                csm_scene_samples.get(scene_id, []),
+            )
+            for scene_id in stability_scene_ids
+        }
+        info["csmStability"] = csm_stability
+    if manager_samples or csm_fallback_samples:
+        fallback_scene_ids = sorted(
+            scene_id
+            for scene_id in set(manager_scene_samples) | set(csm_fallback_scene_samples)
+            if scene_id in CSM_FALLBACK_SCENE_REASONS
+        )
+        fallback_manager_samples = [
+            sample
+            for scene_id in fallback_scene_ids
+            for sample in manager_scene_samples.get(scene_id, [])
+        ]
+        fallback_skip_samples = [
+            sample
+            for scene_id in fallback_scene_ids
+            for sample in csm_fallback_scene_samples.get(scene_id, [])
+        ]
+        csm_fallbacks = csm_fallback_summary(
+            fallback_manager_samples,
+            fallback_skip_samples,
+            CSM_FALLBACK_REQUIRED_REASONS,
+        )
+        csm_fallbacks["scenes"] = {
+            scene_id: csm_fallback_summary(
+                manager_scene_samples.get(scene_id, []),
+                csm_fallback_scene_samples.get(scene_id, []),
+                (CSM_FALLBACK_SCENE_REASONS[scene_id],),
+            )
+            for scene_id in fallback_scene_ids
+        }
+        info["csmFallbacks"] = csm_fallbacks
+
     if not samples:
         return info
 
-    maxima = {
-        name: max(sample[name] for sample in samples)
-        for name in samples[0]
-    }
     scene_summaries = {
         scene_id: {
-            "sampleCount": len(records),
-            "latest": records[-1],
-            "max": {
-                name: max(record[name] for record in records)
-                for name in records[0]
-            },
+            **summarize_int_samples(records),
         }
         for scene_id, records in sorted(scene_samples.items())
         if records
     }
+    summary = summarize_int_samples(samples)
     info.update(
         {
             "found": True,
-            "sampleCount": len(samples),
-            "latest": samples[-1],
-            "max": maxima,
+            "sampleCount": summary["sampleCount"],
+            "latest": summary["latest"],
+            "max": summary["max"],
             "scenes": scene_summaries,
         }
     )
@@ -4720,7 +6276,16 @@ def apply_screenshot_baselines(
         return
 
     baseline_root = baseline_dir.resolve()
+    screenshots_by_name = {
+        str(shot.get("name", "")): shot
+        for shot in screenshots
+        if str(shot.get("name", "")).strip()
+    }
     for shot in screenshots:
+        if shot.get("skipExternalBaseline"):
+            shot.setdefault("baselineStatus", "reference")
+            continue
+
         baseline_key = str(shot.get("baselineKey") or shot.get("name") or "screenshot")
         baseline_path = baseline_root / f"{baseline_key}.png"
         shot["baselinePath"] = str(baseline_path)
@@ -4730,9 +6295,27 @@ def apply_screenshot_baselines(
             shot["baselineStatus"] = "not-compared"
             continue
 
+        baseline_source_path = candidate_path
+        baseline_source_name = str(shot.get("baselineSourceName", ""))
+        if baseline_source_name:
+            baseline_source_shot = screenshots_by_name.get(baseline_source_name)
+            if isinstance(baseline_source_shot, dict):
+                source_path = Path(str(baseline_source_shot.get("path", "")))
+                shot["baselineSourcePath"] = str(source_path)
+                shot["baselineSourceFound"] = bool(
+                    baseline_source_shot.get("found") and source_path.exists()
+                )
+                if shot["baselineSourceFound"]:
+                    baseline_source_path = source_path
+            else:
+                shot["baselineSourceFound"] = False
+
         if approve_baselines:
+            if baseline_source_name and not shot.get("baselineSourceFound"):
+                shot["baselineStatus"] = "missing-source"
+                continue
             baseline_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(candidate_path, baseline_path)
+            shutil.copy2(baseline_source_path, baseline_path)
             shot["baselineStatus"] = "approved"
             continue
 
@@ -4766,6 +6349,315 @@ def apply_screenshot_baselines(
         shot["comparison"] = comparison
 
 
+def apply_projected_dlight_shader_parity_diffs(
+    screenshots: list[dict[str, object]],
+    diff_dir: Path | None,
+    max_rms: float,
+    max_pixel_ratio: float,
+) -> dict[str, object]:
+    references = {
+        str(shot.get("name", "")): shot
+        for shot in screenshots
+        if str(shot.get("projectedDlightShaderParityRole", "")) ==
+        GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+        and str(shot.get("name", "")).strip()
+    }
+    candidates = [
+        shot for shot in screenshots
+        if str(shot.get("projectedDlightShaderParityRole", "")) ==
+        GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+    ]
+    failures: list[str] = []
+    comparisons: list[dict[str, object]] = []
+
+    for shot in candidates:
+        candidate_name = str(shot.get("name", "projected-dlight-candidate"))
+        reference_name = str(
+            shot.get("legacyFallbackCaptureName") or shot.get("baselineSourceName") or ""
+        )
+        if not reference_name:
+            failures.append(
+                f"Projected dlight shader candidate {candidate_name} has no legacy fallback capture."
+            )
+            continue
+
+        reference_shot = references.get(reference_name)
+        if not isinstance(reference_shot, dict):
+            shot["legacyFallbackCaptureStatus"] = "missing-reference"
+            failures.append(
+                f"Projected dlight shader candidate {candidate_name} did not find "
+                f"legacy fallback capture {reference_name}."
+            )
+            continue
+
+        reference_path = Path(str(reference_shot.get("path", "")))
+        candidate_path = Path(str(shot.get("path", "")))
+        shot["legacyFallbackCapturePath"] = str(reference_path)
+        if not reference_shot.get("found") or not reference_path.exists():
+            shot["legacyFallbackCaptureStatus"] = "missing"
+            failures.append(
+                f"Projected dlight shader legacy fallback capture is missing: {reference_name}."
+            )
+            continue
+        if not shot.get("found") or not candidate_path.exists():
+            shot["legacyFallbackCaptureStatus"] = "candidate-missing"
+            failures.append(
+                f"Projected dlight shader candidate screenshot is missing: {candidate_name}."
+            )
+            continue
+
+        comparison_diff_path = (
+            diff_dir.resolve() / f"{shot.get('baselineKey', candidate_name)}.legacy-fallback.diff.png"
+            if diff_dir is not None
+            else None
+        )
+        try:
+            comparison = compare_png_files(
+                reference_path,
+                candidate_path,
+                max_rms,
+                max_pixel_ratio,
+                comparison_diff_path,
+            )
+        except Exception as exc:
+            comparison = {
+                "status": "failed",
+                "reason": str(exc),
+                "baselinePath": str(reference_path),
+                "candidatePath": str(candidate_path),
+                "diffPath": str(comparison_diff_path) if comparison_diff_path else "",
+                "maxRms": max_rms,
+                "maxChangedPixelRatio": max_pixel_ratio,
+            }
+        shot["legacyFallbackCaptureStatus"] = comparison["status"]
+        shot["legacyFallbackComparison"] = comparison
+        comparisons.append(
+            {
+                "candidate": candidate_name,
+                "legacyFallback": reference_name,
+                "status": comparison.get("status", "failed"),
+                "rms": comparison.get("rms", 0.0),
+                "changedPixelRatio": comparison.get("changedPixelRatio", 0.0),
+                "reason": comparison.get("reason", ""),
+            }
+        )
+        if comparison.get("status") != "passed":
+            failures.append(
+                "Projected dlight shader legacy fallback comparison failed for "
+                f"{candidate_name}: {comparison.get('reason', 'diff-threshold') or 'diff-threshold'}."
+            )
+
+    passed = sum(1 for comparison in comparisons if comparison.get("status") == "passed")
+    return {
+        "found": bool(candidates),
+        "status": "passed" if candidates and not failures else ("missing" if not candidates else "failed"),
+        "candidateCount": len(candidates),
+        "legacyFallbackCount": len(references),
+        "comparisonCount": len(comparisons),
+        "passedComparisons": passed,
+        "maxRms": max((float(c.get("rms", 0.0)) for c in comparisons), default=0.0),
+        "maxChangedPixelRatio": max(
+            (float(c.get("changedPixelRatio", 0.0)) for c in comparisons),
+            default=0.0,
+        ),
+        "comparisons": comparisons,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def csm_shimmer_path_screenshots(
+    screenshots: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return [
+        shot
+        for shot in screenshots
+        if shot.get("csmCameraPath")
+        and str(shot.get("scene", "")) in CSM_SHIMMER_EVIDENCE_CATEGORIES
+    ]
+
+
+def csm_shimmer_screenshot_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def csm_shimmer_screenshot_summary(
+    screenshots: list[dict[str, object]],
+) -> dict[str, object]:
+    shimmer_shots = csm_shimmer_path_screenshots(screenshots)
+    thresholds = {
+        "maxRms": CSM_SHIMMER_SCREENSHOT_MAX_RMS,
+        "maxChangedPixelRatio": CSM_SHIMMER_SCREENSHOT_MAX_CHANGED_PIXEL_RATIO,
+    }
+    if not shimmer_shots:
+        return {
+            "found": False,
+            "status": "missing",
+            "scene": "csm-shimmer-path",
+            "baselineStep": CSM_SHIMMER_BASELINE_STEP,
+            "sampleCount": 0,
+            "comparisonCount": 0,
+            "passedComparisons": 0,
+            "maxRms": 0.0,
+            "maxChangedPixelRatio": 0.0,
+            "thresholds": thresholds,
+            "comparisons": [],
+            "failures": [],
+        }
+
+    failures: list[str] = []
+    comparisons: list[dict[str, object]] = []
+    expected_steps = {str(step["id"]) for step in CSM_SHIMMER_CAMERA_PATH}
+    seen_steps = {str(shot.get("csmPathStep", "")) for shot in shimmer_shots}
+    missing_steps = sorted(expected_steps - seen_steps)
+    if missing_steps:
+        failures.append(
+            "CSM shimmer screenshot smoke is missing path step"
+            f"{'s' if len(missing_steps) != 1 else ''}: "
+            + ", ".join(missing_steps)
+            + "."
+        )
+    baseline_shots = [
+        shot for shot in shimmer_shots
+        if str(shot.get("csmPathStep", "")) == CSM_SHIMMER_BASELINE_STEP
+    ]
+    if not baseline_shots:
+        failures.append("CSM shimmer screenshot smoke did not capture a baseline step.")
+    elif not baseline_shots[0].get("found"):
+        failures.append(
+            "CSM shimmer screenshot smoke baseline is missing: "
+            f"{baseline_shots[0].get('name', 'baseline')}."
+        )
+
+    for shot in shimmer_shots:
+        if str(shot.get("csmPathStep", "")) == CSM_SHIMMER_BASELINE_STEP:
+            continue
+        name = str(shot.get("name", "screenshot"))
+        step = str(shot.get("csmPathStep", ""))
+        if not shot.get("found"):
+            failures.append(f"CSM shimmer screenshot smoke image is missing: {name}.")
+            continue
+        comparison = shot.get("csmShimmerComparison")
+        if not isinstance(comparison, dict):
+            failures.append(
+                "CSM shimmer screenshot smoke did not compare step "
+                f"{step or name} against the baseline."
+            )
+            continue
+        status = str(comparison.get("status", "failed"))
+        rms = float(comparison.get("rms", 0.0)) if isinstance(comparison.get("rms"), (int, float)) else 0.0
+        changed_ratio = (
+            float(comparison.get("changedPixelRatio", 0.0))
+            if isinstance(comparison.get("changedPixelRatio"), (int, float))
+            else 0.0
+        )
+        record = {
+            "name": name,
+            "step": step,
+            "baselineStep": str(shot.get("csmShimmerBaselineStep", CSM_SHIMMER_BASELINE_STEP)),
+            "status": status,
+            "rms": rms,
+            "changedPixelRatio": changed_ratio,
+            "reason": str(comparison.get("reason", "")),
+        }
+        comparisons.append(record)
+        if status != "passed":
+            reason = str(comparison.get("reason", "diff-threshold")) or "diff-threshold"
+            failures.append(
+                f"CSM shimmer screenshot smoke comparison failed for {step or name}: {reason}."
+            )
+
+    if not comparisons:
+        failures.append("CSM shimmer screenshot smoke did not produce any baseline comparisons.")
+
+    passed = sum(1 for comparison in comparisons if comparison.get("status") == "passed")
+    max_rms = max((float(comparison.get("rms", 0.0)) for comparison in comparisons), default=0.0)
+    max_changed_ratio = max(
+        (float(comparison.get("changedPixelRatio", 0.0)) for comparison in comparisons),
+        default=0.0,
+    )
+
+    return {
+        "found": True,
+        "status": "failed" if failures else "passed",
+        "scene": "csm-shimmer-path",
+        "baselineStep": CSM_SHIMMER_BASELINE_STEP,
+        "sampleCount": len(shimmer_shots),
+        "comparisonCount": len(comparisons),
+        "passedComparisons": passed,
+        "maxRms": max_rms,
+        "maxChangedPixelRatio": max_changed_ratio,
+        "thresholds": thresholds,
+        "comparisons": comparisons,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def apply_csm_shimmer_screenshot_diffs(
+    screenshots: list[dict[str, object]],
+    diff_dir: Path | None,
+    max_rms: float = CSM_SHIMMER_SCREENSHOT_MAX_RMS,
+    max_pixel_ratio: float = CSM_SHIMMER_SCREENSHOT_MAX_CHANGED_PIXEL_RATIO,
+) -> dict[str, object]:
+    shimmer_shots = csm_shimmer_path_screenshots(screenshots)
+    baseline_shot = next(
+        (
+            shot for shot in shimmer_shots
+            if str(shot.get("csmPathStep", "")) == CSM_SHIMMER_BASELINE_STEP
+        ),
+        None,
+    )
+    if baseline_shot is None:
+        return csm_shimmer_screenshot_summary(screenshots)
+
+    baseline_shot["csmShimmerRole"] = "baseline"
+    baseline_path = Path(str(baseline_shot.get("path", "")))
+    baseline_key = str(baseline_shot.get("baselineKey") or baseline_shot.get("name") or "baseline")
+
+    for shot in shimmer_shots:
+        if shot is baseline_shot:
+            continue
+        shot["csmShimmerRole"] = "candidate"
+        shot["csmShimmerBaselineStep"] = CSM_SHIMMER_BASELINE_STEP
+        shot["csmShimmerBaselineKey"] = baseline_key
+        shot["csmShimmerBaselinePath"] = str(baseline_path)
+
+        candidate_path = Path(str(shot.get("path", "")))
+        if not baseline_shot.get("found") or not shot.get("found"):
+            continue
+
+        candidate_key = str(shot.get("baselineKey") or shot.get("name") or "candidate")
+        comparison_diff_path = (
+            diff_dir.resolve() / f"{candidate_key}.csm-shimmer.diff.png"
+            if diff_dir is not None
+            else None
+        )
+        try:
+            comparison = compare_png_files(
+                baseline_path,
+                candidate_path,
+                max_rms,
+                max_pixel_ratio,
+                comparison_diff_path,
+            )
+        except Exception as exc:
+            comparison = {
+                "status": "failed",
+                "reason": str(exc),
+                "baselinePath": str(baseline_path),
+                "candidatePath": str(candidate_path),
+                "diffPath": str(comparison_diff_path) if comparison_diff_path else "",
+                "maxRms": max_rms,
+                "maxChangedPixelRatio": max_pixel_ratio,
+            }
+        shot["csmShimmerComparison"] = comparison
+
+    return csm_shimmer_screenshot_summary(screenshots)
+
+
 def q3_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled", "ready"}
 
@@ -4784,6 +6676,10 @@ def profile_requires_static_world_packets(profile: str) -> bool:
 
 def profile_requires_projected_dlight_shader(profile: str) -> bool:
     return profile in GLX_PROJECTED_DLIGHT_SHADER_PROFILES
+
+
+def profile_requires_projected_dlight_mdi(profile: str) -> bool:
+    return profile in GLX_PROJECTED_DLIGHT_MDI_PROFILES
 
 
 def metric_section(metrics: dict[str, object], name: str) -> dict[str, object]:
@@ -4825,6 +6721,29 @@ def int_group_any(match: re.Match[str], *names: str) -> int:
     raise KeyError(names)
 
 
+def record_render_ir_product_match(metrics: dict[str, object], match: re.Match[str]) -> None:
+    for key in (
+        "passes",
+        "worldPackets",
+        "dynamicDraws",
+        "materials",
+        "uploads",
+        "postNodes",
+        "outputs",
+        "rejects",
+    ):
+        record_metric_max(metrics, "renderIRProducts", key, int_group(match, key))
+    for key in (
+        "projectedWorldPackets",
+        "projectedWorldPacketDlights",
+        "projectedDynamicDraws",
+        "projectedDynamicDlights",
+    ):
+        value = match.groupdict().get(key)
+        if value is not None:
+            record_metric_max(metrics, "renderIRProducts", key, int(value))
+
+
 def append_stream_dlight_ir_consistency_failures(
     metrics: dict[str, object],
     failures: list[str],
@@ -4856,6 +6775,137 @@ def append_stream_dlight_ir_consistency_failures(
         failures.append(
             "GLx streamed dlight draws are not scheduled on the render IR dynamic-lights pass: "
             f"stream {stream_dlight_draws}, pass {pass_dlight_draws}."
+        )
+
+
+def append_projected_dlight_shader_consistency_failures(
+    metrics: dict[str, object],
+    failures: list[str],
+) -> None:
+    projected_inputs = metric_section(metrics, "dlightProjectedShaderInputs")
+    projected_uniforms = metric_section(metrics, "dlightProjectedShaderUniforms")
+    projected_resource = metric_section(metrics, "dlightProjectedShaderResource")
+    projected_stream = metric_section(metrics, "dlightProjectedShaderStream")
+    projected_arena = metric_section(metrics, "dlightProjectedShaderArena")
+    render_products = metric_section(metrics, "renderIRProducts")
+
+    input_count = int_metric(projected_inputs.get("inputs"))
+    input_records = int_metric(projected_inputs.get("records"))
+    programmable_inputs = int_metric(projected_inputs.get("programmable"))
+    render_projected_records = (
+        int_metric(render_products.get("projectedWorldPacketDlights")) +
+        int_metric(render_products.get("projectedDynamicDlights"))
+    )
+
+    if input_count <= 0:
+        failures.append("GLx projected dlight shader profile did not record projected shader inputs.")
+    if input_records <= 0:
+        failures.append("GLx projected dlight shader profile did not record projected-light input records.")
+    if programmable_inputs <= 0:
+        failures.append("GLx projected dlight shader profile did not record programmable projected-light inputs.")
+    if int_metric(projected_inputs.get("fallback")) > 0:
+        failures.append(
+            "GLx projected dlight shader profile reported projected-light fallback inputs: "
+            f"{int_metric(projected_inputs.get('fallback'))}."
+        )
+    if int_metric(projected_inputs.get("invalid")) > 0:
+        failures.append(
+            "GLx projected dlight shader profile reported invalid projected-light inputs: "
+            f"{int_metric(projected_inputs.get('invalid'))}."
+        )
+    if render_projected_records > 0 and input_records < render_projected_records:
+        failures.append(
+            "GLx projected dlight shader profile recorded fewer shader input records than RenderIR "
+            f"projected-light records: shader {input_records}, render IR {render_projected_records}."
+        )
+    if (
+        int_metric(projected_uniforms.get("truncated")) <= 0
+        and (
+            int_metric(projected_uniforms.get("records")) +
+            int_metric(projected_resource.get("records"))
+        ) < input_records
+    ):
+        failures.append(
+            "GLx projected dlight shader profile bound fewer shader records than projected-light "
+            f"shader inputs: uniforms {int_metric(projected_uniforms.get('records'))}, "
+            f"resources {int_metric(projected_resource.get('records'))}, "
+            f"inputs {input_records}."
+        )
+    if int_metric(projected_resource.get("failures")) > 0:
+        failures.append(
+            "GLx projected dlight shader profile reported projected-light resource failures: "
+            f"{int_metric(projected_resource.get('failures'))}."
+        )
+    if int_metric(projected_resource.get("suppressed")) > 0:
+        failures.append(
+            "GLx projected dlight shader profile suppressed projected-light resource binds: "
+            f"{int_metric(projected_resource.get('suppressed'))}."
+        )
+    if int_metric(projected_resource.get("attempts")) > 0:
+        if int_metric(projected_resource.get("promotions")) <= 0:
+            failures.append("GLx projected dlight shader profile did not promote over-limit resource binds.")
+        if int_metric(projected_resource.get("executable")) <= 0:
+            failures.append("GLx projected dlight shader profile did not execute promoted resource binds.")
+        if int_metric(projected_resource.get("records")) <= 0:
+            failures.append("GLx projected dlight shader profile did not bind promoted resource records.")
+
+    if (
+        "projectedWorldPackets" not in render_products
+        or "projectedDynamicDraws" not in render_products
+    ):
+        failures.append(
+            "GLx projected dlight shader profile is missing RenderIR projected-light product evidence."
+        )
+    for label, input_key, product_key, bind_key in (
+        ("world", "world", "projectedWorldPackets", "worldBinds"),
+        ("dynamic", "dynamic", "projectedDynamicDraws", "dynamicBinds"),
+    ):
+        shader_inputs = int_metric(projected_inputs.get(input_key))
+        render_products_count = int_metric(render_products.get(product_key))
+        uniform_binds = int_metric(projected_uniforms.get(bind_key))
+        if render_products_count > 0 and shader_inputs <= 0:
+            failures.append(
+                "GLx projected dlight shader profile did not record projected shader inputs for "
+                f"{label} RenderIR products."
+            )
+        if shader_inputs > 0 and render_products_count <= 0:
+            failures.append(
+                f"GLx projected dlight shader profile has mismatched projected-light {label} "
+                f"input evidence: shader inputs {shader_inputs}, render IR products "
+                f"{render_products_count}."
+            )
+        if shader_inputs > 0 and uniform_binds <= 0:
+            failures.append(
+                "GLx projected dlight shader profile did not bind projected uniform inputs for "
+                f"{label} projected-light inputs."
+            )
+
+    if int_metric(projected_stream.get("failures")) > 0:
+        failures.append(
+            "GLx projected dlight shader profile reported projected-light stream upload failures: "
+            f"{int_metric(projected_stream.get('failures'))}."
+        )
+    if int_metric(projected_stream.get("rangeFailures")) > 0:
+        failures.append(
+            "GLx projected dlight shader profile reported projected-light stream range failures: "
+            f"{int_metric(projected_stream.get('rangeFailures'))}."
+        )
+    if int_metric(projected_stream.get("rangeBinds")) > int_metric(projected_stream.get("rangeClears")):
+        failures.append(
+            "GLx projected dlight shader profile left stale projected-light stream resource ranges: "
+            f"{int_metric(projected_stream.get('rangeBinds'))} binds / "
+            f"{int_metric(projected_stream.get('rangeClears'))} clears."
+        )
+    if int_metric(projected_arena.get("rangeFailures")) > 0:
+        failures.append(
+            "GLx projected dlight shader profile reported projected-light arena range failures: "
+            f"{int_metric(projected_arena.get('rangeFailures'))}."
+        )
+    if int_metric(projected_arena.get("rangeBinds")) > int_metric(projected_arena.get("rangeClears")):
+        failures.append(
+            "GLx projected dlight shader profile left stale projected-light arena ranges: "
+            f"{int_metric(projected_arena.get('rangeBinds'))} binds / "
+            f"{int_metric(projected_arena.get('rangeClears'))} clears."
         )
 
 
@@ -4995,6 +7045,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
     requires_glx_ownership = profile_requires_glx_ownership(profile)
     requires_static_world_packets = profile_requires_static_world_packets(profile)
     requires_projected_dlight_shader = profile_requires_projected_dlight_shader(profile)
+    requires_projected_dlight_mdi = profile_requires_projected_dlight_mdi(profile)
     requires_tier_contract = profile != "glx-color"
     saw_ownership = False
     saw_stream_categories = False
@@ -5446,26 +7497,12 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
 
         match = GLX_RENDER_IR_PRODUCTS_RE.search(line)
         if match:
-            for key in (
-                "passes",
-                "worldPackets",
-                "dynamicDraws",
-                "materials",
-                "uploads",
-                "postNodes",
-                "outputs",
-                "rejects",
-            ):
-                record_metric_max(metrics, "renderIRProducts", key, int_group(match, key))
-            for key in (
-                "projectedWorldPackets",
-                "projectedWorldPacketDlights",
-                "projectedDynamicDraws",
-                "projectedDynamicDlights",
-            ):
-                value = match.group(key)
-                if value is not None:
-                    record_metric_max(metrics, "renderIRProducts", key, int(value))
+            record_render_ir_product_match(metrics, match)
+            continue
+
+        match = GLX_RENDER_IR_EXECUTOR_COMPACT_RE.search(line)
+        if match:
+            record_render_ir_product_match(metrics, match)
             continue
 
         match = GLX_RENDER_IR_DYNAMIC_ROLES_RE.search(line)
@@ -5536,6 +7573,28 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 )
             continue
 
+        match = GLX_DLIGHT_PROJECTED_SHADER_RESOURCE_RE.search(line)
+        if match:
+            for key in (
+                "attempts",
+                "binds",
+                "executable",
+                "suppressed",
+                "promotions",
+                "failures",
+                "records",
+                "worldExecutable",
+                "dynamicExecutable",
+                "binding",
+            ):
+                record_metric_max(
+                    metrics,
+                    "dlightProjectedShaderResource",
+                    key,
+                    int_group(match, key),
+                )
+            continue
+
         match = GLX_DLIGHT_PROJECTED_SHADER_STREAM_RE.search(line)
         if match:
             for key in (
@@ -5548,12 +7607,153 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
                 "persistent",
                 "world",
                 "dynamic",
+                "rangeBinds",
+                "rangeAttempts",
+                "rangeFailures",
+                "rangeClears",
                 "lastOffset",
                 "lastBytes",
             ):
                 record_metric_max(
                     metrics,
                     "dlightProjectedShaderStream",
+                    key,
+                    int_group_default(match, key),
+                )
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_ARENA_RE.search(line)
+        if match:
+            for key in (
+                "reserves",
+                "uploads",
+                "failures",
+                "wraps",
+                "rejects",
+                "waits",
+                "timeouts",
+                "syncFailures",
+                "bytes",
+                "lightRecords",
+                "listRecords",
+                "worldRecords",
+                "dynamicRecords",
+                "rangeBinds",
+                "rangeAttempts",
+                "rangeFailures",
+                "rangeClears",
+                "authoritativeBinds",
+                "authoritativeAttempts",
+                "authoritativeFailures",
+                "authoritativeFallbacks",
+                "authoritativeClears",
+                "cursor",
+                "lastBuffer",
+                "lastOffset",
+                "lastBytes",
+            ):
+                record_metric_max(
+                    metrics,
+                    "dlightProjectedShaderArena",
+                    key,
+                    int_group_default(match, key),
+                )
+            record_metric_max(
+                metrics,
+                "dlightProjectedShaderArena",
+                "bound",
+                1 if q3_bool(match.group("bound")) else 0,
+            )
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_MDI_RE.search(line)
+        if match:
+            for key in (
+                "attempts",
+                "eligible",
+                "uploads",
+                "failures",
+                "skipped",
+                "records",
+                "indexes",
+                "bytes",
+                "lastOffset",
+                "lastBytes",
+            ):
+                record_metric_max(
+                    metrics,
+                    "dlightProjectedShaderMdi",
+                    key,
+                    int_group(match, key),
+                )
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_MDI_RING_RE.search(line)
+        if match:
+            for key in (
+                "reserves",
+                "commits",
+                "wraps",
+                "failures",
+                "slots",
+                "cursor",
+                "lastSlot",
+                "lastBuffer",
+                "lastOffset",
+                "lastBytes",
+            ):
+                record_metric_max(
+                    metrics,
+                    "dlightProjectedShaderMdiCommandRing",
+                    key,
+                    int_group(match, key),
+                )
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_MDI_SUBMIT_RE.search(line)
+        if match:
+            for key in (
+                "attempts",
+                "plans",
+                "ready",
+                "fallbacks",
+                "skipped",
+                "records",
+                "indexes",
+                "buffer",
+                "lastOffset",
+                "lastBytes",
+            ):
+                record_metric_max(
+                    metrics,
+                    "dlightProjectedShaderMdiSubmit",
+                    key,
+                    int_group(match, key),
+                )
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_MDI_BATCH_RE.search(line)
+        if match:
+            for key in (
+                "attempts",
+                "batches",
+                "ready",
+                "fallbacks",
+                "rejects",
+                "glErrors",
+                "records",
+                "indexes",
+                "submittedDraws",
+                "submittedIndexes",
+                "largest",
+                "lastReject",
+                "buffer",
+                "lastOffset",
+                "lastBytes",
+            ):
+                record_metric_max(
+                    metrics,
+                    "dlightProjectedShaderMdiBatch",
                     key,
                     int_group(match, key),
                 )
@@ -6304,6 +8504,7 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
     if requires_projected_dlight_shader:
         projected_inputs = metric_section(metrics, "dlightProjectedShaderInputs")
         projected_uniforms = metric_section(metrics, "dlightProjectedShaderUniforms")
+        append_projected_dlight_shader_consistency_failures(metrics, failures)
         if int_metric(projected_uniforms.get("binds")) <= 0:
             failures.append("GLx projected dlight shader profile did not bind projected uniform input.")
         if int_metric(projected_uniforms.get("executable")) <= 0:
@@ -6338,6 +8539,119 @@ def analyze_glx_diagnostics(log_path: Path, profile: str) -> dict[str, object]:
             failures.append(
                 "GLx projected dlight shader profile reported projected uniform bind failures: "
                 f"{int_metric(projected_uniforms.get('failures'))}."
+            )
+
+    if requires_projected_dlight_mdi:
+        projected_arena = metric_section(metrics, "dlightProjectedShaderArena")
+        projected_mdi = metric_section(metrics, "dlightProjectedShaderMdi")
+        projected_mdi_ring = metric_section(metrics, "dlightProjectedShaderMdiCommandRing")
+        projected_mdi_submit = metric_section(metrics, "dlightProjectedShaderMdiSubmit")
+        projected_mdi_batch = metric_section(metrics, "dlightProjectedShaderMdiBatch")
+        product_tier = metric_section(metrics, "productTier").get("tier")
+        if product_tier != "GL46":
+            failures.append("GLx projected dlight MDI profile did not run on the GL46 high-end tier.")
+        if int_metric(projected_arena.get("reserves")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not reserve projected-light arena space.")
+        if int_metric(projected_arena.get("uploads")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not upload projected-light arena records.")
+        if (
+            int_metric(projected_arena.get("lightRecords")) <= 0
+            or int_metric(projected_arena.get("listRecords")) <= 0
+        ):
+            failures.append("GLx projected dlight MDI profile did not record projected-light arena list evidence.")
+        if int_metric(projected_arena.get("rangeBinds")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not bind projected-light arena ranges.")
+        if int_metric(projected_arena.get("authoritativeBinds")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not bind authoritative projected-light arena ranges.")
+        if int_metric(projected_arena.get("failures")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported projected-light arena failures: "
+                f"{int_metric(projected_arena.get('failures'))}."
+            )
+        if int_metric(projected_arena.get("rejects")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported projected-light arena wrap rejects: "
+                f"{int_metric(projected_arena.get('rejects'))}."
+            )
+        if int_metric(projected_arena.get("timeouts")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported projected-light arena sync timeouts: "
+                f"{int_metric(projected_arena.get('timeouts'))}."
+            )
+        if int_metric(projected_arena.get("syncFailures")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported projected-light arena sync failures: "
+                f"{int_metric(projected_arena.get('syncFailures'))}."
+            )
+        if int_metric(projected_arena.get("rangeFailures")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported projected-light arena range failures: "
+                f"{int_metric(projected_arena.get('rangeFailures'))}."
+            )
+        if int_metric(projected_arena.get("authoritativeFailures")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported authoritative projected-light arena failures: "
+                f"{int_metric(projected_arena.get('authoritativeFailures'))}."
+            )
+        if int_metric(projected_arena.get("authoritativeFallbacks")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported authoritative projected-light arena fallbacks: "
+                f"{int_metric(projected_arena.get('authoritativeFallbacks'))}."
+            )
+        if int_metric(projected_mdi.get("eligible")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not build eligible indirect commands.")
+        if int_metric(projected_mdi.get("uploads")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not upload indirect commands.")
+        if int_metric(projected_mdi.get("records")) <= 0 or int_metric(projected_mdi.get("indexes")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not record command draw/index evidence.")
+        if int_metric(projected_mdi.get("failures")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported indirect command upload failures: "
+                f"{int_metric(projected_mdi.get('failures'))}."
+            )
+        if int_metric(projected_mdi_ring.get("reserves")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not reserve indirect command ring slots.")
+        if int_metric(projected_mdi_ring.get("commits")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not commit indirect command ring slots.")
+        if int_metric(projected_mdi_ring.get("slots")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not report indirect command ring capacity.")
+        if int_metric(projected_mdi_ring.get("failures")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported indirect command ring failures: "
+                f"{int_metric(projected_mdi_ring.get('failures'))}."
+            )
+        if int_metric(projected_mdi_submit.get("plans")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not produce submit plans.")
+        if int_metric(projected_mdi_submit.get("ready")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not produce submit-ready plans.")
+        if int_metric(projected_mdi_submit.get("fallbacks")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported submit fallbacks: "
+                f"{int_metric(projected_mdi_submit.get('fallbacks'))}."
+            )
+        if int_metric(projected_mdi_batch.get("batches")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not build MDI batches.")
+        if int_metric(projected_mdi_batch.get("ready")) <= 0:
+            failures.append("GLx projected dlight MDI profile did not produce ready MDI batches.")
+        if (
+            int_metric(projected_mdi_batch.get("submittedDraws")) <= 0
+            or int_metric(projected_mdi_batch.get("submittedIndexes")) <= 0
+        ):
+            failures.append("GLx projected dlight MDI profile did not submit projected-dlight MDI batches.")
+        if int_metric(projected_mdi_batch.get("fallbacks")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported batch fallbacks: "
+                f"{int_metric(projected_mdi_batch.get('fallbacks'))}."
+            )
+        if int_metric(projected_mdi_batch.get("rejects")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported batch rejects: "
+                f"{int_metric(projected_mdi_batch.get('rejects'))}."
+            )
+        if int_metric(projected_mdi_batch.get("glErrors")) > 0:
+            failures.append(
+                "GLx projected dlight MDI profile reported GL errors: "
+                f"{int_metric(projected_mdi_batch.get('glErrors'))}."
             )
 
     product_tier = metric_section(metrics, "productTier").get("tier")
@@ -7286,6 +9600,23 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 perf_record_numeric(performance, key, int_group_default(match, group))
             continue
 
+        match = GLX_DLIGHT_PROJECTED_SHADER_RESOURCE_RE.search(line)
+        if match:
+            for group, key in (
+                ("attempts", "dlightProjectedShaderResourceAttempts"),
+                ("binds", "dlightProjectedShaderResourceBinds"),
+                ("executable", "dlightProjectedShaderResourceExecutable"),
+                ("suppressed", "dlightProjectedShaderResourceSuppressed"),
+                ("promotions", "dlightProjectedShaderResourcePromotions"),
+                ("failures", "dlightProjectedShaderResourceFailures"),
+                ("records", "dlightProjectedShaderResourceRecords"),
+                ("worldExecutable", "dlightProjectedShaderResourceWorldExecutable"),
+                ("dynamicExecutable", "dlightProjectedShaderResourceDynamicExecutable"),
+                ("binding", "dlightProjectedShaderResourceBinding"),
+            ):
+                perf_record_numeric(performance, key, int_group(match, group))
+            continue
+
         match = GLX_DLIGHT_PROJECTED_SHADER_STREAM_RE.search(line)
         if match:
             for group, key in (
@@ -7298,8 +9629,123 @@ def analyze_glx_performance(log_path: Path) -> dict[str, object]:
                 ("persistent", "dlightProjectedShaderStreamPersistent"),
                 ("world", "dlightProjectedShaderStreamWorld"),
                 ("dynamic", "dlightProjectedShaderStreamDynamic"),
+                ("rangeBinds", "dlightProjectedShaderStreamRangeBinds"),
+                ("rangeAttempts", "dlightProjectedShaderStreamRangeAttempts"),
+                ("rangeFailures", "dlightProjectedShaderStreamRangeFailures"),
+                ("rangeClears", "dlightProjectedShaderStreamRangeClears"),
                 ("lastOffset", "dlightProjectedShaderStreamLastOffset"),
                 ("lastBytes", "dlightProjectedShaderStreamLastBytes"),
+            ):
+                perf_record_numeric(performance, key, int_group_default(match, group))
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_ARENA_RE.search(line)
+        if match:
+            for group, key in (
+                ("reserves", "dlightProjectedShaderArenaReserves"),
+                ("uploads", "dlightProjectedShaderArenaUploads"),
+                ("failures", "dlightProjectedShaderArenaFailures"),
+                ("wraps", "dlightProjectedShaderArenaWraps"),
+                ("rejects", "dlightProjectedShaderArenaRejects"),
+                ("waits", "dlightProjectedShaderArenaWaits"),
+                ("timeouts", "dlightProjectedShaderArenaTimeouts"),
+                ("syncFailures", "dlightProjectedShaderArenaSyncFailures"),
+                ("bytes", "dlightProjectedShaderArenaBytes"),
+                ("lightRecords", "dlightProjectedShaderArenaLightRecords"),
+                ("listRecords", "dlightProjectedShaderArenaListRecords"),
+                ("worldRecords", "dlightProjectedShaderArenaWorldRecords"),
+                ("dynamicRecords", "dlightProjectedShaderArenaDynamicRecords"),
+                ("rangeBinds", "dlightProjectedShaderArenaRangeBinds"),
+                ("rangeAttempts", "dlightProjectedShaderArenaRangeAttempts"),
+                ("rangeFailures", "dlightProjectedShaderArenaRangeFailures"),
+                ("rangeClears", "dlightProjectedShaderArenaRangeClears"),
+                ("authoritativeBinds", "dlightProjectedShaderArenaAuthoritativeBinds"),
+                ("authoritativeAttempts", "dlightProjectedShaderArenaAuthoritativeAttempts"),
+                ("authoritativeFailures", "dlightProjectedShaderArenaAuthoritativeFailures"),
+                ("authoritativeFallbacks", "dlightProjectedShaderArenaAuthoritativeFallbacks"),
+                ("authoritativeClears", "dlightProjectedShaderArenaAuthoritativeClears"),
+                ("cursor", "dlightProjectedShaderArenaCursor"),
+                ("lastBuffer", "dlightProjectedShaderArenaLastBuffer"),
+                ("lastOffset", "dlightProjectedShaderArenaLastOffset"),
+                ("lastBytes", "dlightProjectedShaderArenaLastBytes"),
+            ):
+                perf_record_numeric(performance, key, int_group_default(match, group))
+            perf_record_numeric(
+                performance,
+                "dlightProjectedShaderArenaBound",
+                1 if q3_bool(match.group("bound")) else 0,
+            )
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_MDI_RE.search(line)
+        if match:
+            for group, key in (
+                ("attempts", "dlightProjectedShaderMdiAttempts"),
+                ("eligible", "dlightProjectedShaderMdiEligible"),
+                ("uploads", "dlightProjectedShaderMdiUploads"),
+                ("failures", "dlightProjectedShaderMdiFailures"),
+                ("skipped", "dlightProjectedShaderMdiSkipped"),
+                ("records", "dlightProjectedShaderMdiRecords"),
+                ("indexes", "dlightProjectedShaderMdiIndexes"),
+                ("bytes", "dlightProjectedShaderMdiBytes"),
+                ("lastOffset", "dlightProjectedShaderMdiLastOffset"),
+                ("lastBytes", "dlightProjectedShaderMdiLastBytes"),
+            ):
+                perf_record_numeric(performance, key, int_group(match, group))
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_MDI_RING_RE.search(line)
+        if match:
+            for group, key in (
+                ("reserves", "dlightProjectedShaderMdiCommandRingReserves"),
+                ("commits", "dlightProjectedShaderMdiCommandRingCommits"),
+                ("wraps", "dlightProjectedShaderMdiCommandRingWraps"),
+                ("failures", "dlightProjectedShaderMdiCommandRingFailures"),
+                ("slots", "dlightProjectedShaderMdiCommandRingSlots"),
+                ("cursor", "dlightProjectedShaderMdiCommandRingCursor"),
+                ("lastSlot", "dlightProjectedShaderMdiCommandRingLastSlot"),
+                ("lastBuffer", "dlightProjectedShaderMdiCommandRingLastBuffer"),
+                ("lastOffset", "dlightProjectedShaderMdiCommandRingLastOffset"),
+                ("lastBytes", "dlightProjectedShaderMdiCommandRingLastBytes"),
+            ):
+                perf_record_numeric(performance, key, int_group(match, group))
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_MDI_SUBMIT_RE.search(line)
+        if match:
+            for group, key in (
+                ("attempts", "dlightProjectedShaderMdiSubmitAttempts"),
+                ("plans", "dlightProjectedShaderMdiSubmitPlans"),
+                ("ready", "dlightProjectedShaderMdiSubmitReady"),
+                ("fallbacks", "dlightProjectedShaderMdiSubmitFallbacks"),
+                ("skipped", "dlightProjectedShaderMdiSubmitSkipped"),
+                ("records", "dlightProjectedShaderMdiSubmitRecords"),
+                ("indexes", "dlightProjectedShaderMdiSubmitIndexes"),
+                ("buffer", "dlightProjectedShaderMdiSubmitBuffer"),
+                ("lastOffset", "dlightProjectedShaderMdiSubmitLastOffset"),
+                ("lastBytes", "dlightProjectedShaderMdiSubmitLastBytes"),
+            ):
+                perf_record_numeric(performance, key, int_group(match, group))
+            continue
+
+        match = GLX_DLIGHT_PROJECTED_SHADER_MDI_BATCH_RE.search(line)
+        if match:
+            for group, key in (
+                ("attempts", "dlightProjectedShaderMdiBatchAttempts"),
+                ("batches", "dlightProjectedShaderMdiBatchBatches"),
+                ("ready", "dlightProjectedShaderMdiBatchReady"),
+                ("fallbacks", "dlightProjectedShaderMdiBatchFallbacks"),
+                ("rejects", "dlightProjectedShaderMdiBatchRejects"),
+                ("glErrors", "dlightProjectedShaderMdiBatchGlErrors"),
+                ("records", "dlightProjectedShaderMdiBatchRecords"),
+                ("indexes", "dlightProjectedShaderMdiBatchIndexes"),
+                ("submittedDraws", "dlightProjectedShaderMdiBatchSubmittedDraws"),
+                ("submittedIndexes", "dlightProjectedShaderMdiBatchSubmittedIndexes"),
+                ("largest", "dlightProjectedShaderMdiBatchLargest"),
+                ("lastReject", "dlightProjectedShaderMdiBatchLastReject"),
+                ("buffer", "dlightProjectedShaderMdiBatchBuffer"),
+                ("lastOffset", "dlightProjectedShaderMdiBatchLastOffset"),
+                ("lastBytes", "dlightProjectedShaderMdiBatchLastBytes"),
             ):
                 perf_record_numeric(performance, key, int_group(match, group))
             continue
@@ -7748,6 +10194,17 @@ def performance_budget_for_gate(
 ) -> dict[str, object]:
     gate_name = str(gate or "").strip()
     override = GLX_GATE_PERFORMANCE_BUDGET_OVERRIDES.get(gate_name)
+    if isinstance(override, dict):
+        return merge_budget(budget, override)
+    return budget
+
+
+def performance_budget_for_profile(
+    profile: str | None,
+    budget: dict[str, object],
+) -> dict[str, object]:
+    profile_name = str(profile or "").strip()
+    override = GLX_PROFILE_PERFORMANCE_BUDGET_OVERRIDES.get(profile_name)
     if isinstance(override, dict):
         return merge_budget(budget, override)
     return budget
@@ -11266,6 +13723,396 @@ def evaluate_color_sweep(manifest: dict[str, object]) -> list[str]:
     return failures
 
 
+def projected_dlight_shader_parity_required(manifest: dict[str, object]) -> bool:
+    profile = str(manifest.get("profile", ""))
+    return (
+        profile in GLX_PROJECTED_DLIGHT_SHADER_PARITY_PROFILES and
+        (
+            bool(manifest.get("screenshotBaselineDir")) or
+            bool(manifest.get("projectedDlightShaderParityRequired"))
+        )
+    )
+
+
+def projected_dlight_shader_parity_evidence(
+    manifest: dict[str, object],
+) -> dict[str, object]:
+    profile = str(manifest.get("profile", ""))
+    required = projected_dlight_shader_parity_required(manifest)
+    proof_corpus = manifest.get("proofCorpus", {})
+    if not isinstance(proof_corpus, dict):
+        proof_corpus = {}
+    parity_suite_ids = [
+        str(suite_id)
+        for suite_id in proof_corpus.get("paritySuiteIds", [])
+        if str(suite_id).strip()
+    ]
+    suite = GLX_PARITY_SUITES[GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE]
+    required_maps = corpus_targets(suite.get("sceneIds", ()), "map")
+    required_demos = corpus_targets(suite.get("sceneIds", ()), "demo")
+    thresholds = manifest.get("screenshotThresholds", {})
+    if not isinstance(thresholds, dict):
+        thresholds = {}
+
+    def threshold(name: str, default: float) -> float:
+        try:
+            return float(thresholds.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    max_rms = threshold("maxRms", GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_RMS)
+    max_changed = threshold(
+        "maxChangedPixelRatio",
+        GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_CHANGED_PIXEL_RATIO,
+    )
+    runs = [
+        run for run in manifest.get("runs", [])
+        if isinstance(run, dict)
+    ]
+    screenshots = [
+        shot for run in runs
+        for shot in run.get("screenshots", [])  # type: ignore[union-attr]
+        if isinstance(shot, dict)
+    ]
+    projected_screenshots = [
+        shot for shot in screenshots
+        if str(shot.get("renderer", "")).lower() == "glx" and
+        GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE in [
+            str(suite_id) for suite_id in shot.get("paritySuiteIds", [])
+        ] and
+        str(shot.get("projectedDlightShaderParityRole", "")) !=
+        GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE and
+        not shot.get("skipExternalBaseline")
+    ]
+    legacy_screenshots = [
+        shot for shot in screenshots
+        if str(shot.get("renderer", "")).lower() == "glx" and
+        str(shot.get("projectedDlightShaderParityRole", "")) ==
+        GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+    ]
+    legacy_screenshot_names = {
+        str(shot.get("name", ""))
+        for shot in legacy_screenshots
+        if shot.get("found") and str(shot.get("name", "")).strip()
+    }
+    timedemo_runs = [
+        run for run in runs
+        if run.get("type") == "timedemo" and
+        str(run.get("renderer", "")).lower() == "glx"
+    ]
+
+    def metric_total(section: str, key: str) -> int:
+        total = 0
+        for run in runs:
+            diagnostics = run.get("diagnostics")
+            if not isinstance(diagnostics, dict):
+                continue
+            metrics = diagnostics.get("metrics")
+            if not isinstance(metrics, dict):
+                continue
+            values = metrics.get(section)
+            if not isinstance(values, dict):
+                continue
+            try:
+                total += int(values.get(key, 0))
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    failures: list[str] = []
+    if profile not in GLX_PROJECTED_DLIGHT_SHADER_PARITY_PROFILES:
+        status = "not-configured"
+    elif manifest.get("dryRun"):
+        status = "planned"
+    elif required:
+        if GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE not in parity_suite_ids:
+            failures.append(
+                "Projected dlight shader parity proof did not select the "
+                f"{GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE} parity suite."
+            )
+        if not manifest.get("screenshotBaselineDir"):
+            failures.append("Projected dlight shader parity requires reviewed screenshot baselines.")
+        if manifest.get("approveScreenshotBaselines"):
+            failures.append(
+                "Projected dlight shader parity must compare against legacy fallback baselines, not approve them."
+            )
+        if max_rms > GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_RMS:
+            failures.append(
+                "Projected dlight shader parity RMS threshold is too loose: "
+                f"{max_rms:g} > {GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_RMS:g}."
+            )
+        if max_changed > GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_CHANGED_PIXEL_RATIO:
+            failures.append(
+                "Projected dlight shader parity changed-pixel threshold is too loose: "
+                f"{max_changed:g} > {GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_CHANGED_PIXEL_RATIO:g}."
+            )
+        for map_name in required_maps:
+            map_shots = [
+                shot for shot in projected_screenshots
+                if str(shot.get("map", "")).lower() == map_name.lower()
+            ]
+            if not map_shots:
+                failures.append(
+                    "Projected dlight shader parity is missing compared GLx screenshot(s) "
+                    f"for map {map_name}."
+                )
+                continue
+            for shot in map_shots:
+                comparison = shot.get("comparison")
+                if not shot.get("found"):
+                    failures.append(
+                        "Projected dlight shader parity screenshot is missing: "
+                        f"{shot.get('name', map_name)}."
+                    )
+                if shot.get("baselineStatus") != "passed":
+                    failures.append(
+                        "Projected dlight shader parity screenshot did not pass its "
+                        f"legacy fallback baseline: {shot.get('baselineKey', shot.get('name', map_name))}."
+                    )
+                if shot.get("legacyFallbackBaseline") != "opengl-projected-light":
+                    failures.append(
+                        "Projected dlight shader parity screenshot is missing the legacy fallback baseline role: "
+                        f"{shot.get('name', map_name)}."
+                    )
+                legacy_capture_name = str(
+                    shot.get("legacyFallbackCaptureName") or
+                    shot.get("baselineSourceName") or
+                    ""
+                )
+                if not legacy_capture_name:
+                    failures.append(
+                        "Projected dlight shader parity screenshot is missing a same-run "
+                        f"legacy fallback capture: {shot.get('name', map_name)}."
+                    )
+                elif legacy_capture_name not in legacy_screenshot_names:
+                    failures.append(
+                        "Projected dlight shader parity screenshot did not capture a usable "
+                        f"legacy fallback reference: {legacy_capture_name}."
+                    )
+                if not isinstance(comparison, dict) or comparison.get("status") != "passed":
+                    failures.append(
+                        "Projected dlight shader parity screenshot comparison did not pass: "
+                        f"{shot.get('baselineKey', shot.get('name', map_name))}."
+                    )
+                    continue
+                try:
+                    rms = float(comparison.get("rms", 0.0))
+                    changed = float(comparison.get("changedPixelRatio", 0.0))
+                except (TypeError, ValueError):
+                    failures.append(
+                        "Projected dlight shader parity screenshot comparison has invalid diff metrics: "
+                        f"{shot.get('baselineKey', shot.get('name', map_name))}."
+                    )
+                    continue
+                if rms > max_rms:
+                    failures.append(
+                        "Projected dlight shader parity screenshot RMS exceeded threshold: "
+                        f"{shot.get('baselineKey', shot.get('name', map_name))} {rms:g}>{max_rms:g}."
+                    )
+                if changed > max_changed:
+                    failures.append(
+                        "Projected dlight shader parity screenshot changed-pixel ratio exceeded threshold: "
+                        f"{shot.get('baselineKey', shot.get('name', map_name))} {changed:g}>{max_changed:g}."
+                    )
+                legacy_comparison = shot.get("legacyFallbackComparison")
+                if not isinstance(legacy_comparison, dict):
+                    failures.append(
+                        "Projected dlight shader parity screenshot did not compare against its "
+                        f"same-run legacy fallback capture: {shot.get('name', map_name)}."
+                    )
+                elif legacy_comparison.get("status") != "passed":
+                    failures.append(
+                        "Projected dlight shader parity same-run legacy fallback comparison did not pass: "
+                        f"{shot.get('baselineKey', shot.get('name', map_name))}."
+                    )
+                else:
+                    try:
+                        legacy_rms = float(legacy_comparison.get("rms", 0.0))
+                        legacy_changed = float(legacy_comparison.get("changedPixelRatio", 0.0))
+                    except (TypeError, ValueError):
+                        failures.append(
+                            "Projected dlight shader parity same-run legacy fallback comparison has invalid diff metrics: "
+                            f"{shot.get('baselineKey', shot.get('name', map_name))}."
+                        )
+                    else:
+                        if legacy_rms > max_rms:
+                            failures.append(
+                                "Projected dlight shader parity same-run legacy fallback RMS exceeded threshold: "
+                                f"{shot.get('baselineKey', shot.get('name', map_name))} {legacy_rms:g}>{max_rms:g}."
+                            )
+                        if legacy_changed > max_changed:
+                            failures.append(
+                                "Projected dlight shader parity same-run legacy fallback changed-pixel ratio exceeded threshold: "
+                                f"{shot.get('baselineKey', shot.get('name', map_name))} {legacy_changed:g}>{max_changed:g}."
+                            )
+        for demo in required_demos:
+            demo_runs = [
+                run for run in timedemo_runs
+                if str(run.get("demo", "")).lower() == demo.lower()
+            ]
+            if not demo_runs:
+                failures.append(
+                    "Projected dlight shader parity is missing GLx timedemo log evidence "
+                    f"for demo {demo}."
+                )
+            elif not any(isinstance(run.get("timedemoMetrics"), dict) for run in demo_runs):
+                failures.append(
+                    "Projected dlight shader parity timedemo is missing timedemo metrics "
+                    f"for demo {demo}."
+                )
+            demo_shots = [
+                shot for shot in projected_screenshots
+                if str(shot.get("demo", "")).lower() == demo.lower()
+            ]
+            if not demo_shots:
+                failures.append(
+                    "Projected dlight shader parity is missing compared GLx timedemo "
+                    f"screenshot(s) for demo {demo}."
+                )
+                continue
+            for shot in demo_shots:
+                if not shot.get("found"):
+                    failures.append(
+                        "Projected dlight shader parity timedemo screenshot is missing: "
+                        f"{shot.get('name', demo)}."
+                    )
+                if shot.get("baselineStatus") != "passed":
+                    failures.append(
+                        "Projected dlight shader parity timedemo screenshot did not pass its "
+                        f"legacy fallback baseline: {shot.get('baselineKey', shot.get('name', demo))}."
+                    )
+                if shot.get("legacyFallbackBaseline") != "opengl-projected-light":
+                    failures.append(
+                        "Projected dlight shader parity timedemo screenshot is missing the "
+                        f"legacy fallback baseline role: {shot.get('name', demo)}."
+                    )
+                legacy_capture_name = str(
+                    shot.get("legacyFallbackCaptureName") or
+                    shot.get("baselineSourceName") or
+                    ""
+                )
+                if not legacy_capture_name:
+                    failures.append(
+                        "Projected dlight shader parity timedemo screenshot is missing a "
+                        f"same-run legacy fallback capture: {shot.get('name', demo)}."
+                    )
+                elif legacy_capture_name not in legacy_screenshot_names:
+                    failures.append(
+                        "Projected dlight shader parity timedemo screenshot did not capture "
+                        f"a usable legacy fallback reference: {legacy_capture_name}."
+                    )
+                comparison = shot.get("comparison")
+                if not isinstance(comparison, dict) or comparison.get("status") != "passed":
+                    failures.append(
+                        "Projected dlight shader parity timedemo screenshot comparison did not pass: "
+                        f"{shot.get('baselineKey', shot.get('name', demo))}."
+                    )
+                else:
+                    try:
+                        rms = float(comparison.get("rms", 0.0))
+                        changed = float(comparison.get("changedPixelRatio", 0.0))
+                    except (TypeError, ValueError):
+                        failures.append(
+                            "Projected dlight shader parity timedemo screenshot comparison has invalid diff metrics: "
+                            f"{shot.get('baselineKey', shot.get('name', demo))}."
+                        )
+                    else:
+                        if rms > max_rms:
+                            failures.append(
+                                "Projected dlight shader parity timedemo screenshot RMS exceeded threshold: "
+                                f"{shot.get('baselineKey', shot.get('name', demo))} {rms:g}>{max_rms:g}."
+                            )
+                        if changed > max_changed:
+                            failures.append(
+                                "Projected dlight shader parity timedemo screenshot changed-pixel ratio exceeded threshold: "
+                                f"{shot.get('baselineKey', shot.get('name', demo))} {changed:g}>{max_changed:g}."
+                            )
+                legacy_comparison = shot.get("legacyFallbackComparison")
+                if not isinstance(legacy_comparison, dict):
+                    failures.append(
+                        "Projected dlight shader parity timedemo screenshot did not compare against its "
+                        f"same-run legacy fallback capture: {shot.get('name', demo)}."
+                    )
+                elif legacy_comparison.get("status") != "passed":
+                    failures.append(
+                        "Projected dlight shader parity timedemo same-run legacy fallback comparison did not pass: "
+                        f"{shot.get('baselineKey', shot.get('name', demo))}."
+                    )
+
+        world_inputs = metric_total("dlightProjectedShaderInputs", "world")
+        dynamic_inputs = metric_total("dlightProjectedShaderInputs", "dynamic")
+        world_executable = (
+            metric_total("dlightProjectedShaderUniforms", "worldExecutable") +
+            metric_total("dlightProjectedShaderResource", "worldExecutable")
+        )
+        dynamic_executable = (
+            metric_total("dlightProjectedShaderUniforms", "dynamicExecutable") +
+            metric_total("dlightProjectedShaderResource", "dynamicExecutable")
+        )
+        resource_promotions = metric_total("dlightProjectedShaderResource", "promotions")
+        resource_executable = metric_total("dlightProjectedShaderResource", "executable")
+        resource_records = metric_total("dlightProjectedShaderResource", "records")
+        if world_inputs <= 0:
+            failures.append("Projected dlight shader parity did not record static-world projected-light inputs.")
+        if dynamic_inputs <= 0:
+            failures.append("Projected dlight shader parity did not record dynamic-draw projected-light inputs.")
+        if world_executable <= 0:
+            failures.append("Projected dlight shader parity did not execute static-world projected-light binds.")
+        if dynamic_executable <= 0:
+            failures.append("Projected dlight shader parity did not execute dynamic-draw projected-light binds.")
+        if resource_promotions <= 0 or resource_executable <= 0 or resource_records <= 0:
+            failures.append(
+                "Projected dlight shader parity did not prove over-limit shader-resource promotion."
+            )
+        status = "passed" if not failures else "failed"
+    else:
+        status = "planned"
+
+    return {
+        "version": 1,
+        "profile": profile,
+        "status": status,
+        "required": required,
+        "suite": GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE,
+        "requiredMaps": required_maps,
+        "requiredDemos": required_demos,
+        "screenshots": len(projected_screenshots),
+        "timedemoScreenshots": sum(1 for shot in projected_screenshots if shot.get("demo")),
+        "legacyFallbackScreenshots": len(legacy_screenshots),
+        "timedemos": len(timedemo_runs),
+        "worldInputs": metric_total("dlightProjectedShaderInputs", "world"),
+        "dynamicInputs": metric_total("dlightProjectedShaderInputs", "dynamic"),
+        "worldExecutable": (
+            metric_total("dlightProjectedShaderUniforms", "worldExecutable") +
+            metric_total("dlightProjectedShaderResource", "worldExecutable")
+        ),
+        "dynamicExecutable": (
+            metric_total("dlightProjectedShaderUniforms", "dynamicExecutable") +
+            metric_total("dlightProjectedShaderResource", "dynamicExecutable")
+        ),
+        "resourcePromotions": metric_total("dlightProjectedShaderResource", "promotions"),
+        "resourceExecutable": metric_total("dlightProjectedShaderResource", "executable"),
+        "resourceRecords": metric_total("dlightProjectedShaderResource", "records"),
+        "maxRms": max_rms,
+        "maxChangedPixelRatio": max_changed,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def evaluate_projected_dlight_shader_parity(manifest: dict[str, object]) -> list[str]:
+    evidence = manifest.get("projectedDlightShaderParityEvidence")
+    if not isinstance(evidence, dict):
+        evidence = projected_dlight_shader_parity_evidence(manifest)
+    if not evidence.get("required"):
+        return []
+    if evidence.get("status") == "passed":
+        return []
+    failures = evidence.get("failures", [])
+    if isinstance(failures, list) and failures:
+        return [str(failure) for failure in failures if str(failure).strip()]
+    return ["Projected dlight shader parity evidence did not pass."]
+
+
 def evaluate_gate(manifest: dict[str, object]) -> list[str]:
     gate_name = manifest.get("gate")
     if manifest.get("dryRun"):
@@ -11292,6 +14139,7 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
     if require_color_sweep:
         failures.extend(validate_image_evidence_manifest(manifest))
         failures.extend(evaluate_color_sweep(manifest))
+    failures.extend(evaluate_projected_dlight_shader_parity(manifest))
 
     failed_runs = [
         run for run in runs
@@ -11511,7 +14359,9 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
             missing_baselines = [
                 shot.get("baselineKey", shot.get("name", "screenshot"))
                 for shot in screenshots
-                if shot.get("found") and shot.get("baselineStatus") == "missing"
+                if shot.get("found") and
+                not shot.get("skipExternalBaseline") and
+                shot.get("baselineStatus") == "missing"
             ]
             if missing_baselines:
                 failures.append(
@@ -11523,7 +14373,8 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
             failed_comparisons = [
                 shot
                 for shot in screenshots
-                if isinstance(shot.get("comparison"), dict) and
+                if not shot.get("skipExternalBaseline") and
+                isinstance(shot.get("comparison"), dict) and
                 shot["comparison"].get("status") != "passed"  # type: ignore[index]
             ]
             if failed_comparisons:
@@ -11547,7 +14398,9 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                 unproved = [
                     shot.get("baselineKey", shot.get("name", "screenshot"))
                     for shot in screenshots
-                    if shot.get("found") and shot.get("baselineStatus") != "passed"
+                    if shot.get("found") and
+                    not shot.get("skipExternalBaseline") and
+                    shot.get("baselineStatus") != "passed"
                 ]
                 if unproved:
                     failures.append(
@@ -11619,6 +14472,15 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
             if not active_logs:
                 failures.append("No GLx dlight shadow planning/render log samples were found.")
             else:
+                active_manager_logs = [
+                    summary.get("shadowManager")
+                    for summary in active_logs
+                    if shadow_manager_summary_active(summary.get("shadowManager"))
+                ]
+                if not active_manager_logs:
+                    failures.append(
+                        "No GLx shadow manager schedule/publication log samples were found."
+                    )
                 scene_categories: dict[str, set[str]] = {}
                 for shot in shadow_screenshots:
                     scene_id = sanitize(str(shot.get("scene", "")))
@@ -11657,6 +14519,204 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                         + ", ".join(missing_log_categories)
                         + "."
                     )
+                if active_manager_logs:
+                    manager_logged_scenes = {
+                        sanitize(str(scene_id))
+                        for summary in active_logs
+                        if isinstance(summary, dict)
+                        and isinstance(summary.get("shadowManager"), dict)
+                        and isinstance(summary["shadowManager"].get("scenes"), dict)  # type: ignore[index]
+                        for scene_id, scene_summary in summary["shadowManager"]["scenes"].items()  # type: ignore[index]
+                        if shadow_manager_summary_active(scene_summary)
+                    }
+                    manager_logged_categories = {
+                        category
+                        for scene_id in manager_logged_scenes
+                        for category in scene_categories.get(scene_id, set())
+                    }
+                    missing_manager_categories = [
+                        category
+                        for category in required_categories
+                        if category not in manager_logged_categories
+                    ]
+                    if missing_manager_categories:
+                        failures.append(
+                            "GLx shadow manager logs are missing categor"
+                            f"{'ies' if len(missing_manager_categories) != 1 else 'y'}: "
+                            + ", ".join(missing_manager_categories)
+                            + "."
+                        )
+                required_surface_categories = [
+                    str(category)
+                    for category in requirements.get(
+                        "required_surface_light_spot_categories",
+                        (),
+                    )
+                ]
+                if required_surface_categories:
+                    surface_logged_scenes = {
+                        sanitize(str(scene_id))
+                        for summary in shadow_logs
+                        if isinstance(summary, dict)
+                        and isinstance(summary.get("surfaceLightSpot"), dict)
+                        and isinstance(summary["surfaceLightSpot"].get("scenes"), dict)  # type: ignore[index]
+                        for scene_id, scene_summary in summary["surfaceLightSpot"]["scenes"].items()  # type: ignore[index]
+                        if surface_light_spot_summary_active(scene_summary)
+                    }
+                    if not surface_logged_scenes:
+                        failures.append(
+                            "No GLx surfacelight spot manager log samples were found."
+                        )
+                    surface_logged_categories = {
+                        category
+                        for scene_id in surface_logged_scenes
+                        for category in scene_categories.get(scene_id, set())
+                    }
+                    missing_surface_categories = [
+                        category
+                        for category in required_surface_categories
+                        if category not in surface_logged_categories
+                    ]
+                    if missing_surface_categories:
+                        failures.append(
+                            "GLx surfacelight spot manager logs are missing categor"
+                            f"{'ies' if len(missing_surface_categories) != 1 else 'y'}: "
+                            + ", ".join(missing_surface_categories)
+                            + "."
+                        )
+                    lod_logged_scenes = {
+                        sanitize(str(scene_id))
+                        for summary in shadow_logs
+                        if isinstance(summary, dict)
+                        and isinstance(summary.get("surfaceLightSpotLod"), dict)
+                        and isinstance(summary["surfaceLightSpotLod"].get("scenes"), dict)  # type: ignore[index]
+                        for scene_id, scene_summary in summary["surfaceLightSpotLod"]["scenes"].items()  # type: ignore[index]
+                        if surface_light_spot_lod_summary_active(scene_summary)
+                    }
+                    if not lod_logged_scenes:
+                        failures.append(
+                            "No GLx surfacelight spot LOD smoke log samples passed."
+                        )
+                    lod_logged_categories = {
+                        category
+                        for scene_id in lod_logged_scenes
+                        for category in scene_categories.get(scene_id, set())
+                    }
+                    missing_lod_categories = [
+                        category
+                        for category in required_surface_categories
+                        if category not in lod_logged_categories
+                    ]
+                    if missing_lod_categories:
+                        failures.append(
+                            "GLx surfacelight spot LOD logs are missing categor"
+                            f"{'ies' if len(missing_lod_categories) != 1 else 'y'}: "
+                            + ", ".join(missing_lod_categories)
+                            + "."
+                        )
+                required_csm_categories = [
+                    str(category)
+                    for category in requirements.get(
+                        "required_csm_shadow_categories",
+                        (),
+                    )
+                ]
+                if required_csm_categories:
+                    csm_logged_scenes = {
+                        sanitize(str(scene_id))
+                        for summary in shadow_logs
+                        if isinstance(summary, dict)
+                        and isinstance(summary.get("csmShadows"), dict)
+                        and isinstance(summary["csmShadows"].get("scenes"), dict)  # type: ignore[index]
+                        for scene_id, scene_summary in summary["csmShadows"]["scenes"].items()  # type: ignore[index]
+                        if csm_shadow_runtime_summary_active(scene_summary)
+                    }
+                    if not csm_logged_scenes:
+                        failures.append(
+                            "No GLx CSM runtime smoke log samples passed."
+                        )
+                    csm_logged_categories = {
+                        category
+                        for scene_id in csm_logged_scenes
+                        for category in scene_categories.get(scene_id, set())
+                    }
+                    missing_csm_categories = [
+                        category
+                        for category in required_csm_categories
+                        if category not in csm_logged_categories
+                    ]
+                    if missing_csm_categories:
+                        failures.append(
+                            "GLx CSM runtime logs are missing categor"
+                            f"{'ies' if len(missing_csm_categories) != 1 else 'y'}: "
+                            + ", ".join(missing_csm_categories)
+                            + "."
+                        )
+                    if requirements.get("require_csm_shimmer_screenshot_diff"):
+                        shimmer_summaries = [
+                            run.get("csmShimmerScreenshots")
+                            for run in shadow_runs
+                            if isinstance(run.get("csmShimmerScreenshots"), dict)
+                        ]
+                        if not any(
+                            csm_shimmer_screenshot_summary_active(summary)
+                            for summary in shimmer_summaries
+                        ):
+                            failures.append(
+                                "No GLx CSM shimmer screenshot diff smoke passed."
+                            )
+                            for summary in shimmer_summaries:
+                                if not isinstance(summary, dict):
+                                    continue
+                                summary_failures = summary.get("failures", [])
+                                if isinstance(summary_failures, list):
+                                    failures.extend(str(failure) for failure in summary_failures[:4])
+                if requirements.get("require_combined_shadow_atlas_smoke"):
+                    combined_summaries: list[dict[str, object]] = []
+                    for run in shadow_runs:
+                        combined = run.get("combinedShadowAtlas")
+                        if isinstance(combined, dict):
+                            combined_summaries.append(combined)
+                            continue
+                        dlight_shadow = run.get("dlightShadow")
+                        if isinstance(dlight_shadow, dict):
+                            combined_summaries.append(
+                                combined_shadow_atlas_summary(dlight_shadow)
+                            )
+                    if not any(
+                        combined_shadow_atlas_summary_active(summary)
+                        for summary in combined_summaries
+                    ):
+                        failures.append(
+                            "No GLx combined shadow atlas smoke passed."
+                        )
+                        for summary in combined_summaries:
+                            summary_failures = summary.get("failures", [])
+                            if isinstance(summary_failures, list):
+                                failures.extend(str(failure) for failure in summary_failures[:6])
+                if requirements.get("require_csm_fallback_smoke"):
+                    fallback_summaries: list[dict[str, object]] = []
+                    for run in shadow_runs:
+                        fallback = run.get("csmFallbacks")
+                        if isinstance(fallback, dict):
+                            fallback_summaries.append(fallback)
+                            continue
+                        dlight_shadow = run.get("dlightShadow")
+                        if isinstance(dlight_shadow, dict) and isinstance(
+                            dlight_shadow.get("csmFallbacks"), dict
+                        ):
+                            fallback_summaries.append(dlight_shadow["csmFallbacks"])  # type: ignore[index]
+                    if not any(
+                        csm_fallback_summary_active(summary)
+                        for summary in fallback_summaries
+                    ):
+                        failures.append(
+                            "No GLx CSM fallback smoke passed."
+                        )
+                        for summary in fallback_summaries:
+                            summary_failures = summary.get("failures", [])
+                            if isinstance(summary_failures, list):
+                                failures.extend(str(failure) for failure in summary_failures[:6])
 
     timedemos: dict[tuple[str, str], dict[str, object]] = {}
     for run in runs:
@@ -11817,7 +14877,7 @@ def release_proof_manifest_record(
         if manifest_path.resolve().is_relative_to(proof_root.resolve())
         else str(manifest_path.resolve())
     )
-    return {
+    record = {
         "platform": proof_platform_for_manifest(manifest, manifest_path),
         "gate": str(manifest.get("gate", "")),
         "path": relative_path,
@@ -11838,6 +14898,10 @@ def release_proof_manifest_record(
             else ""
         ),
     }
+    projected_dlight_rollup = projected_dlight_shader_parity_rollup(manifest)
+    if projected_dlight_rollup.get("configured"):
+        record["projectedDlightShaderParity"] = projected_dlight_rollup
+    return record
 
 
 def markdown_escape_cell(value: object) -> str:
@@ -11876,6 +14940,79 @@ def iter_manifest_screenshots(manifest: dict[str, object]) -> list[dict[str, obj
         for shot in run.get("screenshots", [])
         if isinstance(shot, dict)
     ]
+
+
+def projected_dlight_shader_parity_rollup(manifest: dict[str, object]) -> dict[str, object]:
+    evidence = manifest.get("projectedDlightShaderParityEvidence")
+    evidence_dict = evidence if isinstance(evidence, dict) else {}
+    screenshots = iter_manifest_screenshots(manifest)
+    candidates = [
+        shot for shot in screenshots
+        if str(shot.get("projectedDlightShaderParityRole", "")) ==
+        GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+    ]
+    legacy_refs = [
+        shot for shot in screenshots
+        if str(shot.get("projectedDlightShaderParityRole", "")) ==
+        GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+    ]
+    map_candidates = sorted(
+        {
+            str(shot.get("map", ""))
+            for shot in candidates
+            if str(shot.get("map", "")).strip()
+        }
+    )
+    demo_candidates = sorted(
+        {
+            str(shot.get("demo", ""))
+            for shot in candidates
+            if str(shot.get("demo", "")).strip()
+        }
+    )
+    reviewed_passed = sum(
+        1
+        for shot in candidates
+        if isinstance(shot.get("comparison"), dict) and
+        shot["comparison"].get("status") == "passed"  # type: ignore[index]
+    )
+    same_run_passed = sum(
+        1
+        for shot in candidates
+        if isinstance(shot.get("legacyFallbackComparison"), dict) and
+        shot["legacyFallbackComparison"].get("status") == "passed"  # type: ignore[index]
+    )
+    configured = (
+        bool(candidates) or
+        bool(legacy_refs) or
+        str(evidence_dict.get("status", "")) not in {"", "not-configured"}
+    )
+    return {
+        "configured": configured,
+        "status": evidence_dict.get("status", "not-configured"),
+        "required": bool(evidence_dict.get("required")),
+        "requiredMaps": list(evidence_dict.get("requiredMaps", [])),
+        "requiredDemos": list(evidence_dict.get("requiredDemos", [])),
+        "mapCandidates": map_candidates,
+        "demoCandidates": demo_candidates,
+        "candidateScreenshots": len(candidates),
+        "legacyFallbackScreenshots": len(legacy_refs),
+        "timedemoScreenshots": sum(1 for shot in candidates if shot.get("demo")),
+        "reviewedComparisonsPassed": reviewed_passed,
+        "sameRunComparisonsPassed": same_run_passed,
+        "timedemos": evidence_dict.get("timedemos", 0),
+        "worldInputs": evidence_dict.get("worldInputs", 0),
+        "dynamicInputs": evidence_dict.get("dynamicInputs", 0),
+        "worldExecutable": evidence_dict.get("worldExecutable", 0),
+        "dynamicExecutable": evidence_dict.get("dynamicExecutable", 0),
+        "resourcePromotions": evidence_dict.get("resourcePromotions", 0),
+        "resourceRecords": evidence_dict.get("resourceRecords", 0),
+        "maxRms": evidence_dict.get("maxRms", "-"),
+        "maxChangedPixelRatio": evidence_dict.get("maxChangedPixelRatio", "-"),
+        "failures": list(evidence_dict.get("failures", []))
+        if isinstance(evidence_dict.get("failures", []), list)
+        else [],
+    }
 
 
 def collect_visual_backend_rows(manifest: dict[str, object]) -> list[dict[str, object]]:
@@ -12194,6 +15331,40 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
                 f"{markdown_escape_cell(stream_features.get('beam', '-'))} | "
                 f"{markdown_escape_cell(stream_features.get('dynamicLight', '-'))} | "
                 f"{markdown_escape_cell(stream_draw.get('fallbacks', '-'))} |",
+                "",
+            ]
+        )
+
+    projected_dlight_rollup = projected_dlight_shader_parity_rollup(manifest)
+    if projected_dlight_rollup.get("configured"):
+        changed_ratio = projected_dlight_rollup.get("maxChangedPixelRatio", "-")
+        if isinstance(changed_ratio, (int, float)):
+            changed_ratio = f"{float(changed_ratio):.3%}"
+        max_rms = projected_dlight_rollup.get("maxRms", "-")
+        if isinstance(max_rms, (int, float)):
+            max_rms = f"{float(max_rms):.3f}"
+        lines.extend(
+            [
+                "## Projected Dlight Shader Parity",
+                "",
+                "| Status | Map Candidates | Demo Candidates | Candidates | Legacy Refs | Reviewed Pass | Same-Run Pass | Timedemo Shots | Timedemos | World Exec | Dynamic Exec | Resource Promotions | Max RMS | Max Changed | Failures |",
+                "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+                "| "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('status', '-'))} | "
+                f"{markdown_escape_cell(', '.join(str(item) for item in projected_dlight_rollup.get('mapCandidates', [])) or '-')} | "
+                f"{markdown_escape_cell(', '.join(str(item) for item in projected_dlight_rollup.get('demoCandidates', [])) or '-')} | "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('candidateScreenshots', '-'))} | "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('legacyFallbackScreenshots', '-'))} | "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('reviewedComparisonsPassed', '-'))} | "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('sameRunComparisonsPassed', '-'))} | "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('timedemoScreenshots', '-'))} | "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('timedemos', '-'))} | "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('worldExecutable', '-'))} | "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('dynamicExecutable', '-'))} | "
+                f"{markdown_escape_cell(projected_dlight_rollup.get('resourcePromotions', '-'))} | "
+                f"{markdown_escape_cell(max_rms)} | "
+                f"{markdown_escape_cell(changed_ratio)} | "
+                f"{markdown_escape_cell(len(projected_dlight_rollup.get('failures', [])) if isinstance(projected_dlight_rollup.get('failures'), list) else '-')} |",
                 "",
             ]
         )
@@ -12867,6 +16038,54 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
             lines.append(f"- Failures: `{'; '.join(failures)}`")
         lines.append("")
 
+    projected_dlight_rollup = projected_dlight_shader_parity_rollup(manifest)
+    if projected_dlight_rollup.get("configured"):
+        changed_ratio = projected_dlight_rollup.get("maxChangedPixelRatio", "-")
+        if isinstance(changed_ratio, (int, float)):
+            changed_ratio = f"{float(changed_ratio):.3%}"
+        max_rms = projected_dlight_rollup.get("maxRms", "-")
+        if isinstance(max_rms, (int, float)):
+            max_rms = f"{float(max_rms):.3f}"
+        lines.append("## Projected Dlight Shader Parity")
+        lines.append("")
+        lines.append(f"- Status: `{projected_dlight_rollup.get('status', '-')}`")
+        lines.append(
+            "- Required scenes: "
+            f"`maps={','.join(str(item) for item in projected_dlight_rollup.get('requiredMaps', [])) or '-'}, "
+            f"demos={','.join(str(item) for item in projected_dlight_rollup.get('requiredDemos', [])) or '-'}`"
+        )
+        lines.append(
+            "- Captured candidates: "
+            f"`maps={','.join(str(item) for item in projected_dlight_rollup.get('mapCandidates', [])) or '-'}, "
+            f"demos={','.join(str(item) for item in projected_dlight_rollup.get('demoCandidates', [])) or '-'}, "
+            f"candidateScreenshots={projected_dlight_rollup.get('candidateScreenshots', 0)}, "
+            f"legacyRefs={projected_dlight_rollup.get('legacyFallbackScreenshots', 0)}, "
+            f"timedemoScreenshots={projected_dlight_rollup.get('timedemoScreenshots', 0)}`"
+        )
+        lines.append(
+            "- Comparisons: "
+            f"`reviewed={projected_dlight_rollup.get('reviewedComparisonsPassed', 0)}, "
+            f"sameRun={projected_dlight_rollup.get('sameRunComparisonsPassed', 0)}, "
+            f"maxRms={max_rms}, maxChanged={changed_ratio}`"
+        )
+        lines.append(
+            "- Shader evidence: "
+            f"`worldInputs={projected_dlight_rollup.get('worldInputs', 0)}, "
+            f"dynamicInputs={projected_dlight_rollup.get('dynamicInputs', 0)}, "
+            f"worldExec={projected_dlight_rollup.get('worldExecutable', 0)}, "
+            f"dynamicExec={projected_dlight_rollup.get('dynamicExecutable', 0)}, "
+            f"resourcePromotions={projected_dlight_rollup.get('resourcePromotions', 0)}, "
+            f"resourceRecords={projected_dlight_rollup.get('resourceRecords', 0)}`"
+        )
+        failures = [
+            str(failure)
+            for failure in projected_dlight_rollup.get("failures", [])
+            if str(failure).strip()
+        ]
+        if failures:
+            lines.append(f"- Failures: `{'; '.join(failures)}`")
+        lines.append("")
+
     post_evidence = manifest.get("postProofEvidence")
     if isinstance(post_evidence, dict) and post_evidence.get("requiresPostProof"):
         fbo = (
@@ -13465,6 +16684,11 @@ def main() -> int:
     dlight_shadow_scenes = dlight_shadow_evidence_scenes()
     qconsole_log_path = engine_console_log_path(homepath, args.fs_game)
     runs: list[dict[str, object]] = []
+    dlight_shadow_sidecars = (
+        write_dlight_shadow_sidecar_lights(homepath, args.fs_game, dlight_shadow_scenes)
+        if args.dlight_shadow_scenes
+        else []
+    )
     screenshot_baseline_dir = args.screenshot_baseline_dir.resolve() if args.screenshot_baseline_dir else None
     screenshot_diff_dir = args.screenshot_diff_dir.resolve() if args.screenshot_diff_dir else None
     proof_dir = args.proof_dir.resolve() if args.proof_dir else None
@@ -13499,16 +16723,18 @@ def main() -> int:
         include_default=bool(args.gate) and not args.no_performance_budget,
     )
     performance_budget = performance_budget_for_gate(args.gate, performance_budget)
+    performance_budget = performance_budget_for_profile(args.profile, performance_budget)
     gate_requirements = (
         RC_GATE_PRESETS[args.gate]["requirements"] if args.gate else {}
+    )
+    parity_suite_ids = combined_parity_suite_ids(
+        gate_requirements.get("required_parity_suites", ()),  # type: ignore[union-attr]
+        args.profile,
     )
     proof_corpus = proof_corpus_manifest(
         corpus_scene_ids,
         gate_requirements.get("required_corpus_tags", ()),  # type: ignore[union-attr]
-        gate_requirements.get("required_parity_suites", ()),  # type: ignore[union-attr]
-    )
-    parity_suite_ids = validate_parity_suite_ids(
-        gate_requirements.get("required_parity_suites", ())  # type: ignore[union-attr]
+        parity_suite_ids,
     )
 
     if not args.no_switch_sweep and maps:
@@ -13543,6 +16769,7 @@ def main() -> int:
             qconsole_log_path,
         )
         shots = screenshot_results(homepath, args.fs_game, expected_shots)
+        csm_shimmer_screenshots = csm_shimmer_screenshot_summary(shots)
         if not args.dry_run:
             apply_screenshot_baselines(
                 shots,
@@ -13551,6 +16778,14 @@ def main() -> int:
                 screenshot_diff_dir,
                 screenshot_max_rms,
                 screenshot_max_pixel_ratio,
+            )
+            result["projectedDlightShaderParityScreenshots"] = (
+                apply_projected_dlight_shader_parity_diffs(
+                    shots,
+                    screenshot_diff_dir,
+                    GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_RMS,
+                    GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_CHANGED_PIXEL_RATIO,
+                )
             )
             if any(renderer.lower() == "glx" for renderer in switch_sequence):
                 result["diagnostics"] = analyze_glx_diagnostics(switch_log_path, args.profile)
@@ -13598,6 +16833,7 @@ def main() -> int:
             qconsole_log_path,
         )
         shots = screenshot_results(homepath, args.fs_game, expected_shots)
+        csm_shimmer_screenshots = csm_shimmer_screenshot_summary(shots)
         if not args.dry_run:
             apply_screenshot_baselines(
                 shots,
@@ -13607,7 +16843,15 @@ def main() -> int:
                 screenshot_max_rms,
                 screenshot_max_pixel_ratio,
             )
+            csm_shimmer_screenshots = apply_csm_shimmer_screenshot_diffs(
+                shots,
+                screenshot_diff_dir or (output_root / "csm-shimmer-diffs"),
+            )
             result["dlightShadow"] = analyze_dlight_shadow_log(log_path)
+            result["combinedShadowAtlas"] = combined_shadow_atlas_summary(result["dlightShadow"])
+            fallback_summary = result["dlightShadow"].get("csmFallbacks")
+            if isinstance(fallback_summary, dict):
+                result["csmFallbacks"] = fallback_summary
         result.update(
             {
                 "type": "dlight-shadow-scenes",
@@ -13616,6 +16860,8 @@ def main() -> int:
                 "maps": sorted({str(scene["map"]) for scene in dlight_shadow_scenes}),
                 "scenes": dlight_shadow_scenes,
                 "screenshots": shots,
+                "csmShimmerScreenshots": csm_shimmer_screenshots,
+                "sidecarLights": dlight_shadow_sidecars,
                 "cvars": dlight_shadow_cvars,
                 "startupCvars": dlight_shadow_startup_cvars,
             }
@@ -13692,7 +16938,16 @@ def main() -> int:
                 cfg_name = validate_runtime_qpath(
                     f"{qpath_run_token}-d{renderer_index:02d}-{demo_index:02d}.cfg"
                 )
-                cfg_path = write_cfg(homepath, args.fs_game, cfg_name, build_demo_cfg(args, cfg_cvars, demo))
+                demo_cfg, expected_shots = build_demo_cfg(
+                    args,
+                    cfg_cvars,
+                    demo,
+                    renderer,
+                    qpath_run_token,
+                    corpus_scene_ids,
+                    parity_suite_ids,
+                )
+                cfg_path = write_cfg(homepath, args.fs_game, cfg_name, demo_cfg)
                 command = base_launch_args(
                     exe,
                     basepath,
@@ -13712,16 +16967,38 @@ def main() -> int:
                     qconsole_log_path,
                 )
                 metrics = timedemo_metrics(log_path)
+                shots = screenshot_results(homepath, args.fs_game, expected_shots)
                 result.update(
                     {
                         "type": "timedemo",
                         "config": str(cfg_path),
                         "renderer": renderer,
                         "demo": demo,
+                        "screenshots": shots,
                     }
                 )
                 if metrics:
                     result["timedemoMetrics"] = metrics
+                if not args.dry_run and renderer.lower() == "glx":
+                    if shots:
+                        apply_screenshot_baselines(
+                            shots,
+                            screenshot_baseline_dir,
+                            args.approve_screenshot_baselines,
+                            screenshot_diff_dir,
+                            screenshot_max_rms,
+                            screenshot_max_pixel_ratio,
+                        )
+                        result["projectedDlightShaderParityScreenshots"] = (
+                            apply_projected_dlight_shader_parity_diffs(
+                                shots,
+                                screenshot_diff_dir,
+                                GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_RMS,
+                                GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_CHANGED_PIXEL_RATIO,
+                            )
+                        )
+                    result["diagnostics"] = analyze_glx_diagnostics(log_path, args.profile)
+                    result["performance"] = analyze_glx_performance(log_path)
                 runs.append(result)
 
     shader_reference_ramps: list[dict[str, object]] = []
@@ -13754,6 +17031,7 @@ def main() -> int:
         "dlightShadowScenes": bool(args.dlight_shadow_scenes),
         "dlightShadowEvidenceCategories": list(DLIGHT_SHADOW_EVIDENCE_CATEGORIES),
         "dlightShadowEvidenceScenes": dlight_shadow_scenes if args.dlight_shadow_scenes else [],
+        "dlightShadowSidecars": dlight_shadow_sidecars if args.dlight_shadow_scenes else [],
         "dlightShadowSceneCvars": dlight_shadow_cvars if args.dlight_shadow_scenes else {},
         "dlightShadowSceneStartupCvars": dlight_shadow_startup_cvars if args.dlight_shadow_scenes else {},
         "dlightShadowSceneConfigCvars": dlight_shadow_cfg_cvars if args.dlight_shadow_scenes else {},
@@ -13838,6 +17116,9 @@ def main() -> int:
         manifest["postProofEvidence"] = post_proof_evidence(manifest, gate_requirements)  # type: ignore[arg-type]
     if manifest_requires_ownership_proof(manifest):
         manifest["ownershipProofEvidence"] = ownership_proof_evidence(manifest)
+    manifest["projectedDlightShaderParityEvidence"] = (
+        projected_dlight_shader_parity_evidence(manifest)
+    )
     manifest["proof"] = proof_status(manifest)
 
     gate_failures = evaluate_gate(manifest)
@@ -13867,6 +17148,9 @@ def main() -> int:
         manifest["visualDossier"]["sections"].insert(4, "material-proof")  # type: ignore[index]
     if isinstance(manifest.get("dynamicProofEvidence"), dict):
         manifest["visualDossier"]["sections"].insert(5, "dynamic-proof")  # type: ignore[index]
+    projected_dlight_rollup = projected_dlight_shader_parity_rollup(manifest)
+    if projected_dlight_rollup.get("configured"):
+        manifest["visualDossier"]["sections"].insert(6, "projected-dlight-shader-parity")  # type: ignore[index]
     if isinstance(manifest.get("postProofEvidence"), dict):
         manifest["visualDossier"]["sections"].insert(6, "post-proof")  # type: ignore[index]
     if isinstance(manifest.get("ownershipProofEvidence"), dict):

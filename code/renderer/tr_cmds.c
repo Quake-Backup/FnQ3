@@ -88,25 +88,50 @@ static void R_PerformanceCounters( void ) {
 		const shadowManager_t *manager = &tr.shadowManager;
 
 		ri.Printf( PRINT_ALL,
-			"shadow manager view:%i frame:%i noworld:%i sched:%i p:%i s:%i ca:%i cr:%i pub p:%i s:%i c:%i inputs dlight:%i point:%i/%i cand:%i records:%i/%i atlas:%ix%i/%i fill:%i%% gen:%u spot:%i/%i atlas:%ix%i/%i fill:%i%% gen:%u csm:%i atlas:%ix%i gen:%u\n",
+			"shadow manager view:%i frame:%i noworld:%i sched:%i mask:%x p:%i s:%i ca:%i cr:%i pub p:%i s:%i c:%i inputs dlight:%i point:%i/%i cand:%i records:%i/%i atlas:%ix%i/%i fill:%i%% gen:%u spot:%i/%i src static:%i/%i surface:%i/%i atlas:%ix%i/%i fill:%i%% gen:%u csm:%i atlas:%ix%i gen:%u\n",
 			manager->viewCount, manager->frameCount, manager->noWorldModel,
-			manager->scheduledPasses, manager->pointAtlasScheduled, manager->spotAtlasScheduled,
+			manager->scheduledPasses, manager->scheduledPassMask,
+			manager->pointAtlasScheduled, manager->spotAtlasScheduled,
 			manager->csmAtlasScheduled, manager->csmReceiverScheduled,
-			manager->pointAtlasPublished, manager->spotAtlasPublished, manager->csmAtlasPublished,
+			manager->pointAtlasPublication.published, manager->spotAtlasPublication.published,
+			manager->csmAtlasPublication.published,
 			manager->inputDlights,
 			manager->dlightPlannedCount, manager->dlightConsidered,
 			manager->dlightCandidates,
 			manager->pointPlanCount, manager->pointCandidateCount,
 			manager->dlightAtlasWidth, manager->dlightAtlasHeight,
 			manager->dlightAtlasFaceSize, manager->dlightAtlasFill,
-			manager->pointAtlasGeneration,
+			manager->pointAtlasPublication.generation,
 			manager->spotPlanCount, manager->spotCandidateCount,
+			manager->spotStaticPlanCount, manager->spotStaticCandidateCount,
+			manager->spotSurfacePlanCount, manager->spotSurfaceCandidateCount,
 			manager->spotAtlasWidth, manager->spotAtlasHeight,
 			manager->spotAtlasTileSize, manager->spotAtlasFill,
-			manager->spotAtlasGeneration,
+			manager->spotAtlasPublication.generation,
 			manager->csmCascadeCount,
 			manager->csmAtlasWidth, manager->csmAtlasHeight,
-			manager->csmAtlasGeneration );
+			manager->csmAtlasPublication.generation );
+
+		if ( r_speeds->integer == 4 || spotShadowDebug || surfaceLightDebug ) {
+			ri.Printf( PRINT_ALL,
+				"surfacelight spot plan cand:%i plan:%i req:%i-%i foot:%i-%i caster:%i-%i planreq:%i-%i tile:%i-%i cone:%i-%i/%i-%i alloc:%i atlas:%ix%i/%i fill:%i%% reject weak:%i offview:%i budget:%i malformed:%i\n",
+				manager->spotSurfaceCandidateCount, manager->spotSurfacePlanCount,
+				manager->spotSurfaceCandidateTileMin, manager->spotSurfaceCandidateTileMax,
+				manager->spotSurfaceFootprintMin, manager->spotSurfaceFootprintMax,
+				manager->spotSurfaceCasterRadiusMin, manager->spotSurfaceCasterRadiusMax,
+				manager->spotSurfacePlanRequestedTileMin,
+				manager->spotSurfacePlanRequestedTileMax,
+				manager->spotSurfacePlanTileMin, manager->spotSurfacePlanTileMax,
+				manager->spotSurfaceConeInnerMin, manager->spotSurfaceConeInnerMax,
+				manager->spotSurfaceConeOuterMin, manager->spotSurfaceConeOuterMax,
+				manager->spotSurfacePlanAllocatedCount,
+				manager->spotAtlasWidth, manager->spotAtlasHeight,
+				manager->spotAtlasTileSize, manager->spotAtlasFill,
+				manager->spotSurfaceRejectedWeak,
+				manager->spotSurfaceRejectedOffView,
+				manager->spotSurfaceRejectedOverBudget,
+				manager->spotSurfaceRejectedMalformed );
+		}
 	}
 
 	if ( ( r_speeds->integer == 4 || staticLightDebug ) &&
@@ -178,17 +203,19 @@ static void R_PerformanceCounters( void ) {
 			const csmPlan_t *csm = &tr.csmDebugPlan;
 			float splitFar[CSM_MAX_CASCADES] = { 0.0f };
 			float texelSize[CSM_MAX_CASCADES] = { 0.0f };
+			float snapDepth[CSM_MAX_CASCADES] = { 0.0f };
 			const char *skyShaderName;
 			int i;
 
 			for ( i = 0; i < csm->cascadeCount && i < CSM_MAX_CASCADES; i++ ) {
 				splitFar[i] = csm->cascades[i].splitFar;
 				texelSize[i] = csm->cascades[i].texelSize;
+				snapDepth[i] = 0.5f * ( csm->cascades[i].bounds[0][0] + csm->cascades[i].bounds[1][0] );
 			}
 			skyShaderName = csm->skyShaderName[0] ? csm->skyShaderName : "<unknown>";
 
 			ri.Printf( PRINT_ALL,
-				"csm shadows sky:%s cascades:%i res:%i max:%i lambda:%.2f filter:%s strength:%.2f rbias:%.2f cbias:%.2f/%.2f/%.2f light-dir:%.2f %.2f %.2f to-sun:%.2f %.2f %.2f split far:%.0f %.0f %.0f %.0f texel:%.2f %.2f %.2f %.2f caster:%i cache h/m/u:%i/%i/%i cpu:%ims recv world:%i ent:%i\n",
+				"csm shadows sky:%s cascades:%i res:%i max:%i lambda:%.2f filter:%s strength:%.2f rbias:%.2f cbias:%.2f/%.2f/%.2f light-dir:%.2f %.2f %.2f to-sun:%.2f %.2f %.2f split far:%.0f %.0f %.0f %.0f texel:%.2f %.2f %.2f %.2f snap depth:%.0f %.0f %.0f %.0f caster:%i cache h/m/u:%i/%i/%i cpu:%ims recv world:%i ent:%i\n",
 				skyShaderName,
 				tr.pc.c_csmCascades, tr.pc.c_csmResolution, tr.pc.c_csmMaxDistance,
 				csm->splitLambda, R_ShadowFilterModeName( csm->filterMode ),
@@ -198,6 +225,7 @@ static void R_PerformanceCounters( void ) {
 				csm->directionToSun[0], csm->directionToSun[1], csm->directionToSun[2],
 				splitFar[0], splitFar[1], splitFar[2], splitFar[3],
 				texelSize[0], texelSize[1], texelSize[2], texelSize[3],
+				snapDepth[0], snapDepth[1], snapDepth[2], snapDepth[3],
 				backEnd.pc.c_csmShadowAtlasSurfaces,
 				backEnd.pc.c_csmShadowAtlasCacheHits,
 				backEnd.pc.c_csmShadowAtlasCacheMisses,
@@ -205,6 +233,8 @@ static void R_PerformanceCounters( void ) {
 				backEnd.pc.c_csmShadowAtlasMsec,
 				backEnd.pc.c_csmShadowReceiverWorldSurfaces,
 				backEnd.pc.c_csmShadowReceiverEntitySurfaces );
+		} else if ( tr.pc.c_csmSkippedNoWorldRef ) {
+			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip no-world\n" );
 		} else if ( tr.pc.c_csmSkippedNoSun ) {
 			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip no-sky-sun\n" );
 		} else if ( tr.pc.c_csmSkippedProjection ) {
@@ -213,6 +243,8 @@ static void R_PerformanceCounters( void ) {
 			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip atlas\n" );
 		} else if ( tr.pc.c_csmSkippedStrength ) {
 			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip strength\n" );
+		} else if ( tr.pc.c_csmSkippedZeroCascades ) {
+			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip zero-cascade\n" );
 		} else if ( tr.pc.c_csmSkippedDisabled && !tr.pc.c_csmSkippedNoWorldRef ) {
 			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip disabled\n" );
 		}

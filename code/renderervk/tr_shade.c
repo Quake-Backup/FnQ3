@@ -1396,6 +1396,7 @@ static qboolean VK_DlightShadowParams( const dlight_t *dl,
 	int columns;
 	int atlasBaseFace;
 	int atlasFaceSize;
+	int atlasWidth;
 	float zNear;
 	float zFar;
 	float s;
@@ -1408,7 +1409,7 @@ static qboolean VK_DlightShadowParams( const dlight_t *dl,
 		!r_dlightShadows || !r_dlightShadows->integer ||
 		!r_dlightMode || !r_dlightMode->integer ||
 		( tr.shadowManager.planned ?
-			!tr.shadowManager.pointAtlasPublished : !vk_dlight_shadow_atlas_ready() ) ||
+			!tr.shadowManager.pointAtlasPublication.published : !vk_dlight_shadow_atlas_ready() ) ||
 		vk.renderPassIndex != RENDER_PASS_MAIN ||
 		backEnd.currentEntity != &tr.worldEntity ||
 		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
@@ -1416,7 +1417,12 @@ static qboolean VK_DlightShadowParams( const dlight_t *dl,
 		return qfalse;
 	}
 
-	columns = vk_dlight_shadow_atlas_columns();
+	if ( tr.shadowManager.planned ) {
+		atlasWidth = tr.shadowManager.pointAtlasPublication.width;
+		columns = atlasFaceSize > 0 ? atlasWidth / atlasFaceSize : 0;
+	} else {
+		columns = vk_dlight_shadow_atlas_columns();
+	}
 	if ( columns <= 0 ) {
 		return qfalse;
 	}
@@ -1483,8 +1489,7 @@ static qboolean VK_SpotShadowParams( const dlight_t *dl, const shadowSpotLightPl
 	if ( !dl || !dl->linear || !plan || !plan->atlasAllocated ||
 		plan->atlasTileSize <= 0 || plan->radius <= 0.0f ||
 		!r_spotShadows || !r_spotShadows->integer ||
-		!tr.shadowManager.planned || !tr.shadowManager.spotAtlasPublished ||
-		!vk_spot_shadow_atlas_ready() ||
+		!tr.shadowManager.planned || !tr.shadowManager.spotAtlasPublication.published ||
 		vk.renderPassIndex != RENDER_PASS_MAIN ||
 		backEnd.currentEntity != &tr.worldEntity ||
 		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
@@ -1492,7 +1497,8 @@ static qboolean VK_SpotShadowParams( const dlight_t *dl, const shadowSpotLightPl
 		return qfalse;
 	}
 
-	if ( vk_spot_shadow_atlas_width() <= 0 || vk_spot_shadow_atlas_height() <= 0 ) {
+	if ( tr.shadowManager.spotAtlasPublication.width <= 0 ||
+		tr.shadowManager.spotAtlasPublication.height <= 0 ) {
 		return qfalse;
 	}
 
@@ -1638,7 +1644,7 @@ void VK_CSMShadowPass( void )
 	vk_material_t material;
 
 	if ( ( tr.shadowManager.planned ?
-			!tr.shadowManager.csmAtlasPublished : !vk_csm_shadow_atlas_ready() ) ||
+			!tr.shadowManager.csmAtlasPublication.published : !vk_csm_shadow_atlas_ready() ) ||
 		!tr.csm.enabled || tess.csmCascade < 0 ||
 		tess.csmCascade >= tr.csm.cascadeCount ) {
 		return;
@@ -1646,9 +1652,15 @@ void VK_CSMShadowPass( void )
 
 	cascadeIndex = tess.csmCascade;
 	cascade = &tr.csm.cascades[cascadeIndex];
-	cascadeSize = vk_csm_shadow_cascade_size();
-	atlasWidth = vk_csm_shadow_atlas_width();
-	atlasHeight = vk_csm_shadow_atlas_height();
+	if ( tr.shadowManager.planned ) {
+		cascadeSize = tr.shadowManager.csmAtlasPublication.tileSize;
+		atlasWidth = tr.shadowManager.csmAtlasPublication.width;
+		atlasHeight = tr.shadowManager.csmAtlasPublication.height;
+	} else {
+		cascadeSize = vk_csm_shadow_cascade_size();
+		atlasWidth = vk_csm_shadow_atlas_width();
+		atlasHeight = vk_csm_shadow_atlas_height();
+	}
 	if ( cascadeSize <= 0 || atlasWidth <= 0 || atlasHeight <= 0 ) {
 		return;
 	}
@@ -1760,9 +1772,9 @@ void VK_LightingPass( void )
 		pipeline = vk.dlight_pipelines_x[cull][tess.shader->polygonOffset][fog_stage][abs_light];
 
 	if ( tr.shadowManager.planned ) {
-		if ( spotPlan && tr.shadowManager.spotAtlasPublished ) {
+		if ( spotPlan && tr.shadowManager.spotAtlasPublication.published ) {
 			shadowDescriptor = vk_spot_shadow_descriptor();
-		} else if ( tr.shadowManager.pointAtlasPublished ) {
+		} else if ( tr.shadowManager.pointAtlasPublication.published ) {
 			shadowDescriptor = vk.dlight_shadow_descriptor;
 		}
 	} else if ( vk_dlight_shadow_atlas_available() ) {

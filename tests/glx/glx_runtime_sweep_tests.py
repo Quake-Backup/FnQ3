@@ -156,6 +156,299 @@ def screenshot_histogram() -> dict[str, object]:
     }
 
 
+def projected_dlight_shader_metrics(
+    *,
+    world_inputs: int = 1,
+    dynamic_inputs: int = 1,
+    world_executable: int = 1,
+    dynamic_executable: int = 1,
+    resource_promotions: int = 1,
+    resource_executable: int = 1,
+    resource_records: int = 4,
+) -> dict[str, object]:
+    return {
+        "dlightProjectedShaderInputs": {
+            "inputs": world_inputs + dynamic_inputs,
+            "records": world_inputs + dynamic_inputs,
+            "world": world_inputs,
+            "dynamic": dynamic_inputs,
+            "programmable": world_inputs + dynamic_inputs,
+            "fallback": 0,
+            "invalid": 0,
+        },
+        "dlightProjectedShaderUniforms": {
+            "attempts": 2,
+            "binds": 2,
+            "failures": 0,
+            "records": 2,
+            "truncated": 0,
+            "executable": world_executable + dynamic_executable,
+            "suppressed": 0,
+            "worldExecutable": world_executable,
+            "worldBinds": max(1, world_inputs),
+            "dynamicExecutable": dynamic_executable,
+            "dynamicBinds": max(1, dynamic_inputs),
+            "limitSuppressed": 0,
+            "limit": 3,
+        },
+        "dlightProjectedShaderResource": {
+            "attempts": 1 if resource_promotions else 0,
+            "binds": 1 if resource_promotions else 0,
+            "executable": resource_executable,
+            "suppressed": 0,
+            "promotions": resource_promotions,
+            "failures": 0,
+            "records": resource_records,
+            "worldExecutable": 0,
+            "dynamicExecutable": resource_executable,
+            "binding": 5,
+        },
+    }
+
+
+def shadow_manager_sample() -> dict[str, object]:
+    return {
+        "scheduledPasses": 1,
+        "scheduledMask": 13,
+        "pointScheduled": 1,
+        "spotScheduled": 0,
+        "csmAtlasScheduled": 1,
+        "csmReceiverScheduled": 1,
+        "pointPublished": 1,
+        "spotPublished": 0,
+        "csmPublished": 1,
+        "inputDlights": 4,
+        "pointPlanned": 2,
+        "pointConsidered": 4,
+        "pointCandidates": 3,
+        "pointRecords": 2,
+        "pointCandidateRecords": 3,
+        "pointAtlasWidth": 1024,
+        "pointAtlasHeight": 512,
+        "pointAtlasFaceSize": 128,
+        "spotStaticPlans": 0,
+        "spotStaticCandidates": 0,
+        "spotSurfacePlans": 0,
+        "spotSurfaceCandidates": 0,
+        "csmCascadeCount": 4,
+        "csmAtlasWidth": 2048,
+        "csmAtlasHeight": 512,
+        "csmGeneration": 7,
+    }
+
+
+def shadow_manager_summary(scene_ids: list[str]) -> dict[str, object]:
+    sample = shadow_manager_sample()
+    return {
+        "found": True,
+        "sampleCount": 1,
+        "latest": dict(sample),
+        "max": dict(sample),
+        "scenes": {
+            scene_id: {
+                "found": True,
+                "sampleCount": 1,
+                "latest": dict(sample),
+                "max": dict(sample),
+            }
+            for scene_id in scene_ids
+        },
+    }
+
+
+def surface_light_spot_sample() -> dict[str, int]:
+    return {
+        "surfaceSpotCandidates": 3,
+        "surfaceSpotPlans": 2,
+        "surfaceSpotRequestedTileMin": 128,
+        "surfaceSpotRequestedTileMax": 512,
+        "surfaceSpotFootprintMin": 96,
+        "surfaceSpotFootprintMax": 640,
+        "surfaceSpotCasterRadiusMin": 256,
+        "surfaceSpotCasterRadiusMax": 1200,
+        "surfaceSpotPlanRequestedTileMin": 128,
+        "surfaceSpotPlanRequestedTileMax": 512,
+        "surfaceSpotTileMin": 128,
+        "surfaceSpotTileMax": 256,
+        "surfaceSpotConeInnerMin": 0,
+        "surfaceSpotConeInnerMax": 0,
+        "surfaceSpotConeOuterMin": 45,
+        "surfaceSpotConeOuterMax": 65,
+        "surfaceSpotAllocated": 2,
+        "surfaceSpotAtlasWidth": 1024,
+        "surfaceSpotAtlasHeight": 1024,
+        "surfaceSpotAtlasTileSize": 256,
+        "surfaceSpotAtlasFill": 12,
+        "surfaceSpotRejectedWeak": 1,
+        "surfaceSpotRejectedOffView": 2,
+        "surfaceSpotRejectedBudget": 1,
+        "surfaceSpotRejectedMalformed": 1,
+    }
+
+
+def surface_light_spot_summary(scene_ids: list[str]) -> dict[str, object]:
+    sample = surface_light_spot_sample()
+    return {
+        "found": True,
+        "sampleCount": 1,
+        "latest": dict(sample),
+        "max": dict(sample),
+        "scenes": {
+            scene_id: {
+                "found": True,
+                "sampleCount": 1,
+                "latest": dict(sample),
+                "max": dict(sample),
+            }
+            for scene_id in scene_ids
+        },
+    }
+
+
+def surface_light_spot_lod_summary(scene_ids: list[str]) -> dict[str, object]:
+    sample = surface_light_spot_sample()
+    summary = glx_runtime_sweep.surface_light_spot_lod_summary([sample])
+    summary["scenes"] = {
+        scene_id: glx_runtime_sweep.surface_light_spot_lod_summary([sample])
+        for scene_id in scene_ids
+    }
+    return summary
+
+
+def csm_shadow_summary(scene_ids: list[str]) -> dict[str, object]:
+    sample = {
+        "found": True,
+        "status": "passed",
+        "managerSampleCount": 1,
+        "debugSampleCount": 1,
+        "max": {
+            "csmAtlasScheduled": 1,
+            "csmReceiverScheduled": 1,
+            "csmPublished": 1,
+            "csmCascadeCount": 4,
+            "csmAtlasWidth": 2048,
+            "csmAtlasHeight": 512,
+            "csmGeneration": 7,
+            "csmDebugCascades": 4,
+            "csmDebugResolution": 512,
+            "csmCacheHits": 1,
+            "csmCacheMisses": 1,
+            "csmCacheUncacheable": 0,
+            "csmCacheEvents": 2,
+        },
+        "failures": [],
+    }
+    return {
+        **sample,
+        "scenes": {scene_id: dict(sample) for scene_id in scene_ids},
+    }
+
+
+def csm_shimmer_screenshot_summary(status: str = "passed") -> dict[str, object]:
+    failures = [] if status == "passed" else ["fixture CSM shimmer screenshot diff failed."]
+    return {
+        "found": True,
+        "status": status,
+        "scene": "csm-shimmer-path",
+        "baselineStep": "baseline",
+        "sampleCount": 4,
+        "comparisonCount": 3,
+        "passedComparisons": 3 if status == "passed" else 2,
+        "maxRms": 0.0 if status == "passed" else 8.0,
+        "maxChangedPixelRatio": 0.0 if status == "passed" else 0.2,
+        "thresholds": {
+            "maxRms": glx_runtime_sweep.CSM_SHIMMER_SCREENSHOT_MAX_RMS,
+            "maxChangedPixelRatio": (
+                glx_runtime_sweep.CSM_SHIMMER_SCREENSHOT_MAX_CHANGED_PIXEL_RATIO
+            ),
+        },
+        "comparisons": [
+            {
+                "name": "shot",
+                "step": "nudge-forward",
+                "baselineStep": "baseline",
+                "status": status,
+                "rms": 0.0 if status == "passed" else 8.0,
+                "changedPixelRatio": 0.0 if status == "passed" else 0.2,
+                "reason": "" if status == "passed" else "diff-threshold",
+            },
+        ],
+        "failures": failures,
+    }
+
+
+def combined_shadow_atlas_summary(status: str = "passed") -> dict[str, object]:
+    failures = [] if status == "passed" else ["fixture combined shadow atlas smoke failed."]
+    return {
+        "found": True,
+        "status": status,
+        "scene": "combined-shadow-atlas",
+        "sampleCount": 1,
+        "max": {
+            "scheduledPasses": 4,
+            "scheduledMask": 15,
+            "pointScheduled": 1,
+            "spotScheduled": 1,
+            "csmAtlasScheduled": 1,
+            "csmReceiverScheduled": 1,
+            "pointPublished": 1,
+            "spotPublished": 1,
+            "csmPublished": 1,
+            "pointPlanned": 2,
+            "pointRecords": 2,
+            "pointAtlasWidth": 1024,
+            "pointAtlasHeight": 512,
+            "pointAtlasFaceSize": 128,
+            "spotPlans": 2,
+            "spotStaticPlans": 1,
+            "spotSurfacePlans": 1,
+            "spotAtlasWidth": 1024,
+            "spotAtlasHeight": 1024,
+            "spotAtlasTileSize": 256,
+            "csmCascadeCount": 4,
+            "csmAtlasWidth": 2048,
+            "csmAtlasHeight": 512,
+            "csmGeneration": 7,
+        },
+        "failures": failures,
+    }
+
+
+def csm_fallback_summary(status: str = "passed") -> dict[str, object]:
+    failures = [] if status == "passed" else ["fixture CSM fallback smoke failed."]
+    return {
+        "found": True,
+        "status": status,
+        "managerSampleCount": 4,
+        "fallbackSampleCount": 4,
+        "reasonCoverage": {
+            "no-world": True,
+            "no-sky-sun": True,
+            "atlas": True,
+            "zero-cascade": True,
+        },
+        "max": {
+            "noworld": 1,
+            "scheduledPasses": 1,
+            "scheduledMask": 1,
+            "csmAtlasScheduled": 0,
+            "csmReceiverScheduled": 0,
+            "csmPublished": 0,
+            "csmCascadeCount": 0,
+            "csmAtlasWidth": 0,
+            "csmAtlasHeight": 0,
+            "csmGeneration": 0,
+            "csmFallbackSamples": 1,
+            "csmFallbackCascades": 0,
+            "csmFallbackNoWorld": 1,
+            "csmFallbackNoSun": 1,
+            "csmFallbackAtlasUnavailable": 1,
+            "csmFallbackZeroCascade": 1,
+        },
+        "failures": failures,
+    }
+
+
 def sdr_capture_policy() -> dict[str, object]:
     return dict(glx_runtime_sweep.GLX_SCREENSHOT_CAPTURE_POLICY_CONTRACT)
 
@@ -931,22 +1224,57 @@ def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
     }
     if glx_runtime_sweep.RC_GATE_PRESETS[gate]["requirements"].get("require_dlight_shadow_scenes"):
         dlight_scenes = glx_runtime_sweep.dlight_shadow_evidence_scenes()
-        manifest["runs"].append(
-            {
-                "type": "dlight-shadow-scenes",
-                "status": "passed",
-                "renderer": "glx",
-                "maps": sorted({str(scene["map"]) for scene in dlight_scenes}),
-                "scenes": dlight_scenes,
-                "screenshots": [
-                    {
-                        "name": f"{gate}-{platform_id}-dlight-{scene['id']}",
+        surface_scene_ids = [
+            str(scene["id"])
+            for scene in dlight_scenes
+            if any(
+                category in glx_runtime_sweep.SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES
+                for category in scene["categories"]
+            )
+        ]
+        csm_scene_ids = [
+            str(scene["id"])
+            for scene in dlight_scenes
+            if any(
+                category in glx_runtime_sweep.CSM_SHADOW_EVIDENCE_CATEGORIES
+                for category in scene["categories"]
+            )
+        ]
+        shadow_screenshots: list[dict[str, object]] = []
+        for scene_index, scene in enumerate(dlight_scenes, start=1):
+            camera_path = [
+                dict(step)
+                for step in scene.get("csmCameraPath", [])  # type: ignore[union-attr]
+                if isinstance(step, dict)
+            ]
+            if camera_path:
+                for step_index, step in enumerate(camera_path, start=1):
+                    step_id = str(step["id"])
+                    comparison = (
+                        {}
+                        if step_id == "baseline"
+                        else {
+                            "status": "passed",
+                            "rms": 0.0,
+                            "changedPixelRatio": 0.0,
+                            "maxRms": glx_runtime_sweep.CSM_SHIMMER_SCREENSHOT_MAX_RMS,
+                            "maxChangedPixelRatio": (
+                                glx_runtime_sweep.CSM_SHIMMER_SCREENSHOT_MAX_CHANGED_PIXEL_RATIO
+                            ),
+                        }
+                    )
+                    shot = {
+                        "name": (
+                            f"{gate}-{platform_id}-dlight-{scene['id']}-"
+                            f"{step_index:02d}-{step_id}"
+                        ),
                         "found": True,
                         "renderer": "glx",
                         "map": scene["map"],
                         "mapIndex": scene_index,
                         "baselineKey": (
-                            f"{gate}-{platform_id}-dlight-shadows-{scene['id']}-glx"
+                            f"{gate}-{platform_id}-dlight-shadows-{scene['id']}-"
+                            f"{step_id}-glx"
                         ),
                         "baselineStatus": "not-compared",
                         "histogram": screenshot_histogram(),
@@ -956,9 +1284,53 @@ def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
                         "scene": scene["id"],
                         "evidenceCategories": list(scene["categories"]),
                         "shadowScene": True,
+                        "csmCameraPath": True,
+                        "csmPathStep": step_id,
+                        "csmPathIndex": step_index,
+                        "csmSetviewpos": str(step["setviewpos"]),
+                        "csmOriginDelta": str(step.get("originDelta", "")),
+                        "csmAxisDelta": str(step.get("axisDelta", "")),
+                        "csmShimmerRole": "baseline" if step_id == "baseline" else "candidate",
                     }
-                    for scene_index, scene in enumerate(dlight_scenes, start=1)
-                ],
+                    if comparison:
+                        shot["csmShimmerBaselineStep"] = "baseline"
+                        shot["csmShimmerBaselineKey"] = (
+                            f"{gate}-{platform_id}-dlight-shadows-{scene['id']}-baseline-glx"
+                        )
+                        shot["csmShimmerComparison"] = comparison
+                    shadow_screenshots.append(shot)
+                continue
+            shadow_screenshots.append(
+                {
+                    "name": f"{gate}-{platform_id}-dlight-{scene['id']}",
+                    "found": True,
+                    "renderer": "glx",
+                    "map": scene["map"],
+                    "mapIndex": scene_index,
+                    "baselineKey": (
+                        f"{gate}-{platform_id}-dlight-shadows-{scene['id']}-glx"
+                    ),
+                    "baselineStatus": "not-compared",
+                    "histogram": screenshot_histogram(),
+                    "capturePolicy": sdr_capture_policy(),
+                    "falseColor": {"status": "passed"},
+                    "exposureFalseColor": {"status": "passed"},
+                    "scene": scene["id"],
+                    "evidenceCategories": list(scene["categories"]),
+                    "shadowScene": True,
+                }
+            )
+        manifest["runs"].append(
+            {
+                "type": "dlight-shadow-scenes",
+                "status": "passed",
+                "renderer": "glx",
+                "maps": sorted({str(scene["map"]) for scene in dlight_scenes}),
+                "scenes": dlight_scenes,
+                "screenshots": shadow_screenshots,
+                "csmShimmerScreenshots": csm_shimmer_screenshot_summary(),
+                "combinedShadowAtlas": combined_shadow_atlas_summary(),
+                "csmFallbacks": csm_fallback_summary(),
                 "dlightShadow": {
                     "found": True,
                     "sampleCount": 1,
@@ -972,6 +1344,13 @@ def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
                         }
                         for scene in dlight_scenes
                     },
+                    "shadowManager": shadow_manager_summary(
+                        [str(scene["id"]) for scene in dlight_scenes]
+                    ),
+                    "surfaceLightSpot": surface_light_spot_summary(surface_scene_ids),
+                    "surfaceLightSpotLod": surface_light_spot_lod_summary(surface_scene_ids),
+                    "csmShadows": csm_shadow_summary(csm_scene_ids),
+                    "csmFallbacks": csm_fallback_summary(),
                 },
             }
         )
@@ -1140,6 +1519,179 @@ def ownership_proof_manifest(
         ],
     }
     manifest["ownershipProofEvidence"] = glx_runtime_sweep.ownership_proof_evidence(manifest)
+    return manifest
+
+
+def projected_dlight_shader_parity_manifest(
+    *,
+    screenshot_comparison: dict[str, object] | None = None,
+    legacy_comparison: dict[str, object] | None = None,
+    metrics: dict[str, object] | None = None,
+    baseline_status: str = "passed",
+) -> dict[str, object]:
+    if screenshot_comparison is None:
+        screenshot_comparison = {
+            "status": "passed",
+            "rms": 0.5,
+            "changedPixelRatio": 0.001,
+        }
+    if legacy_comparison is None:
+        legacy_comparison = {
+            "status": "passed",
+            "rms": 0.5,
+            "changedPixelRatio": 0.001,
+        }
+    if metrics is None:
+        metrics = projected_dlight_shader_metrics()
+    suite_ids = glx_runtime_sweep.profile_parity_suite_ids("glx-dlight-shader")
+    manifest = {
+        "runId": "glx-dlight-shader-parity",
+        "createdUtc": "2026-06-04T12:00:00+00:00",
+        "gate": "",
+        "profile": "glx-dlight-shader",
+        "dryRun": False,
+        "maps": ["q3dm1"],
+        "demos": ["demo1"],
+        "renderers": ["opengl", "glx"],
+        "screenshotBaselineDir": "proof/screenshots",
+        "approveScreenshotBaselines": False,
+        "screenshotThresholds": {
+            "maxRms": glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_RMS,
+            "maxChangedPixelRatio": (
+                glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_MAX_CHANGED_PIXEL_RATIO
+            ),
+        },
+        "proofCorpus": glx_runtime_sweep.proof_corpus_manifest(
+            glx_runtime_sweep.corpus_scene_ids_for_profile("glx-dlight-shader"),
+            (),
+            suite_ids,
+        ),
+        "performanceFailures": [],
+        "runs": [
+            {
+                "type": "switch-screenshots",
+                "status": "passed",
+                "screenshots": [
+                    {
+                        "name": "projected-dlight-shader-q3dm1-legacy",
+                        "found": True,
+                        "renderer": "glx",
+                        "map": "q3dm1",
+                        "baselineKey": (
+                            "glx-dlight-shader-projected-dlight-legacy-fallback-"
+                            "q3dm1-round1-legacy-source"
+                        ),
+                        "baselineStatus": "reference",
+                        "histogram": screenshot_histogram(),
+                        "capturePolicy": sdr_capture_policy(),
+                        "paritySuiteIds": list(suite_ids),
+                        "projectedDlightShaderParity": True,
+                        "projectedDlightShaderParityRole": (
+                            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+                        ),
+                        "legacyFallbackBaseline": "opengl-projected-light",
+                        "skipExternalBaseline": True,
+                    },
+                    {
+                        "name": "projected-dlight-shader-q3dm1",
+                        "found": True,
+                        "renderer": "glx",
+                        "map": "q3dm1",
+                        "baselineKey": (
+                            "glx-dlight-shader-projected-dlight-legacy-fallback-"
+                            "q3dm1-round1"
+                        ),
+                        "baselineStatus": baseline_status,
+                        "comparison": screenshot_comparison,
+                        "histogram": screenshot_histogram(),
+                        "capturePolicy": sdr_capture_policy(),
+                        "paritySuiteIds": list(suite_ids),
+                        "projectedDlightShaderParity": True,
+                        "projectedDlightShaderParityRole": (
+                            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+                        ),
+                        "legacyFallbackBaseline": "opengl-projected-light",
+                        "legacyFallbackCaptureName": "projected-dlight-shader-q3dm1-legacy",
+                        "baselineSourceName": "projected-dlight-shader-q3dm1-legacy",
+                        "baselineSourceRole": (
+                            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+                        ),
+                        "legacyFallbackComparison": legacy_comparison,
+                    },
+                ],
+                "diagnostics": {
+                    "found": True,
+                    "failures": [],
+                    "metrics": metrics,
+                },
+            },
+            {
+                "type": "timedemo",
+                "status": "passed",
+                "renderer": "glx",
+                "demo": "demo1",
+                "timedemoMetrics": {"fps": 95.0},
+                "screenshots": [
+                    {
+                        "name": "projected-dlight-shader-demo1-legacy",
+                        "found": True,
+                        "renderer": "glx",
+                        "demo": "demo1",
+                        "baselineKey": (
+                            "glx-dlight-shader-projected-dlight-demo-legacy-"
+                            "fallback-demo1-legacy-source"
+                        ),
+                        "baselineStatus": "reference",
+                        "histogram": screenshot_histogram(),
+                        "capturePolicy": sdr_capture_policy(),
+                        "paritySuiteIds": list(suite_ids),
+                        "projectedDlightShaderParity": True,
+                        "projectedDlightShaderTimedemoParity": True,
+                        "projectedDlightShaderParityRole": (
+                            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+                        ),
+                        "legacyFallbackBaseline": "opengl-projected-light",
+                        "skipExternalBaseline": True,
+                    },
+                    {
+                        "name": "projected-dlight-shader-demo1",
+                        "found": True,
+                        "renderer": "glx",
+                        "demo": "demo1",
+                        "baselineKey": (
+                            "glx-dlight-shader-projected-dlight-demo-legacy-"
+                            "fallback-demo1"
+                        ),
+                        "baselineStatus": baseline_status,
+                        "comparison": screenshot_comparison,
+                        "histogram": screenshot_histogram(),
+                        "capturePolicy": sdr_capture_policy(),
+                        "paritySuiteIds": list(suite_ids),
+                        "projectedDlightShaderParity": True,
+                        "projectedDlightShaderTimedemoParity": True,
+                        "projectedDlightShaderParityRole": (
+                            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+                        ),
+                        "legacyFallbackBaseline": "opengl-projected-light",
+                        "legacyFallbackCaptureName": "projected-dlight-shader-demo1-legacy",
+                        "baselineSourceName": "projected-dlight-shader-demo1-legacy",
+                        "baselineSourceRole": (
+                            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+                        ),
+                        "legacyFallbackComparison": legacy_comparison,
+                    },
+                ],
+                "diagnostics": {
+                    "found": True,
+                    "failures": [],
+                    "metrics": metrics,
+                },
+            },
+        ],
+    }
+    manifest["projectedDlightShaderParityEvidence"] = (
+        glx_runtime_sweep.projected_dlight_shader_parity_evidence(manifest)
+    )
     return manifest
 
 
@@ -1896,6 +2448,8 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         public = (ROOT / "code" / "renderercommon" / "tr_glx_public.h").read_text(encoding="utf-8")
         glx_module = (ROOT / "code" / "rendererglx" / "glx_module.cpp").read_text(encoding="utf-8")
         glx_stream = (ROOT / "code" / "rendererglx" / "glx_stream.cpp").read_text(encoding="utf-8")
+        glx_executor = (ROOT / "code" / "rendererglx" / "glx_executor.cpp").read_text(encoding="utf-8")
+        glx_executor_h = (ROOT / "code" / "rendererglx" / "glx_executor.h").read_text(encoding="utf-8")
         glx_static_world = (ROOT / "code" / "rendererglx" / "glx_static_world.cpp").read_text(encoding="utf-8")
         glx_ir = (ROOT / "code" / "rendererglx" / "glx_render_ir.h").read_text(encoding="utf-8")
         glx_material_key = (ROOT / "code" / "rendererglx" / "glx_material_key.h").read_text(encoding="utf-8")
@@ -2009,26 +2563,64 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("GLX_Dlight_ProjectedShaderProgrammable", glx_module)
         self.assertIn("GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT", glx_module)
         self.assertIn("u_ProjectedDlightOriginRadius", glx_module)
-        self.assertIn("varying vec3 v_LocalPos;", glx_module)
+        self.assertIn("v_LocalPos;", glx_module)
+        self.assertIn("GLX_PROJECTED_DLIGHT_STREAM", glx_module)
+        self.assertIn("u_ProjectedDlightRecords", glx_module)
+        self.assertIn("projectedShaderResourceLimitPromotions", glx_module)
         self.assertIn("evaluateProjectedDlights", glx_module)
         self.assertIn("r_glxDlightProjectedProgram", glx_module)
+        self.assertIn("r_glxDlightProjectedMdi", glx_module)
         self.assertIn("GLX_Dlight_ProjectedProgramEnabled", glx_module)
+        self.assertIn("GLX_Dlight_ProjectedMdiEnabled", glx_module)
+        self.assertIn("GLX_Dlight_RecordProjectedMdiSubmitPlan", glx_module)
+        self.assertIn("GLX_Dlight_SubmitProjectedMdiBatch", glx_module)
+        self.assertIn("glMultiDrawElementsIndirect", glx_module)
+        self.assertIn("GL_DRAW_INDIRECT_BUFFER", glx_module)
+        self.assertIn("GL_DRAW_INDIRECT_BUFFER_BINDING", glx_module)
+        self.assertIn("GLX_Dlight_BindDrawIndirectBuffer( oldDrawIndirectBuffer );", glx_module)
+        self.assertIn("projectedShaderArenaLightRecords", glx_module)
+        self.assertIn("projectedShaderArenaListRecords", glx_module)
+        self.assertIn("GLX_Dlight_FillProjectedArenaListRecords", glx_module)
+        self.assertIn("GLX_Dlight_RecordProjectedShaderArenaReservation", glx_module)
+        self.assertIn("resourceRange->authoritative = qtrue", glx_module)
+        self.assertIn("projectedShaderArenaAuthoritativeBinds", glx_module)
+        self.assertIn("dlight projected shader arena", glx_module)
+        self.assertIn("GLX_PROJECTED_DLIGHT_MDI_COMMAND_RING_LIMIT", glx_module)
+        self.assertIn("GLX_Dlight_ReserveProjectedMdiCommandRingSlot", glx_module)
+        self.assertIn("projectedShaderMdiCommandRecords[ringSlot] = mdiPlan.command", glx_module)
+        self.assertIn("projectedShaderMdiCommandRingCommits", glx_module)
+        self.assertIn("dlight projected shader MDI command ring", glx_module)
+        self.assertIn("projectedShaderMdiBatchSubmittedDraws += batch.drawCount", glx_module)
+        self.assertIn("projectedShaderMdiBatchSubmittedIndexes += batch.indexCount", glx_module)
+        self.assertIn("projectedMdiSubmitted", glx_module)
+        self.assertIn("GLX_Executor_ConsumeDynamicDraw( &executor_, draw )", glx_module)
+        self.assertIn("GLX_Executor_ConsumeDynamicDraw", glx_executor_h)
+        self.assertIn("GLX_Executor_AcceptDynamicDraw", glx_executor)
+        self.assertIn("GLX_Executor_SubmitDynamicDraw( draw )", glx_executor)
         self.assertIn("GLX_Dlight_BindProjectedShaderInput", glx_module)
         self.assertIn("GLX_Dlight_ClearProjectedShaderInput", glx_module)
+        self.assertGreaterEqual(glx_module.count("GLX_Dlight_ClearProjectedShaderInput( &dlight_ );"), 8)
         self.assertIn("dlight projected shader inputs", glx_module)
         self.assertIn("dlight projected shader uniforms", glx_module)
         self.assertIn("projectedPacketListRefs", glx_module)
         self.assertIn("PrepareStaticWorldProjectedDlightRun", glx_module)
         self.assertIn("BindStaticWorldProjectedDlightRun", glx_module)
-        self.assertIn("BindStaticWorldProjectedDlightRun( projectedPacket, projectedShaderInput );", glx_module)
+        self.assertIn("BindStaticWorldProjectedDlightRun( projectedPacket, projectedShaderInput,", glx_module)
         self.assertIn("StaticWorldProjectedDlightSplitActive", glx_module)
         self.assertIn("StaticWorldDrawProjectedDlightRunsFiltered", glx_module)
         self.assertIn("GLX_Dlight_ProjectedProgramEnabled( dlight_ )", glx_module)
+        self.assertIn("replacementPlan.legacyFallback", glx_module)
+        self.assertGreaterEqual(glx_module.count("replacementPlan.legacyFallback"), 2)
         self.assertIn("ConsumeStaticWorldProjectedDlightRun", glx_module)
         self.assertIn("GLX_Module_StaticWorldPacketForItemRange", glx_module)
-        self.assertIn("worldPacketsWithProjectedDlights", (ROOT / "code" / "rendererglx" / "glx_executor.h").read_text(encoding="utf-8"))
-        self.assertIn("dynamicDrawsWithProjectedDlights", (ROOT / "code" / "rendererglx" / "glx_executor.h").read_text(encoding="utf-8"))
+        self.assertIn("worldPacketsWithProjectedDlights", glx_executor_h)
+        self.assertIn("dynamicDrawsWithProjectedDlights", glx_executor_h)
         self.assertIn("GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT", glx_ir)
+        self.assertIn("projectedResourceAuthoritative", glx_ir)
+        self.assertIn("ProjectedDlightShaderExecutionPlan", glx_ir)
+        self.assertIn("ProjectedDlightShaderReplacementPlan", glx_ir)
+        self.assertIn("GLX_RenderIR_PlanProjectedDlightShaderExecution", glx_ir)
+        self.assertIn("GLX_RenderIR_PlanProjectedDlightShaderReplacement", glx_ir)
         self.assertIn("MaterialParameterBlock", glx_ir)
         self.assertIn("PostOutputPlan", glx_ir)
         self.assertIn("GLX_POST_OUTPUT_FALLBACK_EXECUTOR_REJECT", glx_ir)
@@ -2037,7 +2629,19 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("executable nodes", glx_module)
         self.assertIn("post shader plan", glx_module)
         self.assertIn("GLX_PostProcess_RecordPostShaderPlan", glx_module)
-        self.assertIn("postShaderFeatures", SWEEP_PATH.read_text(encoding="utf-8"))
+        sweep_source = SWEEP_PATH.read_text(encoding="utf-8")
+        self.assertIn("GLX_DLIGHT_PROJECTED_SHADER_ARENA_RE", sweep_source)
+        self.assertIn("GLX_DLIGHT_PROJECTED_SHADER_RESOURCE_RE", sweep_source)
+        self.assertIn("dlightProjectedShaderResourcePromotions", sweep_source)
+        self.assertIn("dlightProjectedShaderArenaUploads", sweep_source)
+        self.assertIn("dlightProjectedShaderArenaAuthoritativeBinds", sweep_source)
+        self.assertIn("did not bind authoritative projected-light arena ranges", sweep_source)
+        self.assertIn("append_projected_dlight_shader_consistency_failures", sweep_source)
+        self.assertIn("mismatched projected-light", sweep_source)
+        self.assertIn("stale projected-light stream resource ranges", sweep_source)
+        self.assertIn("GLX_DLIGHT_PROJECTED_SHADER_MDI_RING_RE", sweep_source)
+        self.assertIn("dlightProjectedShaderMdiCommandRingCommits", sweep_source)
+        self.assertIn("postShaderFeatures", sweep_source)
         self.assertIn("postShaderDirectFinalBound", SWEEP_PATH.read_text(encoding="utf-8"))
         self.assertIn("postOutputExecutableNodes", SWEEP_PATH.read_text(encoding="utf-8"))
         self.assertIn("GLX_RenderIR_HashMaterialParameterBlock", glx_ir)
@@ -2051,6 +2655,82 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("MATERIAL_PARAMETER_BLOCKS_RE", SWEEP_PATH.read_text(encoding="utf-8"))
         self.assertIn("GLX_DLIGHT_PROJECTED_SHADER_INPUTS_RE", SWEEP_PATH.read_text(encoding="utf-8"))
         self.assertIn("GLX_DLIGHT_PROJECTED_SHADER_UNIFORMS_RE", SWEEP_PATH.read_text(encoding="utf-8"))
+        self.assertIn("GLX_PROJECTED_DLIGHT_SHADER_PARITY_SUITE", sweep_source)
+        self.assertIn("projected_dlight_shader_parity_evidence", sweep_source)
+        self.assertIn("evaluate_projected_dlight_shader_parity", sweep_source)
+        self.assertIn("projected-dlight-legacy-fallback", sweep_source)
+
+        dynamic_projected_start = glx_module.index(
+            "qboolean RendererModule::DrawElementsClassifiedProjectedDlights"
+        )
+        dynamic_array_start = glx_module.index(
+            "qboolean RendererModule::DrawArraysClassified", dynamic_projected_start
+        )
+        dynamic_projected = glx_module[dynamic_projected_start:dynamic_array_start]
+        self.assertIn("qboolean projectedShaderBound = qfalse;", dynamic_projected)
+        self.assertIn(
+            "projectedShaderBound = GLX_Dlight_BindProjectedShaderInput( &dlight_,",
+            dynamic_projected,
+        )
+        self.assertIn("&projectedExecutionPlan", dynamic_projected)
+        self.assertIn(
+            "if ( !projectedShaderBound && GLX_Dlight_CurrentProgram( &dlight_ ) ) {\n"
+            "\t\t\tGLX_Dlight_ClearProjectedShaderInput( &dlight_ );\n"
+            "\t\t}",
+            dynamic_projected,
+        )
+        self.assertIn("return qfalse;", dynamic_projected)
+        self.assertIn(
+            "} else if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {\n"
+            "\t\tGLX_Dlight_ClearProjectedShaderInput( &dlight_ );\n"
+            "\t}",
+            dynamic_projected,
+        )
+        dynamic_array_end = glx_module.index(
+            "void RendererModule::RecordDraw", dynamic_array_start
+        )
+        dynamic_array = glx_module[dynamic_array_start:dynamic_array_end]
+        self.assertIn(
+            "if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {\n"
+            "\t\tGLX_Dlight_ClearProjectedShaderInput( &dlight_ );\n"
+            "\t}\n"
+            "\tif ( !GLX_Executor_ExecuteDynamicDraw",
+            dynamic_array,
+        )
+        static_run_start = glx_module.index(
+            "qboolean RendererModule::StaticWorldDrawDeviceRun"
+        )
+        static_runs_start = glx_module.index(
+            "qboolean RendererModule::StaticWorldDrawDeviceRuns", static_run_start
+        )
+        static_run = glx_module[static_run_start:static_runs_start]
+        self.assertIn(
+            "BindStaticWorldProjectedDlightRun( projectedPacket, projectedShaderInput,\n"
+            "\t\t\t&projectedExecutionPlan );",
+            static_run,
+        )
+        self.assertIn("replacementPlan.legacyFallback", static_run)
+        self.assertIn("return qfalse;", static_run)
+
+        static_filtered_start = glx_module.index(
+            "int RendererModule::StaticWorldDrawDeviceRunsFiltered"
+        )
+        static_filtered_end = glx_module.index(
+            "void RendererModule::RecordStaticWorldQueue", static_filtered_start
+        )
+        static_filtered = glx_module[static_filtered_start:static_filtered_end]
+        self.assertIn("StaticWorldDrawProjectedDlightRunsFiltered", static_filtered)
+        self.assertIn(
+            "if ( GLX_Dlight_ProjectedProgramEnabled( dlight_ ) && counts && firstItems &&\n"
+            "\t\titemCounts )",
+            static_filtered,
+        )
+        self.assertIn(
+            "PrepareStaticWorldProjectedDlightRun( firstItems[i],\n"
+            "\t\t\t\titemCounts[i], &projectedPacket, &projectedShaderInput )",
+            static_filtered,
+        )
+        self.assertIn("return 0;", static_filtered)
 
     def test_keep_window_renderer_restart_reinitializes_glx_caps(self) -> None:
         source = (ROOT / "code" / "renderer" / "tr_init.c").read_text(encoding="utf-8")
@@ -2317,6 +2997,57 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
             self.assertIn("ssim", comparison)
             self.assertTrue(diff.exists())
 
+    def test_csm_shimmer_screenshot_diff_summary_compares_path_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = root / "baseline.png"
+            candidate = root / "candidate.png"
+            glx_runtime_sweep.write_png_rgba(
+                baseline,
+                2,
+                1,
+                bytes((64, 96, 128, 255, 32, 32, 32, 255)),
+            )
+            glx_runtime_sweep.write_png_rgba(
+                candidate,
+                2,
+                1,
+                bytes((64, 96, 128, 255, 32, 32, 32, 255)),
+            )
+            screenshots = [
+                {
+                    "name": "baseline",
+                    "found": True,
+                    "path": str(baseline),
+                    "scene": "csm-shimmer-path",
+                    "csmCameraPath": True,
+                    "csmPathStep": "baseline",
+                    "baselineKey": "glx-csm-baseline",
+                }
+            ]
+            for index, step in enumerate(("nudge-forward", "nudge-side", "micro-yaw"), start=1):
+                screenshots.append(
+                    {
+                        "name": f"candidate-{index}",
+                        "found": True,
+                        "path": str(candidate),
+                        "scene": "csm-shimmer-path",
+                        "csmCameraPath": True,
+                        "csmPathStep": step,
+                        "baselineKey": f"glx-csm-{step}",
+                    }
+                )
+
+            summary = glx_runtime_sweep.apply_csm_shimmer_screenshot_diffs(
+                screenshots,
+                root / "diffs",
+            )
+
+            self.assertEqual(summary["status"], "passed")
+            self.assertEqual(summary["comparisonCount"], 3)
+            self.assertEqual(screenshots[1]["csmShimmerComparison"]["status"], "passed")
+            self.assertTrue(Path(screenshots[1]["csmShimmerComparison"]["diffPath"]).exists())
+
     def test_shader_reference_ramps_are_deterministic_offline_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2408,6 +3139,123 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
             self.assertEqual(screenshots[0]["baselineStatus"], "passed")
             self.assertEqual(screenshots[0]["comparison"]["status"], "passed")
 
+    def test_projected_dlight_shader_baseline_approval_uses_legacy_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / "legacy.png"
+            candidate = root / "candidate.png"
+            baseline_dir = root / "baselines"
+            glx_runtime_sweep.write_png_rgba(
+                legacy,
+                1,
+                1,
+                bytes((10, 20, 30, 255)),
+            )
+            glx_runtime_sweep.write_png_rgba(
+                candidate,
+                1,
+                1,
+                bytes((200, 210, 220, 255)),
+            )
+            screenshots = [
+                {
+                    "name": "legacy",
+                    "path": str(legacy),
+                    "found": True,
+                    "skipExternalBaseline": True,
+                    "projectedDlightShaderParityRole": (
+                        glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+                    ),
+                },
+                {
+                    "name": "candidate",
+                    "baselineKey": "projected-dlight-baseline",
+                    "path": str(candidate),
+                    "found": True,
+                    "baselineSourceName": "legacy",
+                    "projectedDlightShaderParityRole": (
+                        glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+                    ),
+                },
+            ]
+
+            glx_runtime_sweep.apply_screenshot_baselines(
+                screenshots,
+                baseline_dir,
+                approve_baselines=True,
+                diff_dir=None,
+                max_rms=0.0,
+                max_pixel_ratio=0.0,
+            )
+            baseline_path = baseline_dir / "projected-dlight-baseline.png"
+
+            self.assertEqual(screenshots[0]["baselineStatus"], "reference")
+            self.assertEqual(screenshots[1]["baselineStatus"], "approved")
+            self.assertEqual(baseline_path.read_bytes(), legacy.read_bytes())
+
+            glx_runtime_sweep.apply_screenshot_baselines(
+                screenshots,
+                baseline_dir,
+                approve_baselines=False,
+                diff_dir=root / "diffs",
+                max_rms=255.0,
+                max_pixel_ratio=1.0,
+            )
+            self.assertEqual(screenshots[1]["baselineStatus"], "passed")
+            self.assertEqual(screenshots[1]["comparison"]["baselinePath"], str(baseline_path))
+
+    def test_projected_dlight_shader_same_run_legacy_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / "legacy.png"
+            candidate = root / "candidate.png"
+            glx_runtime_sweep.write_png_rgba(
+                legacy,
+                1,
+                1,
+                bytes((10, 20, 30, 255)),
+            )
+            glx_runtime_sweep.write_png_rgba(
+                candidate,
+                1,
+                1,
+                bytes((10, 20, 31, 255)),
+            )
+            screenshots = [
+                {
+                    "name": "legacy",
+                    "path": str(legacy),
+                    "found": True,
+                    "projectedDlightShaderParityRole": (
+                        glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+                    ),
+                },
+                {
+                    "name": "candidate",
+                    "baselineKey": "projected-dlight-baseline",
+                    "path": str(candidate),
+                    "found": True,
+                    "legacyFallbackCaptureName": "legacy",
+                    "projectedDlightShaderParityRole": (
+                        glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+                    ),
+                },
+            ]
+
+            summary = glx_runtime_sweep.apply_projected_dlight_shader_parity_diffs(
+                screenshots,
+                root / "diffs",
+                max_rms=2.0,
+                max_pixel_ratio=1.0,
+            )
+
+            self.assertEqual(summary["status"], "passed")
+            self.assertEqual(summary["comparisonCount"], 1)
+            self.assertEqual(screenshots[1]["legacyFallbackComparison"]["status"], "passed")
+            self.assertTrue(
+                (root / "diffs" / "projected-dlight-baseline.legacy-fallback.diff.png").exists()
+            )
+
     def test_visual_dossier_summarizes_review_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = release_proof_manifest("rc-parity", "windows-x64")
@@ -2443,23 +3291,111 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         world_binds: int = 0,
         dynamic_executable: int | None = None,
         dynamic_binds: int | None = None,
+        uniform_records: int | None = None,
         truncated: int = 0,
         limit_suppressed: int = 0,
+        render_ir_projected_world: int | None = None,
+        render_ir_projected_dynamic: int | None = None,
+        resource_attempts: int = 0,
+        resource_binds: int = 0,
+        resource_executable: int = 0,
+        resource_suppressed: int = 0,
+        resource_promotions: int = 0,
+        resource_failures: int = 0,
+        resource_records: int = 0,
+        resource_world_executable: int = 0,
+        resource_dynamic_executable: int = 0,
+        stream_failures: int = 0,
+        stream_range_binds: int = 0,
+        stream_range_failures: int = 0,
+        stream_range_clears: int = 0,
+        arena_range_binds: int = 0,
+        arena_range_failures: int = 0,
+        arena_range_clears: int = 0,
     ) -> None:
         if dynamic_executable is None:
             dynamic_executable = executable
         if dynamic_binds is None:
             dynamic_binds = binds
+        if render_ir_projected_world is None:
+            render_ir_projected_world = world_inputs
+        if render_ir_projected_dynamic is None:
+            render_ir_projected_dynamic = dynamic_inputs
         input_count = world_inputs + dynamic_inputs
+        if uniform_records is None:
+            uniform_records = input_count
         log.write_text(
             "\n".join(
                 [
                     f"  GLx pass schedule: valid {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
+                    f"  render IR products: passes 1, world packets 1, projected world packets {render_ir_projected_world}/{render_ir_projected_world} lights, dynamic draws 1, projected dynamic draws {render_ir_projected_dynamic}/{render_ir_projected_dynamic} lights, materials 1, uploads 0, post nodes 0, outputs 0, rejects 0",
                     "  render IR dynamic roles: generic 0/0/0, dlight 1/6/0, shadow 0/0/0, beam 0/0/0, post 0/0/0",
                     "  render IR dynamic passes: dlight 1/6/0, scene 0/0/0, post 0/0/0, other 0/0/0",
                     f"  dlight projected shader inputs: inputs {input_count}/{input_count} records, world {world_inputs}, dynamic {dynamic_inputs}, programmable {input_count}, fallback 0, invalid 0",
-                    f"  dlight projected shader uniforms: attempts 1, binds {binds}, failures {failures}, records {input_count}, truncated {truncated}, executable {executable}, suppressed {suppressed}, world {world_executable}/{world_binds}, dynamic {dynamic_executable}/{dynamic_binds}, limit-suppressed {limit_suppressed}, limit 3",
-                    "  dlight projected shader stream: attempts 0, uploads 0, failures 0, skipped 0, records 0, bytes 0, persistent 0, world 0, dynamic 0, last 0/0",
+                    f"  dlight projected shader uniforms: attempts 1, binds {binds}, failures {failures}, records {uniform_records}, truncated {truncated}, executable {executable}, suppressed {suppressed}, world {world_executable}/{world_binds}, dynamic {dynamic_executable}/{dynamic_binds}, limit-suppressed {limit_suppressed}, limit 3",
+                    f"  dlight projected shader resource: attempts {resource_attempts}, binds {resource_binds}, executable {resource_executable}, suppressed {resource_suppressed}, promotions {resource_promotions}, failures {resource_failures}, records {resource_records}, world {resource_world_executable}, dynamic {resource_dynamic_executable}, binding 5",
+                    f"  dlight projected shader stream: attempts 0, uploads 0, failures {stream_failures}, skipped 0, records 0, bytes 0, persistent 0, world 0, dynamic 0, range {stream_range_binds}/{max(stream_range_binds, stream_range_failures)}, range failures {stream_range_failures}, clears {stream_range_clears}, last 0/0",
+                    f"  dlight projected shader arena: reserves 0, uploads 0, failures 0, wraps 0, rejects 0, waits 0, timeouts 0, sync failures 0, bytes 0, light records 0, list records 0, world records 0, dynamic records 0, range {arena_range_binds}/{max(arena_range_binds, arena_range_failures)}, range failures {arena_range_failures}, clears {arena_range_clears}, authoritative 0/0, auth failures 0, auth fallbacks 0, auth clears 0, bound {'yes' if arena_range_binds > arena_range_clears else 'no'}, cursor 0, last 0/0/0",
+                    "  dlight projected shader MDI commands: attempts 0, eligible 0, uploads 0, failures 0, skipped 0, records 0, indexes 0, bytes 0, last 0/0",
+                    "  dlight projected shader MDI command ring: reserves 0, commits 0, wraps 0, failures 0, slots 256, cursor 0, last 0/0/0/0",
+                    "  dlight projected shader MDI submit: attempts 0, plans 0, ready 0, fallbacks 0, skipped 0, records 0, indexes 0, buffer 0, last 0/0",
+                    "  dlight projected shader MDI batch: attempts 0, batches 0, ready 0, fallbacks 0, rejects 0, gl errors 0, records 0, indexes 0, submitted 0/0, largest 0, reject 0, buffer 0, range 0/0",
+                    "  dynamic stream categories: entity 0/0, particle 0/0, poly 0/0, mark 0/0, weapon 0/0, ui 0/0, beam 0/0, dlight 1/1, special 0/0",
+                    "  static world GLx renderer: yes, arena upload yes, arena draw yes",
+                    "  static world GLx packet batches: yes, attempts 1, batches 1, packet runs 1/3 indexes, fallback runs 0, singles 0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_projected_dlight_mdi_profile_log(
+        self,
+        log: Path,
+        *,
+        command_failures: int = 0,
+        arena_uploads: int = 1,
+        arena_failures: int = 0,
+        arena_rejects: int = 0,
+        arena_timeouts: int = 0,
+        arena_sync_failures: int = 0,
+        arena_light_records: int = 1,
+        arena_list_records: int = 1,
+        arena_range_binds: int = 1,
+        arena_range_failures: int = 0,
+        arena_authoritative_binds: int = 1,
+        arena_authoritative_failures: int = 0,
+        arena_authoritative_fallbacks: int = 0,
+        ring_commits: int = 1,
+        ring_failures: int = 0,
+        submit_ready: int = 1,
+        submit_fallbacks: int = 0,
+        batch_ready: int = 1,
+        batch_fallbacks: int = 0,
+        batch_rejects: int = 0,
+        batch_gl_errors: int = 0,
+        submitted_draws: int = 1,
+        submitted_indexes: int = 6,
+    ) -> None:
+        log.write_text(
+            "\n".join(
+                [
+                    "  product tier: GL46",
+                    "  GL46 high-end executor: active yes, persistent uploads yes, buffer storage uploads yes, sync-heavy streaming yes, direct state access yes, multi-draw indirect yes, aggressive static-world submission yes, detailed GPU counters yes",
+                    "  GL46 high-end support: material compiler yes, common materials yes, dynamic entities yes, modern post chain yes, scene-linear output yes, hardware HDR output yes, screenshots yes, demos yes",
+                    "  GL46 high-end requirements: debug output yes, buffer storage yes, direct state access yes, multi-draw indirect yes",
+                    f"  GLx pass schedule: valid {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_COUNT}/{glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE_HASH} {glx_runtime_sweep.GLX_EXPECTED_PASS_SCHEDULE}",
+                    "  render IR products: passes 1, world packets 1, projected world packets 0/0 lights, dynamic draws 1, projected dynamic draws 1/1 lights, materials 1, uploads 0, post nodes 0, outputs 0, rejects 0",
+                    "  render IR dynamic roles: generic 0/0/0, dlight 1/6/0, shadow 0/0/0, beam 0/0/0, post 0/0/0",
+                    "  render IR dynamic passes: dlight 1/6/0, scene 0/0/0, post 0/0/0, other 0/0/0",
+                    "  dlight projected shader inputs: inputs 1/1 records, world 0, dynamic 1, programmable 1, fallback 0, invalid 0",
+                    "  dlight projected shader uniforms: attempts 1, binds 1, failures 0, records 1, truncated 0, executable 1, suppressed 0, world 0/0, dynamic 1/1, limit-suppressed 0, limit 3",
+                    "  dlight projected shader resource: attempts 0, binds 0, executable 0, suppressed 0, promotions 0, failures 0, records 0, world 0, dynamic 0, binding 5",
+                    "  dlight projected shader stream: attempts 1, uploads 1, failures 0, skipped 0, records 1, bytes 32, persistent 1, world 0, dynamic 1, range 1/1, range failures 0, clears 1, last 1024/32",
+                    f"  dlight projected shader arena: reserves 1, uploads {arena_uploads}, failures {arena_failures}, wraps 0, rejects {arena_rejects}, waits 0, timeouts {arena_timeouts}, sync failures {arena_sync_failures}, bytes 32, light records {arena_light_records}, list records {arena_list_records}, world records 0, dynamic records {arena_light_records}, range {arena_range_binds}/1, range failures {arena_range_failures}, clears 1, authoritative {arena_authoritative_binds}/1, auth failures {arena_authoritative_failures}, auth fallbacks {arena_authoritative_fallbacks}, auth clears 1, bound yes, cursor 32, last 11/1024/32",
+                    f"  dlight projected shader MDI commands: attempts 1, eligible 1, uploads 1, failures {command_failures}, skipped 0, records 1, indexes 6, bytes 20, last 2048/20",
+                    f"  dlight projected shader MDI command ring: reserves 1, commits {ring_commits}, wraps 0, failures {ring_failures}, slots 256, cursor 1, last 0/11/2048/20",
+                    f"  dlight projected shader MDI submit: attempts 1, plans 1, ready {submit_ready}, fallbacks {submit_fallbacks}, skipped 0, records 1, indexes 6, buffer 11, last 2048/20",
+                    f"  dlight projected shader MDI batch: attempts 1, batches 1, ready {batch_ready}, fallbacks {batch_fallbacks}, rejects {batch_rejects}, gl errors {batch_gl_errors}, records 1, indexes 6, submitted {submitted_draws}/{submitted_indexes}, largest 1, reject 0, buffer 11, range 2048/20",
                     "  dynamic stream categories: entity 0/0, particle 0/0, poly 0/0, mark 0/0, weapon 0/0, ui 0/0, beam 0/0, dlight 1/1, special 0/0",
                     "  static world GLx renderer: yes, arena upload yes, arena draw yes",
                     "  static world GLx packet batches: yes, attempts 1, batches 1, packet runs 1/3 indexes, fallback runs 0, singles 0",
@@ -2493,7 +3429,13 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                         "  render IR dynamic passes: dlight 1/6/0, scene 1/12/0, post 0/0/0, other 0/0/0",
                         "  dlight projected shader inputs: inputs 2/3 records, world 1, dynamic 1, programmable 2, fallback 0, invalid 0",
                         "  dlight projected shader uniforms: attempts 1, binds 1, failures 0, records 3, truncated 0, executable 0, suppressed 1, world 0/1, dynamic 0/0, limit-suppressed 0, limit 3",
-                        "  dlight projected shader stream: attempts 0, uploads 0, failures 0, skipped 0, records 0, bytes 0, persistent 0, world 0, dynamic 0, last 0/0",
+                        "  dlight projected shader resource: attempts 0, binds 0, executable 0, suppressed 0, promotions 0, failures 0, records 0, world 0, dynamic 0, binding 5",
+                        "  dlight projected shader stream: attempts 0, uploads 0, failures 0, skipped 0, records 0, bytes 0, persistent 0, world 0, dynamic 0, range 0/0, range failures 0, clears 0, last 0/0",
+                        "  dlight projected shader arena: reserves 0, uploads 0, failures 0, wraps 0, rejects 0, waits 0, timeouts 0, sync failures 0, bytes 0, light records 0, list records 0, world records 0, dynamic records 0, range 0/0, range failures 0, clears 0, authoritative 0/0, auth failures 0, auth fallbacks 0, auth clears 0, bound no, cursor 0, last 0/0/0",
+                        "  dlight projected shader MDI commands: attempts 0, eligible 0, uploads 0, failures 0, skipped 0, records 0, indexes 0, bytes 0, last 0/0",
+                        "  dlight projected shader MDI command ring: reserves 0, commits 0, wraps 0, failures 0, slots 256, cursor 0, last 0/0/0/0",
+                        "  dlight projected shader MDI submit: attempts 0, plans 0, ready 0, fallbacks 0, skipped 0, records 0, indexes 0, buffer 0, last 0/0",
+                        "  dlight projected shader MDI batch: attempts 0, batches 0, ready 0, fallbacks 0, rejects 0, gl errors 0, records 0, indexes 0, submitted 0/0, largest 0, reject 0, buffer 0, range 0/0",
                         "  post/output ownership: mode legacy-fallback, post nodes 1, outputs 1, legacy fallback yes, executable nodes 0, executable outputs 0, post hash 0x01020304, output hash 0x05060708, plan hash 0x090a0b0c, fallback 0x00000001",
                         "  post shader plan: valid yes, features 0x000000de, hash 0x0badcafe, textures 2, uniforms 12, frames 3, invalid 0",
                         "  post shader cache: ready yes, programs 3/32, plans 4 valid/0 invalid, cache 2 hits/3 misses, compile 3 attempts/0 failures, link failures 0, source failures 0, source hash 0x12345678, program 99",
@@ -2737,12 +3679,104 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(projected_shader_uniforms["dynamicBinds"], 0)
             self.assertEqual(projected_shader_uniforms["limitSuppressed"], 0)
             self.assertEqual(projected_shader_uniforms["limit"], 3)
+            projected_shader_resource = diagnostics["metrics"]["dlightProjectedShaderResource"]
+            self.assertEqual(projected_shader_resource["attempts"], 0)
+            self.assertEqual(projected_shader_resource["binds"], 0)
+            self.assertEqual(projected_shader_resource["executable"], 0)
+            self.assertEqual(projected_shader_resource["suppressed"], 0)
+            self.assertEqual(projected_shader_resource["promotions"], 0)
+            self.assertEqual(projected_shader_resource["failures"], 0)
+            self.assertEqual(projected_shader_resource["records"], 0)
+            self.assertEqual(projected_shader_resource["worldExecutable"], 0)
+            self.assertEqual(projected_shader_resource["dynamicExecutable"], 0)
+            self.assertEqual(projected_shader_resource["binding"], 5)
             projected_shader_stream = diagnostics["metrics"]["dlightProjectedShaderStream"]
             self.assertEqual(projected_shader_stream["attempts"], 0)
             self.assertEqual(projected_shader_stream["uploads"], 0)
             self.assertEqual(projected_shader_stream["records"], 0)
             self.assertEqual(projected_shader_stream["bytes"], 0)
             self.assertEqual(projected_shader_stream["persistent"], 0)
+            self.assertEqual(projected_shader_stream["rangeBinds"], 0)
+            self.assertEqual(projected_shader_stream["rangeAttempts"], 0)
+            self.assertEqual(projected_shader_stream["rangeFailures"], 0)
+            self.assertEqual(projected_shader_stream["rangeClears"], 0)
+            projected_shader_arena = diagnostics["metrics"]["dlightProjectedShaderArena"]
+            self.assertEqual(projected_shader_arena["reserves"], 0)
+            self.assertEqual(projected_shader_arena["uploads"], 0)
+            self.assertEqual(projected_shader_arena["failures"], 0)
+            self.assertEqual(projected_shader_arena["wraps"], 0)
+            self.assertEqual(projected_shader_arena["rejects"], 0)
+            self.assertEqual(projected_shader_arena["waits"], 0)
+            self.assertEqual(projected_shader_arena["timeouts"], 0)
+            self.assertEqual(projected_shader_arena["syncFailures"], 0)
+            self.assertEqual(projected_shader_arena["bytes"], 0)
+            self.assertEqual(projected_shader_arena["lightRecords"], 0)
+            self.assertEqual(projected_shader_arena["listRecords"], 0)
+            self.assertEqual(projected_shader_arena["worldRecords"], 0)
+            self.assertEqual(projected_shader_arena["dynamicRecords"], 0)
+            self.assertEqual(projected_shader_arena["rangeBinds"], 0)
+            self.assertEqual(projected_shader_arena["rangeAttempts"], 0)
+            self.assertEqual(projected_shader_arena["rangeFailures"], 0)
+            self.assertEqual(projected_shader_arena["rangeClears"], 0)
+            self.assertEqual(projected_shader_arena["authoritativeBinds"], 0)
+            self.assertEqual(projected_shader_arena["authoritativeAttempts"], 0)
+            self.assertEqual(projected_shader_arena["authoritativeFailures"], 0)
+            self.assertEqual(projected_shader_arena["authoritativeFallbacks"], 0)
+            self.assertEqual(projected_shader_arena["authoritativeClears"], 0)
+            self.assertEqual(projected_shader_arena["bound"], 0)
+            self.assertEqual(projected_shader_arena["cursor"], 0)
+            self.assertEqual(projected_shader_arena["lastBuffer"], 0)
+            self.assertEqual(projected_shader_arena["lastOffset"], 0)
+            self.assertEqual(projected_shader_arena["lastBytes"], 0)
+            projected_shader_mdi = diagnostics["metrics"]["dlightProjectedShaderMdi"]
+            self.assertEqual(projected_shader_mdi["attempts"], 0)
+            self.assertEqual(projected_shader_mdi["eligible"], 0)
+            self.assertEqual(projected_shader_mdi["uploads"], 0)
+            self.assertEqual(projected_shader_mdi["failures"], 0)
+            self.assertEqual(projected_shader_mdi["skipped"], 0)
+            self.assertEqual(projected_shader_mdi["records"], 0)
+            self.assertEqual(projected_shader_mdi["indexes"], 0)
+            self.assertEqual(projected_shader_mdi["bytes"], 0)
+            self.assertEqual(projected_shader_mdi["lastOffset"], 0)
+            self.assertEqual(projected_shader_mdi["lastBytes"], 0)
+            projected_shader_mdi_ring = diagnostics["metrics"]["dlightProjectedShaderMdiCommandRing"]
+            self.assertEqual(projected_shader_mdi_ring["reserves"], 0)
+            self.assertEqual(projected_shader_mdi_ring["commits"], 0)
+            self.assertEqual(projected_shader_mdi_ring["wraps"], 0)
+            self.assertEqual(projected_shader_mdi_ring["failures"], 0)
+            self.assertEqual(projected_shader_mdi_ring["slots"], 256)
+            self.assertEqual(projected_shader_mdi_ring["cursor"], 0)
+            self.assertEqual(projected_shader_mdi_ring["lastSlot"], 0)
+            self.assertEqual(projected_shader_mdi_ring["lastBuffer"], 0)
+            self.assertEqual(projected_shader_mdi_ring["lastOffset"], 0)
+            self.assertEqual(projected_shader_mdi_ring["lastBytes"], 0)
+            projected_shader_mdi_submit = diagnostics["metrics"]["dlightProjectedShaderMdiSubmit"]
+            self.assertEqual(projected_shader_mdi_submit["attempts"], 0)
+            self.assertEqual(projected_shader_mdi_submit["plans"], 0)
+            self.assertEqual(projected_shader_mdi_submit["ready"], 0)
+            self.assertEqual(projected_shader_mdi_submit["fallbacks"], 0)
+            self.assertEqual(projected_shader_mdi_submit["skipped"], 0)
+            self.assertEqual(projected_shader_mdi_submit["records"], 0)
+            self.assertEqual(projected_shader_mdi_submit["indexes"], 0)
+            self.assertEqual(projected_shader_mdi_submit["buffer"], 0)
+            self.assertEqual(projected_shader_mdi_submit["lastOffset"], 0)
+            self.assertEqual(projected_shader_mdi_submit["lastBytes"], 0)
+            projected_shader_mdi_batch = diagnostics["metrics"]["dlightProjectedShaderMdiBatch"]
+            self.assertEqual(projected_shader_mdi_batch["attempts"], 0)
+            self.assertEqual(projected_shader_mdi_batch["batches"], 0)
+            self.assertEqual(projected_shader_mdi_batch["ready"], 0)
+            self.assertEqual(projected_shader_mdi_batch["fallbacks"], 0)
+            self.assertEqual(projected_shader_mdi_batch["rejects"], 0)
+            self.assertEqual(projected_shader_mdi_batch["glErrors"], 0)
+            self.assertEqual(projected_shader_mdi_batch["records"], 0)
+            self.assertEqual(projected_shader_mdi_batch["indexes"], 0)
+            self.assertEqual(projected_shader_mdi_batch["submittedDraws"], 0)
+            self.assertEqual(projected_shader_mdi_batch["submittedIndexes"], 0)
+            self.assertEqual(projected_shader_mdi_batch["largest"], 0)
+            self.assertEqual(projected_shader_mdi_batch["lastReject"], 0)
+            self.assertEqual(projected_shader_mdi_batch["buffer"], 0)
+            self.assertEqual(projected_shader_mdi_batch["lastOffset"], 0)
+            self.assertEqual(projected_shader_mdi_batch["lastBytes"], 0)
             color_pipeline = diagnostics["metrics"]["colorPipeline"]
             self.assertEqual(color_pipeline["space"], "scene-linear")
             self.assertEqual(color_pipeline["transfer"], "sdr-srgb")
@@ -2868,6 +3902,150 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(uniforms["dynamicExecutable"], 1)
             self.assertEqual(uniforms["dynamicBinds"], 1)
 
+    def test_projected_dlight_shader_profile_accepts_promoted_resource_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-shader-resource.log"
+            self.write_projected_dlight_shader_profile_log(
+                log,
+                dynamic_inputs=4,
+                dynamic_executable=1,
+                dynamic_binds=1,
+                uniform_records=0,
+                resource_attempts=1,
+                resource_binds=1,
+                resource_executable=1,
+                resource_promotions=1,
+                resource_records=4,
+                resource_dynamic_executable=1,
+                stream_range_binds=1,
+                stream_range_clears=1,
+                arena_range_binds=1,
+                arena_range_clears=1,
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-shader")
+
+            self.assertEqual(diagnostics["failures"], [])
+            resource = diagnostics["metrics"]["dlightProjectedShaderResource"]
+            self.assertEqual(resource["attempts"], 1)
+            self.assertEqual(resource["promotions"], 1)
+            self.assertEqual(resource["records"], 4)
+            self.assertEqual(resource["dynamicExecutable"], 1)
+
+    def test_projected_dlight_shader_visual_parity_accepts_compared_proof(self) -> None:
+        manifest = projected_dlight_shader_parity_manifest()
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+        evidence = glx_runtime_sweep.projected_dlight_shader_parity_evidence(manifest)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(evidence["status"], "passed")
+        self.assertTrue(evidence["required"])
+        self.assertEqual(evidence["screenshots"], 2)
+        self.assertEqual(evidence["timedemoScreenshots"], 1)
+        self.assertEqual(evidence["legacyFallbackScreenshots"], 2)
+        self.assertEqual(evidence["timedemos"], 1)
+        self.assertGreater(evidence["worldExecutable"], 0)
+        self.assertGreater(evidence["dynamicExecutable"], 0)
+        self.assertGreater(evidence["resourcePromotions"], 0)
+
+    def test_projected_dlight_shader_visual_parity_rejects_incomplete_proof(self) -> None:
+        manifest = projected_dlight_shader_parity_manifest(
+            screenshot_comparison={
+                "status": "failed",
+                "reason": "diff-threshold",
+                "rms": 4.0,
+                "changedPixelRatio": 0.1,
+            },
+            metrics=projected_dlight_shader_metrics(
+                world_inputs=0,
+                dynamic_inputs=1,
+                world_executable=0,
+                dynamic_executable=0,
+                resource_promotions=0,
+                resource_executable=0,
+                resource_records=0,
+            ),
+            baseline_status="failed",
+        )
+        manifest["runs"] = [
+            run for run in manifest["runs"]
+            if run.get("type") != "timedemo"
+        ]
+        manifest["projectedDlightShaderParityEvidence"] = (
+            glx_runtime_sweep.projected_dlight_shader_parity_evidence(manifest)
+        )
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+        text = "\n".join(failures)
+
+        self.assertIn("legacy fallback baseline", text)
+        self.assertIn("screenshot comparison did not pass", text)
+        self.assertIn("missing GLx timedemo log evidence", text)
+        self.assertIn("missing compared GLx timedemo screenshot", text)
+        self.assertIn("static-world projected-light inputs", text)
+        self.assertIn("dynamic-draw projected-light binds", text)
+        self.assertIn("over-limit shader-resource promotion", text)
+
+    def test_projected_dlight_shader_visual_parity_rejects_missing_same_run_reference(self) -> None:
+        manifest = projected_dlight_shader_parity_manifest()
+        screenshots = manifest["runs"][0]["screenshots"]
+        manifest["runs"][0]["screenshots"] = [
+            shot for shot in screenshots
+            if not shot.get("skipExternalBaseline")
+        ]
+        manifest["runs"][0]["screenshots"][0].pop("legacyFallbackComparison", None)
+        manifest["projectedDlightShaderParityEvidence"] = (
+            glx_runtime_sweep.projected_dlight_shader_parity_evidence(manifest)
+        )
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+        text = "\n".join(failures)
+
+        self.assertIn("same-run legacy fallback capture", text)
+        self.assertIn("legacy fallback reference", text)
+
+    def test_projected_dlight_shader_visual_parity_dossier_summarizes_evidence(self) -> None:
+        manifest = projected_dlight_shader_parity_manifest()
+
+        dossier = glx_runtime_sweep.glx_visual_dossier(manifest, Path("manifest.json"))
+
+        self.assertIn("## Projected Dlight Shader Parity", dossier)
+        self.assertIn("| passed | q3dm1 | demo1 | 2 | 2 | 2 | 2 | 1 | 1 |", dossier)
+        self.assertIn("2.000", dossier)
+        self.assertIn("0.500%", dossier)
+
+    def test_projected_dlight_shader_markdown_summary_summarizes_evidence(self) -> None:
+        manifest = projected_dlight_shader_parity_manifest()
+
+        summary = glx_runtime_sweep.markdown_summary(manifest, Path("manifest.json"))
+
+        self.assertIn("## Projected Dlight Shader Parity", summary)
+        self.assertIn("candidateScreenshots=2", summary)
+        self.assertIn("legacyRefs=2", summary)
+        self.assertIn("timedemoScreenshots=1", summary)
+        self.assertIn("reviewed=2", summary)
+        self.assertIn("sameRun=2", summary)
+        self.assertIn("resourcePromotions=2", summary)
+
+    def test_projected_dlight_shader_release_record_summarizes_evidence(self) -> None:
+        manifest = projected_dlight_shader_parity_manifest()
+
+        record = glx_runtime_sweep.release_proof_manifest_record(
+            manifest,
+            Path("proof/windows-x64/glx-dlight-shader/manifest.json"),
+            Path("proof"),
+        )
+        parity = record["projectedDlightShaderParity"]
+
+        self.assertEqual(parity["status"], "passed")
+        self.assertEqual(parity["mapCandidates"], ["q3dm1"])
+        self.assertEqual(parity["demoCandidates"], ["demo1"])
+        self.assertEqual(parity["candidateScreenshots"], 2)
+        self.assertEqual(parity["legacyFallbackScreenshots"], 2)
+        self.assertEqual(parity["reviewedComparisonsPassed"], 2)
+        self.assertEqual(parity["sameRunComparisonsPassed"], 2)
+
     def test_projected_dlight_shader_profile_rejects_suppressed_uniforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "dlight-shader-suppressed.log"
@@ -2904,6 +4082,30 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertIn("truncated projected uniform input", failures)
             self.assertIn("suppressed over-limit projected uniform binds", failures)
 
+    def test_projected_dlight_shader_profile_rejects_failed_resource_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-shader-resource-failed.log"
+            self.write_projected_dlight_shader_profile_log(
+                log,
+                dynamic_inputs=4,
+                dynamic_executable=1,
+                dynamic_binds=1,
+                uniform_records=0,
+                resource_attempts=1,
+                resource_failures=1,
+                resource_suppressed=1,
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-shader")
+            failures = "\n".join(diagnostics["failures"])
+
+            self.assertIn("bound fewer shader records", failures)
+            self.assertIn("reported projected-light resource failures", failures)
+            self.assertIn("suppressed projected-light resource binds", failures)
+            self.assertIn("did not promote over-limit resource binds", failures)
+            self.assertIn("did not execute promoted resource binds", failures)
+            self.assertIn("did not bind promoted resource records", failures)
+
     def test_projected_dlight_shader_profile_rejects_missing_world_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "dlight-shader-world-missing.log"
@@ -2923,6 +4125,140 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             failures = "\n".join(diagnostics["failures"])
 
             self.assertIn("did not execute projected uniform binds for world packets", failures)
+
+    def test_projected_dlight_shader_profile_rejects_mismatched_projected_input_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-shader-input-mismatch.log"
+            self.write_projected_dlight_shader_profile_log(
+                log,
+                world_inputs=1,
+                dynamic_inputs=1,
+                world_executable=1,
+                world_binds=1,
+                dynamic_executable=1,
+                dynamic_binds=1,
+                render_ir_projected_world=0,
+                render_ir_projected_dynamic=0,
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-shader")
+            failures = "\n".join(diagnostics["failures"])
+
+            self.assertIn("mismatched projected-light world input evidence", failures)
+            self.assertIn("mismatched projected-light dynamic input evidence", failures)
+
+    def test_projected_dlight_shader_profile_rejects_stale_resource_ranges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-shader-stale-ranges.log"
+            self.write_projected_dlight_shader_profile_log(
+                log,
+                stream_failures=1,
+                stream_range_binds=2,
+                stream_range_failures=1,
+                stream_range_clears=1,
+                arena_range_binds=1,
+                arena_range_failures=1,
+                arena_range_clears=0,
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-shader")
+            failures = "\n".join(diagnostics["failures"])
+
+            self.assertIn("reported projected-light stream upload failures", failures)
+            self.assertIn("reported projected-light stream range failures", failures)
+            self.assertIn("left stale projected-light stream resource ranges", failures)
+            self.assertIn("reported projected-light arena range failures", failures)
+            self.assertIn("left stale projected-light arena ranges", failures)
+
+    def test_projected_dlight_mdi_profile_accepts_submitted_batches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-mdi.log"
+            self.write_projected_dlight_mdi_profile_log(log)
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-mdi")
+
+            self.assertTrue(diagnostics["found"])
+            self.assertEqual(diagnostics["failures"], [])
+            arena = diagnostics["metrics"]["dlightProjectedShaderArena"]
+            self.assertEqual(arena["reserves"], 1)
+            self.assertEqual(arena["uploads"], 1)
+            self.assertEqual(arena["failures"], 0)
+            self.assertEqual(arena["lightRecords"], 1)
+            self.assertEqual(arena["listRecords"], 1)
+            self.assertEqual(arena["rangeBinds"], 1)
+            self.assertEqual(arena["authoritativeBinds"], 1)
+            self.assertEqual(arena["authoritativeFailures"], 0)
+            self.assertEqual(arena["authoritativeFallbacks"], 0)
+            mdi_commands = diagnostics["metrics"]["dlightProjectedShaderMdi"]
+            self.assertEqual(mdi_commands["eligible"], 1)
+            self.assertEqual(mdi_commands["uploads"], 1)
+            mdi_ring = diagnostics["metrics"]["dlightProjectedShaderMdiCommandRing"]
+            self.assertEqual(mdi_ring["reserves"], 1)
+            self.assertEqual(mdi_ring["commits"], 1)
+            self.assertEqual(mdi_ring["failures"], 0)
+            self.assertEqual(mdi_ring["slots"], 256)
+            mdi_submit = diagnostics["metrics"]["dlightProjectedShaderMdiSubmit"]
+            self.assertEqual(mdi_submit["plans"], 1)
+            self.assertEqual(mdi_submit["ready"], 1)
+            mdi_batch = diagnostics["metrics"]["dlightProjectedShaderMdiBatch"]
+            self.assertEqual(mdi_batch["ready"], 1)
+            self.assertEqual(mdi_batch["submittedDraws"], 1)
+            self.assertEqual(mdi_batch["submittedIndexes"], 6)
+
+    def test_projected_dlight_mdi_profile_rejects_failed_submissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "dlight-mdi-fallback.log"
+            self.write_projected_dlight_mdi_profile_log(
+                log,
+                command_failures=1,
+                arena_uploads=0,
+                arena_failures=1,
+                arena_rejects=1,
+                arena_timeouts=1,
+                arena_sync_failures=1,
+                arena_light_records=0,
+                arena_list_records=0,
+                arena_range_binds=0,
+                arena_range_failures=1,
+                arena_authoritative_binds=0,
+                arena_authoritative_failures=1,
+                arena_authoritative_fallbacks=1,
+                ring_commits=0,
+                ring_failures=1,
+                submit_ready=0,
+                submit_fallbacks=1,
+                batch_ready=0,
+                batch_fallbacks=1,
+                batch_rejects=1,
+                batch_gl_errors=1,
+                submitted_draws=0,
+                submitted_indexes=0,
+            )
+
+            diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-mdi")
+            failures = "\n".join(diagnostics["failures"])
+
+            self.assertIn("did not upload projected-light arena records", failures)
+            self.assertIn("did not record projected-light arena list evidence", failures)
+            self.assertIn("did not bind projected-light arena ranges", failures)
+            self.assertIn("reported projected-light arena failures", failures)
+            self.assertIn("reported projected-light arena wrap rejects", failures)
+            self.assertIn("reported projected-light arena sync timeouts", failures)
+            self.assertIn("reported projected-light arena sync failures", failures)
+            self.assertIn("reported projected-light arena range failures", failures)
+            self.assertIn("did not bind authoritative projected-light arena ranges", failures)
+            self.assertIn("reported authoritative projected-light arena failures", failures)
+            self.assertIn("reported authoritative projected-light arena fallbacks", failures)
+            self.assertIn("indirect command upload failures", failures)
+            self.assertIn("did not commit indirect command ring slots", failures)
+            self.assertIn("reported indirect command ring failures", failures)
+            self.assertIn("did not produce submit-ready plans", failures)
+            self.assertIn("reported submit fallbacks", failures)
+            self.assertIn("did not produce ready MDI batches", failures)
+            self.assertIn("did not submit projected-dlight MDI batches", failures)
+            self.assertIn("reported batch fallbacks", failures)
+            self.assertIn("reported batch rejects", failures)
+            self.assertIn("reported GL errors", failures)
 
     def test_glx_diagnostics_reject_stream_dlights_without_ir_ownership(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4363,6 +5699,16 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             },
         )
         self.assertEqual(
+            glx_runtime_sweep.PROFILE_CVARS["glx-dlight-mdi"],
+            {
+                "r_glxProfile": "rc",
+                **glx_runtime_sweep.GLX_RC_PROFILE_CVARS,
+                "r_dynamiclight": "1",
+                "r_glxDlightProjectedProgram": "1",
+                "r_glxDlightProjectedMdi": "1",
+            },
+        )
+        self.assertEqual(
             glx_runtime_sweep.PROFILE_CVARS["glx-stress"],
             {"r_glxProfile": "stress", **glx_runtime_sweep.GLX_STRESS_PROFILE_CVARS},
         )
@@ -4390,6 +5736,10 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                 "greyscale-proof",
                 "render-scale-proof",
                 "performance-comparison",
+                "projected-dlight-parity",
+                "projected-dlight-static-world",
+                "projected-dlight-dynamic",
+                "projected-dlight-resource-overlimit",
             }.issubset(all_tags)
         )
 
@@ -4411,6 +5761,14 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             glx_runtime_sweep.corpus_scene_ids_for_profile("glx-dlight-shader"),
             ("stock-q3dm1-hud", "timedemo-demo1"),
         )
+        self.assertEqual(
+            glx_runtime_sweep.profile_parity_suite_ids("glx-dlight-shader"),
+            ("projected-dlight-shader",),
+        )
+        self.assertEqual(
+            glx_runtime_sweep.corpus_scene_ids_for_profile("glx-dlight-mdi"),
+            ("stock-q3dm1-hud", "timedemo-demo1"),
+        )
         self.assertEqual(glx_runtime_sweep.PROFILE_CVARS["glx-color"]["r_colorGrade"], "3")
 
     def test_task_v_parity_suites_are_versioned_and_gate_enforced(self) -> None:
@@ -4423,6 +5781,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             "cel-shading",
             "greyscale",
             "render-scale",
+            "projected-dlight-shader",
         )
         self.assertEqual(set(glx_runtime_sweep.GLX_PARITY_SUITES), set(required_suites))
 
@@ -4468,6 +5827,75 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         q3dm11_shots = [shot for shot in expected_shots if shot["map"] == "q3dm11"]
         self.assertTrue(all("shadow" in shot["paritySuiteIds"] for shot in q3dm6_shots))
         self.assertTrue(all("cel-shading" in shot["paritySuiteIds"] for shot in q3dm11_shots))
+
+        dlight_args = argparse.Namespace(
+            startup_wait=1,
+            map_wait=1,
+            switch_wait=1,
+            screenshot_wait=1,
+            perf_sample_wait=0,
+            switch_rounds=1,
+            profile="glx-dlight-shader",
+            no_perf_samples=True,
+        )
+        dlight_cfg, dlight_shots = glx_runtime_sweep.build_switch_cfg(
+            dlight_args,
+            {},
+            ["q3dm1"],
+            ["opengl", "glx"],
+            "projected-dlight-suite-test",
+            "gd12345678",
+            glx_runtime_sweep.corpus_scene_ids_for_profile("glx-dlight-shader"),
+            glx_runtime_sweep.profile_parity_suite_ids("glx-dlight-shader"),
+        )
+        self.assertIn('set r_glxDlightProjectedProgram "1"', dlight_cfg)
+        self.assertIn('set r_glxDlightProjectedProgram "0"', dlight_cfg)
+        dlight_glx_shots = [shot for shot in dlight_shots if shot["renderer"] == "glx"]
+        self.assertEqual(len(dlight_glx_shots), 2)
+        legacy_shot = next(
+            shot for shot in dlight_glx_shots
+            if shot["projectedDlightShaderParityRole"] ==
+            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+        )
+        glx_shot = next(
+            shot for shot in dlight_glx_shots
+            if shot["projectedDlightShaderParityRole"] ==
+            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+        )
+        self.assertTrue(legacy_shot["skipExternalBaseline"])
+        self.assertTrue(glx_shot["projectedDlightShaderParity"])
+        self.assertEqual(glx_shot["legacyFallbackBaseline"], "opengl-projected-light")
+        self.assertEqual(glx_shot["legacyFallbackCaptureName"], legacy_shot["name"])
+        self.assertEqual(glx_shot["baselineSourceName"], legacy_shot["name"])
+        self.assertIn("projected-dlight-legacy-fallback", glx_shot["baselineKey"])
+        demo_cfg, demo_shots = glx_runtime_sweep.build_demo_cfg(
+            dlight_args,
+            {},
+            "demo1",
+            "glx",
+            "gd12345678",
+            glx_runtime_sweep.corpus_scene_ids_for_profile("glx-dlight-shader"),
+            glx_runtime_sweep.profile_parity_suite_ids("glx-dlight-shader"),
+        )
+        self.assertIn('set r_glxDlightProjectedProgram "0"', demo_cfg)
+        self.assertIn("glx_dlight_demo_legacy_capture", demo_cfg)
+        self.assertIn("glx_dlight_demo_shader_run", demo_cfg)
+        self.assertIn("glx_dlight_demo_shader_capture", demo_cfg)
+        self.assertIn("demo demo1", demo_cfg)
+        self.assertEqual(len(demo_shots), 2)
+        demo_legacy = next(
+            shot for shot in demo_shots
+            if shot["projectedDlightShaderParityRole"] ==
+            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
+        )
+        demo_candidate = next(
+            shot for shot in demo_shots
+            if shot["projectedDlightShaderParityRole"] ==
+            glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
+        )
+        self.assertTrue(demo_legacy["projectedDlightShaderTimedemoParity"])
+        self.assertEqual(demo_candidate["legacyFallbackCaptureName"], demo_legacy["name"])
+        self.assertIn("projected-dlight-demo-legacy-fallback", demo_candidate["baselineKey"])
 
         broken = dict(proof_corpus)
         broken["paritySuiteIds"] = ["screenshot"]
@@ -4606,22 +6034,225 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
         self.assertEqual(startup["r_dlightShadows"], "1")
         self.assertEqual(startup["r_dlightShadowMaxLights"], "8")
+        self.assertEqual(startup["r_staticLights"], "1")
+        self.assertEqual(startup["r_staticLightShadows"], "1")
+        self.assertEqual(startup["r_csmShadows"], "1")
+        self.assertEqual(startup["r_csmResolution"], "512")
+        self.assertEqual(startup["r_csmDebugFallback"], "0")
+        self.assertEqual(startup["r_spotShadows"], "1")
+        self.assertEqual(startup["r_spotShadowResolution"], "512")
+        self.assertEqual(startup["r_surfaceLightProxies"], "1")
+        self.assertEqual(startup["r_surfaceLightProxyShadows"], "1")
         self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN world-geometry", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN csm-sky-sun", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN csm-shimmer-path", cfg)
+        self.assertIn("echo CSM_SHIMMER_STEP_BEGIN csm-shimmer-path baseline", cfg)
+        self.assertIn("setviewpos 0.000 0.000 512.000 -10.000 90.000 0.000", cfg)
+        self.assertIn("setviewpos 0.000 0.000 512.000 -10.000 90.030 0.000", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN surfacelight-large-planar", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN combined-shadow-atlas", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-no-world", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-atlas-unavailable", cfg)
         self.assertIn("devmap q3dm6", cfg)
         self.assertIn("devmap q3dm11", cfg)
+        self.assertIn("devmap q3dm17", cfg)
+        self.assertIn("set r_csmShadows \"1\"", cfg)
+        self.assertIn("set r_csmDebug \"1\"", cfg)
+        self.assertIn("set r_csmDebugFallback \"1\"", cfg)
+        self.assertIn("set r_csmDebugFallback \"4\"", cfg)
+        self.assertIn("set r_staticLightDebug \"1\"", cfg)
+        self.assertIn("set r_surfaceLightProxies \"1\"", cfg)
+        self.assertIn("set r_surfaceLightProxyShadows \"1\"", cfg)
+        self.assertIn("set r_spotShadows \"1\"", cfg)
         self.assertIn("r_dlightTest 8 720 224 48 0", cfg)
+        self.assertIn("r_dlightTest 8 780 224 56 0", cfg)
         self.assertIn("r_dlightTest 16 900 256 72 0", cfg)
         self.assertIn("set r_speeds \"4\"", cfg)
         self.assertTrue(all(shot["shadowScene"] for shot in expected_shots))
+        csm_path_shots = [shot for shot in expected_shots if shot.get("csmCameraPath")]
+        self.assertEqual(len(csm_path_shots), len(glx_runtime_sweep.CSM_SHIMMER_CAMERA_PATH))
+        self.assertEqual(
+            [shot["csmPathStep"] for shot in csm_path_shots],
+            ["baseline", "nudge-forward", "nudge-side", "micro-yaw"],
+        )
         self.assertEqual(
             glx_runtime_sweep.dlight_shadow_scene_categories(expected_shots),
             set(glx_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES),
         )
         self.assertTrue(
             any(
+                shot["baselineKey"]
+                == "glx-parity-dlight-shadows-csm-shimmer-path-baseline-q3dm17-glx"
+                for shot in expected_shots
+            )
+        )
+        self.assertTrue(
+            any(
                 shot["baselineKey"] == "glx-parity-dlight-shadows-stress-light-budget-q3dm6-glx"
                 for shot in expected_shots
             )
+        )
+        combined = next(
+            scene for scene in scenes
+            if scene["id"] == glx_runtime_sweep.COMBINED_SHADOW_ATLAS_SCENE_ID
+        )
+        self.assertEqual(combined["sidecarLights"][0]["type"], "spot")
+
+    def test_dlight_shadow_sidecar_lights_are_staged_under_homepath(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records = glx_runtime_sweep.write_dlight_shadow_sidecar_lights(
+                root,
+                "",
+                glx_runtime_sweep.dlight_shadow_evidence_scenes(),
+            )
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["map"], "q3dm6")
+            sidecar = root / "baseq3" / "maps" / "q3dm6.lights.json"
+            self.assertTrue(sidecar.exists())
+            text = sidecar.read_text(encoding="utf-8")
+            self.assertIn('"type": "spot"', text)
+            self.assertIn('"combined-sidecar-spot"', text)
+
+    def test_combined_shadow_atlas_summary_requires_all_active_atlas_types(self) -> None:
+        maximum = dict(combined_shadow_atlas_summary()["max"])
+        dlight_shadow = {
+            "shadowManager": {
+                "scenes": {
+                    glx_runtime_sweep.COMBINED_SHADOW_ATLAS_SCENE_ID: {
+                        "sampleCount": 1,
+                        "max": maximum,
+                    },
+                },
+            },
+        }
+
+        summary = glx_runtime_sweep.combined_shadow_atlas_summary(dlight_shadow)
+
+        self.assertEqual(summary["status"], "passed")
+        self.assertTrue(glx_runtime_sweep.combined_shadow_atlas_summary_active(summary))
+
+        maximum["spotStaticPlans"] = 0
+        maximum["scheduledMask"] = 0x0B
+        failed = glx_runtime_sweep.combined_shadow_atlas_summary(dlight_shadow)
+
+        self.assertEqual(failed["status"], "failed")
+        self.assertTrue(
+            any("static sidecar spot" in failure for failure in failed["failures"])
+        )
+        self.assertTrue(
+            any("schedule mask" in failure for failure in failed["failures"])
+        )
+
+    def test_csm_fallback_summary_requires_no_csm_publication(self) -> None:
+        manager_samples = [
+            {
+                **shadow_manager_sample(),
+                "noworld": 1,
+                "scheduledPasses": 1,
+                "scheduledMask": 1,
+                "csmAtlasScheduled": 0,
+                "csmReceiverScheduled": 0,
+                "csmPublished": 0,
+                "csmCascadeCount": 0,
+                "csmAtlasWidth": 0,
+                "csmAtlasHeight": 0,
+                "csmGeneration": 0,
+            }
+            for _reason in glx_runtime_sweep.CSM_FALLBACK_REQUIRED_REASONS
+        ]
+        fallback_samples = [
+            {
+                "csmFallbackSamples": 1,
+                "csmFallbackCascades": 0,
+                "csmFallbackNoWorld": 1 if reason == "no-world" else 0,
+                "csmFallbackNoSun": 1 if reason == "no-sky-sun" else 0,
+                "csmFallbackAtlasUnavailable": 1 if reason == "atlas" else 0,
+                "csmFallbackZeroCascade": 1 if reason == "zero-cascade" else 0,
+                "csmFallbackProjection": 0,
+                "csmFallbackStrength": 0,
+                "csmFallbackDisabled": 0,
+            }
+            for reason in glx_runtime_sweep.CSM_FALLBACK_REQUIRED_REASONS
+        ]
+
+        summary = glx_runtime_sweep.csm_fallback_summary(
+            manager_samples,
+            fallback_samples,
+            glx_runtime_sweep.CSM_FALLBACK_REQUIRED_REASONS,
+        )
+
+        self.assertEqual(summary["status"], "passed")
+        self.assertTrue(glx_runtime_sweep.csm_fallback_summary_active(summary))
+
+        manager_samples[0]["csmPublished"] = 1
+        failed = glx_runtime_sweep.csm_fallback_summary(
+            manager_samples,
+            fallback_samples[:-1],
+            glx_runtime_sweep.CSM_FALLBACK_REQUIRED_REASONS,
+        )
+
+        self.assertEqual(failed["status"], "failed")
+        self.assertTrue(
+            any("csmPublished" in failure for failure in failed["failures"])
+        )
+        self.assertTrue(
+            any("zero-cascade" in failure for failure in failed["failures"])
+        )
+
+    def test_csm_fallback_skip_logs_are_scene_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "glx.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-no-world",
+                        "shadow manager view:1 frame:7 noworld:1 sched:1 mask:1 "
+                        "p:1 s:0 ca:0 cr:0 pub p:1 s:0 c:0 inputs dlight:4 "
+                        "point:1/4 cand:1 records:1/1 atlas:512x256/128 "
+                        "fill:25% gen:9 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:0 atlas:0x0 gen:0",
+                        "csm plan cascades:0 skip no-world",
+                        "DLIGHT_SHADOW_SCENE_END csm-fallback-no-world",
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-no-sun",
+                        "shadow manager view:1 frame:8 noworld:0 sched:1 mask:1 "
+                        "p:1 s:0 ca:0 cr:0 pub p:1 s:0 c:0 inputs dlight:4 "
+                        "point:1/4 cand:1 records:1/1 atlas:512x256/128 "
+                        "fill:25% gen:10 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:0 atlas:0x0 gen:0",
+                        "csm plan cascades:0 skip no-sky-sun",
+                        "DLIGHT_SHADOW_SCENE_END csm-fallback-no-sun",
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-atlas-unavailable",
+                        "shadow manager view:1 frame:9 noworld:0 sched:1 mask:1 "
+                        "p:1 s:0 ca:0 cr:0 pub p:1 s:0 c:0 inputs dlight:4 "
+                        "point:1/4 cand:1 records:1/1 atlas:512x256/128 "
+                        "fill:25% gen:11 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:0 atlas:0x0 gen:0",
+                        "csm plan cascades:0 skip atlas",
+                        "DLIGHT_SHADOW_SCENE_END csm-fallback-atlas-unavailable",
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-zero-cascade",
+                        "shadow manager view:1 frame:10 noworld:0 sched:1 mask:1 "
+                        "p:1 s:0 ca:0 cr:0 pub p:1 s:0 c:0 inputs dlight:4 "
+                        "point:1/4 cand:1 records:1/1 atlas:512x256/128 "
+                        "fill:25% gen:12 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:0 atlas:0x0 gen:0",
+                        "csm plan cascades:0 skip zero-cascade",
+                        "DLIGHT_SHADOW_SCENE_END csm-fallback-zero-cascade",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            analysis = glx_runtime_sweep.analyze_dlight_shadow_log(log)
+
+        fallback = analysis["csmFallbacks"]
+        self.assertEqual(fallback["status"], "passed")
+        self.assertEqual(fallback["fallbackSampleCount"], 4)
+        self.assertEqual(fallback["reasonCoverage"]["atlas"], True)
+        self.assertEqual(
+            fallback["scenes"]["csm-fallback-no-world"]["max"]["noworld"],
+            1,
         )
 
     def test_dlight_shadow_log_analysis_extracts_active_samples(self) -> None:
@@ -4631,9 +6262,72 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                 "\n".join(
                     [
                         "DLIGHT_SHADOW_SCENE_BEGIN world-geometry",
+                        "shadow manager view:1 frame:2 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100 200 300 400 "
+                        "caster:20 cache h/m/u:1/1/0 "
+                        "cpu:2ms recv world:12 ent:3",
+                        "surfacelight spot plan cand:3 plan:2 req:128-512 "
+                        "foot:96-640 caster:256-1200 planreq:128-512 "
+                        "tile:128-256 cone:0-0/45-65 alloc:2 "
+                        "atlas:1024x1024/256 fill:12% reject weak:1 offview:2 "
+                        "budget:1 malformed:1",
                         "dlight shadows plan:2/4 cand:3 atlas:1024x512/128 fill:75% "
                         "render lights:2 faces:10 batches:5 draws:5 surfs:20 cpu:1ms",
                         "DLIGHT_SHADOW_SCENE_END world-geometry",
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-shimmer-path",
+                        "shadow manager view:1 frame:3 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100.0 200.0 300.0 400.0 "
+                        "caster:20 cache h/m/u:0/1/0 cpu:2ms recv world:12 ent:3",
+                        "shadow manager view:1 frame:4 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "caster:20 cache h/m/u:1/1/0 cpu:0ms recv world:12 ent:3",
+                        "shadow manager view:1 frame:5 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "caster:20 cache h/m/u:2/1/0 cpu:0ms recv world:12 ent:3",
+                        "shadow manager view:1 frame:6 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:8 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:8",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "caster:20 cache h/m/u:2/2/0 cpu:1ms recv world:12 ent:3",
+                        "DLIGHT_SHADOW_SCENE_END csm-shimmer-path",
                     ]
                 ),
                 encoding="utf-8",
@@ -4645,6 +6339,99 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(analysis["max"]["planned"], 2)
         self.assertEqual(analysis["max"]["renderLights"], 2)
         self.assertEqual(analysis["scenes"]["world-geometry"]["max"]["planned"], 2)
+        manager = analysis["shadowManager"]
+        self.assertTrue(manager["found"])
+        self.assertEqual(manager["max"]["pointScheduled"], 1)
+        self.assertEqual(manager["max"]["pointPublished"], 1)
+        self.assertEqual(manager["max"]["csmAtlasScheduled"], 1)
+        self.assertEqual(manager["max"]["csmPublished"], 1)
+        self.assertEqual(manager["max"]["spotStaticCandidates"], 0)
+        self.assertEqual(
+            manager["scenes"]["world-geometry"]["max"]["pointRecords"],
+            2,
+        )
+        surface_spot = analysis["surfaceLightSpot"]
+        self.assertTrue(surface_spot["found"])
+        self.assertEqual(surface_spot["max"]["surfaceSpotCandidates"], 3)
+        self.assertEqual(surface_spot["max"]["surfaceSpotPlans"], 2)
+        self.assertEqual(surface_spot["max"]["surfaceSpotFootprintMax"], 640)
+        self.assertEqual(surface_spot["max"]["surfaceSpotCasterRadiusMax"], 1200)
+        self.assertEqual(surface_spot["max"]["surfaceSpotTileMax"], 256)
+        self.assertEqual(surface_spot["max"]["surfaceSpotRejectedMalformed"], 1)
+        self.assertEqual(
+            surface_spot["scenes"]["world-geometry"]["max"]["surfaceSpotAllocated"],
+            2,
+        )
+        lod = analysis["surfaceLightSpotLod"]
+        self.assertTrue(lod["found"])
+        self.assertEqual(lod["status"], "passed")
+        self.assertEqual(
+            lod["requestedTiles"],
+            {"low": True, "nominal": True, "promoted": True},
+        )
+        self.assertEqual(lod["maxRequestedTile"], 512)
+        self.assertEqual(lod["maxEffectiveTile"], 256)
+        self.assertEqual(lod["maxAtlasTile"], 256)
+        self.assertEqual(lod["maxFill"], 12)
+        self.assertEqual(lod["scenes"]["world-geometry"]["status"], "passed")
+        csm = analysis["csmShadows"]
+        self.assertTrue(csm["found"])
+        self.assertEqual(csm["status"], "passed")
+        self.assertEqual(csm["max"]["csmCascadeCount"], 4)
+        self.assertEqual(csm["max"]["csmDebugResolution"], 512)
+        self.assertEqual(csm["max"]["csmCacheEvents"], 4)
+        self.assertEqual(csm["scenes"]["world-geometry"]["status"], "passed")
+        stability = analysis["csmStability"]
+        self.assertTrue(stability["found"])
+        self.assertEqual(stability["status"], "passed")
+        self.assertEqual(stability["managerSampleCount"], 4)
+        self.assertEqual(stability["debugSampleCount"], 4)
+        self.assertEqual(stability["generationDelta"], 1)
+        self.assertEqual(stability["maxSnapDepthDeltaMilli"], 500)
+        self.assertEqual(stability["max"]["csmCacheEvents"], 4)
+        self.assertEqual(stability["scenes"]["csm-shimmer-path"]["status"], "passed")
+
+    def test_surface_light_spot_lod_smoke_reports_bad_ranges(self) -> None:
+        summary = glx_runtime_sweep.surface_light_spot_lod_summary(
+            [
+                {
+                    "surfaceSpotRequestedTileMin": 128,
+                    "surfaceSpotRequestedTileMax": 768,
+                    "surfaceSpotPlanRequestedTileMin": 128,
+                    "surfaceSpotPlanRequestedTileMax": 768,
+                    "surfaceSpotTileMin": 128,
+                    "surfaceSpotTileMax": 512,
+                    "surfaceSpotAtlasTileSize": 256,
+                    "surfaceSpotAtlasFill": 92,
+                }
+            ]
+        )
+
+        self.assertEqual(summary["status"], "failed")
+        self.assertTrue(
+            any("requested tile exceeded cap" in failure for failure in summary["failures"])
+        )
+        self.assertTrue(
+            any("effective tile exceeded atlas tile" in failure for failure in summary["failures"])
+        )
+        self.assertTrue(any("atlas fill exceeded" in failure for failure in summary["failures"]))
+        missing = glx_runtime_sweep.surface_light_spot_lod_summary(
+            [
+                {
+                    "surfaceSpotRequestedTileMin": 128,
+                    "surfaceSpotRequestedTileMax": 256,
+                    "surfaceSpotPlanRequestedTileMin": 128,
+                    "surfaceSpotPlanRequestedTileMax": 256,
+                    "surfaceSpotTileMin": 128,
+                    "surfaceSpotTileMax": 256,
+                    "surfaceSpotAtlasTileSize": 256,
+                    "surfaceSpotAtlasFill": 12,
+                }
+            ]
+        )
+        self.assertTrue(
+            any("promoted(512)" in failure for failure in missing["failures"])
+        )
 
     def test_gate_evaluation_requires_dlight_shadow_scene_evidence(self) -> None:
         manifest = release_proof_manifest("rc-parity", "linux-x86_64")
@@ -4670,6 +6457,78 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         failures = glx_runtime_sweep.evaluate_gate(manifest)
 
         self.assertTrue(any("stress-light-budget" in failure for failure in failures))
+
+    def test_gate_evaluation_requires_shadow_manager_runtime_evidence(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        shadow_run = next(
+            run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
+        )
+        shadow_run["dlightShadow"].pop("shadowManager")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("shadow manager" in failure for failure in failures))
+
+    def test_gate_evaluation_requires_surface_light_spot_runtime_evidence(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        shadow_run = next(
+            run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
+        )
+        shadow_run["dlightShadow"].pop("surfaceLightSpot")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(
+            any("surfacelight spot manager" in failure for failure in failures)
+        )
+
+    def test_gate_evaluation_requires_csm_runtime_evidence(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        shadow_run = next(
+            run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
+        )
+        shadow_run["dlightShadow"].pop("csmShadows")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("CSM runtime" in failure for failure in failures))
+
+    def test_gate_evaluation_requires_csm_shimmer_screenshot_diff_smoke(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        shadow_run = next(
+            run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
+        )
+        shadow_run["csmShimmerScreenshots"] = csm_shimmer_screenshot_summary("failed")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(
+            any("CSM shimmer screenshot diff smoke" in failure for failure in failures)
+        )
+
+    def test_gate_evaluation_requires_combined_shadow_atlas_smoke(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        shadow_run = next(
+            run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
+        )
+        shadow_run["combinedShadowAtlas"] = combined_shadow_atlas_summary("failed")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(
+            any("combined shadow atlas smoke" in failure for failure in failures)
+        )
+
+    def test_gate_evaluation_requires_csm_fallback_smoke(self) -> None:
+        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        shadow_run = next(
+            run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
+        )
+        shadow_run["csmFallbacks"] = csm_fallback_summary("failed")
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("CSM fallback smoke" in failure for failure in failures))
 
     def test_ownership_profile_preserves_independent_ownership_cvar(self) -> None:
         profile = dict(glx_runtime_sweep.PROFILE_CVARS["glx-ownership"])
@@ -4697,6 +6556,19 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(startup["r_dynamiclight"], "1")
         self.assertNotIn("r_glxStreamDraw", filtered)
         self.assertEqual(filtered["r_glxDlightProjectedProgram"], "1")
+
+    def test_dlight_mdi_profile_preserves_projected_program_and_mdi_overrides(self) -> None:
+        profile = dict(glx_runtime_sweep.PROFILE_CVARS["glx-dlight-mdi"])
+        args = argparse.Namespace(profile="glx-dlight-mdi")
+
+        startup = glx_runtime_sweep.launch_cvars(profile)
+        filtered = glx_runtime_sweep.config_cvars(args, profile)
+
+        self.assertEqual(startup["r_glxProfile"], "rc")
+        self.assertEqual(startup["r_dynamiclight"], "1")
+        self.assertNotIn("r_glxStreamDraw", filtered)
+        self.assertEqual(filtered["r_glxDlightProjectedProgram"], "1")
+        self.assertEqual(filtered["r_glxDlightProjectedMdi"], "1")
 
     def test_proof_dir_defaults_wire_visual_and_performance_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5260,6 +7132,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                 self.assertEqual(profile["r_glxStreamDrawDynamicLights"], "auto")
                 self.assertEqual(profile["r_glxDlightScissor"], "auto")
                 self.assertEqual(profile["r_glxDlightProjectedProgram"], "0")
+                self.assertEqual(profile["r_glxDlightProjectedMdi"], "0")
                 self.assertEqual(profile["r_glxStreamDrawScreenMaps"], "0")
                 self.assertEqual(profile["r_glxStreamDrawVideoMaps"], "0")
 
@@ -5303,7 +7176,13 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
                         "glx: dlight cull legacy verts 40 idx 90",
                         "glx: dlight scissor active yes candidates 4 computed 3 applied 2 fallbacks 1 pixels 1200/4800",
                         "glx: dlight projected shader uniforms attempts 2 binds 1 failures 1 records 3 truncated 0 executable 1 suppressed 0 world 1/1 dynamic 0/0 limit-suppressed 0 limit 3",
-                        "glx: dlight projected shader stream attempts 2 uploads 1 failures 0 skipped 1 records 3 bytes 96 persistent 1 world 1 dynamic 0 last 1024/96",
+                        "glx: dlight projected shader resource attempts 0 binds 0 executable 0 suppressed 0 promotions 0 failures 0 records 0 world 0 dynamic 0 binding 5",
+                        "glx: dlight projected shader stream attempts 2 uploads 1 failures 0 skipped 1 records 3 bytes 96 persistent 1 world 1 dynamic 0 range 1/1 rangefail 0 clears 1 last 1024/96",
+                        "glx: dlight projected shader arena reserves 2 uploads 1 failures 0 wraps 1 rejects 0 waits 2 timeouts 0 syncfail 0 bytes 96 light-records 3 list-records 3 world-records 3 dynamic-records 0 range 1/1 rangefail 0 clears 1 authoritative 1/1 authfail 0 fallbacks 0 auth-clears 1 bound yes cursor 96 last 11/1024/96",
+                        "glx: dlight projected shader MDI attempts 2 eligible 1 uploads 1 failures 0 skipped 1 records 3 idx 6 bytes 20 last 2048/20",
+                        "glx: dlight projected shader MDI command ring reserves 2 commits 1 wraps 0 failures 0 slots 256 cursor 2 last 1/11/2048/20",
+                        "glx: dlight projected shader MDI submit attempts 1 plans 1 ready 0 fallbacks 1 skipped 0 records 3 idx 6 buffer 11 last 2048/20",
+                        "glx: dlight projected shader MDI batch attempts 1 batches 1 ready 0 fallbacks 1 rejects 0 glerr 0 records 3 idx 6 submitted 0/0 largest 1 reject 0 buffer 11 range 2048/20",
                         "glx: stream categories entity 2/2, particle 1/1, poly 1/1, mark 1/1, weapon 1/1, ui 1/1, beam 3/3, dlight 5/6, special 4/4",
                         "glx: stream roles generic 7/8/0, dlight 5/6/1, shadow 2/2/0, beam 3/3/0, post 4/4/0",
                         "glx: stream reservation last 256 bytes at 1024 using map-range, largest 4096 bytes, same-frame wrap rejects 0",
@@ -5546,6 +7425,16 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["dlightProjectedShaderUniformDynamicBinds"], 0)
             self.assertEqual(performance["latest"]["dlightProjectedShaderUniformLimitSuppressed"], 0)
             self.assertEqual(performance["latest"]["dlightProjectedShaderUniformLimit"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourceAttempts"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourceBinds"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourceExecutable"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourceSuppressed"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourcePromotions"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourceFailures"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourceRecords"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourceWorldExecutable"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourceDynamicExecutable"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderResourceBinding"], 5)
             self.assertEqual(performance["latest"]["dlightProjectedShaderStreamAttempts"], 2)
             self.assertEqual(performance["latest"]["dlightProjectedShaderStreamUploads"], 1)
             self.assertEqual(performance["latest"]["dlightProjectedShaderStreamFailures"], 0)
@@ -5555,8 +7444,84 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
             self.assertEqual(performance["latest"]["dlightProjectedShaderStreamPersistent"], 1)
             self.assertEqual(performance["latest"]["dlightProjectedShaderStreamWorld"], 1)
             self.assertEqual(performance["latest"]["dlightProjectedShaderStreamDynamic"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamRangeBinds"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamRangeAttempts"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamRangeFailures"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderStreamRangeClears"], 1)
             self.assertEqual(performance["latest"]["dlightProjectedShaderStreamLastOffset"], 1024)
             self.assertEqual(performance["latest"]["dlightProjectedShaderStreamLastBytes"], 96)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaReserves"], 2)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaUploads"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaFailures"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaWraps"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaRejects"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaWaits"], 2)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaTimeouts"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaSyncFailures"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaBytes"], 96)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaLightRecords"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaListRecords"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaWorldRecords"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaDynamicRecords"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaRangeBinds"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaRangeAttempts"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaRangeFailures"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaRangeClears"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaAuthoritativeBinds"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaAuthoritativeAttempts"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaAuthoritativeFailures"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaAuthoritativeFallbacks"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaAuthoritativeClears"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaBound"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaCursor"], 96)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaLastBuffer"], 11)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaLastOffset"], 1024)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderArenaLastBytes"], 96)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiAttempts"], 2)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiEligible"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiUploads"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiFailures"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSkipped"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiRecords"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiIndexes"], 6)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBytes"], 20)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiLastOffset"], 2048)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiLastBytes"], 20)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingReserves"], 2)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingCommits"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingWraps"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingFailures"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingSlots"], 256)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingCursor"], 2)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingLastSlot"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingLastBuffer"], 11)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingLastOffset"], 2048)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiCommandRingLastBytes"], 20)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitAttempts"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitPlans"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitReady"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitFallbacks"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitSkipped"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitRecords"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitIndexes"], 6)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitBuffer"], 11)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitLastOffset"], 2048)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiSubmitLastBytes"], 20)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchAttempts"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchBatches"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchReady"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchFallbacks"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchRejects"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchGlErrors"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchRecords"], 3)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchIndexes"], 6)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchSubmittedDraws"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchSubmittedIndexes"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchLargest"], 1)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchLastReject"], 0)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchBuffer"], 11)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchLastOffset"], 2048)
+            self.assertEqual(performance["latest"]["dlightProjectedShaderMdiBatchLastBytes"], 20)
             self.assertEqual(performance["latest"]["streamCategoryEntityDraws"], 2)
             self.assertEqual(performance["latest"]["streamCategoryParticleDraws"], 1)
             self.assertEqual(performance["latest"]["streamCategoryPolyDraws"], 1)
@@ -5915,6 +7880,110 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
         self.assertTrue(any("streamDrawScreenMaps" in failure for failure in rc_proof_failures))
         self.assertTrue(any("streamDrawVideoMaps" in failure for failure in rc_proof_failures))
         self.assertEqual(rc_stress_failures, [])
+
+    def test_dlight_mdi_profile_budget_requires_submitted_batch_evidence(self) -> None:
+        self.assertEqual(glx_runtime_sweep.performance_budget_for_profile("glx-parity", {}), {})
+        budget = glx_runtime_sweep.performance_budget_for_profile("glx-dlight-mdi", {})
+        good_aggregate = {
+            "sampleCount": 1,
+            "latest": {
+                "dlightProjectedShaderMdiAttempts": 1,
+                "dlightProjectedShaderMdiEligible": 1,
+                "dlightProjectedShaderMdiUploads": 1,
+                "dlightProjectedShaderMdiFailures": 0,
+                "dlightProjectedShaderMdiRecords": 1,
+                "dlightProjectedShaderMdiIndexes": 6,
+                "dlightProjectedShaderArenaReserves": 1,
+                "dlightProjectedShaderArenaUploads": 1,
+                "dlightProjectedShaderArenaFailures": 0,
+                "dlightProjectedShaderArenaRejects": 0,
+                "dlightProjectedShaderArenaTimeouts": 0,
+                "dlightProjectedShaderArenaSyncFailures": 0,
+                "dlightProjectedShaderArenaLightRecords": 1,
+                "dlightProjectedShaderArenaListRecords": 1,
+                "dlightProjectedShaderArenaRangeBinds": 1,
+                "dlightProjectedShaderArenaRangeFailures": 0,
+                "dlightProjectedShaderArenaAuthoritativeBinds": 1,
+                "dlightProjectedShaderArenaAuthoritativeFailures": 0,
+                "dlightProjectedShaderArenaAuthoritativeFallbacks": 0,
+                "dlightProjectedShaderMdiCommandRingReserves": 1,
+                "dlightProjectedShaderMdiCommandRingCommits": 1,
+                "dlightProjectedShaderMdiCommandRingFailures": 0,
+                "dlightProjectedShaderMdiCommandRingSlots": 256,
+                "dlightProjectedShaderMdiSubmitPlans": 1,
+                "dlightProjectedShaderMdiSubmitReady": 1,
+                "dlightProjectedShaderMdiSubmitFallbacks": 0,
+                "dlightProjectedShaderMdiBatchBatches": 1,
+                "dlightProjectedShaderMdiBatchReady": 1,
+                "dlightProjectedShaderMdiBatchFallbacks": 0,
+                "dlightProjectedShaderMdiBatchRejects": 0,
+                "dlightProjectedShaderMdiBatchGlErrors": 0,
+                "dlightProjectedShaderMdiBatchSubmittedDraws": 1,
+                "dlightProjectedShaderMdiBatchSubmittedIndexes": 6,
+            },
+            "max": {},
+        }
+        bad_aggregate = copy.deepcopy(good_aggregate)
+        bad_latest = bad_aggregate["latest"]
+        bad_latest.update(
+            {
+                "dlightProjectedShaderMdiEligible": 0,
+                "dlightProjectedShaderMdiUploads": 0,
+                "dlightProjectedShaderMdiFailures": 1,
+                "dlightProjectedShaderArenaUploads": 0,
+                "dlightProjectedShaderArenaFailures": 1,
+                "dlightProjectedShaderArenaRejects": 1,
+                "dlightProjectedShaderArenaTimeouts": 1,
+                "dlightProjectedShaderArenaSyncFailures": 1,
+                "dlightProjectedShaderArenaRangeBinds": 0,
+                "dlightProjectedShaderArenaRangeFailures": 1,
+                "dlightProjectedShaderArenaAuthoritativeBinds": 0,
+                "dlightProjectedShaderArenaAuthoritativeFailures": 1,
+                "dlightProjectedShaderArenaAuthoritativeFallbacks": 1,
+                "dlightProjectedShaderMdiCommandRingCommits": 0,
+                "dlightProjectedShaderMdiCommandRingFailures": 1,
+                "dlightProjectedShaderMdiSubmitReady": 0,
+                "dlightProjectedShaderMdiSubmitFallbacks": 1,
+                "dlightProjectedShaderMdiBatchReady": 0,
+                "dlightProjectedShaderMdiBatchFallbacks": 1,
+                "dlightProjectedShaderMdiBatchRejects": 1,
+                "dlightProjectedShaderMdiBatchGlErrors": 1,
+                "dlightProjectedShaderMdiBatchSubmittedDraws": 0,
+                "dlightProjectedShaderMdiBatchSubmittedIndexes": 0,
+            }
+        )
+
+        self.assertEqual(glx_runtime_sweep.evaluate_performance_budget(good_aggregate, budget), [])
+        failures = glx_runtime_sweep.evaluate_performance_budget(bad_aggregate, budget)
+
+        self.assertTrue(any("min dlightProjectedShaderMdiEligible missed" in failure for failure in failures))
+        self.assertTrue(any("min dlightProjectedShaderArenaUploads missed" in failure for failure in failures))
+        self.assertTrue(
+            any("min dlightProjectedShaderArenaRangeBinds missed" in failure for failure in failures)
+        )
+        self.assertTrue(
+            any("min dlightProjectedShaderArenaAuthoritativeBinds missed" in failure for failure in failures)
+        )
+        self.assertTrue(
+            any("min dlightProjectedShaderMdiCommandRingCommits missed" in failure for failure in failures)
+        )
+        self.assertTrue(any("min dlightProjectedShaderMdiSubmitReady missed" in failure for failure in failures))
+        self.assertTrue(any("min dlightProjectedShaderMdiBatchSubmittedDraws missed" in failure for failure in failures))
+        self.assertTrue(any("max dlightProjectedShaderMdiFailures exceeded" in failure for failure in failures))
+        self.assertTrue(any("max dlightProjectedShaderArenaFailures exceeded" in failure for failure in failures))
+        self.assertTrue(
+            any("max dlightProjectedShaderArenaRangeFailures exceeded" in failure for failure in failures)
+        )
+        self.assertTrue(
+            any("max dlightProjectedShaderArenaAuthoritativeFailures exceeded" in failure for failure in failures)
+        )
+        self.assertTrue(
+            any("max dlightProjectedShaderArenaAuthoritativeFallbacks exceeded" in failure for failure in failures)
+        )
+        self.assertTrue(
+            any("max dlightProjectedShaderMdiCommandRingFailures exceeded" in failure for failure in failures)
+        )
+        self.assertTrue(any("max dlightProjectedShaderMdiBatchGlErrors exceeded" in failure for failure in failures))
 
     def test_performance_budget_merges_tier_overrides(self) -> None:
         budget = glx_runtime_sweep.merge_budget(

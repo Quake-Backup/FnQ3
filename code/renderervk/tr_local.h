@@ -893,6 +893,9 @@ typedef struct {
 	int			leafArea;
 	float		intensity;
 	float		radius;
+	float		footprintRadius;
+	float		shadowCasterRadius;
+	float		shadowConeAngle;
 	float		area;
 	float		designerPriority;
 	qboolean	castsShadows;
@@ -961,6 +964,23 @@ typedef struct {
 } shadowSpotLightPlan_t;
 #endif
 
+typedef enum {
+	SHADOW_MANAGER_PASS_POINT_ATLAS = 1 << 0,
+	SHADOW_MANAGER_PASS_SPOT_ATLAS = 1 << 1,
+	SHADOW_MANAGER_PASS_CSM_ATLAS = 1 << 2,
+	SHADOW_MANAGER_PASS_CSM_RECEIVER = 1 << 3
+} shadowManagerPass_t;
+
+#define SHADOW_MANAGER_MAX_SCHEDULED_PASSES 4
+
+typedef struct {
+	qboolean	published;
+	unsigned int	generation;
+	int			width;
+	int			height;
+	int			tileSize;
+} shadowAtlasPublication_t;
+
 typedef struct {
 	qboolean	planned;
 	qboolean	noWorldModel;
@@ -973,11 +993,16 @@ typedef struct {
 	int			csmResolution;
 	int			csmAtlasWidth;
 	int			csmAtlasHeight;
+	csmPlan_t	csmPlan;
 	qboolean	dlightPlanned;
 	qboolean	pointAtlasScheduled;
 	qboolean	csmAtlasScheduled;
 	qboolean	csmReceiverScheduled;
 	int			scheduledPasses;
+	unsigned int	scheduledPassMask;
+	shadowManagerPass_t scheduledPassOrder[SHADOW_MANAGER_MAX_SCHEDULED_PASSES];
+	shadowAtlasPublication_t pointAtlasPublication;
+	shadowAtlasPublication_t csmAtlasPublication;
 	qboolean	pointAtlasPublished;
 	qboolean	csmAtlasPublished;
 	unsigned int	pointAtlasGeneration;
@@ -998,8 +1023,32 @@ typedef struct {
 	shadowPointLightPlan_t pointPlans[MAX_DLIGHTS];
 	int			spotCandidateCount;
 	int			spotPlanCount;
+	int			spotStaticCandidateCount;
+	int			spotStaticPlanCount;
+	int			spotSurfaceCandidateCount;
+	int			spotSurfacePlanCount;
+	int			spotSurfaceRejectedWeak;
+	int			spotSurfaceRejectedOffView;
+	int			spotSurfaceRejectedOverBudget;
+	int			spotSurfaceRejectedMalformed;
+	int			spotSurfaceCandidateTileMin;
+	int			spotSurfaceCandidateTileMax;
+	int			spotSurfaceFootprintMin;
+	int			spotSurfaceFootprintMax;
+	int			spotSurfaceCasterRadiusMin;
+	int			spotSurfaceCasterRadiusMax;
+	int			spotSurfacePlanRequestedTileMin;
+	int			spotSurfacePlanRequestedTileMax;
+	int			spotSurfacePlanTileMin;
+	int			spotSurfacePlanTileMax;
+	int			spotSurfacePlanAllocatedCount;
+	int			spotSurfaceConeInnerMin;
+	int			spotSurfaceConeInnerMax;
+	int			spotSurfaceConeOuterMin;
+	int			spotSurfaceConeOuterMax;
 	qboolean	spotAtlasReady;
 	qboolean	spotAtlasScheduled;
+	shadowAtlasPublication_t spotAtlasPublication;
 	qboolean	spotAtlasPublished;
 	unsigned int	spotAtlasGeneration;
 	int			spotAtlasWidth;
@@ -1011,6 +1060,69 @@ typedef struct {
 	shadowSpotLightPlan_t spotPlans[SPOT_SHADOW_MAX_LIGHTS];
 #endif
 } shadowManager_t;
+
+static ID_INLINE qboolean R_ShadowManagerPassScheduled( const shadowManager_t *manager,
+	shadowManagerPass_t pass )
+{
+	return ( manager && manager->planned &&
+		( manager->scheduledPassMask & (unsigned int)pass ) ) ? qtrue : qfalse;
+}
+
+static ID_INLINE void R_ShadowManagerPublishPointAtlas( shadowManager_t *manager,
+	qboolean published, unsigned int generation )
+{
+	if ( !manager ) {
+		return;
+	}
+
+	manager->pointAtlasPublication.published = published ? qtrue : qfalse;
+	manager->pointAtlasPublication.generation = generation;
+	manager->pointAtlasPublication.width = manager->dlightAtlasWidth;
+	manager->pointAtlasPublication.height = manager->dlightAtlasHeight;
+	manager->pointAtlasPublication.tileSize = manager->dlightAtlasFaceSize;
+	manager->pointAtlasPublished = manager->pointAtlasPublication.published;
+	manager->pointAtlasGeneration = manager->pointAtlasPublication.generation;
+}
+
+static ID_INLINE void R_ShadowManagerPublishCSMAtlas( shadowManager_t *manager,
+	qboolean published, unsigned int generation )
+{
+	if ( !manager ) {
+		return;
+	}
+
+	manager->csmAtlasPublication.published = published ? qtrue : qfalse;
+	manager->csmAtlasPublication.generation = generation;
+	manager->csmAtlasPublication.width = manager->csmAtlasWidth;
+	manager->csmAtlasPublication.height = manager->csmAtlasHeight;
+	manager->csmAtlasPublication.tileSize = manager->csmResolution;
+	manager->csmAtlasPublished = manager->csmAtlasPublication.published;
+	manager->csmAtlasGeneration = manager->csmAtlasPublication.generation;
+}
+
+#ifdef USE_PMLIGHT
+static ID_INLINE void R_ShadowManagerPublishSpotAtlas( shadowManager_t *manager,
+	qboolean published, unsigned int generation )
+{
+	if ( !manager ) {
+		return;
+	}
+
+	manager->spotAtlasPublication.published = published ? qtrue : qfalse;
+	manager->spotAtlasPublication.generation = generation;
+	manager->spotAtlasPublication.width = manager->spotAtlasWidth;
+	manager->spotAtlasPublication.height = manager->spotAtlasHeight;
+	manager->spotAtlasPublication.tileSize = manager->spotAtlasTileSize;
+	manager->spotAtlasPublished = manager->spotAtlasPublication.published;
+	manager->spotAtlasGeneration = manager->spotAtlasPublication.generation;
+}
+#endif
+
+static ID_INLINE const csmPlan_t *R_ShadowManagerCSMPlan( const shadowManager_t *manager )
+{
+	return ( manager && manager->planned && manager->csmPlan.enabled ) ?
+		&manager->csmPlan : NULL;
+}
 
 #ifdef USE_PMLIGHT
 static ID_INLINE const shadowPointLightPlan_t *R_ShadowManagerPointPlanForDlight(
@@ -1517,6 +1629,7 @@ typedef struct {
 	int		c_csmSkippedProjection;
 	int		c_csmSkippedAtlas;
 	int		c_csmSkippedStrength;
+	int		c_csmSkippedZeroCascades;
 #endif
 } frontEndCounters_t;
 
@@ -1876,6 +1989,7 @@ extern cvar_t	*r_csmCasterDepthBias;	// 0.0 - 64.0
 extern cvar_t	*r_csmCasterSlopeBias;	// 0.0 - 8.0
 extern cvar_t	*r_csmCasterNormalBias;	// 0.0 - 8.0
 extern cvar_t	*r_csmDebug;			// 0 - 1
+extern cvar_t	*r_csmDebugFallback;		// 0 - 4
 #ifdef USE_VULKAN
 extern cvar_t	*r_device;
 #ifdef USE_VBO

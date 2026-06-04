@@ -27,7 +27,7 @@ rendering, filtering, testing, or release evidence changes.
 
 ## Current Snapshot
 
-As of May 22, 2026:
+As of June 4, 2026:
 
 - `[x]` Dynamic-light shadow cvars, planning counters, candidate filtering, and
   per-view prioritization are implemented.
@@ -109,10 +109,264 @@ As of May 22, 2026:
   RenderDoc inspection evidence before `r_dlightShadows` may be enabled by
   default. The gate reports a policy failure if either renderer's source
   default is promoted before the evidence is ready.
+- `[x]` GLx and Vulkan runtime sweeps include the
+  `surfacelight-large-planar` shadow scene on `q3dm6`, with surfacelight
+  proxies, surfacelight proxy shadows, 2D spot shadows, and dynamic-light
+  shadows enabled for large planar `q3map_surfaceLight` validation.
+- `[x]` Runtime manifests now describe surfacelight validation through
+  top-level dlight shadow scene metadata, per-screenshot scene/category
+  metadata, shadow-manager spot atlas publication samples,
+  `surfaceLightSpot` telemetry, and `surfaceLightSpotLod` smoke summaries.
+- `[x]` The release gate requires `surfacelight-large-planar` category coverage
+  for published surfacelight spot atlas manager logs, active surfacelight spot
+  telemetry, and passing surfacelight spot LOD smoke.
+- `[x]` GLx and Vulkan runtime sweeps include the `csm-shimmer-path` shadow
+  scene on `q3dm17`, with deterministic `setviewpos` micro-movements for
+  tiny origin and view-axis deltas.
+- `[x]` CSM debug output reports snapped light-depth centers per cascade, and
+  runtime sweep manifests summarize CSM shimmer stability through
+  `csmStability` sample counts, cache events, atlas generation delta, and
+  snapped light-depth delta.
+- `[x]` GLx and Vulkan runtime sweeps compare each `csm-shimmer-path` nudge
+  and micro-yaw screenshot against the path baseline step. Dlight shadow scene
+  runs now report `csmShimmerScreenshots` summaries, per-candidate
+  `csmShimmerComparison` metrics, generated diff PNG paths, and gate failures
+  when the bounded RMS or changed-pixel smoke thresholds are exceeded.
+- `[x]` GLx and Vulkan runtime sweeps include the `combined-shadow-atlas`
+  shadow scene on `q3dm6`, with CSM, point dynamic-light shadows, generated
+  sidecar spot shadows, surfacelight spot proxy shadows, and the shared shadow
+  manager schedule active in one frame.
+- `[x]` Dlight shadow scene runs stage `maps/q3dm6.lights.json` under the
+  sweep homepath for the combined smoke scene, report the generated sidecar in
+  top-level `dlightShadowSidecars` metadata, and preserve per-run
+  `sidecarLights` evidence.
+- `[x]` Runtime manifests now report `combinedShadowAtlas` summaries that
+  require one manager scene sample to schedule and publish point, spot, CSM
+  atlas, and CSM receiver work, with active point, static-sidecar spot,
+  surfacelight spot, and CSM atlas dimensions/generation counters. GLx
+  `rc-parity` and Vulkan `vk-modern` gates fail when this smoke is missing or
+  reports unpublished atlas lanes.
+- `[x]` `r_csmDebugFallback` forces renderer-local CSM diagnostics for
+  no-world, no-sky-sun, atlas-unavailable, and zero-cascade planner fallback
+  paths without changing retail scene state.
+- `[x]` GLx and Vulkan runtime sweeps include four `csm-fallback-*` shadow
+  scenes on `q3dm17` and report `csmFallbacks` summaries that require the
+  manager to avoid CSM atlas, receiver, and publication work when no valid
+  cascade publication exists.
+- `[x]` GLx `rc-parity`, Vulkan `vk-modern`, and the dlight shadow release
+  gate require passing CSM fallback smoke before default-enable evidence can
+  pass.
 
 Next milestone: complete RenderDoc capture validation when a runtime asset
 environment is available. Real shadow maps remain disabled by default until
 reviewed evidence makes the default-enable release gate ready.
+
+## Surfacelight Validation Artifacts
+
+The surfacelight validation contract is tied to the `dlight-shadow-scenes`
+runtime sweep path. This is visual-only renderer evidence; it must not affect
+retail demos, protocol behavior, VM execution, or asset loading.
+
+Required runtime manifest fields:
+
+- Top-level manifest metadata must include `dlightShadowEvidenceCategories`
+  with `surfacelight-large-planar`, `dlightShadowEvidenceScenes` with the scene
+  definition, and `dlightShadowSceneCvars` with the cvars used by the generated
+  shadow-scene config.
+- Each representative screenshot entry in `runs[].screenshots[]` must include
+  `shadowScene: true`, `scene: surfacelight-large-planar`, `map: q3dm6`, and
+  `evidenceCategories` containing `surfacelight-large-planar`.
+- `runs[].dlightShadow.shadowManager.scenes["surfacelight-large-planar"].max`
+  must show published spot atlas manager evidence with non-zero
+  `spotPublished`, `spotSurfaceCandidates`, and `spotSurfacePlans`, plus atlas
+  dimensions through `spotAtlasWidth`, `spotAtlasHeight`, and
+  `spotAtlasTileSize`.
+- `runs[].dlightShadow.surfaceLightSpot.scenes["surfacelight-large-planar"].max`
+  must show non-zero `surfaceSpotCandidates`, `surfaceSpotPlans`,
+  `surfaceSpotAllocated`, `surfaceSpotFootprintMax`,
+  `surfaceSpotCasterRadiusMax`, and `surfaceSpotTileMax`.
+- `runs[].dlightShadow.surfaceLightSpotLod.scenes["surfacelight-large-planar"]`
+  must report `status: passed`, cover `requestedTiles.low`,
+  `requestedTiles.nominal`, and `requestedTiles.promoted`, and keep
+  `maxRequestedTile`, `maxEffectiveTile`, `maxAtlasTile`, and `maxFill` within
+  the sweep's LOD bounds.
+- `scripts/dlight_shadow_release_gate.py` must continue to include
+  `REQUIRED_SURFACELIGHT_SPOT_CATEGORIES = ("surfacelight-large-planar",)` so
+  GLx and Vulkan evidence cannot pass with only generic dlight-shadow samples.
+
+Representative runtime scene:
+
+- Scene id: `surfacelight-large-planar`.
+- Map: `q3dm6`.
+- Category: `surfacelight-large-planar`.
+- Vulkan baseline key:
+  `vk-modern-dlight-shadows-surfacelight-large-planar-q3dm6-vulkan`.
+- GLx baseline key:
+  `rc-parity-dlight-shadows-surfacelight-large-planar-q3dm6-glx`.
+
+Required surfacelight debug cvars:
+
+- `developer=1`, `logfile=2`, `r_dynamiclight=1`, `r_dlightMode=2`,
+  `r_dlightShadows=1`, `r_dlightShadowDebug=1`, `r_dlightShadowFilter=2`,
+  `r_dlightShadowMaxLights=8`, and `r_dlightShadowResolution=256`.
+- `r_spotShadows=1`, `r_spotShadowDebug=1`, `r_spotShadowMaxLights=16`, and
+  `r_spotShadowResolution=512`.
+- `r_surfaceLightProxies=1`, `r_surfaceLightProxyDebug=1`, and
+  `r_surfaceLightProxyShadows=1`.
+
+Manual visual review notes for large planar emitters:
+
+- Review both GLx and Vulkan `shadowScene` screenshots and diffs for broad
+  planar emitters casting stable representative spot shadows near their
+  receivers.
+- Treat telemetry-only success as insufficient if the screenshot shows a
+  missing surfacelight shadow, an inverted or badly rotated projection,
+  unrelated geometry pulled into the cone, over-darkened receivers, obvious
+  atlas flooding, or tile-edge artifacts.
+- Confirm that `surfaceSpotFootprintMax` and `surfaceSpotCasterRadiusMax` are
+  non-zero and plausible for the visible emitter, that `surfaceLightSpotLod`
+  reports `passed`, that effective tiles do not exceed atlas tiles, and that
+  atlas fill stays within the sweep's `85%` smoke bound.
+- Keep the default-enable release gate blocked until these notes are recorded
+  alongside reviewed GLx and Vulkan screenshots, plus RenderDoc inspection
+  evidence.
+  This is the RenderDoc inspection evidence checkpoint for surfacelight
+  validation.
+
+## Combined Atlas Smoke Artifacts
+
+The combined atlas smoke contract exercises all shadow-atlas publications in a
+single dlight-shadow runtime scene. It is renderer-local validation and must not
+change demos, protocol behavior, VM execution, or retail asset loading.
+
+Required runtime manifest fields:
+
+- Top-level manifest metadata must include `combined-shadow-atlas` in
+  `dlightShadowEvidenceCategories`, a `combined-shadow-atlas` scene definition
+  in `dlightShadowEvidenceScenes`, and staged sidecar metadata in
+  `dlightShadowSidecars`.
+- The dlight-shadow run must preserve `sidecarLights` records for the generated
+  static spot light and include a representative screenshot with
+  `shadowScene: true`, `scene: combined-shadow-atlas`, `map: q3dm6`, and
+  `evidenceCategories` containing `combined-shadow-atlas`.
+- `runs[].combinedShadowAtlas` must report `status: passed` for scene
+  `combined-shadow-atlas`.
+- `runs[].combinedShadowAtlas.max` must show `scheduledPasses >= 4` and a
+  `scheduledMask` with bits `0x0f`, plus non-zero `pointScheduled`,
+  `spotScheduled`, `csmAtlasScheduled`, `csmReceiverScheduled`,
+  `pointPublished`, `spotPublished`, and `csmPublished`.
+- The same summary must show non-zero point atlas fields through
+  `pointPlanned`, `pointRecords`, `pointAtlasWidth`, `pointAtlasHeight`, and
+  `pointAtlasFaceSize`; spot atlas fields through `spotPlans`,
+  `spotStaticPlans`, `spotSurfacePlans`, `spotAtlasWidth`, `spotAtlasHeight`,
+  and `spotAtlasTileSize`; and CSM fields through `csmCascadeCount`,
+  `csmAtlasWidth`, `csmAtlasHeight`, and `csmGeneration`.
+
+Representative runtime scene:
+
+- Scene id: `combined-shadow-atlas`.
+- Map: `q3dm6`.
+- Category: `combined-shadow-atlas`.
+- Static sidecar: generated `maps/q3dm6.lights.json` containing
+  `combined-sidecar-spot`.
+- Vulkan baseline key:
+  `vk-modern-dlight-shadows-combined-shadow-atlas-q3dm6-vulkan`.
+- GLx baseline key:
+  `rc-parity-dlight-shadows-combined-shadow-atlas-q3dm6-glx`.
+
+Required combined-smoke debug cvars:
+
+- `developer=1`, `logfile=2`, `r_dynamiclight=1`, `r_dlightMode=2`,
+  `r_dlightShadows=1`, `r_dlightShadowDebug=1`,
+  `r_dlightShadowMaxLights=8`, and `r_dlightShadowResolution=256`.
+- `r_staticLights=1`, `r_staticLightDebug=1`,
+  `r_staticLightMaxLights=8`, `r_staticLightShadows=1`, and
+  `r_staticLightShadowMaxLights=2`.
+- `r_spotShadows=1`, `r_spotShadowDebug=1`,
+  `r_spotShadowMaxLights=16`, and `r_spotShadowResolution=512`.
+- `r_surfaceLightProxies=1`, `r_surfaceLightProxyDebug=1`, and
+  `r_surfaceLightProxyShadows=1`.
+- `r_csmShadows=1`, `r_csmDebug=1`, and `r_csmResolution=512`.
+
+Manual visual review notes for combined atlas smoke:
+
+- Review the GLx and Vulkan combined-scene screenshots to confirm the frame is
+  lit by the injected point lights, the generated sidecar spot, surfacelight
+  spot proxies, and the sky-sun CSM path without obvious atlas cross-talk.
+- Confirm the manager log reports all schedule lanes and publication counters
+  in the same scene sample, because separate passing point/spot/CSM scenes do
+  not prove the manager can publish all active atlas types together.
+- Treat a `combinedShadowAtlas` pass as telemetry smoke only. It does not
+  replace RenderDoc inspection of atlas resources, barriers, descriptors, tile
+  contents, or receiver sampling.
+
+## CSM Fallback Smoke Artifacts
+
+The CSM fallback smoke contract verifies that planned receiver sampling stays
+disabled whenever the shadow manager has no valid CSM publication. This is
+renderer-local validation; it must not affect demos, protocol behavior, VM
+execution, retail asset loading, or normal sky-sun discovery.
+
+Required runtime manifest fields:
+
+- Top-level manifest metadata must include `csm-fallback-no-world`,
+  `csm-fallback-no-sun`, `csm-fallback-atlas-unavailable`, and
+  `csm-fallback-zero-cascade` in `dlightShadowEvidenceCategories`, with
+  matching scene definitions in `dlightShadowEvidenceScenes`.
+- Each representative screenshot entry in `runs[].screenshots[]` must include
+  `shadowScene: true`, one of the `csm-fallback-*` scene ids, `map: q3dm17`,
+  and the matching fallback category in `evidenceCategories`.
+- `runs[].csmFallbacks` or `runs[].dlightShadow.csmFallbacks` must report
+  `status: passed`, list reason coverage for `no-world`, `no-sky-sun`,
+  `atlas`, and `zero-cascade`, and include scene-scoped skip samples for every
+  fallback category.
+- The fallback summary must keep CSM publication and scheduling fields at zero:
+  `csmAtlasScheduled`, `csmReceiverScheduled`, `csmPublished`,
+  `csmCascadeCount`, `csmAtlasWidth`, `csmAtlasHeight`, `csmGeneration`, and
+  `csmFallbackCascades`.
+- The same summary must show non-zero reason counters through
+  `csmFallbackNoWorld`, `csmFallbackNoSun`, `csmFallbackAtlasUnavailable`, and
+  `csmFallbackZeroCascade`; the no-world scene must also prove `noworld` is
+  non-zero in the matching manager sample.
+- `scripts/dlight_shadow_release_gate.py` must continue to require passing
+  `csmFallbacks` smoke and the four fallback categories so GLx and Vulkan
+  evidence cannot pass with only happy-path sky-sun CSM samples.
+
+Representative runtime scenes:
+
+- Scene id: `csm-fallback-no-world`; map: `q3dm17`; reason: `no-world`.
+- Scene id: `csm-fallback-no-sun`; map: `q3dm17`; reason: `no-sky-sun`.
+- Scene id: `csm-fallback-atlas-unavailable`; map: `q3dm17`; reason:
+  `atlas`.
+- Scene id: `csm-fallback-zero-cascade`; map: `q3dm17`; reason:
+  `zero-cascade`.
+- Vulkan baseline key example:
+  `vk-modern-dlight-shadows-csm-fallback-no-world-q3dm17-vulkan`.
+- GLx baseline key example:
+  `rc-parity-dlight-shadows-csm-fallback-no-world-q3dm17-glx`.
+
+Required CSM fallback debug cvars:
+
+- `developer=1`, `logfile=2`, `r_dynamiclight=1`, `r_dlightMode=2`,
+  `r_dlightShadows=1`, `r_dlightShadowDebug=1`,
+  `r_dlightShadowMaxLights=8`, and `r_dlightShadowResolution=256`.
+- `r_csmShadows=1`, `r_csmDebug=1`, `r_csmResolution=512`, and
+  `r_csmDebugFallback=1`, `r_csmDebugFallback=2`,
+  `r_csmDebugFallback=3`, or `r_csmDebugFallback=4` for the four forced
+  fallback scenes.
+
+Manual review notes for CSM fallback smoke:
+
+- Treat fallback smoke as telemetry validation. The screenshots prove the
+  sweep path and scene metadata; they are not expected to show visible CSM
+  shadows.
+- Confirm each fallback scene logs `csm plan cascades:0 skip ...` with the
+  expected reason and never schedules or publishes CSM atlas or receiver work.
+- Confirm the no-world fallback also records a non-zero `noworld` manager
+  sample, because the receiver path must stay disabled before any world-model
+  assumptions leak into CSM sampling.
+- This smoke does not replace RenderDoc inspection of the normal sky-sun CSM
+  atlas, barriers, descriptors, or receiver sampling path.
 
 ## Roadmap
 
@@ -248,6 +502,47 @@ enable `r_dlightShadows` before the evidence is complete.
 
 Build and script evidence:
 
+- `[x]` `python tests\vulkan\vk_runtime_sweep_tests.py` passed after CSM
+  fallback smoke runtime parsing and gate coverage on June 4, 2026.
+- `[x]` `python tests\glx\glx_runtime_sweep_tests.py` passed after CSM
+  fallback smoke runtime parsing and gate coverage on June 4, 2026.
+- `[x]` `python tests\dlight_shadow_release_gate_tests.py` passed after CSM
+  fallback smoke release-gate coverage on June 4, 2026.
+- `[x]` `python tests\shadow_manager_source_tests.py` passed after CSM
+  fallback diagnostics source-contract coverage on June 4, 2026.
+- `[x]` `python tests\surfacelight_validation_docs_tests.py` passed after
+  CSM fallback smoke artifact documentation on June 4, 2026.
+- `[x]` `python tests\vulkan\vk_runtime_sweep_tests.py` passed after
+  combined shadow atlas runtime smoke and gate coverage on June 4, 2026.
+- `[x]` `python tests\glx\glx_runtime_sweep_tests.py` passed after
+  combined shadow atlas runtime smoke and gate coverage on June 4, 2026.
+- `[x]` `python tests\surfacelight_validation_docs_tests.py` passed after
+  combined atlas smoke artifact documentation on June 4, 2026.
+- `[x]` `python tests\dlight_shadow_release_gate_tests.py` passed after
+  combined atlas smoke gate fixture coverage on June 4, 2026.
+- `[x]` `python tests\csm_shadow_cache_source_tests.py` passed after
+  combined atlas smoke runtime schedule coverage on June 4, 2026.
+- `[x]` `python tests\shadow_manager_source_tests.py` passed after
+  combined atlas smoke runtime schedule coverage on June 4, 2026.
+- `[x]` `python tests\vulkan\vk_runtime_sweep_tests.py` passed after CSM
+  shimmer screenshot diff smoke coverage on June 4, 2026.
+- `[x]` `python tests\glx\glx_runtime_sweep_tests.py` passed after CSM
+  shimmer screenshot diff smoke coverage on June 4, 2026.
+- `[x]` `python tests\surfacelight_validation_docs_tests.py` passed after
+  surfacelight validation artifact documentation on June 4, 2026.
+- `[x]` `python tests\dlight_shadow_release_gate_tests.py` passed after
+  surfacelight validation artifact documentation on June 4, 2026.
+- `[x]` `git diff --check -- docs\fnquake3\DLIGHT_SHADOWMAP_ROADMAP.md
+  docs-dev\plans\2026-06-03-vk-shadowmapping.md
+  tests\surfacelight_validation_docs_tests.py` passed after surfacelight
+  validation artifact documentation on June 4, 2026; Git reported only
+  existing LF-to-CRLF working-copy warnings.
+- `[x]` `python tests\csm_shadow_cache_source_tests.py` passed after CSM
+  shimmer camera-path instrumentation on June 4, 2026.
+- `[x]` `python tests\vulkan\vk_runtime_sweep_tests.py` passed after CSM
+  shimmer camera-path instrumentation on June 4, 2026.
+- `[x]` `python tests\glx\glx_runtime_sweep_tests.py` passed after CSM
+  shimmer camera-path instrumentation on June 4, 2026.
 - `[x]` `meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64
   fnquake3_vulkan_x86_64` passed on May 22, 2026.
 - `[x]` `python -m py_compile scripts\dlight_shadow_test.py` passed on

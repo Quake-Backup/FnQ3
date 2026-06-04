@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import struct
 import subprocess
 import sys
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -83,6 +85,72 @@ DLIGHT_SHADOW_PLAN_RE = re.compile(
     r"cpu:(?P<cpuMsec>\d+)ms",
     re.IGNORECASE,
 )
+SHADOW_MANAGER_RE = re.compile(
+    r"shadow manager view:(?P<view>\d+)\s+frame:(?P<frame>\d+)\s+"
+    r"noworld:(?P<noworld>\d+)\s+sched:(?P<scheduledPasses>\d+)\s+"
+    r"mask:(?P<scheduledMask>[0-9a-fA-F]+)\s+"
+    r"p:(?P<pointScheduled>\d+)\s+s:(?P<spotScheduled>\d+)\s+"
+    r"ca:(?P<csmAtlasScheduled>\d+)\s+cr:(?P<csmReceiverScheduled>\d+)\s+"
+    r"pub p:(?P<pointPublished>\d+)\s+s:(?P<spotPublished>\d+)\s+"
+    r"c:(?P<csmPublished>\d+)\s+inputs dlight:(?P<inputDlights>\d+)\s+"
+    r"point:(?P<pointPlanned>\d+)/(?P<pointConsidered>\d+)\s+"
+    r"cand:(?P<pointCandidates>\d+)\s+"
+    r"records:(?P<pointRecords>\d+)/(?P<pointCandidateRecords>\d+)\s+"
+    r"atlas:(?P<pointAtlasWidth>\d+)x(?P<pointAtlasHeight>\d+)/(?P<pointAtlasFaceSize>\d+)\s+"
+    r"fill:(?P<pointAtlasFill>\d+)%\s+gen:(?P<pointGeneration>\d+)\s+"
+    r"spot:(?P<spotPlans>\d+)/(?P<spotCandidates>\d+)\s+"
+    r"(?:src\s+static:(?P<spotStaticPlans>\d+)/(?P<spotStaticCandidates>\d+)\s+"
+    r"surface:(?P<spotSurfacePlans>\d+)/(?P<spotSurfaceCandidates>\d+)\s+)?"
+    r"atlas:(?P<spotAtlasWidth>\d+)x(?P<spotAtlasHeight>\d+)/(?P<spotAtlasTileSize>\d+)\s+"
+    r"fill:(?P<spotAtlasFill>\d+)%\s+gen:(?P<spotGeneration>\d+)\s+"
+    r"csm:(?P<csmCascadeCount>\d+)\s+"
+    r"atlas:(?P<csmAtlasWidth>\d+)x(?P<csmAtlasHeight>\d+)\s+"
+    r"gen:(?P<csmGeneration>\d+)",
+    re.IGNORECASE,
+)
+SURFACELIGHT_SPOT_PLAN_RE = re.compile(
+    r"surfacelight spot plan cand:(?P<surfaceSpotCandidates>\d+)\s+"
+    r"plan:(?P<surfaceSpotPlans>\d+)\s+"
+    r"req:(?P<surfaceSpotRequestedTileMin>\d+)-(?P<surfaceSpotRequestedTileMax>\d+)\s+"
+    r"foot:(?P<surfaceSpotFootprintMin>\d+)-(?P<surfaceSpotFootprintMax>\d+)\s+"
+    r"caster:(?P<surfaceSpotCasterRadiusMin>\d+)-(?P<surfaceSpotCasterRadiusMax>\d+)\s+"
+    r"planreq:(?P<surfaceSpotPlanRequestedTileMin>\d+)-(?P<surfaceSpotPlanRequestedTileMax>\d+)\s+"
+    r"tile:(?P<surfaceSpotTileMin>\d+)-(?P<surfaceSpotTileMax>\d+)\s+"
+    r"cone:(?P<surfaceSpotConeInnerMin>\d+)-(?P<surfaceSpotConeInnerMax>\d+)/"
+    r"(?P<surfaceSpotConeOuterMin>\d+)-(?P<surfaceSpotConeOuterMax>\d+)\s+"
+    r"alloc:(?P<surfaceSpotAllocated>\d+)\s+"
+    r"atlas:(?P<surfaceSpotAtlasWidth>\d+)x(?P<surfaceSpotAtlasHeight>\d+)/"
+    r"(?P<surfaceSpotAtlasTileSize>\d+)\s+"
+    r"fill:(?P<surfaceSpotAtlasFill>\d+)%\s+"
+    r"reject weak:(?P<surfaceSpotRejectedWeak>\d+)\s+"
+    r"offview:(?P<surfaceSpotRejectedOffView>\d+)\s+"
+    r"budget:(?P<surfaceSpotRejectedBudget>\d+)\s+"
+    r"malformed:(?P<surfaceSpotRejectedMalformed>\d+)",
+    re.IGNORECASE,
+)
+CSM_SHADOWS_RE = re.compile(
+    r"csm shadows sky:(?P<csmSky>\S+)\s+"
+    r"cascades:(?P<csmDebugCascades>\d+)\s+"
+    r"res:(?P<csmDebugResolution>\d+)\s+"
+    r"max:(?P<csmDebugMaxDistance>\d+)\s+"
+    r"lambda:\S+\s+filter:\S+\s+strength:\S+\s+rbias:\S+\s+"
+    r"cbias:\S+\s+light-dir:\S+\s+\S+\s+\S+\s+to-sun:\S+\s+\S+\s+\S+\s+"
+    r"split far:\S+\s+\S+\s+\S+\s+\S+\s+texel:\S+\s+\S+\s+\S+\s+\S+\s+"
+    r"(?:snap depth:(?P<csmSnapDepth0>-?\d+(?:\.\d+)?)\s+"
+    r"(?P<csmSnapDepth1>-?\d+(?:\.\d+)?)\s+"
+    r"(?P<csmSnapDepth2>-?\d+(?:\.\d+)?)\s+"
+    r"(?P<csmSnapDepth3>-?\d+(?:\.\d+)?)\s+)?"
+    r"caster:(?P<csmCasterSurfaces>\d+)\s+"
+    r"cache h/m/u:(?P<csmCacheHits>\d+)/(?P<csmCacheMisses>\d+)/(?P<csmCacheUncacheable>\d+)\s+"
+    r"cpu:(?P<csmCpuMsec>\d+)ms\s+"
+    r"recv world:(?P<csmReceiverWorldSurfaces>\d+)\s+ent:(?P<csmReceiverEntitySurfaces>\d+)",
+    re.IGNORECASE,
+)
+CSM_PLAN_SKIP_RE = re.compile(
+    r"csm plan cascades:(?P<csmFallbackCascades>\d+)\s+skip\s+"
+    r"(?P<csmFallbackReason>[A-Za-z0-9_-]+)",
+    re.IGNORECASE,
+)
 DLIGHT_SHADOW_SCENE_BEGIN_RE = re.compile(
     r"DLIGHT_SHADOW_SCENE_BEGIN\s+(?P<scene>[A-Za-z0-9_.-]+)",
     re.IGNORECASE,
@@ -127,7 +195,55 @@ DLIGHT_SHADOW_SCENE_CVARS = {
     "r_dlightShadowFilter": "2",
     "r_dlightShadowMaxLights": "8",
     "r_dlightShadowResolution": "256",
+    "r_staticLights": "1",
+    "r_staticLightDebug": "1",
+    "r_staticLightMaxLights": "8",
+    "r_staticLightShadows": "1",
+    "r_staticLightShadowMaxLights": "2",
+    "r_csmShadows": "1",
+    "r_csmDebug": "1",
+    "r_csmCascadeCount": "4",
+    "r_csmDebugFallback": "0",
+    "r_csmResolution": "512",
+    "r_csmShadowFilter": "2",
+    "r_spotShadows": "1",
+    "r_spotShadowDebug": "1",
+    "r_spotShadowMaxLights": "16",
+    "r_spotShadowResolution": "512",
+    "r_surfaceLightProxies": "1",
+    "r_surfaceLightProxyDebug": "1",
+    "r_surfaceLightProxyShadows": "1",
 }
+
+SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES = (
+    "surfacelight-large-planar",
+)
+
+CSM_SKY_SUN_EVIDENCE_CATEGORIES = (
+    "csm-sky-sun",
+)
+
+CSM_SHIMMER_EVIDENCE_CATEGORIES = (
+    "csm-shimmer-path",
+)
+
+COMBINED_SHADOW_ATLAS_SCENE_ID = "combined-shadow-atlas"
+COMBINED_SHADOW_ATLAS_EVIDENCE_CATEGORIES = (
+    COMBINED_SHADOW_ATLAS_SCENE_ID,
+)
+CSM_FALLBACK_SCENE_REASONS = {
+    "csm-fallback-no-world": "no-world",
+    "csm-fallback-no-sun": "no-sky-sun",
+    "csm-fallback-atlas-unavailable": "atlas",
+    "csm-fallback-zero-cascade": "zero-cascade",
+}
+CSM_FALLBACK_EVIDENCE_CATEGORIES = tuple(CSM_FALLBACK_SCENE_REASONS)
+CSM_FALLBACK_REQUIRED_REASONS = tuple(CSM_FALLBACK_SCENE_REASONS.values())
+
+CSM_SHADOW_EVIDENCE_CATEGORIES = (
+    *CSM_SKY_SUN_EVIDENCE_CATEGORIES,
+    *CSM_SHIMMER_EVIDENCE_CATEGORIES,
+)
 
 DLIGHT_SHADOW_EVIDENCE_CATEGORIES = (
     "world-geometry",
@@ -136,6 +252,67 @@ DLIGHT_SHADOW_EVIDENCE_CATEGORIES = (
     "alpha-tested-surfaces",
     "portals-mirrors",
     "stress-light-budget",
+    *CSM_SHADOW_EVIDENCE_CATEGORIES,
+    *SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES,
+    *COMBINED_SHADOW_ATLAS_EVIDENCE_CATEGORIES,
+    *CSM_FALLBACK_EVIDENCE_CATEGORIES,
+)
+
+SURFACELIGHT_SPOT_LOD_TILES = {
+    "low": 128,
+    "nominal": 256,
+    "promoted": 512,
+}
+SURFACELIGHT_SPOT_REQUESTED_TILE_CAP = 512
+SURFACELIGHT_SPOT_LOD_MAX_FILL_PERCENT = 85
+CSM_SHIMMER_MIN_SAMPLES = 4
+CSM_SHIMMER_MAX_GENERATION_DELTA = 1
+CSM_SHIMMER_MAX_SNAP_DEPTH_DELTA_MILLI = 1000
+CSM_SHIMMER_BASELINE_STEP = "baseline"
+CSM_SHIMMER_SCREENSHOT_MAX_RMS = 6.0
+CSM_SHIMMER_SCREENSHOT_MAX_CHANGED_PIXEL_RATIO = 0.10
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+COMBINED_SHADOW_ATLAS_SIDECAR_LIGHTS = (
+    {
+        "name": "combined-sidecar-spot",
+        "type": "spot",
+        "origin": [0.0, 0.0, 768.0],
+        "direction": [0.0, 0.0, -1.0],
+        "color": [1.0, 0.82, 0.55],
+        "intensity": 900.0,
+        "radius": 2048.0,
+        "innerAngle": 18.0,
+        "outerAngle": 48.0,
+        "castsShadows": True,
+        "resolution": 256,
+        "priority": 8.0,
+    },
+)
+CSM_SHIMMER_CAMERA_PATH = (
+    {
+        "id": "baseline",
+        "setviewpos": "setviewpos 0.000 0.000 512.000 -10.000 90.000 0.000",
+        "originDelta": "0 0 0",
+        "axisDelta": "0 0 0",
+    },
+    {
+        "id": "nudge-forward",
+        "setviewpos": "setviewpos 0.125 0.000 512.000 -10.000 90.000 0.000",
+        "originDelta": "0.125 0 0",
+        "axisDelta": "0 0 0",
+    },
+    {
+        "id": "nudge-side",
+        "setviewpos": "setviewpos 0.000 0.125 512.000 -10.000 90.000 0.000",
+        "originDelta": "0 0.125 0",
+        "axisDelta": "0 0 0",
+    },
+    {
+        "id": "micro-yaw",
+        "setviewpos": "setviewpos 0.000 0.000 512.000 -10.000 90.030 0.000",
+        "originDelta": "0 0 0",
+        "axisDelta": "yaw +0.03",
+    },
 )
 
 DLIGHT_SHADOW_EVIDENCE_SCENES = (
@@ -182,6 +359,69 @@ DLIGHT_SHADOW_EVIDENCE_SCENES = (
         "description": "Over-budget dynamic-light ring to exercise atlas budget and skip logging.",
         "dlight": {"count": 16, "intensity": 900, "distance": 256, "height": 72, "seconds": 0},
     },
+    {
+        "id": "csm-sky-sun",
+        "map": "q3dm17",
+        "categories": CSM_SKY_SUN_EVIDENCE_CATEGORIES,
+        "description": "Outdoor sky-sun scene for CSM schedule, atlas publication, and cache telemetry evidence.",
+        "dlight": {"count": 8, "intensity": 720, "distance": 240, "height": 64, "seconds": 0},
+    },
+    {
+        "id": "csm-shimmer-path",
+        "map": "q3dm17",
+        "categories": CSM_SHIMMER_EVIDENCE_CATEGORIES,
+        "description": "Deterministic tiny camera path for CSM snapped-coordinate, cache, and atlas generation churn evidence.",
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+        "csmCameraPath": CSM_SHIMMER_CAMERA_PATH,
+    },
+    {
+        "id": "surfacelight-large-planar",
+        "map": "q3dm6",
+        "categories": SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES,
+        "description": "Large planar q3map_surfaceLight emitters with surfacelight proxies and the 2D spot atlas enabled.",
+        "dlight": {"count": 8, "intensity": 720, "distance": 224, "height": 64, "seconds": 0},
+    },
+    {
+        "id": COMBINED_SHADOW_ATLAS_SCENE_ID,
+        "map": "q3dm6",
+        "categories": COMBINED_SHADOW_ATLAS_EVIDENCE_CATEGORIES,
+        "description": "One-frame point, static sidecar spot, surfacelight spot, and CSM atlas publication smoke.",
+        "setviewpos": "setviewpos 0.000 0.000 512.000 -10.000 90.000 0.000",
+        "dlight": {"count": 8, "intensity": 780, "distance": 224, "height": 56, "seconds": 0},
+        "sidecarLights": COMBINED_SHADOW_ATLAS_SIDECAR_LIGHTS,
+    },
+    {
+        "id": "csm-fallback-no-world",
+        "map": "q3dm17",
+        "categories": ("csm-fallback-no-world",),
+        "description": "Forced no-world CSM fallback smoke with no CSM atlas or receiver publication.",
+        "cvars": {"r_csmDebugFallback": "1"},
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+    },
+    {
+        "id": "csm-fallback-no-sun",
+        "map": "q3dm17",
+        "categories": ("csm-fallback-no-sun",),
+        "description": "Forced no-sky-sun CSM fallback smoke with no CSM atlas or receiver publication.",
+        "cvars": {"r_csmDebugFallback": "2"},
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+    },
+    {
+        "id": "csm-fallback-atlas-unavailable",
+        "map": "q3dm17",
+        "categories": ("csm-fallback-atlas-unavailable",),
+        "description": "Forced atlas-unavailable CSM fallback smoke with no CSM receiver publication.",
+        "cvars": {"r_csmDebugFallback": "3"},
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+    },
+    {
+        "id": "csm-fallback-zero-cascade",
+        "map": "q3dm17",
+        "categories": ("csm-fallback-zero-cascade",),
+        "description": "Forced zero-cascade CSM fallback smoke with no CSM atlas or receiver publication.",
+        "cvars": {"r_csmDebugFallback": "4"},
+        "dlight": {"count": 4, "intensity": 640, "distance": 192, "height": 48, "seconds": 0},
+    },
 )
 
 STARTUP_CVAR_NAMES = {
@@ -216,6 +456,24 @@ STARTUP_CVAR_NAMES = {
     "r_dlightShadowFilter",
     "r_dlightShadowMaxLights",
     "r_dlightShadowResolution",
+    "r_staticLights",
+    "r_staticLightDebug",
+    "r_staticLightMaxLights",
+    "r_staticLightShadows",
+    "r_staticLightShadowMaxLights",
+    "r_csmShadows",
+    "r_csmDebug",
+    "r_csmDebugFallback",
+    "r_csmCascadeCount",
+    "r_csmResolution",
+    "r_csmShadowFilter",
+    "r_spotShadows",
+    "r_spotShadowDebug",
+    "r_spotShadowMaxLights",
+    "r_spotShadowResolution",
+    "r_surfaceLightProxies",
+    "r_surfaceLightProxyDebug",
+    "r_surfaceLightProxyShadows",
 }
 
 PROFILE_CVARS = {
@@ -295,6 +553,11 @@ RC_GATE_PRESETS = {
             "require_timedemo_metrics": True,
             "require_dlight_shadow_scenes": True,
             "required_dlight_shadow_categories": DLIGHT_SHADOW_EVIDENCE_CATEGORIES,
+            "required_surface_light_spot_categories": SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES,
+            "required_csm_shadow_categories": CSM_SHADOW_EVIDENCE_CATEGORIES,
+            "require_csm_shimmer_screenshot_diff": True,
+            "require_combined_shadow_atlas_smoke": True,
+            "require_csm_fallback_smoke": True,
         },
     },
     "vk-hdr": {
@@ -462,15 +725,28 @@ def dlight_shadow_scene_cvars(cvars: dict[str, str]) -> dict[str, str]:
 
 
 def dlight_shadow_evidence_scenes() -> list[dict[str, object]]:
-    return [
-        {
+    scenes: list[dict[str, object]] = []
+    for scene in DLIGHT_SHADOW_EVIDENCE_SCENES:
+        copied = {
             **scene,
             "categories": list(scene["categories"]),
             "cvars": dict(scene.get("cvars", {})),
             "dlight": dict(scene["dlight"]),
         }
-        for scene in DLIGHT_SHADOW_EVIDENCE_SCENES
-    ]
+        if scene.get("csmCameraPath"):
+            copied["csmCameraPath"] = [
+                dict(step)
+                for step in scene.get("csmCameraPath", [])  # type: ignore[union-attr]
+                if isinstance(step, dict)
+            ]
+        if scene.get("sidecarLights"):
+            copied["sidecarLights"] = [
+                dict(light)
+                for light in scene.get("sidecarLights", [])  # type: ignore[union-attr]
+                if isinstance(light, dict)
+            ]
+        scenes.append(copied)
+    return scenes
 
 
 def dlight_shadow_scene_categories(screenshots: list[dict[str, object]]) -> set[str]:
@@ -483,6 +759,521 @@ def dlight_shadow_scene_categories(screenshots: list[dict[str, object]]) -> set[
             if text:
                 categories.add(text)
     return categories
+
+
+def write_dlight_shadow_sidecar_lights(
+    homepath: Path,
+    fs_game: str,
+    scenes: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    lights_by_map: dict[str, list[dict[str, object]]] = {}
+    scene_ids_by_map: dict[str, list[str]] = {}
+    for scene in scenes:
+        sidecar_lights = scene.get("sidecarLights", [])
+        if not isinstance(sidecar_lights, list) or not sidecar_lights:
+            continue
+        map_name = str(scene.get("map", "")).strip()
+        if not map_name:
+            continue
+        lights_by_map.setdefault(map_name, []).extend(
+            dict(light) for light in sidecar_lights if isinstance(light, dict)
+        )
+        scene_ids_by_map.setdefault(map_name, []).append(str(scene.get("id", "")))
+
+    records: list[dict[str, object]] = []
+    maps_dir = homepath / game_dir(fs_game) / "maps"
+    for map_name, lights in sorted(lights_by_map.items()):
+        if not lights:
+            continue
+        path = maps_dir / f"{map_name}.lights.json"
+        payload = {
+            "version": 1,
+            "lights": lights,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        records.append(
+            {
+                "map": map_name,
+                "path": str(path),
+                "lightCount": len(lights),
+                "scenes": [scene_id for scene_id in scene_ids_by_map.get(map_name, []) if scene_id],
+            }
+        )
+    return records
+
+
+def shadow_manager_summary_active(summary: object) -> bool:
+    if not isinstance(summary, dict) or not summary.get("found"):
+        return False
+    maximum = summary.get("max")
+    if not isinstance(maximum, dict):
+        return False
+
+    def field(name: str) -> int:
+        try:
+            return int(maximum.get(name, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return (
+        field("scheduledPasses") > 0
+        and field("scheduledMask") > 0
+        and field("pointScheduled") > 0
+        and field("pointPublished") > 0
+        and field("pointPlanned") > 0
+        and field("pointRecords") > 0
+        and field("pointAtlasWidth") > 0
+        and field("pointAtlasHeight") > 0
+        and field("pointAtlasFaceSize") > 0
+    )
+
+
+def surface_light_spot_summary_active(summary: object) -> bool:
+    if not isinstance(summary, dict) or not summary.get("found"):
+        return False
+    maximum = summary.get("max")
+    if not isinstance(maximum, dict):
+        return False
+
+    def field(name: str) -> int:
+        try:
+            return int(maximum.get(name, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return (
+        field("surfaceSpotCandidates") > 0
+        and field("surfaceSpotPlans") > 0
+        and field("surfaceSpotAllocated") > 0
+        and field("surfaceSpotAtlasWidth") > 0
+        and field("surfaceSpotAtlasHeight") > 0
+        and field("surfaceSpotAtlasTileSize") > 0
+        and field("surfaceSpotFootprintMax") > 0
+        and field("surfaceSpotCasterRadiusMax") > 0
+        and field("surfaceSpotTileMax") > 0
+    )
+
+
+def surface_light_spot_lod_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def csm_shadow_runtime_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def combined_shadow_atlas_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def combined_shadow_atlas_summary(dlight_shadow: object) -> dict[str, object]:
+    if not isinstance(dlight_shadow, dict):
+        return {
+            "found": False,
+            "status": "missing",
+            "scene": COMBINED_SHADOW_ATLAS_SCENE_ID,
+            "sampleCount": 0,
+            "max": {},
+            "failures": ["Combined shadow atlas smoke is missing dlight shadow analysis."],
+        }
+
+    manager = dlight_shadow.get("shadowManager")
+    scene_summary: object = None
+    if isinstance(manager, dict) and isinstance(manager.get("scenes"), dict):
+        scene_summary = manager["scenes"].get(COMBINED_SHADOW_ATLAS_SCENE_ID)  # type: ignore[index]
+    if not isinstance(scene_summary, dict):
+        return {
+            "found": False,
+            "status": "missing",
+            "scene": COMBINED_SHADOW_ATLAS_SCENE_ID,
+            "sampleCount": 0,
+            "max": {},
+            "failures": ["Combined shadow atlas smoke is missing manager scene samples."],
+        }
+
+    maximum = scene_summary.get("max", {})
+    if not isinstance(maximum, dict):
+        maximum = {}
+
+    def field(name: str) -> int:
+        try:
+            return int(maximum.get(name, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    checks = (
+        ("scheduledPasses", 4, "scheduled all point, spot, CSM atlas, and CSM receiver passes"),
+        ("pointScheduled", 1, "scheduled the point shadow atlas"),
+        ("spotScheduled", 1, "scheduled the spot shadow atlas"),
+        ("csmAtlasScheduled", 1, "scheduled the CSM atlas"),
+        ("csmReceiverScheduled", 1, "scheduled the CSM receiver pass"),
+        ("pointPublished", 1, "published the point shadow atlas"),
+        ("spotPublished", 1, "published the spot shadow atlas"),
+        ("csmPublished", 1, "published the CSM atlas"),
+        ("pointPlanned", 1, "planned point shadow lights"),
+        ("pointRecords", 1, "recorded point shadow atlas metadata"),
+        ("pointAtlasWidth", 1, "reported point atlas width"),
+        ("pointAtlasHeight", 1, "reported point atlas height"),
+        ("pointAtlasFaceSize", 1, "reported point atlas face size"),
+        ("spotPlans", 1, "planned spot shadow lights"),
+        ("spotStaticPlans", 1, "planned static sidecar spot shadows"),
+        ("spotSurfacePlans", 1, "planned surfacelight spot proxy shadows"),
+        ("spotAtlasWidth", 1, "reported spot atlas width"),
+        ("spotAtlasHeight", 1, "reported spot atlas height"),
+        ("spotAtlasTileSize", 1, "reported spot atlas tile size"),
+        ("csmCascadeCount", 1, "reported CSM cascades"),
+        ("csmAtlasWidth", 1, "reported CSM atlas width"),
+        ("csmAtlasHeight", 1, "reported CSM atlas height"),
+        ("csmGeneration", 1, "reported CSM atlas generation"),
+    )
+    failures: list[str] = []
+    for name, minimum, label in checks:
+        if field(name) < minimum:
+            failures.append(
+                "Combined shadow atlas smoke did not "
+                f"{label}: {name}={field(name)}<{minimum}."
+            )
+    if (field("scheduledMask") & 0x0F) != 0x0F:
+        failures.append(
+            "Combined shadow atlas smoke did not report all combined shadow pass bits "
+            f"in the schedule mask: scheduledMask=0x{field('scheduledMask'):x}, expected bits 0x0f."
+        )
+
+    return {
+        "found": True,
+        "status": "failed" if failures else "passed",
+        "scene": COMBINED_SHADOW_ATLAS_SCENE_ID,
+        "sampleCount": int(scene_summary.get("sampleCount", 0)),
+        "max": {
+            name: field(name)
+            for name, _minimum, _label in checks
+        } | {"scheduledMask": field("scheduledMask")},
+        "failures": failures,
+    }
+
+
+def int_sample_field(sample: dict[str, int], name: str) -> int:
+    try:
+        return int(sample.get(name, 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def surface_light_spot_range_includes(
+    sample: dict[str, int], min_name: str, max_name: str, value: int
+) -> bool:
+    minimum = int_sample_field(sample, min_name)
+    maximum = int_sample_field(sample, max_name)
+    return minimum > 0 and minimum <= value <= maximum
+
+
+def surface_light_spot_lod_summary(samples: list[dict[str, int]]) -> dict[str, object]:
+    requested_tiles = {name: False for name in SURFACELIGHT_SPOT_LOD_TILES}
+    failures: list[str] = []
+    max_requested_tile = 0
+    max_plan_requested_tile = 0
+    max_effective_tile = 0
+    max_atlas_tile = 0
+    max_fill = 0
+
+    if not samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "sampleCount": 0,
+            "requestedTiles": requested_tiles,
+            "maxRequestedTile": 0,
+            "maxPlanRequestedTile": 0,
+            "maxEffectiveTile": 0,
+            "maxAtlasTile": 0,
+            "maxFill": 0,
+            "failures": [],
+        }
+
+    for sample in samples:
+        requested_max = int_sample_field(sample, "surfaceSpotRequestedTileMax")
+        plan_requested_max = int_sample_field(sample, "surfaceSpotPlanRequestedTileMax")
+        effective_max = int_sample_field(sample, "surfaceSpotTileMax")
+        atlas_tile = int_sample_field(sample, "surfaceSpotAtlasTileSize")
+        fill = int_sample_field(sample, "surfaceSpotAtlasFill")
+
+        max_requested_tile = max(max_requested_tile, requested_max)
+        max_plan_requested_tile = max(max_plan_requested_tile, plan_requested_max)
+        max_effective_tile = max(max_effective_tile, effective_max)
+        max_atlas_tile = max(max_atlas_tile, atlas_tile)
+        max_fill = max(max_fill, fill)
+
+        for label, tile_size in SURFACELIGHT_SPOT_LOD_TILES.items():
+            if surface_light_spot_range_includes(
+                sample,
+                "surfaceSpotRequestedTileMin",
+                "surfaceSpotRequestedTileMax",
+                tile_size,
+            ):
+                requested_tiles[label] = True
+
+        if requested_max > SURFACELIGHT_SPOT_REQUESTED_TILE_CAP:
+            failures.append(
+                "Surfacelight spot requested tile exceeded cap: "
+                f"{requested_max}>{SURFACELIGHT_SPOT_REQUESTED_TILE_CAP}."
+            )
+        if plan_requested_max > SURFACELIGHT_SPOT_REQUESTED_TILE_CAP:
+            failures.append(
+                "Surfacelight spot planned request exceeded cap: "
+                f"{plan_requested_max}>{SURFACELIGHT_SPOT_REQUESTED_TILE_CAP}."
+            )
+        if atlas_tile > 0 and effective_max > atlas_tile:
+            failures.append(
+                "Surfacelight spot effective tile exceeded atlas tile: "
+                f"{effective_max}>{atlas_tile}."
+            )
+        if fill > SURFACELIGHT_SPOT_LOD_MAX_FILL_PERCENT:
+            failures.append(
+                "Surfacelight spot atlas fill exceeded smoke bound: "
+                f"{fill}%>{SURFACELIGHT_SPOT_LOD_MAX_FILL_PERCENT}%."
+            )
+
+    missing_tiles = [
+        f"{label}({tile_size})"
+        for label, tile_size in SURFACELIGHT_SPOT_LOD_TILES.items()
+        if not requested_tiles[label]
+    ]
+    if missing_tiles:
+        failures.append(
+            "Surfacelight spot LOD smoke missing requested tile coverage: "
+            + ", ".join(missing_tiles)
+            + "."
+        )
+    if max_effective_tile > 0 and max_atlas_tile <= 0:
+        failures.append("Surfacelight spot LOD smoke has effective tiles without an atlas tile size.")
+
+    return {
+        "found": True,
+        "status": "failed" if failures else "passed",
+        "sampleCount": len(samples),
+        "requestedTiles": requested_tiles,
+        "maxRequestedTile": max_requested_tile,
+        "maxPlanRequestedTile": max_plan_requested_tile,
+        "maxEffectiveTile": max_effective_tile,
+        "maxAtlasTile": max_atlas_tile,
+        "maxFill": max_fill,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def csm_shadow_runtime_summary(
+    manager_samples: list[dict[str, int]],
+    csm_samples: list[dict[str, int]],
+) -> dict[str, object]:
+    manager_max = summarize_int_samples(manager_samples)["max"] if manager_samples else {}
+    csm_max = summarize_int_samples(csm_samples)["max"] if csm_samples else {}
+    failures: list[str] = []
+
+    def manager_field(name: str) -> int:
+        return int(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
+
+    def csm_field(name: str) -> int:
+        return int(csm_max.get(name, 0)) if isinstance(csm_max, dict) else 0
+
+    if not manager_samples and not csm_samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "managerSampleCount": 0,
+            "debugSampleCount": 0,
+            "max": {},
+            "failures": [],
+        }
+
+    if not manager_samples:
+        failures.append("CSM runtime smoke missing shadow manager samples.")
+    if not csm_samples:
+        failures.append("CSM runtime smoke missing csm debug samples.")
+    if manager_samples:
+        if manager_field("csmAtlasScheduled") <= 0:
+            failures.append("CSM runtime smoke did not schedule the CSM atlas pass.")
+        if manager_field("csmReceiverScheduled") <= 0:
+            failures.append("CSM runtime smoke did not schedule the CSM receiver pass.")
+        if manager_field("csmPublished") <= 0:
+            failures.append("CSM runtime smoke did not publish the CSM atlas.")
+        if manager_field("csmCascadeCount") <= 0:
+            failures.append("CSM runtime smoke reported zero manager cascades.")
+        if manager_field("csmAtlasWidth") <= 0 or manager_field("csmAtlasHeight") <= 0:
+            failures.append("CSM runtime smoke reported missing manager atlas dimensions.")
+        if manager_field("csmGeneration") <= 0:
+            failures.append("CSM runtime smoke reported no CSM atlas generation.")
+    if csm_samples:
+        if csm_field("csmDebugCascades") <= 0:
+            failures.append("CSM runtime smoke reported zero debug cascades.")
+        if csm_field("csmDebugResolution") <= 0:
+            failures.append("CSM runtime smoke reported missing debug resolution.")
+        cache_events = (
+            csm_field("csmCacheHits")
+            + csm_field("csmCacheMisses")
+            + csm_field("csmCacheUncacheable")
+        )
+        if cache_events <= 0:
+            failures.append("CSM runtime smoke reported no cache hit/miss/uncacheable telemetry.")
+
+    maximum = {}
+    if isinstance(manager_max, dict):
+        maximum.update(
+            {
+                "csmAtlasScheduled": manager_field("csmAtlasScheduled"),
+                "csmReceiverScheduled": manager_field("csmReceiverScheduled"),
+                "csmPublished": manager_field("csmPublished"),
+                "csmCascadeCount": manager_field("csmCascadeCount"),
+                "csmAtlasWidth": manager_field("csmAtlasWidth"),
+                "csmAtlasHeight": manager_field("csmAtlasHeight"),
+                "csmGeneration": manager_field("csmGeneration"),
+            }
+        )
+    if isinstance(csm_max, dict):
+        maximum.update(csm_max)
+        maximum["csmCacheEvents"] = (
+            csm_field("csmCacheHits")
+            + csm_field("csmCacheMisses")
+            + csm_field("csmCacheUncacheable")
+        )
+
+    return {
+        "found": bool(manager_samples or csm_samples),
+        "status": "failed" if failures else "passed",
+        "managerSampleCount": len(manager_samples),
+        "debugSampleCount": len(csm_samples),
+        "max": maximum,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def csm_generation_delta(manager_samples: list[dict[str, int]]) -> tuple[int, int, int]:
+    generations = [
+        int_sample_field(sample, "csmGeneration")
+        for sample in manager_samples
+        if int_sample_field(sample, "csmGeneration") > 0
+    ]
+    if not generations:
+        return 0, 0, 0
+    return min(generations), max(generations), max(generations) - min(generations)
+
+
+def csm_snap_depth_delta_milli(csm_samples: list[dict[str, int]]) -> int:
+    deltas: list[int] = []
+    for index in range(4):
+        name = f"csmSnapDepth{index}Milli"
+        values = [
+            int_sample_field(sample, name)
+            for sample in csm_samples
+            if int_sample_field(sample, "csmSnapDepthSamples") > 0
+        ]
+        if values:
+            deltas.append(max(values) - min(values))
+    return max(deltas) if deltas else 0
+
+
+def csm_stability_summary(
+    manager_samples: list[dict[str, int]],
+    csm_samples: list[dict[str, int]],
+) -> dict[str, object]:
+    manager_max = summarize_int_samples(manager_samples)["max"] if manager_samples else {}
+    csm_max = summarize_int_samples(csm_samples)["max"] if csm_samples else {}
+    min_generation, max_generation, generation_delta = csm_generation_delta(manager_samples)
+    max_snap_depth_delta = csm_snap_depth_delta_milli(csm_samples)
+    failures: list[str] = []
+
+    def manager_field(name: str) -> int:
+        return int(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
+
+    def csm_field(name: str) -> int:
+        return int(csm_max.get(name, 0)) if isinstance(csm_max, dict) else 0
+
+    if not manager_samples and not csm_samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "managerSampleCount": 0,
+            "debugSampleCount": 0,
+            "minGeneration": 0,
+            "maxGeneration": 0,
+            "generationDelta": 0,
+            "maxSnapDepthDeltaMilli": 0,
+            "max": {},
+            "failures": [],
+        }
+
+    if len(manager_samples) < CSM_SHIMMER_MIN_SAMPLES:
+        failures.append(
+            "CSM shimmer path manager samples below minimum: "
+            f"{len(manager_samples)}<{CSM_SHIMMER_MIN_SAMPLES}."
+        )
+    if len(csm_samples) < CSM_SHIMMER_MIN_SAMPLES:
+        failures.append(
+            "CSM shimmer path debug samples below minimum: "
+            f"{len(csm_samples)}<{CSM_SHIMMER_MIN_SAMPLES}."
+        )
+    if manager_field("csmPublished") <= 0 or manager_field("csmGeneration") <= 0:
+        failures.append("CSM shimmer path did not publish a sampleable atlas generation.")
+    if csm_field("csmDebugCascades") <= 0 or csm_field("csmDebugResolution") <= 0:
+        failures.append("CSM shimmer path did not report cascade debug telemetry.")
+    if csm_field("csmSnapDepthSamples") <= 0:
+        failures.append("CSM shimmer path is missing snapped light-depth telemetry.")
+    if (
+        csm_field("csmCacheHits")
+        + csm_field("csmCacheMisses")
+        + csm_field("csmCacheUncacheable")
+    ) <= 0:
+        failures.append("CSM shimmer path reported no cache hit/miss/uncacheable telemetry.")
+    if generation_delta > CSM_SHIMMER_MAX_GENERATION_DELTA:
+        failures.append(
+            "CSM shimmer path atlas generation churn exceeded smoke bound: "
+            f"{generation_delta}>{CSM_SHIMMER_MAX_GENERATION_DELTA}."
+        )
+    if max_snap_depth_delta > CSM_SHIMMER_MAX_SNAP_DEPTH_DELTA_MILLI:
+        failures.append(
+            "CSM shimmer path snapped light-depth delta exceeded smoke bound: "
+            f"{max_snap_depth_delta}>{CSM_SHIMMER_MAX_SNAP_DEPTH_DELTA_MILLI} milli-units."
+        )
+
+    maximum = {}
+    if isinstance(manager_max, dict):
+        maximum.update(manager_max)
+    if isinstance(csm_max, dict):
+        maximum.update(csm_max)
+        maximum["csmCacheEvents"] = (
+            csm_field("csmCacheHits")
+            + csm_field("csmCacheMisses")
+            + csm_field("csmCacheUncacheable")
+        )
+
+    return {
+        "found": bool(manager_samples or csm_samples),
+        "status": "failed" if failures else "passed",
+        "managerSampleCount": len(manager_samples),
+        "debugSampleCount": len(csm_samples),
+        "minGeneration": min_generation,
+        "maxGeneration": max_generation,
+        "generationDelta": generation_delta,
+        "maxSnapDepthDeltaMilli": max_snap_depth_delta,
+        "max": maximum,
+        "failures": list(dict.fromkeys(failures)),
+    }
 
 
 def format_dlight_test_command(dlight: dict[str, object]) -> str:
@@ -567,43 +1358,94 @@ def build_dlight_shadow_cfg(
         safe_map = sanitize(map_name)
         categories = [str(category) for category in scene.get("categories", [])]
         dlight = dict(scene["dlight"])  # type: ignore[arg-type]
+        camera_path = [
+            dict(step)
+            for step in scene.get("csmCameraPath", [])  # type: ignore[union-attr]
+            if isinstance(step, dict)
+        ]
         shot_name = f"vkdl-{scene_index:02d}-{scene_id[:24].rstrip('._-')}-{safe_map}"
         for name, value in sorted(dict(scene.get("cvars", {})).items()):
             lines.append(f"set {name} {q3_quote(value)}")
         lines.append(f"echo DLIGHT_SHADOW_SCENE_BEGIN {scene_id}")
         lines.append(f"devmap {map_name}")
         lines.append(f"wait {args.map_wait}")
+        if scene.get("setviewpos"):
+            lines.append(str(scene["setviewpos"]))
+            lines.append("wait 4")
         lines.append("vkinfo")
         lines.append(format_dlight_test_command(dlight))
         lines.append("wait 4")
-        if not args.no_perf_samples:
-            lines.append('set r_speeds "4"')
-            lines.append(f"wait {args.perf_sample_wait}")
-        lines.append(f"screenshotPNG {shot_name}")
-        lines.append(f"wait {args.screenshot_wait}")
-        if not args.no_perf_samples:
-            lines.append('set r_speeds "0"')
-            lines.append("wait 1")
+        if camera_path:
+            for step_index, step in enumerate(camera_path, start=1):
+                step_id = sanitize(str(step["id"]))
+                step_shot_name = (
+                    f"vkdl-{scene_index:02d}-{scene_id[:18].rstrip('._-')}-"
+                    f"{step_index:02d}-{step_id[:14].rstrip('._-')}-{safe_map}"
+                )
+                lines.append(f"echo CSM_SHIMMER_STEP_BEGIN {scene_id} {step_id}")
+                lines.append(str(step["setviewpos"]))
+                lines.append("wait 4")
+                if not args.no_perf_samples:
+                    lines.append('set r_speeds "4"')
+                    lines.append(f"wait {args.perf_sample_wait}")
+                lines.append(f"screenshotPNG {step_shot_name}")
+                lines.append(f"wait {args.screenshot_wait}")
+                if not args.no_perf_samples:
+                    lines.append('set r_speeds "0"')
+                    lines.append("wait 1")
+                lines.append(f"echo CSM_SHIMMER_STEP_END {scene_id} {step_id}")
+                screenshots.append(
+                    {
+                        "name": step_shot_name,
+                        "baselineKey": (
+                            f"{args.profile}-dlight-shadows-{scene_id}-"
+                            f"{step_id}-{safe_map}-vulkan"
+                        ),
+                        "renderer": "vulkan",
+                        "map": map_name,
+                        "mapIndex": scene_index,
+                        "scene": scene_id,
+                        "description": scene.get("description", ""),
+                        "evidenceCategories": categories,
+                        "shadowScene": True,
+                        "dlightTest": dlight,
+                        "csmCameraPath": True,
+                        "csmPathStep": step_id,
+                        "csmPathIndex": step_index,
+                        "csmSetviewpos": str(step["setviewpos"]),
+                        "csmOriginDelta": str(step.get("originDelta", "")),
+                        "csmAxisDelta": str(step.get("axisDelta", "")),
+                    }
+                )
+        else:
+            if not args.no_perf_samples:
+                lines.append('set r_speeds "4"')
+                lines.append(f"wait {args.perf_sample_wait}")
+            lines.append(f"screenshotPNG {shot_name}")
+            lines.append(f"wait {args.screenshot_wait}")
+            if not args.no_perf_samples:
+                lines.append('set r_speeds "0"')
+                lines.append("wait 1")
+            screenshots.append(
+                {
+                    "name": shot_name,
+                    "baselineKey": f"{args.profile}-dlight-shadows-{scene_id}-{safe_map}-vulkan",
+                    "renderer": "vulkan",
+                    "map": map_name,
+                    "mapIndex": scene_index,
+                    "scene": scene_id,
+                    "description": scene.get("description", ""),
+                    "evidenceCategories": categories,
+                    "shadowScene": True,
+                    "dlightTest": dlight,
+                }
+            )
         lines.append("r_dlightTest off")
         lines.append("wait 1")
         lines.append("vkinfo")
         lines.append(f"echo DLIGHT_SHADOW_SCENE_END {scene_id}")
         lines.append("disconnect")
         lines.append("wait 30")
-        screenshots.append(
-            {
-                "name": shot_name,
-                "baselineKey": f"{args.profile}-dlight-shadows-{scene_id}-{safe_map}-vulkan",
-                "renderer": "vulkan",
-                "map": map_name,
-                "mapIndex": scene_index,
-                "scene": scene_id,
-                "description": scene.get("description", ""),
-                "evidenceCategories": categories,
-                "shadowScene": True,
-                "dlightTest": dlight,
-            }
-        )
 
     lines.append("quit")
     lines.append("")
@@ -732,6 +1574,282 @@ def run_engine(
         }
 
 
+def png_unfilter(filter_type: int, row: bytes, previous: bytes, bpp: int) -> bytes:
+    if filter_type == 0:
+        return row
+
+    out = bytearray(row)
+    for i, value in enumerate(row):
+        left = out[i - bpp] if i >= bpp else 0
+        up = previous[i] if previous else 0
+        up_left = previous[i - bpp] if previous and i >= bpp else 0
+
+        if filter_type == 1:
+            predictor = left
+        elif filter_type == 2:
+            predictor = up
+        elif filter_type == 3:
+            predictor = (left + up) // 2
+        elif filter_type == 4:
+            p = left + up - up_left
+            pa = abs(p - left)
+            pb = abs(p - up)
+            pc = abs(p - up_left)
+            if pa <= pb and pa <= pc:
+                predictor = left
+            elif pb <= pc:
+                predictor = up
+            else:
+                predictor = up_left
+        else:
+            raise ValueError(f"Unsupported PNG filter type {filter_type}.")
+
+        out[i] = (value + predictor) & 0xFF
+    return bytes(out)
+
+
+def read_png_rgba(path: Path) -> tuple[int, int, bytes]:
+    data = path.read_bytes()
+    if not data.startswith(PNG_SIGNATURE):
+        raise ValueError(f"{path} is not a PNG file.")
+
+    offset = len(PNG_SIGNATURE)
+    width = height = bit_depth = color_type = interlace = None
+    palette: bytes | None = None
+    transparency: bytes | None = None
+    compressed = bytearray()
+
+    while offset + 12 <= len(data):
+        length = struct.unpack(">I", data[offset:offset + 4])[0]
+        chunk_type = data[offset + 4:offset + 8]
+        chunk_data = data[offset + 8:offset + 8 + length]
+        offset += 12 + length
+
+        if chunk_type == b"IHDR":
+            (
+                width,
+                height,
+                bit_depth,
+                color_type,
+                _compression,
+                _filter_method,
+                interlace,
+            ) = struct.unpack(">IIBBBBB", chunk_data)
+        elif chunk_type == b"PLTE":
+            palette = chunk_data
+        elif chunk_type == b"tRNS":
+            transparency = chunk_data
+        elif chunk_type == b"IDAT":
+            compressed.extend(chunk_data)
+        elif chunk_type == b"IEND":
+            break
+
+    if width is None or height is None or bit_depth is None or color_type is None:
+        raise ValueError(f"{path} is missing a PNG IHDR chunk.")
+    if bit_depth != 8:
+        raise ValueError(f"{path} uses unsupported PNG bit depth {bit_depth}.")
+    if interlace:
+        raise ValueError(f"{path} uses unsupported interlaced PNG encoding.")
+
+    channels_by_type = {
+        0: 1,
+        2: 3,
+        3: 1,
+        4: 2,
+        6: 4,
+    }
+    channels = channels_by_type.get(color_type)
+    if channels is None:
+        raise ValueError(f"{path} uses unsupported PNG color type {color_type}.")
+
+    raw = zlib.decompress(bytes(compressed))
+    stride = width * channels
+    source_rows: list[bytes] = []
+    previous = b""
+    source_offset = 0
+    for _row_index in range(height):
+        if source_offset >= len(raw):
+            raise ValueError(f"{path} ended before all PNG rows were decoded.")
+        filter_type = raw[source_offset]
+        source_offset += 1
+        row = raw[source_offset:source_offset + stride]
+        source_offset += stride
+        if len(row) != stride:
+            raise ValueError(f"{path} has a truncated PNG row.")
+        decoded = png_unfilter(filter_type, row, previous, channels)
+        source_rows.append(decoded)
+        previous = decoded
+
+    pixels = bytearray(width * height * 4)
+    out = 0
+    for row in source_rows:
+        if color_type == 0:
+            for gray in row:
+                pixels[out:out + 4] = bytes((gray, gray, gray, 255))
+                out += 4
+        elif color_type == 2:
+            for i in range(0, len(row), 3):
+                pixels[out:out + 4] = row[i:i + 3] + b"\xff"
+                out += 4
+        elif color_type == 3:
+            if palette is None:
+                raise ValueError(f"{path} is an indexed PNG without a palette.")
+            for index in row:
+                palette_offset = index * 3
+                if palette_offset + 3 > len(palette):
+                    raise ValueError(f"{path} references palette index {index} out of range.")
+                alpha = transparency[index] if transparency and index < len(transparency) else 255
+                pixels[out:out + 4] = palette[palette_offset:palette_offset + 3] + bytes((alpha,))
+                out += 4
+        elif color_type == 4:
+            for i in range(0, len(row), 2):
+                gray = row[i]
+                alpha = row[i + 1]
+                pixels[out:out + 4] = bytes((gray, gray, gray, alpha))
+                out += 4
+        elif color_type == 6:
+            pixels[out:out + len(row)] = row
+            out += len(row)
+
+    return width, height, bytes(pixels)
+
+
+def png_filter_none_rows(width: int, height: int, pixels: bytes) -> bytes:
+    stride = width * 4
+    rows = bytearray()
+    for row_index in range(height):
+        start = row_index * stride
+        rows.append(0)
+        rows.extend(pixels[start:start + stride])
+    return bytes(rows)
+
+
+def write_png_rgba(path: Path, width: int, height: int, pixels: bytes) -> None:
+    if width <= 0 or height <= 0:
+        raise ValueError("PNG dimensions must be positive.")
+    if len(pixels) != width * height * 4:
+        raise ValueError("RGBA pixel data does not match the requested PNG dimensions.")
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload)) +
+            kind +
+            payload +
+            struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = png_filter_none_rows(width, height, pixels)
+    encoded = bytearray(PNG_SIGNATURE)
+    encoded.extend(
+        chunk(
+            b"IHDR",
+            struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0),
+        )
+    )
+    encoded.extend(chunk(b"IDAT", zlib.compress(raw)))
+    encoded.extend(chunk(b"IEND", b""))
+    path.write_bytes(bytes(encoded))
+
+
+def compare_rgba_pixels(
+    width: int,
+    height: int,
+    baseline_pixels: bytes,
+    candidate_pixels: bytes,
+) -> tuple[dict[str, object], bytes]:
+    if len(baseline_pixels) != len(candidate_pixels):
+        raise ValueError("PNG pixel buffers have different lengths.")
+
+    diff_pixels = bytearray(width * height * 4)
+    squared_error = 0
+    absolute_error = 0
+    max_delta = 0
+    changed_pixels = 0
+    pixel_count = width * height
+    channel_count = pixel_count * 3
+
+    for pixel_index in range(pixel_count):
+        base_offset = pixel_index * 4
+        pixel_changed = False
+        for channel in range(3):
+            delta = abs(
+                baseline_pixels[base_offset + channel] -
+                candidate_pixels[base_offset + channel]
+            )
+            squared_error += delta * delta
+            absolute_error += delta
+            max_delta = max(max_delta, delta)
+            diff_pixels[base_offset + channel] = min(255, delta * 4)
+            if delta:
+                pixel_changed = True
+        diff_pixels[base_offset + 3] = 255
+        if pixel_changed:
+            changed_pixels += 1
+
+    rms = (squared_error / channel_count) ** 0.5 if channel_count else 0.0
+    mean_absolute = absolute_error / channel_count if channel_count else 0.0
+    changed_ratio = changed_pixels / pixel_count if pixel_count else 0.0
+    metrics = {
+        "width": width,
+        "height": height,
+        "pixels": pixel_count,
+        "changedPixels": changed_pixels,
+        "changedPixelRatio": changed_ratio,
+        "rms": rms,
+        "meanAbsolute": mean_absolute,
+        "maxDelta": max_delta,
+    }
+    return metrics, bytes(diff_pixels)
+
+
+def compare_png_files(
+    baseline_path: Path,
+    candidate_path: Path,
+    max_rms: float,
+    max_pixel_ratio: float,
+    diff_path: Path | None = None,
+) -> dict[str, object]:
+    base_width, base_height, base_pixels = read_png_rgba(baseline_path)
+    candidate_width, candidate_height, candidate_pixels = read_png_rgba(candidate_path)
+
+    if (base_width, base_height) != (candidate_width, candidate_height):
+        return {
+            "status": "failed",
+            "reason": "size-mismatch",
+            "baselineWidth": base_width,
+            "baselineHeight": base_height,
+            "candidateWidth": candidate_width,
+            "candidateHeight": candidate_height,
+        }
+
+    metrics, diff_pixels = compare_rgba_pixels(
+        base_width,
+        base_height,
+        base_pixels,
+        candidate_pixels,
+    )
+    passed = (
+        float(metrics["rms"]) <= max_rms and
+        float(metrics["changedPixelRatio"]) <= max_pixel_ratio
+    )
+
+    if diff_path:
+        write_png_rgba(diff_path, base_width, base_height, diff_pixels)
+
+    metrics.update(
+        {
+            "status": "passed" if passed else "failed",
+            "baselinePath": str(baseline_path),
+            "candidatePath": str(candidate_path),
+            "diffPath": str(diff_path) if diff_path else "",
+            "maxRms": max_rms,
+            "maxChangedPixelRatio": max_pixel_ratio,
+        }
+    )
+    return metrics
+
+
 def screenshot_results(homepath: Path, fs_game: str, expected: list[dict[str, object]]) -> list[dict[str, object]]:
     screenshot_dir = homepath / game_dir(fs_game) / "screenshots"
     results: list[dict[str, object]] = []
@@ -750,6 +1868,199 @@ def screenshot_results(homepath: Path, fs_game: str, expected: list[dict[str, ob
     return results
 
 
+def csm_shimmer_path_screenshots(
+    screenshots: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return [
+        shot
+        for shot in screenshots
+        if shot.get("csmCameraPath")
+        and str(shot.get("scene", "")) in CSM_SHIMMER_EVIDENCE_CATEGORIES
+    ]
+
+
+def csm_shimmer_screenshot_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def csm_shimmer_screenshot_summary(
+    screenshots: list[dict[str, object]],
+) -> dict[str, object]:
+    shimmer_shots = csm_shimmer_path_screenshots(screenshots)
+    thresholds = {
+        "maxRms": CSM_SHIMMER_SCREENSHOT_MAX_RMS,
+        "maxChangedPixelRatio": CSM_SHIMMER_SCREENSHOT_MAX_CHANGED_PIXEL_RATIO,
+    }
+    if not shimmer_shots:
+        return {
+            "found": False,
+            "status": "missing",
+            "scene": "csm-shimmer-path",
+            "baselineStep": CSM_SHIMMER_BASELINE_STEP,
+            "sampleCount": 0,
+            "comparisonCount": 0,
+            "passedComparisons": 0,
+            "maxRms": 0.0,
+            "maxChangedPixelRatio": 0.0,
+            "thresholds": thresholds,
+            "comparisons": [],
+            "failures": [],
+        }
+
+    failures: list[str] = []
+    comparisons: list[dict[str, object]] = []
+    expected_steps = {str(step["id"]) for step in CSM_SHIMMER_CAMERA_PATH}
+    seen_steps = {str(shot.get("csmPathStep", "")) for shot in shimmer_shots}
+    missing_steps = sorted(expected_steps - seen_steps)
+    if missing_steps:
+        failures.append(
+            "CSM shimmer screenshot smoke is missing path step"
+            f"{'s' if len(missing_steps) != 1 else ''}: "
+            + ", ".join(missing_steps)
+            + "."
+        )
+    baseline_shots = [
+        shot for shot in shimmer_shots
+        if str(shot.get("csmPathStep", "")) == CSM_SHIMMER_BASELINE_STEP
+    ]
+    if not baseline_shots:
+        failures.append("CSM shimmer screenshot smoke did not capture a baseline step.")
+    elif not baseline_shots[0].get("found"):
+        failures.append(
+            "CSM shimmer screenshot smoke baseline is missing: "
+            f"{baseline_shots[0].get('name', 'baseline')}."
+        )
+
+    for shot in shimmer_shots:
+        if str(shot.get("csmPathStep", "")) == CSM_SHIMMER_BASELINE_STEP:
+            continue
+        name = str(shot.get("name", "screenshot"))
+        step = str(shot.get("csmPathStep", ""))
+        if not shot.get("found"):
+            failures.append(f"CSM shimmer screenshot smoke image is missing: {name}.")
+            continue
+        comparison = shot.get("csmShimmerComparison")
+        if not isinstance(comparison, dict):
+            failures.append(
+                "CSM shimmer screenshot smoke did not compare step "
+                f"{step or name} against the baseline."
+            )
+            continue
+        status = str(comparison.get("status", "failed"))
+        rms = float(comparison.get("rms", 0.0)) if isinstance(comparison.get("rms"), (int, float)) else 0.0
+        changed_ratio = (
+            float(comparison.get("changedPixelRatio", 0.0))
+            if isinstance(comparison.get("changedPixelRatio"), (int, float))
+            else 0.0
+        )
+        record = {
+            "name": name,
+            "step": step,
+            "baselineStep": str(shot.get("csmShimmerBaselineStep", CSM_SHIMMER_BASELINE_STEP)),
+            "status": status,
+            "rms": rms,
+            "changedPixelRatio": changed_ratio,
+            "reason": str(comparison.get("reason", "")),
+        }
+        comparisons.append(record)
+        if status != "passed":
+            reason = str(comparison.get("reason", "diff-threshold")) or "diff-threshold"
+            failures.append(
+                f"CSM shimmer screenshot smoke comparison failed for {step or name}: {reason}."
+            )
+
+    if not comparisons:
+        failures.append("CSM shimmer screenshot smoke did not produce any baseline comparisons.")
+
+    passed = sum(1 for comparison in comparisons if comparison.get("status") == "passed")
+    max_rms = max((float(comparison.get("rms", 0.0)) for comparison in comparisons), default=0.0)
+    max_changed_ratio = max(
+        (float(comparison.get("changedPixelRatio", 0.0)) for comparison in comparisons),
+        default=0.0,
+    )
+
+    return {
+        "found": True,
+        "status": "failed" if failures else "passed",
+        "scene": "csm-shimmer-path",
+        "baselineStep": CSM_SHIMMER_BASELINE_STEP,
+        "sampleCount": len(shimmer_shots),
+        "comparisonCount": len(comparisons),
+        "passedComparisons": passed,
+        "maxRms": max_rms,
+        "maxChangedPixelRatio": max_changed_ratio,
+        "thresholds": thresholds,
+        "comparisons": comparisons,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def apply_csm_shimmer_screenshot_diffs(
+    screenshots: list[dict[str, object]],
+    diff_dir: Path | None,
+    max_rms: float = CSM_SHIMMER_SCREENSHOT_MAX_RMS,
+    max_pixel_ratio: float = CSM_SHIMMER_SCREENSHOT_MAX_CHANGED_PIXEL_RATIO,
+) -> dict[str, object]:
+    shimmer_shots = csm_shimmer_path_screenshots(screenshots)
+    baseline_shot = next(
+        (
+            shot for shot in shimmer_shots
+            if str(shot.get("csmPathStep", "")) == CSM_SHIMMER_BASELINE_STEP
+        ),
+        None,
+    )
+    if baseline_shot is None:
+        return csm_shimmer_screenshot_summary(screenshots)
+
+    baseline_shot["csmShimmerRole"] = "baseline"
+    baseline_path = Path(str(baseline_shot.get("path", "")))
+    baseline_key = str(baseline_shot.get("baselineKey") or baseline_shot.get("name") or "baseline")
+
+    for shot in shimmer_shots:
+        if shot is baseline_shot:
+            continue
+        shot["csmShimmerRole"] = "candidate"
+        shot["csmShimmerBaselineStep"] = CSM_SHIMMER_BASELINE_STEP
+        shot["csmShimmerBaselineKey"] = baseline_key
+        shot["csmShimmerBaselinePath"] = str(baseline_path)
+
+        candidate_path = Path(str(shot.get("path", "")))
+        if not baseline_shot.get("found") or not shot.get("found"):
+            continue
+
+        candidate_key = str(shot.get("baselineKey") or shot.get("name") or "candidate")
+        comparison_diff_path = (
+            diff_dir.resolve() / f"{candidate_key}.csm-shimmer.diff.png"
+            if diff_dir is not None
+            else None
+        )
+        try:
+            comparison = compare_png_files(
+                baseline_path,
+                candidate_path,
+                max_rms,
+                max_pixel_ratio,
+                comparison_diff_path,
+            )
+        except Exception as exc:
+            comparison = {
+                "status": "failed",
+                "reason": str(exc),
+                "baselinePath": str(baseline_path),
+                "candidatePath": str(candidate_path),
+                "diffPath": str(comparison_diff_path) if comparison_diff_path else "",
+                "maxRms": max_rms,
+                "maxChangedPixelRatio": max_pixel_ratio,
+            }
+        shot["csmShimmerComparison"] = comparison
+
+    return csm_shimmer_screenshot_summary(screenshots)
+
+
 def timedemo_metrics(log_path: Path) -> dict[str, object] | None:
     if not log_path.exists():
         return None
@@ -765,6 +2076,203 @@ def timedemo_metrics(log_path: Path) -> dict[str, object] | None:
     }
 
 
+def summarize_int_samples(samples: list[dict[str, int]]) -> dict[str, object]:
+    if not samples:
+        return {
+            "found": False,
+            "sampleCount": 0,
+            "latest": {},
+            "max": {},
+        }
+
+    return {
+        "found": True,
+        "sampleCount": len(samples),
+        "latest": samples[-1],
+        "max": {
+            name: max(sample[name] for sample in samples)
+            for name in samples[0]
+        },
+    }
+
+
+def shadow_manager_sample(match: re.Match[str]) -> dict[str, int]:
+    sample: dict[str, int] = {}
+    for name, value in match.groupdict().items():
+        if value is None:
+            sample[name] = 0
+        else:
+            sample[name] = int(value, 16) if name == "scheduledMask" else int(value)
+    return sample
+
+
+def csm_shadow_sample(match: re.Match[str]) -> dict[str, int]:
+    sample: dict[str, int] = {}
+    snap_depth_present = False
+    for name, value in match.groupdict().items():
+        if name == "csmSky":
+            continue
+        if value is None:
+            if name.startswith("csmSnapDepth"):
+                sample[f"{name}Milli"] = 0
+            else:
+                sample[name] = 0
+            continue
+        if name.startswith("csmSnapDepth"):
+            sample[f"{name}Milli"] = int(round(float(value) * 1000.0))
+            snap_depth_present = True
+        else:
+            sample[name] = int(value)
+    sample["csmSnapDepthSamples"] = 1 if snap_depth_present else 0
+    return sample
+
+
+def csm_fallback_sample(match: re.Match[str]) -> dict[str, int]:
+    reason = sanitize(match.group("csmFallbackReason"))
+    sample = {
+        "csmFallbackSamples": 1,
+        "csmFallbackCascades": int(match.group("csmFallbackCascades")),
+        "csmFallbackNoWorld": 0,
+        "csmFallbackNoSun": 0,
+        "csmFallbackAtlasUnavailable": 0,
+        "csmFallbackZeroCascade": 0,
+        "csmFallbackProjection": 0,
+        "csmFallbackStrength": 0,
+        "csmFallbackDisabled": 0,
+    }
+    if reason == "no-world":
+        sample["csmFallbackNoWorld"] = 1
+    elif reason == "no-sky-sun":
+        sample["csmFallbackNoSun"] = 1
+    elif reason == "atlas":
+        sample["csmFallbackAtlasUnavailable"] = 1
+    elif reason == "zero-cascade":
+        sample["csmFallbackZeroCascade"] = 1
+    elif reason == "projection":
+        sample["csmFallbackProjection"] = 1
+    elif reason == "strength":
+        sample["csmFallbackStrength"] = 1
+    elif reason == "disabled":
+        sample["csmFallbackDisabled"] = 1
+    return sample
+
+
+def csm_fallback_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def csm_fallback_summary(
+    manager_samples: list[dict[str, int]],
+    fallback_samples: list[dict[str, int]],
+    expected_reasons: tuple[str, ...] = (),
+) -> dict[str, object]:
+    manager_max = summarize_int_samples(manager_samples)["max"] if manager_samples else {}
+    fallback_max = summarize_int_samples(fallback_samples)["max"] if fallback_samples else {}
+    failures: list[str] = []
+
+    def manager_field(name: str) -> int:
+        return int(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
+
+    def fallback_field(name: str) -> int:
+        return int(fallback_max.get(name, 0)) if isinstance(fallback_max, dict) else 0
+
+    reason_fields = {
+        "no-world": "csmFallbackNoWorld",
+        "no-sky-sun": "csmFallbackNoSun",
+        "atlas": "csmFallbackAtlasUnavailable",
+        "zero-cascade": "csmFallbackZeroCascade",
+    }
+
+    if not manager_samples and not fallback_samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "managerSampleCount": 0,
+            "fallbackSampleCount": 0,
+            "reasonCoverage": {reason: False for reason in expected_reasons},
+            "max": {},
+            "failures": [],
+        }
+
+    if not manager_samples:
+        failures.append("CSM fallback smoke missing shadow manager samples.")
+    if not fallback_samples:
+        failures.append("CSM fallback smoke missing CSM skip reason samples.")
+
+    if manager_samples:
+        blocked_fields = (
+            "csmAtlasScheduled",
+            "csmReceiverScheduled",
+            "csmPublished",
+            "csmCascadeCount",
+            "csmAtlasWidth",
+            "csmAtlasHeight",
+            "csmGeneration",
+        )
+        for name in blocked_fields:
+            if manager_field(name) > 0:
+                failures.append(
+                    "CSM fallback smoke published or scheduled invalid CSM work: "
+                    f"{name}={manager_field(name)}."
+                )
+    if fallback_field("csmFallbackCascades") > 0:
+        failures.append(
+            "CSM fallback smoke reported non-zero cascades in a skip sample: "
+            f"{fallback_field('csmFallbackCascades')}."
+        )
+
+    reason_coverage = {
+        reason: fallback_field(field) > 0
+        for reason, field in reason_fields.items()
+        if not expected_reasons or reason in expected_reasons
+    }
+    missing_reasons = [
+        reason for reason in expected_reasons
+        if not reason_coverage.get(reason, False)
+    ]
+    if missing_reasons:
+        failures.append(
+            "CSM fallback smoke missing skip reason coverage: "
+            + ", ".join(missing_reasons)
+            + "."
+        )
+    if "no-world" in expected_reasons and manager_field("noworld") <= 0:
+        failures.append("CSM fallback no-world smoke did not mark the manager noworld sample.")
+
+    maximum: dict[str, int] = {}
+    if isinstance(manager_max, dict):
+        maximum.update(
+            {
+                "noworld": manager_field("noworld"),
+                "scheduledPasses": manager_field("scheduledPasses"),
+                "scheduledMask": manager_field("scheduledMask"),
+                "csmAtlasScheduled": manager_field("csmAtlasScheduled"),
+                "csmReceiverScheduled": manager_field("csmReceiverScheduled"),
+                "csmPublished": manager_field("csmPublished"),
+                "csmCascadeCount": manager_field("csmCascadeCount"),
+                "csmAtlasWidth": manager_field("csmAtlasWidth"),
+                "csmAtlasHeight": manager_field("csmAtlasHeight"),
+                "csmGeneration": manager_field("csmGeneration"),
+            }
+        )
+    if isinstance(fallback_max, dict):
+        maximum.update(fallback_max)
+
+    return {
+        "found": bool(manager_samples or fallback_samples),
+        "status": "failed" if failures else "passed",
+        "managerSampleCount": len(manager_samples),
+        "fallbackSampleCount": len(fallback_samples),
+        "reasonCoverage": reason_coverage,
+        "max": maximum,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
 def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
     info: dict[str, object] = {
         "found": False,
@@ -772,6 +2280,24 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
         "latest": {},
         "max": {},
         "scenes": {},
+        "shadowManager": {
+            "found": False,
+            "sampleCount": 0,
+            "latest": {},
+            "max": {},
+            "scenes": {},
+        },
+        "surfaceLightSpot": {
+            "found": False,
+            "sampleCount": 0,
+            "latest": {},
+            "max": {},
+            "scenes": {},
+        },
+        "surfaceLightSpotLod": surface_light_spot_lod_summary([]),
+        "csmShadows": csm_shadow_runtime_summary([], []),
+        "csmStability": csm_stability_summary([], []),
+        "csmFallbacks": csm_fallback_summary([], [], CSM_FALLBACK_REQUIRED_REASONS),
     }
     if not log_path.exists():
         return info
@@ -779,15 +2305,51 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
     text = log_path.read_text(encoding="utf-8", errors="replace")
     samples: list[dict[str, int]] = []
     scene_samples: dict[str, list[dict[str, int]]] = {}
+    manager_samples: list[dict[str, int]] = []
+    manager_scene_samples: dict[str, list[dict[str, int]]] = {}
+    surface_spot_samples: list[dict[str, int]] = []
+    surface_spot_scene_samples: dict[str, list[dict[str, int]]] = {}
+    csm_samples: list[dict[str, int]] = []
+    csm_scene_samples: dict[str, list[dict[str, int]]] = {}
+    csm_fallback_samples: list[dict[str, int]] = []
+    csm_fallback_scene_samples: dict[str, list[dict[str, int]]] = {}
     current_scene = ""
     for line in text.splitlines():
         if match := DLIGHT_SHADOW_SCENE_BEGIN_RE.search(line):
             current_scene = sanitize(match.group("scene"))
             scene_samples.setdefault(current_scene, [])
+            manager_scene_samples.setdefault(current_scene, [])
+            surface_spot_scene_samples.setdefault(current_scene, [])
+            csm_scene_samples.setdefault(current_scene, [])
+            csm_fallback_scene_samples.setdefault(current_scene, [])
             continue
         if match := DLIGHT_SHADOW_SCENE_END_RE.search(line):
             if sanitize(match.group("scene")) == current_scene:
                 current_scene = ""
+            continue
+        if match := SHADOW_MANAGER_RE.search(line):
+            sample = shadow_manager_sample(match)
+            manager_samples.append(sample)
+            if current_scene:
+                manager_scene_samples.setdefault(current_scene, []).append(sample)
+            continue
+        if match := SURFACELIGHT_SPOT_PLAN_RE.search(line):
+            sample = {name: int(value) for name, value in match.groupdict().items()}
+            surface_spot_samples.append(sample)
+            if current_scene:
+                surface_spot_scene_samples.setdefault(current_scene, []).append(sample)
+            continue
+        if match := CSM_SHADOWS_RE.search(line):
+            sample = csm_shadow_sample(match)
+            csm_samples.append(sample)
+            if current_scene:
+                csm_scene_samples.setdefault(current_scene, []).append(sample)
+            continue
+        if match := CSM_PLAN_SKIP_RE.search(line):
+            sample = csm_fallback_sample(match)
+            csm_fallback_samples.append(sample)
+            if current_scene:
+                csm_fallback_scene_samples.setdefault(current_scene, []).append(sample)
             continue
         if match := DLIGHT_SHADOW_PLAN_RE.search(line):
             sample = {name: int(value) for name, value in match.groupdict().items()}
@@ -795,31 +2357,116 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
             if current_scene:
                 scene_samples.setdefault(current_scene, []).append(sample)
 
+    if manager_samples:
+        manager_summary = summarize_int_samples(manager_samples)
+        manager_summary["scenes"] = {
+            scene_id: {
+                **summarize_int_samples(records),
+            }
+            for scene_id, records in sorted(manager_scene_samples.items())
+            if records
+        }
+        info["shadowManager"] = manager_summary
+    if surface_spot_samples:
+        surface_spot_summary = summarize_int_samples(surface_spot_samples)
+        surface_spot_summary["scenes"] = {
+            scene_id: {
+                **summarize_int_samples(records),
+            }
+            for scene_id, records in sorted(surface_spot_scene_samples.items())
+            if records
+        }
+        info["surfaceLightSpot"] = surface_spot_summary
+        surface_spot_lod = surface_light_spot_lod_summary(surface_spot_samples)
+        surface_spot_lod["scenes"] = {
+            scene_id: surface_light_spot_lod_summary(records)
+            for scene_id, records in sorted(surface_spot_scene_samples.items())
+            if records
+        }
+        info["surfaceLightSpotLod"] = surface_spot_lod
+    if manager_samples or csm_samples:
+        csm_runtime = csm_shadow_runtime_summary(manager_samples, csm_samples)
+        csm_runtime["scenes"] = {
+            scene_id: csm_shadow_runtime_summary(
+                manager_scene_samples.get(scene_id, []),
+                csm_scene_samples.get(scene_id, []),
+            )
+            for scene_id in sorted(set(manager_scene_samples) | set(csm_scene_samples))
+            if manager_scene_samples.get(scene_id) or csm_scene_samples.get(scene_id)
+        }
+        info["csmShadows"] = csm_runtime
+        stability_scene_ids = sorted(
+            scene_id
+            for scene_id in set(manager_scene_samples) | set(csm_scene_samples)
+            if scene_id in CSM_SHIMMER_EVIDENCE_CATEGORIES
+        )
+        stability_manager_samples = [
+            sample
+            for scene_id in stability_scene_ids
+            for sample in manager_scene_samples.get(scene_id, [])
+        ]
+        stability_csm_samples = [
+            sample
+            for scene_id in stability_scene_ids
+            for sample in csm_scene_samples.get(scene_id, [])
+        ]
+        csm_stability = csm_stability_summary(stability_manager_samples, stability_csm_samples)
+        csm_stability["scenes"] = {
+            scene_id: csm_stability_summary(
+                manager_scene_samples.get(scene_id, []),
+                csm_scene_samples.get(scene_id, []),
+            )
+            for scene_id in stability_scene_ids
+        }
+        info["csmStability"] = csm_stability
+    if manager_samples or csm_fallback_samples:
+        fallback_scene_ids = sorted(
+            scene_id
+            for scene_id in set(manager_scene_samples) | set(csm_fallback_scene_samples)
+            if scene_id in CSM_FALLBACK_SCENE_REASONS
+        )
+        fallback_manager_samples = [
+            sample
+            for scene_id in fallback_scene_ids
+            for sample in manager_scene_samples.get(scene_id, [])
+        ]
+        fallback_skip_samples = [
+            sample
+            for scene_id in fallback_scene_ids
+            for sample in csm_fallback_scene_samples.get(scene_id, [])
+        ]
+        csm_fallbacks = csm_fallback_summary(
+            fallback_manager_samples,
+            fallback_skip_samples,
+            CSM_FALLBACK_REQUIRED_REASONS,
+        )
+        csm_fallbacks["scenes"] = {
+            scene_id: csm_fallback_summary(
+                manager_scene_samples.get(scene_id, []),
+                csm_fallback_scene_samples.get(scene_id, []),
+                (CSM_FALLBACK_SCENE_REASONS[scene_id],),
+            )
+            for scene_id in fallback_scene_ids
+        }
+        info["csmFallbacks"] = csm_fallbacks
+
     if not samples:
         return info
 
-    maxima = {
-        name: max(sample[name] for sample in samples)
-        for name in samples[0]
-    }
     scene_summaries = {
         scene_id: {
-            "sampleCount": len(records),
-            "latest": records[-1],
-            "max": {
-                name: max(record[name] for record in records)
-                for name in records[0]
-            },
+            **summarize_int_samples(records),
         }
         for scene_id, records in sorted(scene_samples.items())
         if records
     }
+    summary = summarize_int_samples(samples)
     info.update(
         {
             "found": True,
-            "sampleCount": len(samples),
-            "latest": samples[-1],
-            "max": maxima,
+            "sampleCount": summary["sampleCount"],
+            "latest": summary["latest"],
+            "max": summary["max"],
             "scenes": scene_summaries,
         }
     )
@@ -1094,6 +2741,15 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
             if not active_logs:
                 failures.append("No Vulkan dlight shadow planning/render log samples were found.")
             else:
+                active_manager_logs = [
+                    summary.get("shadowManager")
+                    for summary in active_logs
+                    if shadow_manager_summary_active(summary.get("shadowManager"))
+                ]
+                if not active_manager_logs:
+                    failures.append(
+                        "No Vulkan shadow manager schedule/publication log samples were found."
+                    )
                 scene_categories: dict[str, set[str]] = {}
                 for shot in shadow_screenshots:
                     scene_id = sanitize(str(shot.get("scene", "")))
@@ -1132,6 +2788,204 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                         + ", ".join(missing_log_categories)
                         + "."
                     )
+                if active_manager_logs:
+                    manager_logged_scenes = {
+                        sanitize(str(scene_id))
+                        for summary in active_logs
+                        if isinstance(summary, dict)
+                        and isinstance(summary.get("shadowManager"), dict)
+                        and isinstance(summary["shadowManager"].get("scenes"), dict)  # type: ignore[index]
+                        for scene_id, scene_summary in summary["shadowManager"]["scenes"].items()  # type: ignore[index]
+                        if shadow_manager_summary_active(scene_summary)
+                    }
+                    manager_logged_categories = {
+                        category
+                        for scene_id in manager_logged_scenes
+                        for category in scene_categories.get(scene_id, set())
+                    }
+                    missing_manager_categories = [
+                        category
+                        for category in required_categories
+                        if category not in manager_logged_categories
+                    ]
+                    if missing_manager_categories:
+                        failures.append(
+                            "Vulkan shadow manager logs are missing categor"
+                            f"{'ies' if len(missing_manager_categories) != 1 else 'y'}: "
+                            + ", ".join(missing_manager_categories)
+                            + "."
+                        )
+                required_surface_categories = [
+                    str(category)
+                    for category in requirements.get(
+                        "required_surface_light_spot_categories",
+                        (),
+                    )
+                ]
+                if required_surface_categories:
+                    surface_logged_scenes = {
+                        sanitize(str(scene_id))
+                        for summary in shadow_logs
+                        if isinstance(summary, dict)
+                        and isinstance(summary.get("surfaceLightSpot"), dict)
+                        and isinstance(summary["surfaceLightSpot"].get("scenes"), dict)  # type: ignore[index]
+                        for scene_id, scene_summary in summary["surfaceLightSpot"]["scenes"].items()  # type: ignore[index]
+                        if surface_light_spot_summary_active(scene_summary)
+                    }
+                    if not surface_logged_scenes:
+                        failures.append(
+                            "No Vulkan surfacelight spot manager log samples were found."
+                        )
+                    surface_logged_categories = {
+                        category
+                        for scene_id in surface_logged_scenes
+                        for category in scene_categories.get(scene_id, set())
+                    }
+                    missing_surface_categories = [
+                        category
+                        for category in required_surface_categories
+                        if category not in surface_logged_categories
+                    ]
+                    if missing_surface_categories:
+                        failures.append(
+                            "Vulkan surfacelight spot manager logs are missing categor"
+                            f"{'ies' if len(missing_surface_categories) != 1 else 'y'}: "
+                            + ", ".join(missing_surface_categories)
+                            + "."
+                        )
+                    lod_logged_scenes = {
+                        sanitize(str(scene_id))
+                        for summary in shadow_logs
+                        if isinstance(summary, dict)
+                        and isinstance(summary.get("surfaceLightSpotLod"), dict)
+                        and isinstance(summary["surfaceLightSpotLod"].get("scenes"), dict)  # type: ignore[index]
+                        for scene_id, scene_summary in summary["surfaceLightSpotLod"]["scenes"].items()  # type: ignore[index]
+                        if surface_light_spot_lod_summary_active(scene_summary)
+                    }
+                    if not lod_logged_scenes:
+                        failures.append(
+                            "No Vulkan surfacelight spot LOD smoke log samples passed."
+                        )
+                    lod_logged_categories = {
+                        category
+                        for scene_id in lod_logged_scenes
+                        for category in scene_categories.get(scene_id, set())
+                    }
+                    missing_lod_categories = [
+                        category
+                        for category in required_surface_categories
+                        if category not in lod_logged_categories
+                    ]
+                    if missing_lod_categories:
+                        failures.append(
+                            "Vulkan surfacelight spot LOD logs are missing categor"
+                            f"{'ies' if len(missing_lod_categories) != 1 else 'y'}: "
+                            + ", ".join(missing_lod_categories)
+                            + "."
+                        )
+                required_csm_categories = [
+                    str(category)
+                    for category in requirements.get(
+                        "required_csm_shadow_categories",
+                        (),
+                    )
+                ]
+                if required_csm_categories:
+                    csm_logged_scenes = {
+                        sanitize(str(scene_id))
+                        for summary in shadow_logs
+                        if isinstance(summary, dict)
+                        and isinstance(summary.get("csmShadows"), dict)
+                        and isinstance(summary["csmShadows"].get("scenes"), dict)  # type: ignore[index]
+                        for scene_id, scene_summary in summary["csmShadows"]["scenes"].items()  # type: ignore[index]
+                        if csm_shadow_runtime_summary_active(scene_summary)
+                    }
+                    if not csm_logged_scenes:
+                        failures.append(
+                            "No Vulkan CSM runtime smoke log samples passed."
+                        )
+                    csm_logged_categories = {
+                        category
+                        for scene_id in csm_logged_scenes
+                        for category in scene_categories.get(scene_id, set())
+                    }
+                    missing_csm_categories = [
+                        category
+                        for category in required_csm_categories
+                        if category not in csm_logged_categories
+                    ]
+                    if missing_csm_categories:
+                        failures.append(
+                            "Vulkan CSM runtime logs are missing categor"
+                            f"{'ies' if len(missing_csm_categories) != 1 else 'y'}: "
+                            + ", ".join(missing_csm_categories)
+                            + "."
+                        )
+                    if requirements.get("require_csm_shimmer_screenshot_diff"):
+                        shimmer_summaries = [
+                            run.get("csmShimmerScreenshots")
+                            for run in shadow_runs
+                            if isinstance(run.get("csmShimmerScreenshots"), dict)
+                        ]
+                        if not any(
+                            csm_shimmer_screenshot_summary_active(summary)
+                            for summary in shimmer_summaries
+                        ):
+                            failures.append(
+                                "No Vulkan CSM shimmer screenshot diff smoke passed."
+                            )
+                            for summary in shimmer_summaries:
+                                if not isinstance(summary, dict):
+                                    continue
+                                summary_failures = summary.get("failures", [])
+                                if isinstance(summary_failures, list):
+                                    failures.extend(str(failure) for failure in summary_failures[:4])
+                if requirements.get("require_combined_shadow_atlas_smoke"):
+                    combined_summaries: list[dict[str, object]] = []
+                    for run in shadow_runs:
+                        combined = run.get("combinedShadowAtlas")
+                        if isinstance(combined, dict):
+                            combined_summaries.append(combined)
+                            continue
+                        dlight_shadow = run.get("dlightShadow")
+                        if isinstance(dlight_shadow, dict):
+                            combined_summaries.append(
+                                combined_shadow_atlas_summary(dlight_shadow)
+                            )
+                    if not any(
+                        combined_shadow_atlas_summary_active(summary)
+                        for summary in combined_summaries
+                    ):
+                        failures.append(
+                            "No Vulkan combined shadow atlas smoke passed."
+                        )
+                        for summary in combined_summaries:
+                            summary_failures = summary.get("failures", [])
+                            if isinstance(summary_failures, list):
+                                failures.extend(str(failure) for failure in summary_failures[:6])
+                if requirements.get("require_csm_fallback_smoke"):
+                    fallback_summaries: list[dict[str, object]] = []
+                    for run in shadow_runs:
+                        fallback = run.get("csmFallbacks")
+                        if isinstance(fallback, dict):
+                            fallback_summaries.append(fallback)
+                            continue
+                        dlight_shadow = run.get("dlightShadow")
+                        if isinstance(dlight_shadow, dict) and isinstance(
+                            dlight_shadow.get("csmFallbacks"), dict
+                        ):
+                            fallback_summaries.append(dlight_shadow["csmFallbacks"])  # type: ignore[index]
+                    if not any(
+                        csm_fallback_summary_active(summary)
+                        for summary in fallback_summaries
+                    ):
+                        failures.append(
+                            "No Vulkan CSM fallback smoke passed."
+                        )
+                        for summary in fallback_summaries:
+                            summary_failures = summary.get("failures", [])
+                            if isinstance(summary_failures, list):
+                                failures.extend(str(failure) for failure in summary_failures[:6])
 
     if requirements.get("require_timedemo_metrics"):
         demos = manifest.get("demos", [])
@@ -1297,6 +3151,11 @@ def main() -> int:
     homepath = args.homepath.resolve() if args.homepath else output_root / "home"
     logs_dir = output_root / "logs"
     runs: list[dict[str, object]] = []
+    dlight_shadow_sidecars = (
+        write_dlight_shadow_sidecar_lights(homepath, args.fs_game, dlight_shadow_scenes)
+        if args.dlight_shadow_scenes
+        else []
+    )
 
     if maps and not args.no_map_sweep:
         cfg_name = f"{run_id}-maps.cfg"
@@ -1338,9 +3197,18 @@ def main() -> int:
         log_path = logs_dir / "dlight-shadows.log"
         result = run_engine(command, exe.parent, args.timeout, log_path, args.dry_run)
         shots = screenshot_results(homepath, args.fs_game, expected_screenshots)
+        csm_shimmer_screenshots = csm_shimmer_screenshot_summary(shots)
         if not args.dry_run:
+            csm_shimmer_screenshots = apply_csm_shimmer_screenshot_diffs(
+                shots,
+                output_root / "csm-shimmer-diffs",
+            )
             result["vkinfo"] = analyze_vk_log(log_path, args.profile)
             result["dlightShadow"] = analyze_dlight_shadow_log(log_path)
+            result["combinedShadowAtlas"] = combined_shadow_atlas_summary(result["dlightShadow"])
+            fallback_summary = result["dlightShadow"].get("csmFallbacks")
+            if isinstance(fallback_summary, dict):
+                result["csmFallbacks"] = fallback_summary
         result.update(
             {
                 "type": "dlight-shadow-scenes",
@@ -1348,6 +3216,8 @@ def main() -> int:
                 "maps": sorted({str(scene["map"]) for scene in dlight_shadow_scenes}),
                 "scenes": dlight_shadow_scenes,
                 "screenshots": shots,
+                "csmShimmerScreenshots": csm_shimmer_screenshots,
+                "sidecarLights": dlight_shadow_sidecars,
                 "cvars": dlight_shadow_cvars,
                 "startupCvars": dlight_shadow_startup_cvars,
             }
@@ -1394,6 +3264,7 @@ def main() -> int:
         "dlightShadowScenes": bool(args.dlight_shadow_scenes),
         "dlightShadowEvidenceCategories": list(DLIGHT_SHADOW_EVIDENCE_CATEGORIES),
         "dlightShadowEvidenceScenes": dlight_shadow_scenes if args.dlight_shadow_scenes else [],
+        "dlightShadowSidecars": dlight_shadow_sidecars if args.dlight_shadow_scenes else [],
         "dlightShadowSceneCvars": dlight_shadow_cvars if args.dlight_shadow_scenes else {},
         "dlightShadowSceneStartupCvars": dlight_shadow_startup_cvars if args.dlight_shadow_scenes else {},
         "maps": maps,

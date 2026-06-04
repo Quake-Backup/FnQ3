@@ -929,17 +929,24 @@ static void R_PlanCascadedShadows( void )
 	int filterMode;
 	int cascadeCount;
 	int resolution;
+	int debugFallback;
 	int i;
 
 	R_ClearCSMPlan();
+	debugFallback = r_csmDebugFallback ? r_csmDebugFallback->integer : 0;
 
 	if ( !r_csmShadows || !r_csmShadows->integer ) {
 		tr.pc.c_csmSkippedDisabled++;
 		return;
 	}
 
-	if ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) {
+	if ( debugFallback == 1 || ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
 		tr.pc.c_csmSkippedNoWorldRef++;
+		return;
+	}
+
+	if ( debugFallback == 2 ) {
+		tr.pc.c_csmSkippedNoSun++;
 		return;
 	}
 
@@ -965,9 +972,17 @@ static void R_PlanCascadedShadows( void )
 		tr.pc.c_csmSkippedProjection++;
 		return;
 	}
+	if ( debugFallback == 4 ) {
+		tr.pc.c_csmSkippedZeroCascades++;
+		return;
+	}
 
 	cascadeCount = r_csmCascadeCount ? (int)Com_Clamp( 1, CSM_MAX_CASCADES, r_csmCascadeCount->integer ) : CSM_MAX_CASCADES;
 	resolution = r_csmResolution ? (int)Com_Clamp( 128, 4096, r_csmResolution->integer ) : 1024;
+	if ( debugFallback == 3 ) {
+		tr.pc.c_csmSkippedAtlas++;
+		return;
+	}
 	if ( !R_CSMShadowAtlasLayout( cascadeCount, resolution, glConfig.maxTextureSize, &atlasLayout ) ) {
 		tr.pc.c_csmSkippedAtlas++;
 		return;
@@ -1538,17 +1553,15 @@ static void R_ShadowManagerStorePointLightRecord( shadowPointLightPlan_t *record
 {
 	Com_Memset( record, 0, sizeof( *record ) );
 	record->dlightIndex = dlightIndex;
-	record->shadowIndex = dl->shadowIndex;
-	record->atlasBaseFace = dl->shadowAtlasBaseFace;
-	record->atlasFaceSize = dl->shadowAtlasFaceSize;
-	Com_Memcpy( record->atlasX, dl->shadowAtlasX, sizeof( record->atlasX ) );
-	Com_Memcpy( record->atlasY, dl->shadowAtlasY, sizeof( record->atlasY ) );
+	record->shadowIndex = -1;
+	record->atlasBaseFace = -1;
+	record->atlasFaceSize = 0;
 	record->receiverCount = dl->shadowReceiverCount;
 	record->priority = dl->shadowPriority;
 	VectorCopy( dl->origin, record->origin );
 	VectorCopy( dl->color, record->color );
 	record->radius = dl->radius;
-	record->atlasAllocated = ( dl->shadowAtlasFaceSize > 0 && dl->shadowAtlasBaseFace >= 0 ) ? qtrue : qfalse;
+	record->atlasAllocated = qfalse;
 }
 
 static void R_ShadowManagerAddPointCandidate( int dlightIndex, const dlight_t *dl )
@@ -1603,16 +1616,6 @@ static void R_ShadowManagerAssignPointAtlas( shadowPointLightPlan_t *record, int
 	record->atlasAllocated = qtrue;
 }
 
-static void R_ShadowManagerApplyPointPlanToDlight( const shadowPointLightPlan_t *record, dlight_t *dl )
-{
-	dl->shadowPlanned = qtrue;
-	dl->shadowIndex = record->shadowIndex;
-	dl->shadowAtlasBaseFace = record->atlasBaseFace;
-	dl->shadowAtlasFaceSize = record->atlasFaceSize;
-	Com_Memcpy( dl->shadowAtlasX, record->atlasX, sizeof( dl->shadowAtlasX ) );
-	Com_Memcpy( dl->shadowAtlasY, record->atlasY, sizeof( dl->shadowAtlasY ) );
-}
-
 static qboolean R_ShadowManagerPlanPointAtlas( int maxLights, int requestedFaceSize, int maxTextureSize )
 {
 	shadowManager_t *manager = &tr.shadowManager;
@@ -1651,6 +1654,34 @@ static float R_ShadowSpotBrightness( const vec3_t color )
 		brightness = color[2];
 	}
 	return brightness;
+}
+
+static void R_ShadowSpotTelemetryRange( int *minValue, int *maxValue, int value )
+{
+	if ( value <= 0 || !minValue || !maxValue ) {
+		return;
+	}
+	if ( *minValue <= 0 || value < *minValue ) {
+		*minValue = value;
+	}
+	if ( value > *maxValue ) {
+		*maxValue = value;
+	}
+}
+
+static int R_ShadowSpotTelemetryAngle( float angle )
+{
+	return (int)Com_Clamp( 0.0f, 180.0f, angle + 0.5f );
+}
+
+static qboolean R_ShadowSpotSurfaceMalformed( const surfaceLightProxy_t *proxy )
+{
+	if ( !proxy || proxy->radius <= 0.0f || proxy->area <= 1.0f ||
+		proxy->shadowCasterRadius <= 0.0f || proxy->shadowConeAngle <= 0.0f ||
+		DotProduct( proxy->normal, proxy->normal ) <= 0.0f ) {
+		return qtrue;
+	}
+	return qfalse;
 }
 
 static qboolean R_ShadowSpotVisibleInPVS( const vec3_t origin, float radius,
@@ -1778,7 +1809,9 @@ static float R_ShadowSpotSurfaceViewWeight( const surfaceLightProxy_t *proxy,
 
 	VectorSubtract( proxy->origin, tr.refdef.vieworg, delta );
 	forward = DotProduct( delta, tr.refdef.viewaxis[0] );
-	radius = Com_Clamp( 32.0f, 1024.0f, proxy->radius );
+	radius = ( proxy->shadowCasterRadius > 0.0f ) ?
+		proxy->shadowCasterRadius : proxy->radius;
+	radius = Com_Clamp( 32.0f, 1024.0f, radius );
 	if ( forward <= -radius ) {
 		return 0.08f;
 	}
@@ -1813,6 +1846,7 @@ static float R_ShadowSpotSurfacePriority( const surfaceLightProxy_t *proxy,
 	vec3_t delta;
 	float brightness;
 	float dist2;
+	float priorityRadius;
 	float radius2;
 
 	*hemisphereWeight = R_ShadowSpotSurfaceHemisphereWeight( proxy );
@@ -1827,7 +1861,9 @@ static float R_ShadowSpotSurfacePriority( const surfaceLightProxy_t *proxy,
 
 	VectorSubtract( proxy->origin, tr.refdef.vieworg, delta );
 	dist2 = DotProduct( delta, delta );
-	radius2 = Square( proxy->radius );
+	priorityRadius = ( proxy->shadowCasterRadius > 0.0f ) ?
+		proxy->shadowCasterRadius : proxy->radius;
+	radius2 = Square( priorityRadius );
 
 	return brightness * proxy->designerPriority * proxy->intensity *
 		*hemisphereWeight * *viewWeight * radius2 / ( dist2 + radius2 + 1.0f );
@@ -1883,19 +1919,74 @@ static void R_ShadowManagerStoreSpotRecord( shadowSpotLightPlan_t *record,
 	record->atlasAllocated = qfalse;
 }
 
+static void R_ShadowManagerRecordSurfaceSpotCandidateTelemetry(
+	const shadowSpotLightPlan_t *record )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+
+	if ( !record || record->source != SHADOW_SPOT_SOURCE_SURFACELIGHT_PROXY ) {
+		return;
+	}
+
+	R_ShadowSpotTelemetryRange( &manager->spotSurfaceCandidateTileMin,
+		&manager->spotSurfaceCandidateTileMax, record->requestedTileSize );
+	if ( record->sourceIndex >= 0 &&
+		record->sourceIndex < tr.surfaceLightProxies.count ) {
+		const surfaceLightProxy_t *proxy =
+			&tr.surfaceLightProxies.proxies[record->sourceIndex];
+
+		R_ShadowSpotTelemetryRange( &manager->spotSurfaceFootprintMin,
+			&manager->spotSurfaceFootprintMax, (int)( proxy->footprintRadius + 0.5f ) );
+	}
+	R_ShadowSpotTelemetryRange( &manager->spotSurfaceCasterRadiusMin,
+		&manager->spotSurfaceCasterRadiusMax, (int)( record->radius + 0.5f ) );
+	R_ShadowSpotTelemetryRange( &manager->spotSurfaceConeInnerMin,
+		&manager->spotSurfaceConeInnerMax,
+		R_ShadowSpotTelemetryAngle( record->innerAngle ) );
+	R_ShadowSpotTelemetryRange( &manager->spotSurfaceConeOuterMin,
+		&manager->spotSurfaceConeOuterMax,
+		R_ShadowSpotTelemetryAngle( record->outerAngle ) );
+}
+
+static void R_ShadowManagerRecordSurfaceSpotPlanTelemetry(
+	const shadowSpotLightPlan_t *record )
+{
+	shadowManager_t *manager = &tr.shadowManager;
+
+	if ( !record || record->source != SHADOW_SPOT_SOURCE_SURFACELIGHT_PROXY ) {
+		return;
+	}
+
+	R_ShadowSpotTelemetryRange( &manager->spotSurfacePlanRequestedTileMin,
+		&manager->spotSurfacePlanRequestedTileMax, record->requestedTileSize );
+	if ( record->atlasAllocated && record->atlasTileSize > 0 ) {
+		manager->spotSurfacePlanAllocatedCount++;
+		R_ShadowSpotTelemetryRange( &manager->spotSurfacePlanTileMin,
+			&manager->spotSurfacePlanTileMax, record->atlasTileSize );
+	}
+}
+
 static void R_ShadowManagerAddSpotCandidate( shadowSpotLightSource_t source, int sourceIndex,
 	const vec3_t origin, const vec3_t direction, const vec3_t color, float radius,
 	float intensity, float innerAngle, float outerAngle, int requestedTileSize, float priority )
 {
 	shadowManager_t *manager = &tr.shadowManager;
+	shadowSpotLightPlan_t *record;
 
 	if ( manager->spotCandidateCount >= ARRAY_LEN( manager->spotCandidates ) ) {
 		return;
 	}
 
-	R_ShadowManagerStoreSpotRecord( &manager->spotCandidates[manager->spotCandidateCount++],
+	record = &manager->spotCandidates[manager->spotCandidateCount++];
+	R_ShadowManagerStoreSpotRecord( record,
 		source, sourceIndex, origin, direction, color, radius, intensity, innerAngle,
 		outerAngle, requestedTileSize, priority );
+	if ( source == SHADOW_SPOT_SOURCE_STATIC_MAP ) {
+		manager->spotStaticCandidateCount++;
+	} else if ( source == SHADOW_SPOT_SOURCE_SURFACELIGHT_PROXY ) {
+		manager->spotSurfaceCandidateCount++;
+		R_ShadowManagerRecordSurfaceSpotCandidateTelemetry( record );
+	}
 }
 
 static shadowSpotLightPlan_t *R_ShadowManagerAddSpotPlan( const shadowSpotLightPlan_t *source )
@@ -1909,6 +2000,11 @@ static shadowSpotLightPlan_t *R_ShadowManagerAddSpotPlan( const shadowSpotLightP
 
 	record = &manager->spotPlans[manager->spotPlanCount++];
 	Com_Memcpy( record, source, sizeof( *record ) );
+	if ( source->source == SHADOW_SPOT_SOURCE_STATIC_MAP ) {
+		manager->spotStaticPlanCount++;
+	} else if ( source->source == SHADOW_SPOT_SOURCE_SURFACELIGHT_PROXY ) {
+		manager->spotSurfacePlanCount++;
+	}
 	return record;
 }
 
@@ -2013,27 +2109,49 @@ static void R_ShadowManagerCollectSurfaceSpotCandidates( void )
 		const surfaceLightProxy_t *proxy = &tr.surfaceLightProxies.proxies[i];
 		float hemisphereWeight;
 		float viewWeight;
+		float casterRadius;
+		float outerAngle;
 		float priority;
 		int requestedTileSize;
 
-		if ( proxy->projection != SURFACE_LIGHT_PROXY_SPOT || !proxy->castsShadows ||
-			!R_ShadowSpotVisibleInPVS( proxy->origin, proxy->radius,
+		if ( proxy->projection != SURFACE_LIGHT_PROXY_SPOT || !proxy->castsShadows ) {
+			continue;
+		}
+		if ( R_ShadowSpotSurfaceMalformed( proxy ) ) {
+			tr.shadowManager.spotSurfaceRejectedMalformed++;
+			continue;
+		}
+		if ( R_ShadowSpotBrightness( proxy->color ) <= 0.0f ||
+			proxy->intensity <= 0.0f || proxy->designerPriority <= 0.0f ) {
+			tr.shadowManager.spotSurfaceRejectedWeak++;
+			continue;
+		}
+		if ( !R_ShadowSpotVisibleInPVS( proxy->origin, proxy->radius,
 				proxy->leafCluster, proxy->leafArea ) ) {
+			tr.shadowManager.spotSurfaceRejectedOffView++;
 			continue;
 		}
 
 		priority = R_ShadowSpotSurfacePriority( proxy, tanHalfFovX, tanHalfFovY,
 			&hemisphereWeight, &viewWeight );
-		if ( priority <= 0.0f || hemisphereWeight < 0.25f || viewWeight < 0.25f ) {
+		if ( hemisphereWeight < 0.25f || viewWeight < 0.25f ) {
+			tr.shadowManager.spotSurfaceRejectedOffView++;
+			continue;
+		}
+		if ( priority <= 0.0f ) {
+			tr.shadowManager.spotSurfaceRejectedWeak++;
 			continue;
 		}
 
 		requestedTileSize = R_ShadowSpotSurfaceRequestedTileSize( proxy,
 			hemisphereWeight, viewWeight );
+		casterRadius = ( proxy->shadowCasterRadius > 0.0f ) ?
+			proxy->shadowCasterRadius : proxy->radius;
+		outerAngle = ( proxy->shadowConeAngle > 0.0f ) ?
+			proxy->shadowConeAngle : SPOT_SHADOW_SURFACELIGHT_OUTER_ANGLE;
 		R_ShadowManagerAddSpotCandidate( SHADOW_SPOT_SOURCE_SURFACELIGHT_PROXY, i,
-			proxy->origin, proxy->normal, proxy->color, proxy->radius, proxy->intensity,
-			SPOT_SHADOW_SURFACELIGHT_INNER_ANGLE, SPOT_SHADOW_SURFACELIGHT_OUTER_ANGLE,
-			requestedTileSize, priority );
+			proxy->origin, proxy->normal, proxy->color, casterRadius, proxy->intensity,
+			SPOT_SHADOW_SURFACELIGHT_INNER_ANGLE, outerAngle, requestedTileSize, priority );
 	}
 }
 
@@ -2072,6 +2190,11 @@ static void R_ShadowManagerSelectSpotPlans( int maxLights )
 		}
 		R_ShadowManagerAssignSpotAtlas( plan, pass,
 			tr.shadowManager.spotAtlasReady ? &tr.shadowManager.spotAtlasLayout : NULL );
+		R_ShadowManagerRecordSurfaceSpotPlanTelemetry( plan );
+	}
+	if ( tr.shadowManager.spotSurfaceCandidateCount > tr.shadowManager.spotSurfacePlanCount ) {
+		tr.shadowManager.spotSurfaceRejectedOverBudget =
+			tr.shadowManager.spotSurfaceCandidateCount - tr.shadowManager.spotSurfacePlanCount;
 	}
 }
 
@@ -2223,14 +2346,12 @@ static void R_PlanDlightShadows( void )
 		if ( candidate->dlightIndex < 0 || candidate->dlightIndex >= tr.viewParms.num_dlights ) {
 			continue;
 		}
-		dl = &tr.viewParms.dlights[candidate->dlightIndex];
 		plan = R_ShadowManagerAddPointPlan( candidate );
 		if ( !plan ) {
 			break;
 		}
 		R_ShadowManagerAssignPointAtlas( plan, planned,
 			tr.shadowManager.pointAtlasReady ? &tr.shadowManager.pointAtlasLayout : NULL );
-		R_ShadowManagerApplyPointPlanToDlight( plan, dl );
 		planned++;
 		tr.pc.c_dlightShadowPlanned++;
 	}
@@ -2282,7 +2403,26 @@ static void R_ClearShadowManager( void )
 	tr.shadowManager.frameCount = tr.viewParms.frameCount;
 	tr.shadowManager.viewCount = tr.viewCount;
 	tr.shadowManager.inputDlights = tr.viewParms.num_dlights;
-	tr.shadowManager.noWorldModel = ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ? qtrue : qfalse;
+	tr.shadowManager.noWorldModel =
+		( ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+			( r_csmDebugFallback && r_csmDebugFallback->integer == 1 ) ) ? qtrue : qfalse;
+}
+
+static void R_ShadowManagerSchedulePass( shadowManager_t *manager, shadowManagerPass_t pass,
+	qboolean *scheduled, qboolean condition )
+{
+	if ( !manager || !scheduled ) {
+		return;
+	}
+
+	*scheduled = condition ? qtrue : qfalse;
+	if ( *scheduled ) {
+		manager->scheduledPassMask |= (unsigned int)pass;
+		if ( manager->scheduledPasses < SHADOW_MANAGER_MAX_SCHEDULED_PASSES ) {
+			manager->scheduledPassOrder[manager->scheduledPasses] = pass;
+		}
+		manager->scheduledPasses++;
+	}
 }
 
 static void R_UpdateShadowManagerSummary( void )
@@ -2293,19 +2433,18 @@ static void R_UpdateShadowManagerSummary( void )
 	manager->csmPlanned = ( tr.csm.enabled && tr.csm.cascadeCount > 0 ) ? qtrue : qfalse;
 	manager->csmCascadeCount = tr.csm.cascadeCount;
 	manager->csmResolution = tr.csm.resolution;
+	manager->csmPlan = tr.csm;
 	if ( manager->csmPlanned ) {
 		manager->csmAtlasWidth = tr.csm.cascadeCount * tr.csm.resolution;
 		manager->csmAtlasHeight = tr.csm.resolution;
 	}
+	R_ShadowManagerPublishCSMAtlas( manager, qfalse, 0 );
 	manager->scheduledPasses = 0;
-	manager->csmAtlasScheduled = manager->csmPlanned;
-	manager->csmReceiverScheduled = manager->csmPlanned;
-	if ( manager->csmAtlasScheduled ) {
-		manager->scheduledPasses++;
-	}
-	if ( manager->csmReceiverScheduled ) {
-		manager->scheduledPasses++;
-	}
+	manager->scheduledPassMask = 0;
+	R_ShadowManagerSchedulePass( manager, SHADOW_MANAGER_PASS_CSM_ATLAS,
+		&manager->csmAtlasScheduled, manager->csmPlanned );
+	R_ShadowManagerSchedulePass( manager, SHADOW_MANAGER_PASS_CSM_RECEIVER,
+		&manager->csmReceiverScheduled, manager->csmPlanned );
 
 #ifdef USE_PMLIGHT
 	manager->dlightConsidered = tr.pc.c_dlightShadowConsidered;
@@ -2318,19 +2457,16 @@ static void R_UpdateShadowManagerSummary( void )
 		manager->dlightAtlasFaceSize = manager->pointAtlasLayout.faceSize;
 	}
 	manager->dlightAtlasFill = tr.pc.c_dlightShadowAtlasFill;
-	manager->pointAtlasScheduled =
-		( manager->pointPlanCount > 0 && manager->pointAtlasReady ) ? qtrue : qfalse;
-	if ( manager->pointAtlasScheduled ) {
-		manager->scheduledPasses++;
-	}
+	R_ShadowManagerPublishPointAtlas( manager, qfalse, 0 );
+	R_ShadowManagerSchedulePass( manager, SHADOW_MANAGER_PASS_POINT_ATLAS,
+		&manager->pointAtlasScheduled,
+		( manager->pointPlanCount > 0 && manager->pointAtlasReady ) ? qtrue : qfalse );
 	if ( manager->spotAtlasReady ) {
 		manager->spotAtlasWidth = manager->spotAtlasLayout.width;
 		manager->spotAtlasHeight = manager->spotAtlasLayout.height;
 		manager->spotAtlasTileSize = manager->spotAtlasLayout.tileSize;
 	}
-	if ( vk_spot_shadow_atlas_available() ) {
-		manager->spotAtlasGeneration = vk_spot_shadow_atlas_generation();
-	}
+	R_ShadowManagerPublishSpotAtlas( manager, qfalse, 0 );
 	if ( manager->spotAtlasReady &&
 		manager->spotAtlasLayout.width > 0 &&
 		manager->spotAtlasLayout.height > 0 &&
@@ -2353,9 +2489,8 @@ static void R_UpdateShadowManagerSummary( void )
 	manager->spotAtlasScheduled =
 		( manager->spotPlanCount > 0 && manager->spotAtlasReady &&
 			vk_spot_shadow_atlas_available() ) ? qtrue : qfalse;
-	if ( manager->spotAtlasScheduled ) {
-		manager->scheduledPasses++;
-	}
+	R_ShadowManagerSchedulePass( manager, SHADOW_MANAGER_PASS_SPOT_ATLAS,
+		&manager->spotAtlasScheduled, manager->spotAtlasScheduled );
 #endif
 }
 

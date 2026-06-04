@@ -1078,6 +1078,8 @@ typedef struct {
 	vec3_t centroidAccum;
 	vec3_t normalAccum;
 	vec3_t colorAccum;
+	vec3_t boundsMins;
+	vec3_t boundsMaxs;
 	float area;
 } surfaceLightProxyAccum_t;
 
@@ -1095,7 +1097,31 @@ static void R_ClearSurfaceLightProxyAccum( surfaceLightProxyAccum_t *accum )
 	VectorClear( accum->centroidAccum );
 	VectorClear( accum->normalAccum );
 	VectorClear( accum->colorAccum );
+	VectorSet( accum->boundsMins, 999999.0f, 999999.0f, 999999.0f );
+	VectorSet( accum->boundsMaxs, -999999.0f, -999999.0f, -999999.0f );
 	accum->area = 0.0f;
+}
+
+static void R_SurfaceLightAccumBoundsPoint( surfaceLightProxyAccum_t *accum, const vec3_t point )
+{
+	int axis;
+
+	for ( axis = 0; axis < 3; axis++ ) {
+		if ( point[axis] < accum->boundsMins[axis] ) {
+			accum->boundsMins[axis] = point[axis];
+		}
+		if ( point[axis] > accum->boundsMaxs[axis] ) {
+			accum->boundsMaxs[axis] = point[axis];
+		}
+	}
+}
+
+static void R_SurfaceLightAccumTriangleBounds( surfaceLightProxyAccum_t *accum,
+	const vec3_t a, const vec3_t b, const vec3_t c )
+{
+	R_SurfaceLightAccumBoundsPoint( accum, a );
+	R_SurfaceLightAccumBoundsPoint( accum, b );
+	R_SurfaceLightAccumBoundsPoint( accum, c );
 }
 
 static void R_SurfaceLightAccumulateVertexColor( vec3_t colorAccum, float area,
@@ -1215,6 +1241,7 @@ static void R_SurfaceLightAccumulateTriangle( const vec3_t a, const vec3_t b, co
 	VectorMA( accum->centroidAccum, area, centroid, accum->centroidAccum );
 	VectorAdd( accum->normalAccum, cross, accum->normalAccum );
 	R_SurfaceLightAccumulateVertexColor( accum->colorAccum, area, color0, color1, color2 );
+	R_SurfaceLightAccumTriangleBounds( accum, a, b, c );
 	accum->area += area;
 }
 
@@ -1230,6 +1257,77 @@ static float R_SurfaceLightProxyRadius( const shader_t *shader, float area )
 	}
 
 	return Com_Clamp( 64.0f, 4096.0f, radius );
+}
+
+static float R_SurfaceLightProxyFootprintRadius( const surfaceLightProxyAccum_t *accum,
+	const vec3_t normal )
+{
+	vec3_t axes[2];
+	float mins[2];
+	float maxs[2];
+	float radius;
+	float areaRadius;
+	int corner;
+	int axis;
+
+	if ( accum->boundsMaxs[0] < accum->boundsMins[0] || accum->area <= 1.0f ) {
+		return 16.0f;
+	}
+
+	MakeNormalVectors( normal, axes[0], axes[1] );
+	mins[0] = mins[1] = 999999.0f;
+	maxs[0] = maxs[1] = -999999.0f;
+
+	for ( corner = 0; corner < 8; corner++ ) {
+		vec3_t point;
+
+		point[0] = ( corner & 1 ) ? accum->boundsMaxs[0] : accum->boundsMins[0];
+		point[1] = ( corner & 2 ) ? accum->boundsMaxs[1] : accum->boundsMins[1];
+		point[2] = ( corner & 4 ) ? accum->boundsMaxs[2] : accum->boundsMins[2];
+
+		for ( axis = 0; axis < 2; axis++ ) {
+			float coord = DotProduct( point, axes[axis] );
+			if ( coord < mins[axis] ) {
+				mins[axis] = coord;
+			}
+			if ( coord > maxs[axis] ) {
+				maxs[axis] = coord;
+			}
+		}
+	}
+
+	radius = 0.5f * sqrtf( Square( maxs[0] - mins[0] ) +
+		Square( maxs[1] - mins[1] ) );
+	areaRadius = sqrtf( accum->area / (float)M_PI );
+	return Com_Clamp( 16.0f, 2048.0f, MAX( radius, areaRadius ) );
+}
+
+static float R_SurfaceLightProxyShadowCasterRadius( const shader_t *shader,
+	float footprintRadius, float proxyRadius )
+{
+	float radius;
+
+	radius = footprintRadius * 1.75f + sqrtf( MAX( shader->surfaceLight, 1.0f ) ) * 6.0f;
+	if ( shader->surfaceLightSubdivide > 0.0f ) {
+		radius = MAX( radius, shader->surfaceLightSubdivide * 1.25f );
+	}
+
+	radius = Com_Clamp( 128.0f, 2048.0f, radius );
+	if ( proxyRadius > 0.0f ) {
+		radius = MIN( radius, proxyRadius );
+	}
+	return MAX( radius, 64.0f );
+}
+
+static float R_SurfaceLightProxyShadowConeAngle( float footprintRadius, float casterRadius )
+{
+	float supportRadius;
+	float angle;
+
+	supportRadius = MAX( 64.0f, footprintRadius * 1.5f );
+	angle = atan2f( supportRadius, MAX( casterRadius, 64.0f ) ) * 180.0f /
+		(float)M_PI;
+	return Com_Clamp( 35.0f, 70.0f, angle );
 }
 
 static surfaceLightProxyProjection_t R_SurfaceLightProxyProjection( float area )
@@ -1274,6 +1372,11 @@ static qboolean R_AddSurfaceLightProxy( int surfaceIndex, const shader_t *shader
 	proxy->area = accum->area;
 	proxy->intensity = shader->surfaceLight;
 	proxy->radius = R_SurfaceLightProxyRadius( shader, accum->area );
+	proxy->footprintRadius = R_SurfaceLightProxyFootprintRadius( accum, normal );
+	proxy->shadowCasterRadius = R_SurfaceLightProxyShadowCasterRadius( shader,
+		proxy->footprintRadius, proxy->radius );
+	proxy->shadowConeAngle = R_SurfaceLightProxyShadowConeAngle(
+		proxy->footprintRadius, proxy->shadowCasterRadius );
 	proxy->designerPriority = Com_Clamp( 0.25f, 4.0f, proxy->radius / 512.0f );
 	proxy->castsShadows = qtrue;
 	VectorCopy( normal, proxy->normal );
@@ -1405,6 +1508,7 @@ static void R_SurfaceLightAccumulateTriangleForSubdivision( const vec3_t a, cons
 	VectorMA( accum->centroidAccum, area, centroid, accum->centroidAccum );
 	VectorAdd( accum->normalAccum, cross, accum->normalAccum );
 	R_SurfaceLightAccumulateVertexColor( accum->colorAccum, area, color0, color1, color2 );
+	R_SurfaceLightAccumTriangleBounds( accum, a, b, c );
 	accum->area += area;
 }
 

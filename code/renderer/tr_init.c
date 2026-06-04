@@ -139,6 +139,7 @@ cvar_t	*r_csmCasterDepthBias;
 cvar_t	*r_csmCasterSlopeBias;
 cvar_t	*r_csmCasterNormalBias;
 cvar_t	*r_csmDebug;
+cvar_t	*r_csmDebugFallback;
 
 #ifdef USE_VBO
 cvar_t	*r_vbo;
@@ -2754,6 +2755,10 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_csmDebug, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_csmDebug, "Prints directional sky-sun shadow-map planning and render counters each frame." );
 	ri.Cvar_SetGroup( r_csmDebug, CVG_RENDERER );
+	r_csmDebugFallback = ri.Cvar_Get( "r_csmDebugFallback", "0", CVAR_TEMP );
+	ri.Cvar_CheckRange( r_csmDebugFallback, "0", "4", CV_INTEGER );
+	ri.Cvar_SetDescription( r_csmDebugFallback, "Forces CSM fallback diagnostics: 0 off, 1 no-world, 2 no-sun, 3 atlas-unavailable, 4 zero-cascade." );
+	ri.Cvar_SetGroup( r_csmDebugFallback, CVG_RENDERER );
 
 #ifdef USE_FBO
 	r_ext_multisample = ri.Cvar_Get( "r_ext_multisample", "0", CVAR_ARCHIVE_ND );

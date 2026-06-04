@@ -658,12 +658,11 @@ qboolean GLX_Executor_ConsumeOutputTransform( ExecutorState *state, const Output
 	return qtrue;
 }
 
-qboolean GLX_Executor_ExecuteDynamicDraw( ExecutorState *state, const DynamicDraw &draw )
+static qboolean GLX_Executor_AcceptDynamicDraw( ExecutorState *state,
+	const DynamicDraw &draw )
 {
-	const TierExecutor &executor = GLX_Executor_ForTier( state ? state->tier : RenderProductTier::GL12 );
-
 	if ( !state || !GLX_RenderIR_TierConsumesProduct( state->tier, RenderProductKind::DynamicDraw ) ||
-		!executor.dynamicDraw( draw ) ) {
+		!GLX_RenderIR_TierSupportsDynamicDraw( state->tier, draw ) ) {
 		GLX_Executor_RecordUnsupportedGL12Upload( state, draw.upload );
 		GLX_Executor_RecordUnsupportedGL2XUpload( state, draw.upload );
 		GLX_Executor_RecordUnsupportedGL3XUpload( state, draw.upload );
@@ -708,6 +707,47 @@ qboolean GLX_Executor_ExecuteDynamicDraw( ExecutorState *state, const DynamicDra
 	} else {
 		state->dynamicVertices += static_cast<unsigned int>( draw.count );
 	}
+	return qtrue;
+}
+
+qboolean GLX_Executor_ConsumeDynamicDraw( ExecutorState *state, const DynamicDraw &draw )
+{
+	return GLX_Executor_AcceptDynamicDraw( state, draw );
+}
+
+qboolean GLX_Executor_ExecuteDynamicDraw( ExecutorState *state, const DynamicDraw &draw )
+{
+	if ( !state || !GLX_RenderIR_TierConsumesProduct( state->tier, RenderProductKind::DynamicDraw ) ||
+		!GLX_RenderIR_TierSupportsDynamicDraw( state->tier, draw ) ) {
+		GLX_Executor_RecordUnsupportedGL12Upload( state, draw.upload );
+		GLX_Executor_RecordUnsupportedGL2XUpload( state, draw.upload );
+		GLX_Executor_RecordUnsupportedGL3XUpload( state, draw.upload );
+		GLX_Executor_RecordUnsupportedGL41Upload( state, draw.upload );
+		GLX_Executor_RecordReject( state );
+		return qfalse;
+	}
+	if ( !GLX_Executor_SubmitDynamicDraw( draw ) ) {
+		GLX_Executor_RecordReject( state );
+		return qfalse;
+	}
+	return GLX_Executor_AcceptDynamicDraw( state, draw );
+}
+
+qboolean GLX_Executor_ConsumeProjectedDlightDynamicMdiPlan( ExecutorState *state,
+	const ProjectedDlightDynamicMdiPlan &plan )
+{
+	if ( !state || state->tier != RenderProductTier::GL46 ||
+		!plan.valid || !plan.eligible ||
+		!GLX_RenderIR_TierSupportsUploadPlan( state->tier,
+			plan.commandUploadPlan ) ) {
+		GLX_Executor_RecordReject( state );
+		return qfalse;
+	}
+
+	state->highEndProjectedDlightMdiCandidates +=
+		static_cast<unsigned int>( plan.drawCount > 0 ? plan.drawCount : 0 );
+	state->highEndProjectedDlightMdiRecords += plan.projectedRecordCount;
+	state->highEndProjectedDlightMdiIndexes += plan.indexCount;
 	return qtrue;
 }
 
@@ -867,6 +907,10 @@ void GLX_Executor_PrintInfo( const ExecutorState &state )
 			state.highEndAggressiveStaticProducts,
 			state.highEndPostNodes,
 			state.highEndMaterialPlans );
+		RI().Printf( PRINT_ALL, "  GL46 projected dlight MDI candidates: draws %u, records %u, indexes %u\n",
+			state.highEndProjectedDlightMdiCandidates,
+			state.highEndProjectedDlightMdiRecords,
+			state.highEndProjectedDlightMdiIndexes );
 	}
 	RI().Printf( PRINT_ALL, "  pass schedule: %s %i/%08x %s\n",
 		state.frameScheduleValid ? "valid" : "invalid",

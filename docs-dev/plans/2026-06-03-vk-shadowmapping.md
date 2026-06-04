@@ -47,11 +47,68 @@ My recommended implementation order is: stabilize skies first, formalize the uni
 - [x] Added CSM cache telemetry/source-contract coverage for hit, miss, and uncacheable paths, cascade signature inputs, deformed-surface invalidation, cache publication, and receiver publication gates.
 - [x] Added CSM atlas profiling counters/debug output, plus a GLX GPU timing pass for CSM atlas rendering.
 - [x] Added CSM cascade stability coverage and snapped the light-depth coordinate with half-texel padded extents to reduce atlas cache churn and shimmer from small sun-axis camera movement.
-- [ ] Promote `shadowManager_t` from a summary/debug container into the owner of shadow candidates, atlas allocation, descriptor publication, and render scheduling.
-- [ ] Add the dedicated 2D spotlight atlas path for planar surfacelight and sidecar spot shadows.
-- [ ] Add true atlas-backed sidecar spot shadows, per-light resolution, cone-angle sampling, and spotlight atlas integration.
-- [ ] Finish atlas-backed surfacelight projection validation for large planar emitters, including emitter footprint tuning, caster coverage, and runtime LOD smoke coverage.
-- [ ] Add CSM runtime shimmer validation and runtime smoke coverage for sidecar and shadow atlas behavior.
+- [x] Moved point, spot, and CSM atlas publication metadata into manager-owned publication records, with backend producer/cache paths publishing through manager helpers and planned sampling reading the records before fallback backend checks.
+- [x] Added a manager-owned ordered shadow pass schedule and changed the Vulkan/OpenGL backends to iterate it for pre-main atlas producer passes while routing CSM receiver dispatch through the same scheduled pass executor.
+- [x] Reduced `dlight_t` point-shadow atlas assignment fields to compatibility fallback use by keeping selected point-light atlas allocation only in manager-owned point plans.
+- [x] Added GLx/Vulkan runtime sweep and dlight-shadow release-gate smoke coverage for manager schedule publication, point atlas readiness, and per-category manager log evidence.
+- [x] Promote `shadowManager_t` from a summary/debug container into the owner of shadow candidates, atlas allocation, descriptor publication, and render scheduling.
+- [x] Added manager debug/source-contract coverage for static sidecar and surfacelight spot source breakdowns, proving sidecar `spot` lights promote to preview lights and manager-owned atlas candidates with cone and resolution inputs.
+- [x] Added surfacelight spot-plan telemetry for candidate/plan counts, requested and effective tile ranges, cone ranges, atlas allocation, and weak/off-view/budget/malformed rejection counters.
+- [x] Tuned large planar surfacelight spot proxies with projected footprint telemetry, bounded caster radius, and per-proxy cone angles so broad emitters use representative spot-shadow volumes.
+- [x] Added surfacelight spot runtime LOD smoke summaries to GLX/Vulkan sweeps, including low/nominal/promoted tile coverage, requested/effective tile caps, and bounded atlas fill checks.
+- [x] Added GLX/Vulkan surfacelight spot runtime scenes that enable surfacelight proxies plus the 2D spot atlas and require large-planar surfacelight manager/LOD evidence.
+- [x] Added dlight-shadow release-gate checks for surfacelight spot atlas publication, non-empty surfacelight spot source counts, parsed spot telemetry, LOD smoke, and large-planar category coverage.
+- [x] Added GLX/Vulkan CSM runtime smoke parsing and release-gate checks for sky-sun scene coverage, manager CSM atlas/receiver scheduling, atlas publication, cascade/atlas dimensions, generation, and cache telemetry.
+- [x] Documented the surfacelight validation artifact contract for runtime manifest fields, representative scenes, debug cvars, manual large-planar review notes, and release-gate category expectations.
+- [x] Added surfacelight validation documentation contract coverage and recorded the focused docs/release-gate evidence commands.
+- [x] Added deterministic GLX/Vulkan `csm-shimmer-path` runtime camera probes with `setviewpos` micro-movements, per-step screenshots, snapped light-depth telemetry, and `csmStability` summaries for cache/generation churn.
+- [x] Added GLX/Vulkan CSM shimmer screenshot diff smoke, comparing path nudge/micro-yaw captures against the baseline step with bounded RMS and changed-pixel thresholds in runtime manifests.
+- [x] Added GLX/Vulkan `combined-shadow-atlas` runtime smoke on `q3dm6`, staging a static sidecar spot light and requiring one frame to publish point, spot, CSM atlas, and CSM receiver schedule evidence.
+- [x] Added GLX/Vulkan CSM fallback smoke scenes for forced no-world, no-sky-sun, atlas-unavailable, and zero-cascade cases, with `csmFallbacks` summaries requiring zero CSM receiver/atlas publication.
+- [x] Add the dedicated 2D spotlight atlas path for planar surfacelight and sidecar spot shadows.
+- [x] Add true atlas-backed sidecar spot shadows, per-light resolution, cone-angle sampling, and spotlight atlas integration.
+- [x] Finish atlas-backed surfacelight projection validation for large planar emitters, including emitter footprint tuning, caster coverage, and runtime LOD smoke coverage.
+- [x] Add CSM runtime shimmer validation and runtime smoke coverage for sidecar and shadow atlas behavior.
+
+## Shadow manager implementation checklist
+
+- [x] Add `shadowManager_t` as the per-view debug and summary container for shadow planning.
+- [x] Store point-light candidates and selected point-light atlas plans in `shadowManager_t`.
+- [x] Move point-light atlas fit, tile assignment, and fill accounting into manager-owned point plans.
+- [x] Route backend point-light atlas rendering and cache slot identity through manager point plans.
+- [x] Route point-light sampling metadata through manager point plans for OpenGL/GLX and Vulkan.
+- [x] Publish point and CSM atlas readiness/generation state through the manager before sampling.
+- [x] Store spotlight candidates and selected 2D spot atlas plans in `shadowManager_t`.
+- [x] Route spot atlas producer passes and receiver sampling through manager spot plans.
+- [x] Copy the planned manager state into draw-surface commands for backend use.
+- [x] Add a manager-owned pass schedule mask and backend schedule helpers for point, spot, CSM atlas, and CSM receiver passes.
+- [x] Move CSM cascade plan ownership from `tr.csm`/draw commands into `shadowManager_t` while retaining compatibility mirrors.
+- [x] Move atlas resource/descriptor publication metadata into manager-owned publication records rather than backend-global readiness checks.
+- [x] Convert backend shadow pass ordering from hard-coded calls to iterating the manager-owned pass schedule.
+- [x] Reduce `dlight_t` point-shadow mirror fields to compatibility fallback only, with manager plans as the canonical source.
+- [x] Add runtime smoke coverage for manager schedule publication, atlas readiness, and fallback behavior.
+
+## Remaining implementation checkpoint breakdown
+
+### Atlas-backed surfacelight projection validation
+
+- [x] Add focused source-contract coverage for large planar surfacelight proxy geometry: stable emitter origin/normal selection, bounded `q3map_lightSubdivide` fan-out, projected footprint sizing, and sky/invalid-surface rejection.
+- [x] Add surfacelight spot-plan telemetry that exposes per-source spot candidates/plans, requested/effective tile sizes, cone angles, atlas allocation, and rejection counters for weak, off-view, over-budget, and malformed emitters.
+- [x] Tune large planar emitter footprint and caster coverage heuristics so broad emissive surfaces cast from a representative cone without pulling unrelated geometry or flooding the spot atlas.
+- [x] Add runtime LOD smoke coverage for surfacelight spot tiles, proving low/nominal/promoted tile requests stay within atlas caps and produce bounded fill percentages.
+- [x] Add GLx and Vulkan runtime sweep scenes that enable `r_surfaceLightProxies`, `r_surfaceLightProxyShadows`, and `r_spotShadows`, then require surfacelight spot manager evidence plus screenshots for large planar emitters.
+- [x] Add release-gate evidence checks for surfacelight spot atlas readiness/publication, non-empty surfacelight spot source counts, and per-category runtime coverage.
+- [x] Document the expected surfacelight validation artifacts: runtime manifest fields, representative maps/scenes, debug cvars, and manual visual review notes for large planar emitters.
+
+### CSM runtime shimmer and combined atlas smoke
+
+- [x] Add deterministic CSM runtime camera paths with tiny view-origin/view-axis deltas to measure cascade signature stability, snapped light-depth coordinates, cache hits/misses, and atlas generation churn.
+- [x] Add GLx and Vulkan runtime sweep parsing for CSM-specific manager evidence: scheduled CSM atlas/receiver passes, atlas publication generation, cascade count, atlas dimensions, and cache telemetry.
+- [x] Add screenshot/diff smoke coverage for CSM shimmer, comparing repeated captures from small camera movements against bounded visual-diff thresholds.
+- [x] Add combined sidecar/shadow-atlas smoke scenes that enable CSM, point shadows, sidecar spot shadows, and surfacelight spot proxies in one frame, then require the manager schedule to publish all active atlas types safely.
+- [x] Add fallback smoke coverage for no-sun, no-world, atlas-unavailable, and zero-cascade cases so CSM receiver sampling stays disabled when the manager has no valid publication.
+- [x] Add release-gate checks for CSM shimmer stability and combined-atlas runtime evidence, including clear failure messages for missing CSM logs, unstable cascade signatures, or unpublished atlases.
+- [x] Update maintainer docs with the CSM/sidecar smoke workflow, required cvars, expected runtime logs, and the maps/scenes used for validation.
 
 ## Repository findings and current behavior
 

@@ -16,6 +16,250 @@ assert spec.loader is not None
 spec.loader.exec_module(vk_runtime_sweep)
 
 
+def shadow_manager_sample() -> dict[str, object]:
+    return {
+        "scheduledPasses": 1,
+        "scheduledMask": 13,
+        "pointScheduled": 1,
+        "spotScheduled": 0,
+        "csmAtlasScheduled": 1,
+        "csmReceiverScheduled": 1,
+        "pointPublished": 1,
+        "spotPublished": 0,
+        "csmPublished": 1,
+        "inputDlights": 4,
+        "pointPlanned": 2,
+        "pointConsidered": 4,
+        "pointCandidates": 3,
+        "pointRecords": 2,
+        "pointCandidateRecords": 3,
+        "pointAtlasWidth": 1024,
+        "pointAtlasHeight": 512,
+        "pointAtlasFaceSize": 128,
+        "spotStaticPlans": 0,
+        "spotStaticCandidates": 0,
+        "spotSurfacePlans": 0,
+        "spotSurfaceCandidates": 0,
+        "csmCascadeCount": 4,
+        "csmAtlasWidth": 2048,
+        "csmAtlasHeight": 512,
+        "csmGeneration": 7,
+    }
+
+
+def shadow_manager_summary(scene_ids: list[str]) -> dict[str, object]:
+    sample = shadow_manager_sample()
+    return {
+        "found": True,
+        "sampleCount": 1,
+        "latest": dict(sample),
+        "max": dict(sample),
+        "scenes": {
+            scene_id: {
+                "found": True,
+                "sampleCount": 1,
+                "latest": dict(sample),
+                "max": dict(sample),
+            }
+            for scene_id in scene_ids
+        },
+    }
+
+
+def surface_light_spot_sample() -> dict[str, object]:
+    return {
+        "surfaceSpotCandidates": 3,
+        "surfaceSpotPlans": 2,
+        "surfaceSpotRequestedTileMin": 128,
+        "surfaceSpotRequestedTileMax": 512,
+        "surfaceSpotFootprintMin": 96,
+        "surfaceSpotFootprintMax": 640,
+        "surfaceSpotCasterRadiusMin": 256,
+        "surfaceSpotCasterRadiusMax": 1200,
+        "surfaceSpotPlanRequestedTileMin": 128,
+        "surfaceSpotPlanRequestedTileMax": 512,
+        "surfaceSpotTileMin": 128,
+        "surfaceSpotTileMax": 256,
+        "surfaceSpotAllocated": 2,
+        "surfaceSpotAtlasWidth": 1024,
+        "surfaceSpotAtlasHeight": 1024,
+        "surfaceSpotAtlasTileSize": 256,
+        "surfaceSpotAtlasFill": 12,
+    }
+
+
+def surface_light_spot_summary(scene_ids: list[str]) -> dict[str, object]:
+    sample = surface_light_spot_sample()
+    return {
+        "found": True,
+        "sampleCount": 1,
+        "latest": dict(sample),
+        "max": dict(sample),
+        "scenes": {
+            scene_id: {
+                "found": True,
+                "sampleCount": 1,
+                "latest": dict(sample),
+                "max": dict(sample),
+            }
+            for scene_id in scene_ids
+        },
+    }
+
+
+def surface_light_spot_lod_summary(scene_ids: list[str]) -> dict[str, object]:
+    sample = {
+        "found": True,
+        "status": "passed",
+        "sampleCount": 1,
+        "requestedTiles": {"low": True, "nominal": True, "promoted": True},
+        "maxRequestedTile": 512,
+        "maxPlanRequestedTile": 512,
+        "maxEffectiveTile": 256,
+        "maxAtlasTile": 256,
+        "maxFill": 12,
+        "failures": [],
+    }
+    return {
+        **sample,
+        "scenes": {scene_id: dict(sample) for scene_id in scene_ids},
+    }
+
+
+def csm_shadow_summary(scene_ids: list[str]) -> dict[str, object]:
+    sample = {
+        "found": True,
+        "status": "passed",
+        "managerSampleCount": 1,
+        "debugSampleCount": 1,
+        "max": {
+            "csmAtlasScheduled": 1,
+            "csmReceiverScheduled": 1,
+            "csmPublished": 1,
+            "csmCascadeCount": 4,
+            "csmAtlasWidth": 2048,
+            "csmAtlasHeight": 512,
+            "csmGeneration": 7,
+            "csmDebugCascades": 4,
+            "csmDebugResolution": 512,
+            "csmCacheHits": 1,
+            "csmCacheMisses": 1,
+            "csmCacheUncacheable": 0,
+            "csmCacheEvents": 2,
+        },
+        "failures": [],
+    }
+    return {
+        **sample,
+        "scenes": {scene_id: dict(sample) for scene_id in scene_ids},
+    }
+
+
+def csm_shimmer_screenshot_summary(status: str = "passed") -> dict[str, object]:
+    failures = [] if status == "passed" else ["fixture CSM shimmer screenshot diff failed."]
+    return {
+        "found": True,
+        "status": status,
+        "scene": "csm-shimmer-path",
+        "baselineStep": "baseline",
+        "sampleCount": 4,
+        "comparisonCount": 3,
+        "passedComparisons": 3 if status == "passed" else 2,
+        "maxRms": 0.0 if status == "passed" else 8.0,
+        "maxChangedPixelRatio": 0.0 if status == "passed" else 0.2,
+        "thresholds": {
+            "maxRms": vk_runtime_sweep.CSM_SHIMMER_SCREENSHOT_MAX_RMS,
+            "maxChangedPixelRatio": (
+                vk_runtime_sweep.CSM_SHIMMER_SCREENSHOT_MAX_CHANGED_PIXEL_RATIO
+            ),
+        },
+        "comparisons": [
+            {
+                "name": "shot",
+                "step": "nudge-forward",
+                "baselineStep": "baseline",
+                "status": status,
+                "rms": 0.0 if status == "passed" else 8.0,
+                "changedPixelRatio": 0.0 if status == "passed" else 0.2,
+                "reason": "" if status == "passed" else "diff-threshold",
+            },
+        ],
+        "failures": failures,
+    }
+
+
+def combined_shadow_atlas_summary(status: str = "passed") -> dict[str, object]:
+    failures = [] if status == "passed" else ["fixture combined shadow atlas smoke failed."]
+    return {
+        "found": True,
+        "status": status,
+        "scene": "combined-shadow-atlas",
+        "sampleCount": 1,
+        "max": {
+            "scheduledPasses": 4,
+            "scheduledMask": 15,
+            "pointScheduled": 1,
+            "spotScheduled": 1,
+            "csmAtlasScheduled": 1,
+            "csmReceiverScheduled": 1,
+            "pointPublished": 1,
+            "spotPublished": 1,
+            "csmPublished": 1,
+            "pointPlanned": 2,
+            "pointRecords": 2,
+            "pointAtlasWidth": 1024,
+            "pointAtlasHeight": 512,
+            "pointAtlasFaceSize": 128,
+            "spotPlans": 2,
+            "spotStaticPlans": 1,
+            "spotSurfacePlans": 1,
+            "spotAtlasWidth": 1024,
+            "spotAtlasHeight": 1024,
+            "spotAtlasTileSize": 256,
+            "csmCascadeCount": 4,
+            "csmAtlasWidth": 2048,
+            "csmAtlasHeight": 512,
+            "csmGeneration": 7,
+        },
+        "failures": failures,
+    }
+
+
+def csm_fallback_summary(status: str = "passed") -> dict[str, object]:
+    failures = [] if status == "passed" else ["fixture CSM fallback smoke failed."]
+    return {
+        "found": True,
+        "status": status,
+        "managerSampleCount": 4,
+        "fallbackSampleCount": 4,
+        "reasonCoverage": {
+            "no-world": True,
+            "no-sky-sun": True,
+            "atlas": True,
+            "zero-cascade": True,
+        },
+        "max": {
+            "noworld": 1,
+            "scheduledPasses": 1,
+            "scheduledMask": 1,
+            "csmAtlasScheduled": 0,
+            "csmReceiverScheduled": 0,
+            "csmPublished": 0,
+            "csmCascadeCount": 0,
+            "csmAtlasWidth": 0,
+            "csmAtlasHeight": 0,
+            "csmGeneration": 0,
+            "csmFallbackSamples": 1,
+            "csmFallbackCascades": 0,
+            "csmFallbackNoWorld": 1,
+            "csmFallbackNoSun": 1,
+            "csmFallbackAtlasUnavailable": 1,
+            "csmFallbackZeroCascade": 1,
+        },
+        "failures": failures,
+    }
+
+
 class VkRuntimeSweepParseTests(unittest.TestCase):
     def test_vkinfo_parser_extracts_modern_diagnostics(self) -> None:
         text = "\n".join(
@@ -211,22 +455,225 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
 
         self.assertEqual(startup["r_dlightShadows"], "1")
         self.assertEqual(startup["r_dlightShadowMaxLights"], "8")
+        self.assertEqual(startup["r_staticLights"], "1")
+        self.assertEqual(startup["r_staticLightShadows"], "1")
+        self.assertEqual(startup["r_csmShadows"], "1")
+        self.assertEqual(startup["r_csmResolution"], "512")
+        self.assertEqual(startup["r_csmDebugFallback"], "0")
+        self.assertEqual(startup["r_spotShadows"], "1")
+        self.assertEqual(startup["r_spotShadowResolution"], "512")
+        self.assertEqual(startup["r_surfaceLightProxies"], "1")
+        self.assertEqual(startup["r_surfaceLightProxyShadows"], "1")
         self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN world-geometry", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN csm-sky-sun", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN csm-shimmer-path", cfg)
+        self.assertIn("echo CSM_SHIMMER_STEP_BEGIN csm-shimmer-path baseline", cfg)
+        self.assertIn("setviewpos 0.000 0.000 512.000 -10.000 90.000 0.000", cfg)
+        self.assertIn("setviewpos 0.000 0.000 512.000 -10.000 90.030 0.000", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN surfacelight-large-planar", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN combined-shadow-atlas", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-no-world", cfg)
+        self.assertIn("echo DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-atlas-unavailable", cfg)
         self.assertIn("devmap q3dm6", cfg)
         self.assertIn("devmap q3dm11", cfg)
+        self.assertIn("devmap q3dm17", cfg)
+        self.assertIn('set r_csmShadows "1"', cfg)
+        self.assertIn('set r_csmDebug "1"', cfg)
+        self.assertIn('set r_csmDebugFallback "1"', cfg)
+        self.assertIn('set r_csmDebugFallback "4"', cfg)
+        self.assertIn('set r_staticLightDebug "1"', cfg)
+        self.assertIn('set r_surfaceLightProxies "1"', cfg)
+        self.assertIn('set r_surfaceLightProxyShadows "1"', cfg)
+        self.assertIn('set r_spotShadows "1"', cfg)
         self.assertIn("r_dlightTest 8 720 224 48 0", cfg)
+        self.assertIn("r_dlightTest 8 780 224 56 0", cfg)
         self.assertIn("r_dlightTest 16 900 256 72 0", cfg)
         self.assertIn('set r_speeds "4"', cfg)
         self.assertTrue(all(shot["shadowScene"] for shot in screenshots))
+        csm_path_shots = [shot for shot in screenshots if shot.get("csmCameraPath")]
+        self.assertEqual(len(csm_path_shots), len(vk_runtime_sweep.CSM_SHIMMER_CAMERA_PATH))
+        self.assertEqual(
+            [shot["csmPathStep"] for shot in csm_path_shots],
+            ["baseline", "nudge-forward", "nudge-side", "micro-yaw"],
+        )
         self.assertEqual(
             vk_runtime_sweep.dlight_shadow_scene_categories(screenshots),
             set(vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES),
         )
         self.assertTrue(
             any(
+                shot["baselineKey"]
+                == "vk-modern-dlight-shadows-csm-shimmer-path-baseline-q3dm17-vulkan"
+                for shot in screenshots
+            )
+        )
+        self.assertTrue(
+            any(
                 shot["baselineKey"] == "vk-modern-dlight-shadows-stress-light-budget-q3dm6-vulkan"
                 for shot in screenshots
             )
+        )
+        combined = next(
+            scene for scene in scenes
+            if scene["id"] == vk_runtime_sweep.COMBINED_SHADOW_ATLAS_SCENE_ID
+        )
+        self.assertEqual(combined["sidecarLights"][0]["type"], "spot")
+
+    def test_dlight_shadow_sidecar_lights_are_staged_under_homepath(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records = vk_runtime_sweep.write_dlight_shadow_sidecar_lights(
+                root,
+                "",
+                vk_runtime_sweep.dlight_shadow_evidence_scenes(),
+            )
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["map"], "q3dm6")
+            sidecar = root / "baseq3" / "maps" / "q3dm6.lights.json"
+            self.assertTrue(sidecar.exists())
+            text = sidecar.read_text(encoding="utf-8")
+            self.assertIn('"type": "spot"', text)
+            self.assertIn('"combined-sidecar-spot"', text)
+
+    def test_combined_shadow_atlas_summary_requires_all_active_atlas_types(self) -> None:
+        maximum = dict(combined_shadow_atlas_summary()["max"])
+        dlight_shadow = {
+            "shadowManager": {
+                "scenes": {
+                    vk_runtime_sweep.COMBINED_SHADOW_ATLAS_SCENE_ID: {
+                        "sampleCount": 1,
+                        "max": maximum,
+                    },
+                },
+            },
+        }
+
+        summary = vk_runtime_sweep.combined_shadow_atlas_summary(dlight_shadow)
+
+        self.assertEqual(summary["status"], "passed")
+        self.assertTrue(vk_runtime_sweep.combined_shadow_atlas_summary_active(summary))
+
+        maximum["spotSurfacePlans"] = 0
+        maximum["scheduledMask"] = 0x0D
+        failed = vk_runtime_sweep.combined_shadow_atlas_summary(dlight_shadow)
+
+        self.assertEqual(failed["status"], "failed")
+        self.assertTrue(
+            any("surfacelight spot proxy" in failure for failure in failed["failures"])
+        )
+        self.assertTrue(
+            any("schedule mask" in failure for failure in failed["failures"])
+        )
+
+    def test_csm_fallback_summary_requires_no_csm_publication(self) -> None:
+        manager_samples = [
+            {
+                **shadow_manager_sample(),
+                "noworld": 1,
+                "scheduledPasses": 1,
+                "scheduledMask": 1,
+                "csmAtlasScheduled": 0,
+                "csmReceiverScheduled": 0,
+                "csmPublished": 0,
+                "csmCascadeCount": 0,
+                "csmAtlasWidth": 0,
+                "csmAtlasHeight": 0,
+                "csmGeneration": 0,
+            }
+            for _reason in vk_runtime_sweep.CSM_FALLBACK_REQUIRED_REASONS
+        ]
+        fallback_samples = [
+            {
+                "csmFallbackSamples": 1,
+                "csmFallbackCascades": 0,
+                "csmFallbackNoWorld": 1 if reason == "no-world" else 0,
+                "csmFallbackNoSun": 1 if reason == "no-sky-sun" else 0,
+                "csmFallbackAtlasUnavailable": 1 if reason == "atlas" else 0,
+                "csmFallbackZeroCascade": 1 if reason == "zero-cascade" else 0,
+                "csmFallbackProjection": 0,
+                "csmFallbackStrength": 0,
+                "csmFallbackDisabled": 0,
+            }
+            for reason in vk_runtime_sweep.CSM_FALLBACK_REQUIRED_REASONS
+        ]
+
+        summary = vk_runtime_sweep.csm_fallback_summary(
+            manager_samples,
+            fallback_samples,
+            vk_runtime_sweep.CSM_FALLBACK_REQUIRED_REASONS,
+        )
+
+        self.assertEqual(summary["status"], "passed")
+        self.assertTrue(vk_runtime_sweep.csm_fallback_summary_active(summary))
+
+        manager_samples[0]["csmReceiverScheduled"] = 1
+        failed = vk_runtime_sweep.csm_fallback_summary(
+            manager_samples,
+            fallback_samples[:-1],
+            vk_runtime_sweep.CSM_FALLBACK_REQUIRED_REASONS,
+        )
+
+        self.assertEqual(failed["status"], "failed")
+        self.assertTrue(
+            any("csmReceiverScheduled" in failure for failure in failed["failures"])
+        )
+        self.assertTrue(
+            any("zero-cascade" in failure for failure in failed["failures"])
+        )
+
+    def test_csm_fallback_skip_logs_are_scene_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "vk.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-no-world",
+                        "shadow manager view:1 frame:7 noworld:1 sched:1 mask:1 "
+                        "p:1 s:0 ca:0 cr:0 pub p:1 s:0 c:0 inputs dlight:4 "
+                        "point:1/4 cand:1 records:1/1 atlas:512x256/128 "
+                        "fill:25% gen:9 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:0 atlas:0x0 gen:0",
+                        "csm plan cascades:0 skip no-world",
+                        "DLIGHT_SHADOW_SCENE_END csm-fallback-no-world",
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-no-sun",
+                        "shadow manager view:1 frame:8 noworld:0 sched:1 mask:1 "
+                        "p:1 s:0 ca:0 cr:0 pub p:1 s:0 c:0 inputs dlight:4 "
+                        "point:1/4 cand:1 records:1/1 atlas:512x256/128 "
+                        "fill:25% gen:10 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:0 atlas:0x0 gen:0",
+                        "csm plan cascades:0 skip no-sky-sun",
+                        "DLIGHT_SHADOW_SCENE_END csm-fallback-no-sun",
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-atlas-unavailable",
+                        "shadow manager view:1 frame:9 noworld:0 sched:1 mask:1 "
+                        "p:1 s:0 ca:0 cr:0 pub p:1 s:0 c:0 inputs dlight:4 "
+                        "point:1/4 cand:1 records:1/1 atlas:512x256/128 "
+                        "fill:25% gen:11 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:0 atlas:0x0 gen:0",
+                        "csm plan cascades:0 skip atlas",
+                        "DLIGHT_SHADOW_SCENE_END csm-fallback-atlas-unavailable",
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-fallback-zero-cascade",
+                        "shadow manager view:1 frame:10 noworld:0 sched:1 mask:1 "
+                        "p:1 s:0 ca:0 cr:0 pub p:1 s:0 c:0 inputs dlight:4 "
+                        "point:1/4 cand:1 records:1/1 atlas:512x256/128 "
+                        "fill:25% gen:12 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:0 atlas:0x0 gen:0",
+                        "csm plan cascades:0 skip zero-cascade",
+                        "DLIGHT_SHADOW_SCENE_END csm-fallback-zero-cascade",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            analysis = vk_runtime_sweep.analyze_dlight_shadow_log(log)
+
+        fallback = analysis["csmFallbacks"]
+        self.assertEqual(fallback["status"], "passed")
+        self.assertEqual(fallback["fallbackSampleCount"], 4)
+        self.assertEqual(fallback["reasonCoverage"]["atlas"], True)
+        self.assertEqual(
+            fallback["scenes"]["csm-fallback-no-world"]["max"]["noworld"],
+            1,
         )
 
     def test_dlight_shadow_log_analysis_extracts_active_samples(self) -> None:
@@ -236,9 +683,72 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
                 "\n".join(
                     [
                         "DLIGHT_SHADOW_SCENE_BEGIN world-geometry",
+                        "shadow manager view:1 frame:2 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100 200 300 400 "
+                        "caster:20 cache h/m/u:1/1/0 "
+                        "cpu:2ms recv world:12 ent:3",
+                        "surfacelight spot plan cand:3 plan:2 req:128-512 "
+                        "foot:96-640 caster:256-1200 planreq:128-512 "
+                        "tile:128-256 cone:0-0/45-65 alloc:2 "
+                        "atlas:1024x1024/256 fill:12% reject weak:1 offview:2 "
+                        "budget:1 malformed:1",
                         "dlight shadows plan:2/4 cand:3 atlas:1024x512/128 fill:75% "
                         "render lights:2 faces:10 batches:5 draws:5 surfs:20 cpu:1ms",
                         "DLIGHT_SHADOW_SCENE_END world-geometry",
+                        "DLIGHT_SHADOW_SCENE_BEGIN csm-shimmer-path",
+                        "shadow manager view:1 frame:3 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100.0 200.0 300.0 400.0 "
+                        "caster:20 cache h/m/u:0/1/0 cpu:2ms recv world:12 ent:3",
+                        "shadow manager view:1 frame:4 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "caster:20 cache h/m/u:1/1/0 cpu:0ms recv world:12 ent:3",
+                        "shadow manager view:1 frame:5 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "caster:20 cache h/m/u:2/1/0 cpu:0ms recv world:12 ent:3",
+                        "shadow manager view:1 frame:6 noworld:0 sched:3 mask:d "
+                        "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
+                        "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
+                        "fill:75% gen:8 spot:0/0 src static:0/0 surface:0/0 "
+                        "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:8",
+                        "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
+                        "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
+                        "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
+                        "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
+                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "caster:20 cache h/m/u:2/2/0 cpu:1ms recv world:12 ent:3",
+                        "DLIGHT_SHADOW_SCENE_END csm-shimmer-path",
                     ]
                 ),
                 encoding="utf-8",
@@ -250,6 +760,150 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
         self.assertEqual(analysis["max"]["planned"], 2)
         self.assertEqual(analysis["max"]["renderLights"], 2)
         self.assertEqual(analysis["scenes"]["world-geometry"]["max"]["planned"], 2)
+        manager = analysis["shadowManager"]
+        self.assertTrue(manager["found"])
+        self.assertEqual(manager["max"]["pointScheduled"], 1)
+        self.assertEqual(manager["max"]["pointPublished"], 1)
+        self.assertEqual(manager["max"]["csmAtlasScheduled"], 1)
+        self.assertEqual(manager["max"]["csmPublished"], 1)
+        self.assertEqual(manager["max"]["spotStaticCandidates"], 0)
+        self.assertEqual(
+            manager["scenes"]["world-geometry"]["max"]["pointRecords"],
+            2,
+        )
+        surface_spot = analysis["surfaceLightSpot"]
+        self.assertTrue(surface_spot["found"])
+        self.assertEqual(surface_spot["max"]["surfaceSpotCandidates"], 3)
+        self.assertEqual(surface_spot["max"]["surfaceSpotPlans"], 2)
+        self.assertEqual(surface_spot["max"]["surfaceSpotFootprintMax"], 640)
+        self.assertEqual(surface_spot["max"]["surfaceSpotCasterRadiusMax"], 1200)
+        self.assertEqual(surface_spot["max"]["surfaceSpotTileMax"], 256)
+        self.assertEqual(surface_spot["max"]["surfaceSpotRejectedMalformed"], 1)
+        self.assertEqual(
+            surface_spot["scenes"]["world-geometry"]["max"]["surfaceSpotAllocated"],
+            2,
+        )
+        lod = analysis["surfaceLightSpotLod"]
+        self.assertTrue(lod["found"])
+        self.assertEqual(lod["status"], "passed")
+        self.assertEqual(
+            lod["requestedTiles"],
+            {"low": True, "nominal": True, "promoted": True},
+        )
+        self.assertEqual(lod["maxRequestedTile"], 512)
+        self.assertEqual(lod["maxEffectiveTile"], 256)
+        self.assertEqual(lod["maxAtlasTile"], 256)
+        self.assertEqual(lod["maxFill"], 12)
+        self.assertEqual(lod["scenes"]["world-geometry"]["status"], "passed")
+        csm = analysis["csmShadows"]
+        self.assertTrue(csm["found"])
+        self.assertEqual(csm["status"], "passed")
+        self.assertEqual(csm["max"]["csmCascadeCount"], 4)
+        self.assertEqual(csm["max"]["csmDebugResolution"], 512)
+        self.assertEqual(csm["max"]["csmCacheEvents"], 4)
+        self.assertEqual(csm["scenes"]["world-geometry"]["status"], "passed")
+        stability = analysis["csmStability"]
+        self.assertTrue(stability["found"])
+        self.assertEqual(stability["status"], "passed")
+        self.assertEqual(stability["managerSampleCount"], 4)
+        self.assertEqual(stability["debugSampleCount"], 4)
+        self.assertEqual(stability["generationDelta"], 1)
+        self.assertEqual(stability["maxSnapDepthDeltaMilli"], 500)
+        self.assertEqual(stability["max"]["csmCacheEvents"], 4)
+        self.assertEqual(stability["scenes"]["csm-shimmer-path"]["status"], "passed")
+
+    def test_surface_light_spot_lod_smoke_reports_bad_ranges(self) -> None:
+        summary = vk_runtime_sweep.surface_light_spot_lod_summary(
+            [
+                {
+                    "surfaceSpotRequestedTileMin": 128,
+                    "surfaceSpotRequestedTileMax": 768,
+                    "surfaceSpotPlanRequestedTileMin": 128,
+                    "surfaceSpotPlanRequestedTileMax": 768,
+                    "surfaceSpotTileMin": 128,
+                    "surfaceSpotTileMax": 512,
+                    "surfaceSpotAtlasTileSize": 256,
+                    "surfaceSpotAtlasFill": 92,
+                }
+            ]
+        )
+
+        self.assertEqual(summary["status"], "failed")
+        self.assertTrue(
+            any("requested tile exceeded cap" in failure for failure in summary["failures"])
+        )
+        self.assertTrue(
+            any("effective tile exceeded atlas tile" in failure for failure in summary["failures"])
+        )
+        self.assertTrue(any("atlas fill exceeded" in failure for failure in summary["failures"]))
+        missing = vk_runtime_sweep.surface_light_spot_lod_summary(
+            [
+                {
+                    "surfaceSpotRequestedTileMin": 128,
+                    "surfaceSpotRequestedTileMax": 256,
+                    "surfaceSpotPlanRequestedTileMin": 128,
+                    "surfaceSpotPlanRequestedTileMax": 256,
+                    "surfaceSpotTileMin": 128,
+                    "surfaceSpotTileMax": 256,
+                    "surfaceSpotAtlasTileSize": 256,
+                    "surfaceSpotAtlasFill": 12,
+                }
+            ]
+        )
+        self.assertTrue(
+            any("promoted(512)" in failure for failure in missing["failures"])
+        )
+
+    def test_csm_shimmer_screenshot_diff_summary_compares_path_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = root / "baseline.png"
+            candidate = root / "candidate.png"
+            vk_runtime_sweep.write_png_rgba(
+                baseline,
+                2,
+                1,
+                bytes((64, 96, 128, 255, 32, 32, 32, 255)),
+            )
+            vk_runtime_sweep.write_png_rgba(
+                candidate,
+                2,
+                1,
+                bytes((64, 96, 128, 255, 32, 32, 32, 255)),
+            )
+            screenshots = [
+                {
+                    "name": "baseline",
+                    "found": True,
+                    "path": str(baseline),
+                    "scene": "csm-shimmer-path",
+                    "csmCameraPath": True,
+                    "csmPathStep": "baseline",
+                    "baselineKey": "vk-csm-baseline",
+                }
+            ]
+            for index, step in enumerate(("nudge-forward", "nudge-side", "micro-yaw"), start=1):
+                screenshots.append(
+                    {
+                        "name": f"candidate-{index}",
+                        "found": True,
+                        "path": str(candidate),
+                        "scene": "csm-shimmer-path",
+                        "csmCameraPath": True,
+                        "csmPathStep": step,
+                        "baselineKey": f"vk-csm-{step}",
+                    }
+                )
+
+            summary = vk_runtime_sweep.apply_csm_shimmer_screenshot_diffs(
+                screenshots,
+                root / "diffs",
+            )
+
+            self.assertEqual(summary["status"], "passed")
+            self.assertEqual(summary["comparisonCount"], 3)
+            self.assertEqual(screenshots[1]["csmShimmerComparison"]["status"], "passed")
+            self.assertTrue(Path(screenshots[1]["csmShimmerComparison"]["diffPath"]).exists())
 
     def test_modern_gate_requires_dlight_shadow_category_evidence(self) -> None:
         screenshots = [
@@ -266,6 +920,8 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
             shot for shot in screenshots
             if shot["evidenceCategories"] != ["stress-light-budget"]
         ]
+        surface_scene_ids = list(vk_runtime_sweep.SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES)
+        csm_scene_ids = list(vk_runtime_sweep.CSM_SHADOW_EVIDENCE_CATEGORIES)
         manifest = {
             "gate": "vk-modern",
             "dryRun": False,
@@ -293,6 +949,12 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
                             }
                             for shot in screenshots
                         },
+                        "shadowManager": shadow_manager_summary(
+                            [str(shot["scene"]) for shot in screenshots]
+                        ),
+                        "surfaceLightSpot": surface_light_spot_summary(surface_scene_ids),
+                        "surfaceLightSpotLod": surface_light_spot_lod_summary(surface_scene_ids),
+                        "csmShadows": csm_shadow_summary(csm_scene_ids),
                     },
                 },
                 {
@@ -307,6 +969,374 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
         failures = vk_runtime_sweep.evaluate_gate(manifest)
 
         self.assertTrue(any("stress-light-budget" in failure for failure in failures))
+
+    def test_modern_gate_requires_shadow_manager_runtime_evidence(self) -> None:
+        screenshots = [
+            {
+                "name": f"shot-{category}",
+                "found": True,
+                "shadowScene": True,
+                "scene": category,
+                "evidenceCategories": [category],
+            }
+            for category in vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES
+        ]
+        surface_scene_ids = list(vk_runtime_sweep.SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES)
+        csm_scene_ids = list(vk_runtime_sweep.CSM_SHADOW_EVIDENCE_CATEGORIES)
+        manifest = {
+            "gate": "vk-modern",
+            "dryRun": False,
+            "demos": ["demo1"],
+            "runs": [
+                {
+                    "type": "map-screenshots",
+                    "status": "passed",
+                    "screenshots": [{"name": "shot", "found": True}],
+                    "vkinfo": {
+                        "failures": [],
+                        "gpuTimings": [{"from": "a", "to": "b", "msec": 0.1}],
+                    },
+                },
+                {
+                    "type": "dlight-shadow-scenes",
+                    "status": "passed",
+                    "screenshots": screenshots,
+                    "dlightShadow": {
+                        "found": True,
+                        "max": {"planned": 2, "renderLights": 2},
+                        "scenes": {
+                            str(shot["scene"]): {
+                                "max": {"planned": 2, "renderLights": 2}
+                            }
+                            for shot in screenshots
+                        },
+                        "surfaceLightSpot": surface_light_spot_summary(surface_scene_ids),
+                        "surfaceLightSpotLod": surface_light_spot_lod_summary(surface_scene_ids),
+                        "csmShadows": csm_shadow_summary(csm_scene_ids),
+                    },
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "demo": "demo1",
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+            ],
+        }
+
+        failures = vk_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("shadow manager" in failure for failure in failures))
+
+    def test_modern_gate_requires_surface_light_spot_runtime_evidence(self) -> None:
+        screenshots = [
+            {
+                "name": f"shot-{category}",
+                "found": True,
+                "shadowScene": True,
+                "scene": category,
+                "evidenceCategories": [category],
+            }
+            for category in vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES
+        ]
+        csm_scene_ids = list(vk_runtime_sweep.CSM_SHADOW_EVIDENCE_CATEGORIES)
+        manifest = {
+            "gate": "vk-modern",
+            "dryRun": False,
+            "demos": ["demo1"],
+            "runs": [
+                {
+                    "type": "map-screenshots",
+                    "status": "passed",
+                    "screenshots": [{"name": "shot", "found": True}],
+                    "vkinfo": {
+                        "failures": [],
+                        "gpuTimings": [{"from": "a", "to": "b", "msec": 0.1}],
+                    },
+                },
+                {
+                    "type": "dlight-shadow-scenes",
+                    "status": "passed",
+                    "screenshots": screenshots,
+                    "dlightShadow": {
+                        "found": True,
+                        "max": {"planned": 2, "renderLights": 2},
+                        "scenes": {
+                            str(shot["scene"]): {
+                                "max": {"planned": 2, "renderLights": 2}
+                            }
+                            for shot in screenshots
+                        },
+                        "shadowManager": shadow_manager_summary(
+                            [str(shot["scene"]) for shot in screenshots]
+                        ),
+                        "csmShadows": csm_shadow_summary(csm_scene_ids),
+                    },
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "demo": "demo1",
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+            ],
+        }
+
+        failures = vk_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("surfacelight spot manager" in failure for failure in failures))
+
+    def test_modern_gate_requires_csm_runtime_evidence(self) -> None:
+        screenshots = [
+            {
+                "name": f"shot-{category}",
+                "found": True,
+                "shadowScene": True,
+                "scene": category,
+                "evidenceCategories": [category],
+            }
+            for category in vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES
+        ]
+        surface_scene_ids = list(vk_runtime_sweep.SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES)
+        manifest = {
+            "gate": "vk-modern",
+            "dryRun": False,
+            "demos": ["demo1"],
+            "runs": [
+                {
+                    "type": "map-screenshots",
+                    "status": "passed",
+                    "screenshots": [{"name": "shot", "found": True}],
+                    "vkinfo": {
+                        "failures": [],
+                        "gpuTimings": [{"from": "a", "to": "b", "msec": 0.1}],
+                    },
+                },
+                {
+                    "type": "dlight-shadow-scenes",
+                    "status": "passed",
+                    "screenshots": screenshots,
+                    "dlightShadow": {
+                        "found": True,
+                        "max": {"planned": 2, "renderLights": 2},
+                        "scenes": {
+                            str(shot["scene"]): {
+                                "max": {"planned": 2, "renderLights": 2}
+                            }
+                            for shot in screenshots
+                        },
+                        "shadowManager": shadow_manager_summary(
+                            [str(shot["scene"]) for shot in screenshots]
+                        ),
+                        "surfaceLightSpot": surface_light_spot_summary(surface_scene_ids),
+                        "surfaceLightSpotLod": surface_light_spot_lod_summary(surface_scene_ids),
+                    },
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "demo": "demo1",
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+            ],
+        }
+
+        failures = vk_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("CSM runtime" in failure for failure in failures))
+
+    def test_modern_gate_requires_csm_shimmer_screenshot_diff_smoke(self) -> None:
+        screenshots = [
+            {
+                "name": f"shot-{category}",
+                "found": True,
+                "shadowScene": True,
+                "scene": category,
+                "evidenceCategories": [category],
+            }
+            for category in vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES
+        ]
+        surface_scene_ids = list(vk_runtime_sweep.SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES)
+        csm_scene_ids = list(vk_runtime_sweep.CSM_SHADOW_EVIDENCE_CATEGORIES)
+        manifest = {
+            "gate": "vk-modern",
+            "dryRun": False,
+            "demos": ["demo1"],
+            "runs": [
+                {
+                    "type": "map-screenshots",
+                    "status": "passed",
+                    "screenshots": [{"name": "shot", "found": True}],
+                    "vkinfo": {
+                        "failures": [],
+                        "gpuTimings": [{"from": "a", "to": "b", "msec": 0.1}],
+                    },
+                },
+                {
+                    "type": "dlight-shadow-scenes",
+                    "status": "passed",
+                    "screenshots": screenshots,
+                    "csmShimmerScreenshots": csm_shimmer_screenshot_summary("failed"),
+                    "dlightShadow": {
+                        "found": True,
+                        "max": {"planned": 2, "renderLights": 2},
+                        "scenes": {
+                            str(shot["scene"]): {
+                                "max": {"planned": 2, "renderLights": 2}
+                            }
+                            for shot in screenshots
+                        },
+                        "shadowManager": shadow_manager_summary(
+                            [str(shot["scene"]) for shot in screenshots]
+                        ),
+                        "surfaceLightSpot": surface_light_spot_summary(surface_scene_ids),
+                        "surfaceLightSpotLod": surface_light_spot_lod_summary(surface_scene_ids),
+                        "csmShadows": csm_shadow_summary(csm_scene_ids),
+                    },
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "demo": "demo1",
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+            ],
+        }
+
+        failures = vk_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(
+            any("CSM shimmer screenshot diff smoke" in failure for failure in failures)
+        )
+
+    def test_modern_gate_requires_combined_shadow_atlas_smoke(self) -> None:
+        screenshots = [
+            {
+                "name": f"shot-{category}",
+                "found": True,
+                "shadowScene": True,
+                "scene": category,
+                "evidenceCategories": [category],
+            }
+            for category in vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES
+        ]
+        surface_scene_ids = list(vk_runtime_sweep.SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES)
+        csm_scene_ids = list(vk_runtime_sweep.CSM_SHADOW_EVIDENCE_CATEGORIES)
+        manifest = {
+            "gate": "vk-modern",
+            "dryRun": False,
+            "demos": ["demo1"],
+            "runs": [
+                {
+                    "type": "map-screenshots",
+                    "status": "passed",
+                    "screenshots": [{"name": "shot", "found": True}],
+                    "vkinfo": {
+                        "failures": [],
+                        "gpuTimings": [{"from": "a", "to": "b", "msec": 0.1}],
+                    },
+                },
+                {
+                    "type": "dlight-shadow-scenes",
+                    "status": "passed",
+                    "screenshots": screenshots,
+                    "csmShimmerScreenshots": csm_shimmer_screenshot_summary(),
+                    "combinedShadowAtlas": combined_shadow_atlas_summary("failed"),
+                    "dlightShadow": {
+                        "found": True,
+                        "max": {"planned": 2, "renderLights": 2},
+                        "scenes": {
+                            str(shot["scene"]): {
+                                "max": {"planned": 2, "renderLights": 2}
+                            }
+                            for shot in screenshots
+                        },
+                        "shadowManager": shadow_manager_summary(
+                            [str(shot["scene"]) for shot in screenshots]
+                        ),
+                        "surfaceLightSpot": surface_light_spot_summary(surface_scene_ids),
+                        "surfaceLightSpotLod": surface_light_spot_lod_summary(surface_scene_ids),
+                        "csmShadows": csm_shadow_summary(csm_scene_ids),
+                    },
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "demo": "demo1",
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+            ],
+        }
+
+        failures = vk_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(
+            any("combined shadow atlas smoke" in failure for failure in failures)
+        )
+
+    def test_modern_gate_requires_csm_fallback_smoke(self) -> None:
+        screenshots = [
+            {
+                "name": f"shot-{category}",
+                "found": True,
+                "shadowScene": True,
+                "scene": category,
+                "evidenceCategories": [category],
+            }
+            for category in vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES
+        ]
+        surface_scene_ids = list(vk_runtime_sweep.SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES)
+        csm_scene_ids = list(vk_runtime_sweep.CSM_SHADOW_EVIDENCE_CATEGORIES)
+        manifest = {
+            "gate": "vk-modern",
+            "dryRun": False,
+            "demos": ["demo1"],
+            "runs": [
+                {
+                    "type": "map-screenshots",
+                    "status": "passed",
+                    "screenshots": [{"name": "shot", "found": True}],
+                    "vkinfo": {
+                        "failures": [],
+                        "gpuTimings": [{"from": "a", "to": "b", "msec": 0.1}],
+                    },
+                },
+                {
+                    "type": "dlight-shadow-scenes",
+                    "status": "passed",
+                    "screenshots": screenshots,
+                    "csmShimmerScreenshots": csm_shimmer_screenshot_summary(),
+                    "combinedShadowAtlas": combined_shadow_atlas_summary(),
+                    "csmFallbacks": csm_fallback_summary("failed"),
+                    "dlightShadow": {
+                        "found": True,
+                        "max": {"planned": 2, "renderLights": 2},
+                        "scenes": {
+                            str(shot["scene"]): {
+                                "max": {"planned": 2, "renderLights": 2}
+                            }
+                            for shot in screenshots
+                        },
+                        "shadowManager": shadow_manager_summary(
+                            [str(shot["scene"]) for shot in screenshots]
+                        ),
+                        "surfaceLightSpot": surface_light_spot_summary(surface_scene_ids),
+                        "surfaceLightSpotLod": surface_light_spot_lod_summary(surface_scene_ids),
+                        "csmShadows": csm_shadow_summary(csm_scene_ids),
+                    },
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "demo": "demo1",
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+            ],
+        }
+
+        failures = vk_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(any("CSM fallback smoke" in failure for failure in failures))
 
 
 class VkRendererSourceTests(unittest.TestCase):

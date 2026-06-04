@@ -955,6 +955,7 @@ endif
 if get_option('glx-tests')
   glx_logic_tests = executable('fnq3_glx_logic_tests',
     'tests/glx/glx_logic_tests.cpp',
+    'code/rendererglx/glx_executor.cpp',
     include_directories: include_directories('code/rendererglx', 'code/qcommon', 'code/renderercommon'),
     cpp_args: common_cpp_args,
   )
@@ -968,11 +969,17 @@ if get_option('glx-tests')
   test('fnq3_static_map_lights_source', python,
     args: files('tests/static_map_lights_source_tests.py'),
   )
+  test('fnq3_surface_light_proxy_source', python,
+    args: files('tests/surface_light_proxy_source_tests.py'),
+  )
   test('fnq3_csm_shadow_cache_source', python,
     args: files('tests/csm_shadow_cache_source_tests.py'),
   )
   test('fnq3_csm_plan_source', python,
     args: files('tests/csm_plan_source_tests.py'),
+  )
+  test('fnq3_shadow_manager_source', python,
+    args: files('tests/shadow_manager_source_tests.py'),
   )
 endif
 

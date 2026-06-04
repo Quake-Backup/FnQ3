@@ -24,6 +24,18 @@
 #ifndef GL_FRAGMENT_SHADER
 #define GL_FRAGMENT_SHADER 0x8B30
 #endif
+#ifndef GL_SHADER_STORAGE_BUFFER
+#define GL_SHADER_STORAGE_BUFFER 0x90D2
+#endif
+#ifndef GL_DRAW_INDIRECT_BUFFER
+#define GL_DRAW_INDIRECT_BUFFER 0x8F3F
+#endif
+#ifndef GL_DRAW_INDIRECT_BUFFER_BINDING
+#define GL_DRAW_INDIRECT_BUFFER_BINDING 0x8F43
+#endif
+#ifndef GL_NO_ERROR
+#define GL_NO_ERROR 0
+#endif
 #ifndef GL_COMPILE_STATUS
 #define GL_COMPILE_STATUS 0x8B81
 #endif
@@ -32,6 +44,15 @@
 #endif
 #ifndef GL_INFO_LOG_LENGTH
 #define GL_INFO_LOG_LENGTH 0x8B84
+#endif
+#ifndef GL_UNSIGNED_BYTE
+#define GL_UNSIGNED_BYTE 0x1401
+#endif
+#ifndef GL_UNSIGNED_SHORT
+#define GL_UNSIGNED_SHORT 0x1403
+#endif
+#ifndef GL_UNSIGNED_INT
+#define GL_UNSIGNED_INT 0x1405
 #endif
 
 namespace glx {
@@ -56,6 +77,20 @@ const char *BoolName( qboolean value )
 qboolean ToQBool( bool value )
 {
 	return value ? qtrue : qfalse;
+}
+
+static unsigned int GLX_Module_IndexStrideBytes( unsigned int type )
+{
+	switch ( type ) {
+	case GL_UNSIGNED_BYTE:
+		return 1u;
+	case GL_UNSIGNED_SHORT:
+		return 2u;
+	case GL_UNSIGNED_INT:
+		return 4u;
+	default:
+		return 0u;
+	}
 }
 
 static int GLX_Module_Stricmp( const char *lhs, const char *rhs )
@@ -126,6 +161,7 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 	{ "r_glxStreamDrawDynamicLights", "0", "auto", "auto" },
 	{ "r_glxDlightScissor", "0", "auto", "auto" },
 	{ "r_glxDlightProjectedProgram", "0", "0", "0" },
+	{ "r_glxDlightProjectedMdi", "0", "0", "0" },
 	{ "r_glxStreamDrawScreenMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawVideoMaps", "0", "0", "0" },
 	{ "r_glxStreamDrawShadows", "0", "1", "1" },
@@ -151,6 +187,13 @@ static const ProfileCvarSetting GLX_PROFILE_CVARS[] = {
 
 typedef void ( APIENTRY *PFNGLXUNIFORM1FPROC )( GLint location, GLfloat v0 );
 typedef void ( APIENTRY *PFNGLXUNIFORM4FVPROC )( GLint location, GLsizei count, const GLfloat *value );
+typedef void ( APIENTRY *PFNGLXBINDBUFFERRANGEPROC )( GLenum target, GLuint index,
+	GLuint buffer, ptrdiff_t offset, ptrdiff_t size );
+typedef void ( APIENTRY *PFNGLXDLIGHTBINDBUFFERPROC )( GLenum target, GLuint buffer );
+typedef void ( APIENTRY *PFNGLXDLIGHTGETINTEGERVPROC )( GLenum pname, GLint *params );
+typedef GLenum ( APIENTRY *PFNGLXDLIGHTGETERRORPROC )( void );
+typedef void ( APIENTRY *PFNGLXDLIGHTMULTIDRAWELEMENTSINDIRECTPROC )( GLenum mode,
+	GLenum type, const GLvoid *indirect, GLsizei drawcount, GLsizei stride );
 
 struct DlightFns {
 	PFNGLXCREATESHADERPROC CreateShader;
@@ -168,6 +211,7 @@ struct DlightFns {
 	PFNGLXUNIFORM1IPROC Uniform1i;
 	PFNGLXUNIFORM1FPROC Uniform1f;
 	PFNGLXUNIFORM4FVPROC Uniform4fv;
+	PFNGLXBINDBUFFERRANGEPROC BindBufferRange;
 	PFNGLXDELETEPROGRAMPROC DeleteProgram;
 	PFNGLXDELETESHADERPROC DeleteShader;
 };
@@ -177,6 +221,7 @@ struct DlightProgramKey {
 	int fogMode;
 	qboolean absLight;
 	qboolean shadow;
+	qboolean projectedStream;
 };
 
 struct DlightProgram {
@@ -203,9 +248,22 @@ struct DlightProgram {
 	GLint projectedColorFlagsUniform;
 };
 
+struct ProjectedDlightMdiFns {
+	PFNGLXDLIGHTBINDBUFFERPROC BindBuffer;
+	PFNGLXDLIGHTGETINTEGERVPROC GetIntegerv;
+	PFNGLXDLIGHTGETERRORPROC GetError;
+	PFNGLXDLIGHTMULTIDRAWELEMENTSINDIRECTPROC MultiDrawElementsIndirect;
+};
+
+static ProjectedDlightMdiFns s_projectedDlightMdiFns {};
+
 static constexpr int GLX_DLIGHT_PROGRAM_LIMIT = 24;
 static constexpr int GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT = 3;
 static constexpr int GLX_PROJECTED_DLIGHT_STREAM_ALIGNMENT = 64;
+static constexpr GLuint GLX_PROJECTED_DLIGHT_STREAM_BINDING = 5;
+static constexpr unsigned int GLX_PROJECTED_DLIGHT_MDI_BATCH_LIMIT = 256u;
+static constexpr unsigned int GLX_PROJECTED_DLIGHT_MDI_COMMAND_RING_LIMIT =
+	GLX_PROJECTED_DLIGHT_MDI_BATCH_LIMIT;
 static constexpr int GLX_PROJECTED_DLIGHT_LIST_ARENA_LIMIT =
 	GLX_RENDER_IR_PROJECTED_DLIGHT_LIST_RECORD_LIMIT;
 
@@ -214,10 +272,16 @@ struct ProjectedDlightStreamRecord {
 	float colorFlags[4];
 };
 
+struct ProjectedDlightArenaListRecord {
+	unsigned int recordIndex;
+	unsigned int flags;
+};
+
 struct DlightState {
 	cvar_t *enabled;
 	cvar_t *scissor;
 	cvar_t *projectedProgram;
+	cvar_t *projectedMdi;
 	DlightFns fns;
 	DlightProgram programs[GLX_DLIGHT_PROGRAM_LIMIT];
 	int programCount;
@@ -318,6 +382,15 @@ struct DlightState {
 	unsigned int projectedShaderUniformDynamicBinds;
 	unsigned int projectedShaderUniformDynamicExecutableBinds;
 	unsigned int projectedShaderUniformLimitSuppressions;
+	unsigned int projectedShaderResourceAttempts;
+	unsigned int projectedShaderResourceBinds;
+	unsigned int projectedShaderResourceExecutableBinds;
+	unsigned int projectedShaderResourceSuppressedBinds;
+	unsigned int projectedShaderResourceLimitPromotions;
+	unsigned int projectedShaderResourceFailures;
+	unsigned int projectedShaderResourceRecords;
+	unsigned int projectedShaderResourceWorldExecutableBinds;
+	unsigned int projectedShaderResourceDynamicExecutableBinds;
 	unsigned int projectedShaderStreamAttempts;
 	unsigned int projectedShaderStreamUploads;
 	unsigned int projectedShaderStreamFailures;
@@ -326,9 +399,93 @@ struct DlightState {
 	unsigned int projectedShaderStreamPersistentUploads;
 	unsigned int projectedShaderStreamWorldUploads;
 	unsigned int projectedShaderStreamDynamicUploads;
+	unsigned int projectedShaderStreamRangeAttempts;
+	unsigned int projectedShaderStreamRangeBinds;
+	unsigned int projectedShaderStreamRangeFailures;
+	unsigned int projectedShaderStreamRangeClears;
 	unsigned int projectedShaderStreamLastOffset;
 	unsigned int projectedShaderStreamLastBytes;
 	unsigned long long projectedShaderStreamBytes;
+	qboolean projectedShaderStreamRangeBound;
+	ProjectedDlightStreamRecord
+		projectedShaderArenaLightRecords[GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT];
+	ProjectedDlightArenaListRecord
+		projectedShaderArenaListRecords[GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT];
+	unsigned int projectedShaderArenaReserveAttempts;
+	unsigned int projectedShaderArenaUploads;
+	unsigned int projectedShaderArenaFailures;
+	unsigned int projectedShaderArenaWraps;
+	unsigned int projectedShaderArenaSameFrameRejects;
+	unsigned int projectedShaderArenaWaits;
+	unsigned int projectedShaderArenaTimeouts;
+	unsigned int projectedShaderArenaSyncFailures;
+	unsigned int projectedShaderArenaLightRecordUploads;
+	unsigned int projectedShaderArenaListRecordUploads;
+	unsigned int projectedShaderArenaWorldRecords;
+	unsigned int projectedShaderArenaDynamicRecords;
+	unsigned int projectedShaderArenaRangeAttempts;
+	unsigned int projectedShaderArenaRangeBinds;
+	unsigned int projectedShaderArenaRangeFailures;
+	unsigned int projectedShaderArenaRangeClears;
+	unsigned int projectedShaderArenaAuthoritativeAttempts;
+	unsigned int projectedShaderArenaAuthoritativeBinds;
+	unsigned int projectedShaderArenaAuthoritativeFailures;
+	unsigned int projectedShaderArenaAuthoritativeFallbacks;
+	unsigned int projectedShaderArenaAuthoritativeClears;
+	unsigned int projectedShaderArenaFrameBytes;
+	unsigned int projectedShaderArenaLastBuffer;
+	unsigned int projectedShaderArenaLastOffset;
+	unsigned int projectedShaderArenaLastBytes;
+	unsigned long long projectedShaderArenaBytes;
+	qboolean projectedShaderArenaRangeBound;
+	unsigned int projectedShaderMdiAttempts;
+	unsigned int projectedShaderMdiEligible;
+	unsigned int projectedShaderMdiCommandUploads;
+	unsigned int projectedShaderMdiCommandFailures;
+	unsigned int projectedShaderMdiCommandSkips;
+	unsigned int projectedShaderMdiRecords;
+	unsigned int projectedShaderMdiIndexes;
+	unsigned int projectedShaderMdiLastOffset;
+	unsigned int projectedShaderMdiLastBytes;
+	unsigned long long projectedShaderMdiCommandBytes;
+	DrawElementsIndirectCommand
+		projectedShaderMdiCommandRecords[GLX_PROJECTED_DLIGHT_MDI_COMMAND_RING_LIMIT];
+	ProjectedDlightDynamicMdiCommandUpload
+		projectedShaderMdiCommandRing[GLX_PROJECTED_DLIGHT_MDI_COMMAND_RING_LIMIT];
+	unsigned int projectedShaderMdiCommandRingCursor;
+	unsigned int projectedShaderMdiCommandRingReserves;
+	unsigned int projectedShaderMdiCommandRingCommits;
+	unsigned int projectedShaderMdiCommandRingWraps;
+	unsigned int projectedShaderMdiCommandRingFailures;
+	unsigned int projectedShaderMdiCommandRingLastSlot;
+	unsigned int projectedShaderMdiCommandRingLastBuffer;
+	unsigned int projectedShaderMdiCommandRingLastOffset;
+	unsigned int projectedShaderMdiCommandRingLastBytes;
+	unsigned int projectedShaderMdiSubmitAttempts;
+	unsigned int projectedShaderMdiSubmitPlans;
+	unsigned int projectedShaderMdiSubmitReady;
+	unsigned int projectedShaderMdiSubmitFallbacks;
+	unsigned int projectedShaderMdiSubmitSkips;
+	unsigned int projectedShaderMdiSubmitRecords;
+	unsigned int projectedShaderMdiSubmitIndexes;
+	unsigned int projectedShaderMdiSubmitLastBuffer;
+	unsigned int projectedShaderMdiSubmitLastOffset;
+	unsigned int projectedShaderMdiSubmitLastBytes;
+	unsigned int projectedShaderMdiBatchAttempts;
+	unsigned int projectedShaderMdiBatchBatches;
+	unsigned int projectedShaderMdiBatchReady;
+	unsigned int projectedShaderMdiBatchFallbacks;
+	unsigned int projectedShaderMdiBatchRejects;
+	unsigned int projectedShaderMdiBatchGlErrors;
+	unsigned int projectedShaderMdiBatchRecords;
+	unsigned int projectedShaderMdiBatchIndexes;
+	unsigned int projectedShaderMdiBatchSubmittedDraws;
+	unsigned int projectedShaderMdiBatchSubmittedIndexes;
+	unsigned int projectedShaderMdiBatchLargest;
+	unsigned int projectedShaderMdiBatchLastReject;
+	unsigned int projectedShaderMdiBatchLastBuffer;
+	unsigned int projectedShaderMdiBatchLastOffset;
+	unsigned int projectedShaderMdiBatchLastBytes;
 };
 
 static int GLX_Dlight_ClampFogMode( int fogMode )
@@ -348,7 +505,8 @@ static qboolean GLX_Dlight_KeyEquals( const DlightProgramKey &lhs,
 	return lhs.linear == rhs.linear &&
 		lhs.fogMode == rhs.fogMode &&
 		lhs.absLight == rhs.absLight &&
-		lhs.shadow == rhs.shadow ? qtrue : qfalse;
+		lhs.shadow == rhs.shadow &&
+		lhs.projectedStream == rhs.projectedStream ? qtrue : qfalse;
 }
 
 static void GLX_Dlight_SetReason( DlightState *state, const char *reason )
@@ -451,6 +609,15 @@ static void GLX_Dlight_ResetCounters( DlightState *state )
 	state->projectedShaderUniformDynamicBinds = 0;
 	state->projectedShaderUniformDynamicExecutableBinds = 0;
 	state->projectedShaderUniformLimitSuppressions = 0;
+	state->projectedShaderResourceAttempts = 0;
+	state->projectedShaderResourceBinds = 0;
+	state->projectedShaderResourceExecutableBinds = 0;
+	state->projectedShaderResourceSuppressedBinds = 0;
+	state->projectedShaderResourceLimitPromotions = 0;
+	state->projectedShaderResourceFailures = 0;
+	state->projectedShaderResourceRecords = 0;
+	state->projectedShaderResourceWorldExecutableBinds = 0;
+	state->projectedShaderResourceDynamicExecutableBinds = 0;
 	state->projectedShaderStreamAttempts = 0;
 	state->projectedShaderStreamUploads = 0;
 	state->projectedShaderStreamFailures = 0;
@@ -459,14 +626,99 @@ static void GLX_Dlight_ResetCounters( DlightState *state )
 	state->projectedShaderStreamPersistentUploads = 0;
 	state->projectedShaderStreamWorldUploads = 0;
 	state->projectedShaderStreamDynamicUploads = 0;
+	state->projectedShaderStreamRangeAttempts = 0;
+	state->projectedShaderStreamRangeBinds = 0;
+	state->projectedShaderStreamRangeFailures = 0;
+	state->projectedShaderStreamRangeClears = 0;
 	state->projectedShaderStreamLastOffset = 0;
 	state->projectedShaderStreamLastBytes = 0;
 	state->projectedShaderStreamBytes = 0;
+	state->projectedShaderStreamRangeBound = qfalse;
+	state->projectedShaderArenaReserveAttempts = 0;
+	state->projectedShaderArenaUploads = 0;
+	state->projectedShaderArenaFailures = 0;
+	state->projectedShaderArenaWraps = 0;
+	state->projectedShaderArenaSameFrameRejects = 0;
+	state->projectedShaderArenaWaits = 0;
+	state->projectedShaderArenaTimeouts = 0;
+	state->projectedShaderArenaSyncFailures = 0;
+	state->projectedShaderArenaLightRecordUploads = 0;
+	state->projectedShaderArenaListRecordUploads = 0;
+	state->projectedShaderArenaWorldRecords = 0;
+	state->projectedShaderArenaDynamicRecords = 0;
+	state->projectedShaderArenaRangeAttempts = 0;
+	state->projectedShaderArenaRangeBinds = 0;
+	state->projectedShaderArenaRangeFailures = 0;
+	state->projectedShaderArenaRangeClears = 0;
+	state->projectedShaderArenaAuthoritativeAttempts = 0;
+	state->projectedShaderArenaAuthoritativeBinds = 0;
+	state->projectedShaderArenaAuthoritativeFailures = 0;
+	state->projectedShaderArenaAuthoritativeFallbacks = 0;
+	state->projectedShaderArenaAuthoritativeClears = 0;
+	state->projectedShaderArenaFrameBytes = 0;
+	state->projectedShaderArenaLastBuffer = 0;
+	state->projectedShaderArenaLastOffset = 0;
+	state->projectedShaderArenaLastBytes = 0;
+	state->projectedShaderArenaBytes = 0;
+	state->projectedShaderArenaRangeBound = qfalse;
+	state->projectedShaderMdiAttempts = 0;
+	state->projectedShaderMdiEligible = 0;
+	state->projectedShaderMdiCommandUploads = 0;
+	state->projectedShaderMdiCommandFailures = 0;
+	state->projectedShaderMdiCommandSkips = 0;
+	state->projectedShaderMdiRecords = 0;
+	state->projectedShaderMdiIndexes = 0;
+	state->projectedShaderMdiLastOffset = 0;
+	state->projectedShaderMdiLastBytes = 0;
+	state->projectedShaderMdiCommandBytes = 0;
+	state->projectedShaderMdiCommandRingCursor = 0;
+	state->projectedShaderMdiCommandRingReserves = 0;
+	state->projectedShaderMdiCommandRingCommits = 0;
+	state->projectedShaderMdiCommandRingWraps = 0;
+	state->projectedShaderMdiCommandRingFailures = 0;
+	state->projectedShaderMdiCommandRingLastSlot = 0;
+	state->projectedShaderMdiCommandRingLastBuffer = 0;
+	state->projectedShaderMdiCommandRingLastOffset = 0;
+	state->projectedShaderMdiCommandRingLastBytes = 0;
+	state->projectedShaderMdiSubmitAttempts = 0;
+	state->projectedShaderMdiSubmitPlans = 0;
+	state->projectedShaderMdiSubmitReady = 0;
+	state->projectedShaderMdiSubmitFallbacks = 0;
+	state->projectedShaderMdiSubmitSkips = 0;
+	state->projectedShaderMdiSubmitRecords = 0;
+	state->projectedShaderMdiSubmitIndexes = 0;
+	state->projectedShaderMdiSubmitLastBuffer = 0;
+	state->projectedShaderMdiSubmitLastOffset = 0;
+	state->projectedShaderMdiSubmitLastBytes = 0;
+	state->projectedShaderMdiBatchAttempts = 0;
+	state->projectedShaderMdiBatchBatches = 0;
+	state->projectedShaderMdiBatchReady = 0;
+	state->projectedShaderMdiBatchFallbacks = 0;
+	state->projectedShaderMdiBatchRejects = 0;
+	state->projectedShaderMdiBatchGlErrors = 0;
+	state->projectedShaderMdiBatchRecords = 0;
+	state->projectedShaderMdiBatchIndexes = 0;
+	state->projectedShaderMdiBatchSubmittedDraws = 0;
+	state->projectedShaderMdiBatchSubmittedIndexes = 0;
+	state->projectedShaderMdiBatchLargest = 0;
+	state->projectedShaderMdiBatchLastReject =
+		GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NONE;
+	state->projectedShaderMdiBatchLastBuffer = 0;
+	state->projectedShaderMdiBatchLastOffset = 0;
+	state->projectedShaderMdiBatchLastBytes = 0;
 	state->projectedSourceRecordCount = 0;
 	state->projectedListRecordCount = 0;
 	state->projectedPacketActivePackets = 0;
 	state->projectedPacketCopiedMask = 0;
 	state->projectedPacketDroppedMask = 0;
+	for ( unsigned int i = 0; i < GLX_PROJECTED_DLIGHT_MDI_COMMAND_RING_LIMIT; i++ ) {
+		state->projectedShaderMdiCommandRecords[i] = {};
+		state->projectedShaderMdiCommandRing[i] = {};
+	}
+	for ( int i = 0; i < GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT; i++ ) {
+		state->projectedShaderArenaLightRecords[i] = {};
+		state->projectedShaderArenaListRecords[i] = {};
+	}
 }
 
 static void GLX_Dlight_ClearProjectedFrame( DlightState *state )
@@ -481,10 +733,39 @@ static void GLX_Dlight_ClearProjectedFrame( DlightState *state )
 	state->projectedPacketActivePackets = 0;
 	state->projectedPacketCopiedMask = 0;
 	state->projectedPacketDroppedMask = 0;
+	state->projectedShaderArenaFrameBytes = 0;
+	state->projectedShaderMdiCommandRingCursor = 0;
 	for ( int i = 0; i < GLX_STATIC_WORLD_PACKET_LIMIT; i++ ) {
 		state->projectedPacketListRefs[i] = {};
 		state->projectedPacketLightMasks[i] = 0u;
 	}
+}
+
+static ProjectedDlightDynamicMdiCommandUpload *
+GLX_Dlight_ReserveProjectedMdiCommandRingSlot( DlightState *state,
+	unsigned int *slotOut )
+{
+	unsigned int slot;
+
+	if ( !state ) {
+		return nullptr;
+	}
+
+	state->projectedShaderMdiCommandRingReserves++;
+	if ( state->projectedShaderMdiCommandRingCursor >=
+			GLX_PROJECTED_DLIGHT_MDI_COMMAND_RING_LIMIT ) {
+		state->projectedShaderMdiCommandRingCursor = 0;
+		state->projectedShaderMdiCommandRingWraps++;
+	}
+
+	slot = state->projectedShaderMdiCommandRingCursor++;
+	state->projectedShaderMdiCommandRingLastSlot = slot;
+	state->projectedShaderMdiCommandRecords[slot] = {};
+	state->projectedShaderMdiCommandRing[slot] = {};
+	if ( slotOut ) {
+		*slotOut = slot;
+	}
+	return &state->projectedShaderMdiCommandRing[slot];
 }
 
 static void GLX_Dlight_RecordState( DlightState *state, int event )
@@ -577,6 +858,82 @@ static qboolean GLX_Dlight_ScissorEnabled( const DlightState &state )
 static qboolean GLX_Dlight_ProjectedProgramEnabled( const DlightState &state )
 {
 	return state.projectedProgram && state.projectedProgram->integer ? qtrue : qfalse;
+}
+
+static qboolean GLX_Dlight_ProjectedStreamShaderEnabled( const DlightState &state,
+	RenderProductTier tier )
+{
+	return tier == RenderProductTier::GL46 &&
+		GLX_Dlight_ProjectedProgramEnabled( state ) &&
+		state.fns.BindBufferRange ? qtrue : qfalse;
+}
+
+static qboolean GLX_Dlight_ProjectedMdiEnabled( const DlightState &state )
+{
+	return state.projectedMdi && state.projectedMdi->integer ? qtrue : qfalse;
+}
+
+static void GLX_Dlight_RecordProjectedMdiSubmitPlan( DlightState *state,
+	const ProjectedDlightDynamicMdiSubmitPlan &plan )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->projectedShaderMdiSubmitAttempts++;
+	if ( !plan.valid ) {
+		state->projectedShaderMdiSubmitSkips++;
+		return;
+	}
+
+	state->projectedShaderMdiSubmitPlans++;
+	state->projectedShaderMdiSubmitRecords += plan.projectedRecordCount;
+	state->projectedShaderMdiSubmitIndexes += plan.indexCount;
+	state->projectedShaderMdiSubmitLastBuffer = plan.commandBuffer;
+	state->projectedShaderMdiSubmitLastOffset = plan.commandOffset;
+	state->projectedShaderMdiSubmitLastBytes = plan.commandBytes;
+	if ( !plan.eligible ) {
+		state->projectedShaderMdiSubmitFallbacks++;
+		return;
+	}
+
+	state->projectedShaderMdiSubmitReady++;
+}
+
+static void GLX_Dlight_RecordProjectedMdiBatchPlan( DlightState *state,
+	const ProjectedDlightDynamicMdiBatchPlan &batch )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->projectedShaderMdiBatchAttempts++;
+	if ( !batch.valid ) {
+		state->projectedShaderMdiBatchRejects++;
+		state->projectedShaderMdiBatchLastReject = batch.rejectReason;
+		return;
+	}
+
+	state->projectedShaderMdiBatchBatches++;
+	state->projectedShaderMdiBatchRecords += batch.projectedRecordCount;
+	state->projectedShaderMdiBatchIndexes += batch.indexCount;
+	state->projectedShaderMdiBatchLastReject = batch.rejectReason;
+	state->projectedShaderMdiBatchLastBuffer = batch.commandBuffer;
+	state->projectedShaderMdiBatchLastOffset = batch.commandOffset;
+	state->projectedShaderMdiBatchLastBytes = batch.commandBytes;
+	if ( batch.drawCount > state->projectedShaderMdiBatchLargest ) {
+		state->projectedShaderMdiBatchLargest = batch.drawCount;
+	}
+	if ( batch.rejectReason !=
+			GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NONE ) {
+		state->projectedShaderMdiBatchRejects++;
+	}
+	if ( !batch.eligible ) {
+		state->projectedShaderMdiBatchFallbacks++;
+		return;
+	}
+
+	state->projectedShaderMdiBatchReady++;
 }
 
 static void GLX_Dlight_RecordScissor( DlightState *state, qboolean computed,
@@ -881,8 +1238,105 @@ static void GLX_Dlight_LoadFunctions( DlightState *state )
 	state->fns.Uniform1i = reinterpret_cast<PFNGLXUNIFORM1IPROC>( GLX_Dlight_GetProc( "glUniform1i" ) );
 	state->fns.Uniform1f = reinterpret_cast<PFNGLXUNIFORM1FPROC>( GLX_Dlight_GetProc( "glUniform1f" ) );
 	state->fns.Uniform4fv = reinterpret_cast<PFNGLXUNIFORM4FVPROC>( GLX_Dlight_GetProc( "glUniform4fv" ) );
+	state->fns.BindBufferRange = reinterpret_cast<PFNGLXBINDBUFFERRANGEPROC>(
+		GLX_Dlight_GetProc( "glBindBufferRange" ) );
 	state->fns.DeleteProgram = reinterpret_cast<PFNGLXDELETEPROGRAMPROC>( GLX_Dlight_GetProc( "glDeleteProgram" ) );
 	state->fns.DeleteShader = reinterpret_cast<PFNGLXDELETESHADERPROC>( GLX_Dlight_GetProc( "glDeleteShader" ) );
+}
+
+static qboolean GLX_Dlight_ResolveProjectedMdiFns()
+{
+	if ( s_projectedDlightMdiFns.BindBuffer &&
+		s_projectedDlightMdiFns.GetIntegerv &&
+		s_projectedDlightMdiFns.GetError &&
+		s_projectedDlightMdiFns.MultiDrawElementsIndirect ) {
+		return qtrue;
+	}
+
+	s_projectedDlightMdiFns.BindBuffer =
+		reinterpret_cast<PFNGLXDLIGHTBINDBUFFERPROC>(
+			GLX_Dlight_GetProc( "glBindBuffer" ) );
+	if ( !s_projectedDlightMdiFns.BindBuffer ) {
+		s_projectedDlightMdiFns.BindBuffer =
+			reinterpret_cast<PFNGLXDLIGHTBINDBUFFERPROC>(
+				GLX_Dlight_GetProc( "glBindBufferARB" ) );
+	}
+	s_projectedDlightMdiFns.GetIntegerv =
+		reinterpret_cast<PFNGLXDLIGHTGETINTEGERVPROC>(
+			GLX_Dlight_GetProc( "glGetIntegerv" ) );
+	s_projectedDlightMdiFns.GetError =
+		reinterpret_cast<PFNGLXDLIGHTGETERRORPROC>(
+			GLX_Dlight_GetProc( "glGetError" ) );
+	s_projectedDlightMdiFns.MultiDrawElementsIndirect =
+		reinterpret_cast<PFNGLXDLIGHTMULTIDRAWELEMENTSINDIRECTPROC>(
+			GLX_Dlight_GetProc( "glMultiDrawElementsIndirect" ) );
+
+	return s_projectedDlightMdiFns.BindBuffer &&
+		s_projectedDlightMdiFns.GetIntegerv &&
+		s_projectedDlightMdiFns.GetError &&
+		s_projectedDlightMdiFns.MultiDrawElementsIndirect ? qtrue : qfalse;
+}
+
+static GLuint GLX_Dlight_CurrentDrawIndirectBuffer()
+{
+	GLint current = 0;
+
+	if ( s_projectedDlightMdiFns.GetIntegerv ) {
+		s_projectedDlightMdiFns.GetIntegerv( GL_DRAW_INDIRECT_BUFFER_BINDING,
+			&current );
+	}
+	return static_cast<GLuint>( current );
+}
+
+static void GLX_Dlight_BindDrawIndirectBuffer( GLuint buffer )
+{
+	if ( s_projectedDlightMdiFns.BindBuffer ) {
+		s_projectedDlightMdiFns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, buffer );
+	}
+}
+
+static qboolean GLX_Dlight_SubmitProjectedMdiBatch( DlightState *state,
+	const ProjectedDlightDynamicMdiBatchPlan &batch )
+{
+	GLuint oldDrawIndirectBuffer;
+	GLenum err;
+	const GLvoid *commandOffset;
+
+	if ( !state || !batch.valid || !batch.eligible || batch.drawCount == 0u ||
+		batch.commandBuffer == 0u || batch.commandBytes == 0u ||
+		batch.commandStride == 0u || batch.indexBuffer == 0u ) {
+		if ( state ) {
+			state->projectedShaderMdiBatchFallbacks++;
+		}
+		return qfalse;
+	}
+	if ( !GLX_Dlight_ResolveProjectedMdiFns() ) {
+		state->projectedShaderMdiBatchFallbacks++;
+		return qfalse;
+	}
+
+	commandOffset = reinterpret_cast<const GLvoid *>(
+		static_cast<intptr_t>( batch.commandOffset ) );
+	oldDrawIndirectBuffer = GLX_Dlight_CurrentDrawIndirectBuffer();
+	s_projectedDlightMdiFns.GetError();
+	GLX_Dlight_BindDrawIndirectBuffer( batch.commandBuffer );
+	s_projectedDlightMdiFns.MultiDrawElementsIndirect(
+		static_cast<GLenum>( batch.primitive ),
+		static_cast<GLenum>( batch.indexType ), commandOffset,
+		static_cast<GLsizei>( batch.drawCount ),
+		static_cast<GLsizei>( batch.commandStride ) );
+	err = s_projectedDlightMdiFns.GetError();
+	GLX_Dlight_BindDrawIndirectBuffer( oldDrawIndirectBuffer );
+
+	if ( err != GL_NO_ERROR ) {
+		state->projectedShaderMdiBatchGlErrors++;
+		state->projectedShaderMdiBatchFallbacks++;
+		return qfalse;
+	}
+
+	state->projectedShaderMdiBatchSubmittedDraws += batch.drawCount;
+	state->projectedShaderMdiBatchSubmittedIndexes += batch.indexCount;
+	return qtrue;
 }
 
 static qboolean GLX_Dlight_FunctionsReady( const DlightState &state )
@@ -930,8 +1384,13 @@ static GLint GLX_Dlight_GetUniformLocationAny( const DlightState *state, GLuint 
 static qboolean GLX_Dlight_VertexSource( const DlightProgramKey &key,
 	char *out, size_t outSize )
 {
+	const char *version = key.projectedStream ?
+		"#version 430 compatibility\n" : "#version 120\n";
+	const char *varyingOut = key.projectedStream ? "out" : "varying";
+	const char *positionExpr = key.projectedStream ?
+		"gl_ModelViewProjectionMatrix * pos" : "ftransform()";
 	const int written = std::snprintf( out, outSize,
-		"#version 120\n"
+		"%s"
 		"#define GLX_DLIGHT_FOG %i\n"
 		"#define GLX_DLIGHT_FOG_OUTSIDE %i\n"
 		"uniform vec4 u_EyePos;\n"
@@ -939,17 +1398,17 @@ static qboolean GLX_Dlight_VertexSource( const DlightProgramKey &key,
 		"uniform vec4 u_FogDistanceVector;\n"
 		"uniform vec4 u_FogDepthVector;\n"
 		"uniform float u_FogEyeT;\n"
-		"varying vec2 v_TexCoord;\n"
-		"varying vec3 v_LocalPos;\n"
-		"varying vec3 v_LightVector;\n"
-		"varying vec3 v_ViewVector;\n"
-		"varying vec3 v_Normal;\n"
+		"%s vec2 v_TexCoord;\n"
+		"%s vec3 v_LocalPos;\n"
+		"%s vec3 v_LightVector;\n"
+		"%s vec3 v_ViewVector;\n"
+		"%s vec3 v_Normal;\n"
 		"#if GLX_DLIGHT_FOG\n"
-		"varying vec2 v_FogTexCoord;\n"
+		"%s vec2 v_FogTexCoord;\n"
 		"#endif\n"
 		"void main(void) {\n"
 		"    vec4 pos = gl_Vertex;\n"
-		"    gl_Position = ftransform();\n"
+		"    gl_Position = %s;\n"
 		"    v_TexCoord = gl_MultiTexCoord0.xy;\n"
 		"    v_LocalPos = pos.xyz;\n"
 		"    v_LightVector = u_LightPos.xyz - pos.xyz;\n"
@@ -970,21 +1429,51 @@ static qboolean GLX_Dlight_VertexSource( const DlightProgramKey &key,
 		"    v_FogTexCoord = vec2(s, t);\n"
 		"#endif\n"
 		"}\n",
+		version,
 		key.fogMode != 0 ? 1 : 0,
-		key.fogMode == 1 ? 1 : 0 );
+		key.fogMode == 1 ? 1 : 0,
+		varyingOut,
+		varyingOut,
+		varyingOut,
+		varyingOut,
+		varyingOut,
+		varyingOut,
+		positionExpr );
 	return GLX_Dlight_SourceFits( written, outSize );
 }
 
 static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 	char *out, size_t outSize )
 {
-	const int written = std::snprintf( out, outSize,
+	const char *version = key.projectedStream ?
+		"#version 430 compatibility\n"
+		"#define GLX_TEX2D texture\n"
+		"#define GLX_FRAG_COLOR o_FragColor\n" :
 		"#version 120\n"
+		"#define GLX_TEX2D texture2D\n"
+		"#define GLX_FRAG_COLOR gl_FragColor\n";
+	const char *varyingIn = key.projectedStream ? "in" : "varying";
+	const char *fragmentOutput = key.projectedStream ?
+		"out vec4 o_FragColor;\n" : "";
+	const char *streamBlock = key.projectedStream ?
+		"struct GLXProjectedDlightRecord {\n"
+		"    vec4 originRadius;\n"
+		"    vec4 colorFlags;\n"
+		"};\n"
+		"layout(std430, binding = GLX_PROJECTED_DLIGHT_STREAM_BINDING) readonly buffer GLXProjectedDlightStream {\n"
+		"    GLXProjectedDlightRecord u_ProjectedDlightRecords[];\n"
+		"};\n" : "";
+	const int written = std::snprintf( out, outSize,
+		"%s"
 		"#define GLX_DLIGHT_LINEAR %i\n"
 		"#define GLX_DLIGHT_FOG %i\n"
 		"#define GLX_DLIGHT_ABS_LIGHT %i\n"
 		"#define GLX_DLIGHT_SHADOW %i\n"
 		"#define GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT %i\n"
+		"#define GLX_PROJECTED_DLIGHT_LOOP_LIMIT %i\n"
+		"#define GLX_PROJECTED_DLIGHT_STREAM %i\n"
+		"#define GLX_PROJECTED_DLIGHT_STREAM_BINDING %u\n"
+		"%s"
 		"uniform sampler2D u_Texture0;\n"
 		"uniform sampler2D u_FogTexture;\n"
 		"uniform sampler2D u_ShadowTexture;\n"
@@ -999,25 +1488,39 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"uniform vec4 u_ProjectedDlightControl;\n"
 		"uniform vec4 u_ProjectedDlightOriginRadius[GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT];\n"
 		"uniform vec4 u_ProjectedDlightColorFlags[GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT];\n"
-		"varying vec2 v_TexCoord;\n"
-		"varying vec3 v_LocalPos;\n"
-		"varying vec3 v_LightVector;\n"
-		"varying vec3 v_ViewVector;\n"
-		"varying vec3 v_Normal;\n"
+		"%s vec2 v_TexCoord;\n"
+		"%s vec3 v_LocalPos;\n"
+		"%s vec3 v_LightVector;\n"
+		"%s vec3 v_ViewVector;\n"
+		"%s vec3 v_Normal;\n"
 		"#if GLX_DLIGHT_FOG\n"
-		"varying vec2 v_FogTexCoord;\n"
+		"%s vec2 v_FogTexCoord;\n"
 		"#endif\n"
+		"%s"
 		"vec3 safeNormalize(vec3 value) {\n"
 		"    return value * inversesqrt(max(dot(value, value), 0.00000001));\n"
 		"}\n"
 		"vec3 evaluateProjectedDlights(vec3 localPos, vec3 normal) {\n"
 		"    vec3 accum = vec3(0.0);\n"
-		"    for (int i = 0; i < GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT; i++) {\n"
+		"    for (int i = 0; i < GLX_PROJECTED_DLIGHT_LOOP_LIMIT; i++) {\n"
 		"        if (float(i) >= u_ProjectedDlightControl.x) {\n"
 		"            break;\n"
 		"        }\n"
-		"        vec4 originRadius = u_ProjectedDlightOriginRadius[i];\n"
-		"        vec4 colorFlags = u_ProjectedDlightColorFlags[i];\n"
+		"        vec4 originRadius;\n"
+		"        vec4 colorFlags;\n"
+		"#if GLX_PROJECTED_DLIGHT_STREAM\n"
+		"        if (u_ProjectedDlightControl.w > 0.5) {\n"
+		"            originRadius = u_ProjectedDlightRecords[i].originRadius;\n"
+		"            colorFlags = u_ProjectedDlightRecords[i].colorFlags;\n"
+		"        } else\n"
+		"#endif\n"
+		"        {\n"
+		"            if (i >= GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT) {\n"
+		"                break;\n"
+		"            }\n"
+		"            originRadius = u_ProjectedDlightOriginRadius[i];\n"
+		"            colorFlags = u_ProjectedDlightColorFlags[i];\n"
+		"        }\n"
 		"        vec3 delta = originRadius.xyz - localPos;\n"
 		"        float invRadius = 1.0 / max(originRadius.w, 0.0001);\n"
 		"        vec2 st = vec2(0.5) + delta.xy * invRadius;\n"
@@ -1069,10 +1572,10 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"        vec2 inner = u_DlightShadow.xy * u_ShadowFilter.x;\n"
 		"        vec2 outer = u_DlightShadow.xy * u_ShadowFilter.y;\n"
 		"        float occ = 0.0;\n"
-		"        occ += texture2D(u_ShadowTexture, tc + vec2(-outer.x, -inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
-		"        occ += texture2D(u_ShadowTexture, tc + vec2( inner.x, -outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
-		"        occ += texture2D(u_ShadowTexture, tc + vec2(-inner.x,  outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
-		"        occ += texture2D(u_ShadowTexture, tc + vec2( outer.x,  inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"        occ += GLX_TEX2D(u_ShadowTexture, tc + vec2(-outer.x, -inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"        occ += GLX_TEX2D(u_ShadowTexture, tc + vec2( inner.x, -outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"        occ += GLX_TEX2D(u_ShadowTexture, tc + vec2(-inner.x,  outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"        occ += GLX_TEX2D(u_ShadowTexture, tc + vec2( outer.x,  inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
 		"        return 1.0 - occ * 0.25 * u_DlightShadow.z;\n"
 		"    }\n"
 		"    vec3 shadowVec = -dnLV;\n"
@@ -1108,15 +1611,15 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"    vec2 inner = u_DlightShadow.xy * u_ShadowFilter.x;\n"
 		"    vec2 outer = u_DlightShadow.xy * u_ShadowFilter.y;\n"
 		"    float occ = 0.0;\n"
-		"    occ += texture2D(u_ShadowTexture, tc + vec2(-outer.x, -inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
-		"    occ += texture2D(u_ShadowTexture, tc + vec2( inner.x, -outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
-		"    occ += texture2D(u_ShadowTexture, tc + vec2(-inner.x,  outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
-		"    occ += texture2D(u_ShadowTexture, tc + vec2( outer.x,  inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"    occ += GLX_TEX2D(u_ShadowTexture, tc + vec2(-outer.x, -inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"    occ += GLX_TEX2D(u_ShadowTexture, tc + vec2( inner.x, -outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"    occ += GLX_TEX2D(u_ShadowTexture, tc + vec2(-inner.x,  outer.y)).r < receiverDepth ? 1.0 : 0.0;\n"
+		"    occ += GLX_TEX2D(u_ShadowTexture, tc + vec2( outer.x,  inner.y)).r < receiverDepth ? 1.0 : 0.0;\n"
 		"    return 1.0 - occ * 0.25 * u_DlightShadow.z;\n"
 		"}\n"
 		"#endif\n"
 		"void main(void) {\n"
-		"    vec4 base = texture2D(u_Texture0, v_TexCoord);\n"
+		"    vec4 base = GLX_TEX2D(u_Texture0, v_TexCoord);\n"
 		"    base.rgb *= u_TexFactors.x;\n"
 		"    vec3 dnLV = v_LightVector;\n"
 		"#if GLX_DLIGHT_LINEAR\n"
@@ -1157,18 +1660,31 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"#endif\n"
 		"    vec4 lit = base * diffuse + spec;\n"
 		"#if GLX_DLIGHT_FOG\n"
-		"    vec4 fog = texture2D(u_FogTexture, v_FogTexCoord);\n"
+		"    vec4 fog = GLX_TEX2D(u_FogTexture, v_FogTexCoord);\n"
 		"    lit *= 1.0 - fog.a;\n"
 		"#endif\n"
 		"    vec4 currentLight = lit * vec4(u_LightColor.rgb * intensity * shadowFactor, intensity * shadowFactor);\n"
 		"    vec3 projectedLight = evaluateProjectedDlights(v_LocalPos, nn);\n"
-		"    gl_FragColor = currentLight + vec4(base.rgb * projectedLight, 0.0) * u_ProjectedDlightControl.z;\n"
+		"    GLX_FRAG_COLOR = currentLight + vec4(base.rgb * projectedLight, 0.0) * u_ProjectedDlightControl.z;\n"
 		"}\n",
+		version,
 		key.linear ? 1 : 0,
 		key.fogMode != 0 ? 1 : 0,
 		key.absLight ? 1 : 0,
 		key.shadow ? 1 : 0,
-		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT );
+		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT,
+		key.projectedStream ? GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT :
+			GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT,
+		key.projectedStream ? 1 : 0,
+		GLX_PROJECTED_DLIGHT_STREAM_BINDING,
+		streamBlock,
+		varyingIn,
+		varyingIn,
+		varyingIn,
+		varyingIn,
+		varyingIn,
+		varyingIn,
+		fragmentOutput );
 	return GLX_Dlight_SourceFits( written, outSize );
 }
 
@@ -1351,7 +1867,8 @@ static qboolean GLX_Dlight_Active( const DlightState &state )
 }
 
 static DlightProgram *GLX_Dlight_FindOrCreateProgram( DlightState *state,
-	qboolean linear, int fogMode, qboolean absLight, qboolean shadow )
+	qboolean linear, int fogMode, qboolean absLight, qboolean shadow,
+	qboolean projectedStream )
 {
 	DlightProgramKey key;
 	DlightProgram *program;
@@ -1364,6 +1881,7 @@ static DlightProgram *GLX_Dlight_FindOrCreateProgram( DlightState *state,
 	key.fogMode = GLX_Dlight_ClampFogMode( fogMode );
 	key.absLight = absLight;
 	key.shadow = shadow;
+	key.projectedStream = projectedStream;
 
 	program = GLX_Dlight_FindProgram( state, key );
 	if ( program ) {
@@ -1420,40 +1938,140 @@ static qboolean GLX_Dlight_FillProjectedStreamRecords( DlightState *state,
 	return qtrue;
 }
 
-static qboolean GLX_Dlight_BindProjectedShaderInput( DlightState *state,
+static int GLX_Dlight_FillProjectedArenaListRecords( DlightState *state,
 	const ProjectedDlightShaderInput &input )
 {
+	if ( !state ||
+		!GLX_RenderIR_ValidateProjectedDlightShaderInput( input ) ) {
+		return 0;
+	}
+
+	for ( int i = 0; i < input.projectedDlights.recordCount; i++ ) {
+		ProjectedDlightArenaListRecord &out = state->projectedShaderArenaListRecords[i];
+		const int recordIndex = input.projectedDlights.firstRecord + i;
+		const ProjectedDlightRecord &record = state->projectedListRecords[recordIndex];
+
+		out.recordIndex = static_cast<unsigned int>( recordIndex );
+		out.flags = record.flags & GLX_PROJECTED_DLIGHT_FLAGS_ALL;
+	}
+	return input.projectedDlights.recordCount;
+}
+
+static void GLX_Dlight_RecordProjectedShaderArenaReservation(
+	DlightState *state, const StreamReservation &reservation )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->projectedShaderArenaWraps += reservation.reserveWraps;
+	state->projectedShaderArenaSameFrameRejects +=
+		reservation.reserveSameFrameWrapRejects;
+	state->projectedShaderArenaWaits += reservation.reserveSyncWaits;
+	state->projectedShaderArenaTimeouts += reservation.reserveSyncTimeouts;
+	state->projectedShaderArenaSyncFailures += reservation.reserveSyncFailures;
+}
+
+static void GLX_Dlight_RecordProjectedShaderArenaUpload( DlightState *state,
+	const ProjectedDlightShaderInput &input, const StreamReservation &reservation,
+	unsigned int uploadBytes, unsigned int lightRecords, unsigned int listRecords )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->projectedShaderArenaUploads++;
+	state->projectedShaderArenaLightRecordUploads += lightRecords;
+	state->projectedShaderArenaListRecordUploads += listRecords;
+	state->projectedShaderArenaBytes += static_cast<unsigned long long>( uploadBytes );
+	state->projectedShaderArenaFrameBytes += uploadBytes;
+	state->projectedShaderArenaLastBuffer = reservation.buffer;
+	state->projectedShaderArenaLastOffset =
+		static_cast<unsigned int>( reservation.offset > ~0u ? ~0u : reservation.offset );
+	state->projectedShaderArenaLastBytes =
+		static_cast<unsigned int>( reservation.bytes > ~0u ? ~0u : reservation.bytes );
+	if ( input.target == ProjectedDlightShaderTarget::WorldPacket ) {
+		state->projectedShaderArenaWorldRecords += lightRecords;
+	} else if ( input.target == ProjectedDlightShaderTarget::DynamicDraw ) {
+		state->projectedShaderArenaDynamicRecords += lightRecords;
+	}
+}
+
+static void GLX_Dlight_RecordProjectedShaderArenaRange( DlightState *state,
+	qboolean rangeReady )
+{
+	if ( !state ) {
+		return;
+	}
+
+	state->projectedShaderArenaRangeAttempts++;
+	state->projectedShaderArenaAuthoritativeAttempts++;
+	if ( rangeReady ) {
+		state->projectedShaderArenaRangeBinds++;
+		state->projectedShaderArenaRangeBound = qtrue;
+		state->projectedShaderArenaAuthoritativeBinds++;
+	} else {
+		state->projectedShaderArenaRangeFailures++;
+		state->projectedShaderArenaRangeBound = qfalse;
+		state->projectedShaderArenaAuthoritativeFailures++;
+		state->projectedShaderArenaAuthoritativeFallbacks++;
+	}
+}
+
+static qboolean GLX_Dlight_BindProjectedShaderInput( DlightState *state,
+	const ProjectedDlightShaderInput &input,
+	const ProjectedDlightResourceRange *resourceRange = nullptr,
+	ProjectedDlightShaderExecutionPlan *executionPlanOut = nullptr )
+{
 	DlightProgram *program;
-	ProjectedDlightShaderUniformPlan uniformPlan {};
+	ProjectedDlightShaderExecutionPlan executionPlan {};
 	int count;
 	float control[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	float originRadius[GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT * 4] {};
 	float colorFlags[GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT * 4] {};
 
+	if ( executionPlanOut ) {
+		*executionPlanOut = {};
+	}
 	if ( !state || !input.programmable ) {
 		return qfalse;
 	}
 
 	state->projectedShaderUniformAttempts++;
-	uniformPlan = GLX_RenderIR_PlanProjectedDlightUniformWindow( input,
-		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT,
-		GLX_Dlight_ProjectedProgramEnabled( *state ) );
-	if ( !uniformPlan.valid ) {
-		state->projectedShaderUniformFailures++;
-		return qfalse;
-	}
-
 	program = GLX_Dlight_CurrentProgram( state );
-	if ( !program || program->projectedControlUniform < 0 ||
-		program->projectedOriginRadiusUniform < 0 ||
-		program->projectedColorFlagsUniform < 0 ) {
+	executionPlan = GLX_RenderIR_PlanProjectedDlightShaderExecution( input,
+		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT,
+		GLX_Dlight_ProjectedProgramEnabled( *state ),
+		program && program->key.projectedStream ? qtrue : qfalse,
+		resourceRange,
+		static_cast<unsigned int>( sizeof( ProjectedDlightStreamRecord ) ),
+		GLX_PROJECTED_DLIGHT_STREAM_ALIGNMENT );
+	if ( !executionPlan.valid ) {
 		state->projectedShaderUniformFailures++;
 		return qfalse;
 	}
 
-	count = uniformPlan.uploadRecords;
-	if ( uniformPlan.truncatedRecords > 0 ) {
-		state->projectedShaderUniformTruncated += uniformPlan.truncatedRecords;
+	if ( executionPlan.requestedRecords > GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT ) {
+		state->projectedShaderResourceAttempts++;
+		if ( !executionPlan.resourcePromoted ) {
+			state->projectedShaderResourceFailures++;
+		}
+	}
+
+	if ( !program || program->projectedControlUniform < 0 ) {
+		state->projectedShaderUniformFailures++;
+		return qfalse;
+	}
+	if ( executionPlan.backend == ProjectedDlightShaderBackend::UniformWindow &&
+		( program->projectedOriginRadiusUniform < 0 ||
+			program->projectedColorFlagsUniform < 0 ) ) {
+		state->projectedShaderUniformFailures++;
+		return qfalse;
+	}
+
+	count = executionPlan.uniformRecords;
+	if ( executionPlan.truncatedRecords > 0 ) {
+		state->projectedShaderUniformTruncated += executionPlan.truncatedRecords;
 	}
 
 	for ( int i = 0; i < count; i++ ) {
@@ -1477,10 +2095,12 @@ static qboolean GLX_Dlight_BindProjectedShaderInput( DlightState *state,
 		colorOut[3] = static_cast<float>( record.flags & GLX_PROJECTED_DLIGHT_FLAGS_ALL );
 	}
 
-	control[0] = static_cast<float>( count );
+	control[0] = executionPlan.backend == ProjectedDlightShaderBackend::StreamResource ?
+		static_cast<float>( executionPlan.streamRecords ) : static_cast<float>( count );
 	control[1] = static_cast<float>( input.projectedDlights.firstRecord );
-	control[2] = uniformPlan.execute ? 1.0f : 0.0f;
-	control[3] = 0.0f;
+	control[2] = executionPlan.execute ? 1.0f : 0.0f;
+	control[3] = executionPlan.backend == ProjectedDlightShaderBackend::StreamResource ?
+		1.0f : 0.0f;
 	GLX_Dlight_SetUniform4fvCount( state, program->projectedControlUniform, 1,
 		control );
 	GLX_Dlight_SetUniform4fvCount( state, program->projectedOriginRadiusUniform,
@@ -1489,25 +2109,88 @@ static qboolean GLX_Dlight_BindProjectedShaderInput( DlightState *state,
 		count, colorFlags );
 	state->projectedShaderUniformBinds++;
 	state->projectedShaderUniformRecords += static_cast<unsigned int>( count );
-	if ( uniformPlan.execute ) {
+	if ( executionPlan.execute ) {
 		state->projectedShaderUniformExecutableBinds++;
 	} else {
 		state->projectedShaderUniformSuppressedBinds++;
 	}
-	if ( uniformPlan.limitSuppressed ) {
+	if ( executionPlan.limitSuppressed ) {
 		state->projectedShaderUniformLimitSuppressions++;
+	}
+	if ( executionPlan.backend == ProjectedDlightShaderBackend::StreamResource ) {
+		state->projectedShaderResourceBinds++;
+		state->projectedShaderResourceRecords += executionPlan.streamRecords;
+		state->projectedShaderResourceLimitPromotions++;
+		if ( executionPlan.execute ) {
+			state->projectedShaderResourceExecutableBinds++;
+		} else {
+			state->projectedShaderResourceSuppressedBinds++;
+		}
 	}
 	if ( input.target == ProjectedDlightShaderTarget::WorldPacket ) {
 		state->projectedShaderUniformWorldBinds++;
-		if ( uniformPlan.execute ) {
+		if ( executionPlan.execute ) {
 			state->projectedShaderUniformWorldExecutableBinds++;
+		}
+		if ( executionPlan.backend == ProjectedDlightShaderBackend::StreamResource &&
+			executionPlan.execute ) {
+			state->projectedShaderResourceWorldExecutableBinds++;
 		}
 	} else if ( input.target == ProjectedDlightShaderTarget::DynamicDraw ) {
 		state->projectedShaderUniformDynamicBinds++;
-		if ( uniformPlan.execute ) {
+		if ( executionPlan.execute ) {
 			state->projectedShaderUniformDynamicExecutableBinds++;
 		}
+		if ( executionPlan.backend == ProjectedDlightShaderBackend::StreamResource &&
+			executionPlan.execute ) {
+			state->projectedShaderResourceDynamicExecutableBinds++;
+		}
 	}
+	if ( executionPlanOut ) {
+		*executionPlanOut = executionPlan;
+	}
+	return qtrue;
+}
+
+static void GLX_Dlight_ClearProjectedStreamRange( DlightState *state )
+{
+	if ( !state ) {
+		return;
+	}
+	if ( state->projectedShaderArenaRangeBound ) {
+		state->projectedShaderArenaRangeBound = qfalse;
+		state->projectedShaderArenaRangeClears++;
+		state->projectedShaderArenaAuthoritativeClears++;
+	}
+	if ( !state->projectedShaderStreamRangeBound || !state->fns.BindBufferRange ) {
+		return;
+	}
+
+	state->fns.BindBufferRange( GL_SHADER_STORAGE_BUFFER,
+		GLX_PROJECTED_DLIGHT_STREAM_BINDING, 0, 0, 0 );
+	state->projectedShaderStreamRangeBound = qfalse;
+	state->projectedShaderStreamRangeClears++;
+}
+
+static qboolean GLX_Dlight_BindProjectedStreamRange( DlightState *state,
+	GLuint buffer, size_t offset, size_t bytes )
+{
+	if ( !state ) {
+		return qfalse;
+	}
+
+	state->projectedShaderStreamRangeAttempts++;
+	if ( !state->fns.BindBufferRange || !buffer || bytes == 0 ||
+		offset > static_cast<size_t>( ~0u ) || bytes > static_cast<size_t>( ~0u ) ) {
+		state->projectedShaderStreamRangeFailures++;
+		return qfalse;
+	}
+
+	state->fns.BindBufferRange( GL_SHADER_STORAGE_BUFFER,
+		GLX_PROJECTED_DLIGHT_STREAM_BINDING, buffer,
+		static_cast<ptrdiff_t>( offset ), static_cast<ptrdiff_t>( bytes ) );
+	state->projectedShaderStreamRangeBound = qtrue;
+	state->projectedShaderStreamRangeBinds++;
 	return qtrue;
 }
 
@@ -1516,6 +2199,7 @@ static qboolean GLX_Dlight_ClearProjectedShaderInput( DlightState *state )
 	DlightProgram *program = GLX_Dlight_CurrentProgram( state );
 	const float noProjectedDlights[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
+	GLX_Dlight_ClearProjectedStreamRange( state );
 	if ( !program || program->projectedControlUniform < 0 ) {
 		return qfalse;
 	}
@@ -1540,7 +2224,11 @@ static void GLX_Dlight_RegisterCvars( DlightState *state )
 	state->projectedProgram = RI().Cvar_Get( "r_glxDlightProjectedProgram", "0",
 		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->projectedProgram,
-		"Evaluate compact projected-light uniform records in the GLx GLSL dlight program; experimental and off by default while legacy projected-light fallback remains authoritative." );
+		"Evaluate compact projected-light records in the GLx GLSL dlight program as an opt-in guarded replacement; unsupported or invalid binds fall back to legacy projected lights." );
+	state->projectedMdi = RI().Cvar_Get( "r_glxDlightProjectedMdi", "0",
+		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
+	RI().Cvar_SetDescription( state->projectedMdi,
+		"Prepare GLx projected dynamic-light indirect submission plans from staged persistent command records; experimental and off by default until projected-light shader parity is authoritative." );
 }
 
 static void GLX_Dlight_Shutdown( DlightState *state, qboolean deletePrograms )
@@ -1549,6 +2237,8 @@ static void GLX_Dlight_Shutdown( DlightState *state, qboolean deletePrograms )
 		return;
 	}
 
+	GLX_Dlight_ClearProjectedStreamRange( state );
+	s_projectedDlightMdiFns = {};
 	if ( state->currentProgram && state->fns.UseProgram ) {
 		state->fns.UseProgram( 0 );
 	}
@@ -1581,14 +2271,15 @@ static void GLX_Dlight_OnOpenGLReady( DlightState *state )
 }
 
 static qboolean GLX_Dlight_ProgramAvailable( DlightState *state, qboolean linear,
-	int fogMode, qboolean absLight, qboolean shadow )
+	int fogMode, qboolean absLight, qboolean shadow, qboolean projectedStream )
 {
 	DlightProgram *program;
 
 	if ( state ) {
 		state->availabilityQueries++;
 	}
-	program = GLX_Dlight_FindOrCreateProgram( state, linear, fogMode, absLight, shadow );
+	program = GLX_Dlight_FindOrCreateProgram( state, linear, fogMode, absLight, shadow,
+		projectedStream );
 	if ( state ) {
 		if ( program ) {
 			state->availabilityHits++;
@@ -1600,7 +2291,8 @@ static qboolean GLX_Dlight_ProgramAvailable( DlightState *state, qboolean linear
 }
 
 static qboolean GLX_Dlight_BindProgram( DlightState *state, qboolean linear,
-	int fogMode, qboolean absLight, qboolean shadow, const float *eyePos, const float *lightPos,
+	int fogMode, qboolean absLight, qboolean shadow, qboolean projectedStream,
+	const float *eyePos, const float *lightPos,
 	const float *lightColor, const float *lightVector, const float *texFactors,
 	const float *dlightFactors, const float *fogDistanceVector,
 	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
@@ -1632,7 +2324,8 @@ static qboolean GLX_Dlight_BindProgram( DlightState *state, qboolean linear,
 		return qfalse;
 	}
 
-	program = GLX_Dlight_FindOrCreateProgram( state, linear, fogMode, absLight, shadow );
+	program = GLX_Dlight_FindOrCreateProgram( state, linear, fogMode, absLight,
+		shadow, projectedStream );
 	if ( !program ) {
 		if ( state ) {
 			state->bindFailures++;
@@ -1673,10 +2366,14 @@ static qboolean GLX_Dlight_BindProgram( DlightState *state, qboolean linear,
 
 static void GLX_Dlight_Unbind( DlightState *state )
 {
-	if ( !state || !state->currentProgram || !state->fns.UseProgram ) {
+	if ( !state ) {
 		return;
 	}
 
+	GLX_Dlight_ClearProjectedStreamRange( state );
+	if ( !state->currentProgram || !state->fns.UseProgram ) {
+		return;
+	}
 	state->fns.UseProgram( 0 );
 	state->currentProgram = 0;
 	state->unbinds++;
@@ -1766,7 +2463,18 @@ static void GLX_Dlight_PrintInfo( const DlightState &state )
 		state.projectedShaderUniformDynamicBinds,
 		state.projectedShaderUniformLimitSuppressions,
 		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT );
-	RI().Printf( PRINT_ALL, "  dlight projected shader stream: attempts %u, uploads %u, failures %u, skipped %u, records %u, bytes %llu, persistent %u, world %u, dynamic %u, last %u/%u\n",
+	RI().Printf( PRINT_ALL, "  dlight projected shader resource: attempts %u, binds %u, executable %u, suppressed %u, promotions %u, failures %u, records %u, world %u, dynamic %u, binding %u\n",
+		state.projectedShaderResourceAttempts,
+		state.projectedShaderResourceBinds,
+		state.projectedShaderResourceExecutableBinds,
+		state.projectedShaderResourceSuppressedBinds,
+		state.projectedShaderResourceLimitPromotions,
+		state.projectedShaderResourceFailures,
+		state.projectedShaderResourceRecords,
+		state.projectedShaderResourceWorldExecutableBinds,
+		state.projectedShaderResourceDynamicExecutableBinds,
+		GLX_PROJECTED_DLIGHT_STREAM_BINDING );
+	RI().Printf( PRINT_ALL, "  dlight projected shader stream: attempts %u, uploads %u, failures %u, skipped %u, records %u, bytes %llu, persistent %u, world %u, dynamic %u, range %u/%u, range failures %u, clears %u, last %u/%u\n",
 		state.projectedShaderStreamAttempts,
 		state.projectedShaderStreamUploads,
 		state.projectedShaderStreamFailures,
@@ -1776,8 +2484,89 @@ static void GLX_Dlight_PrintInfo( const DlightState &state )
 		state.projectedShaderStreamPersistentUploads,
 		state.projectedShaderStreamWorldUploads,
 		state.projectedShaderStreamDynamicUploads,
+		state.projectedShaderStreamRangeBinds,
+		state.projectedShaderStreamRangeAttempts,
+		state.projectedShaderStreamRangeFailures,
+		state.projectedShaderStreamRangeClears,
 		state.projectedShaderStreamLastOffset,
 		state.projectedShaderStreamLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader arena: reserves %u, uploads %u, failures %u, wraps %u, rejects %u, waits %u, timeouts %u, sync failures %u, bytes %llu, light records %u, list records %u, world records %u, dynamic records %u, range %u/%u, range failures %u, clears %u, authoritative %u/%u, auth failures %u, auth fallbacks %u, auth clears %u, bound %s, cursor %u, last %u/%u/%u\n",
+		state.projectedShaderArenaReserveAttempts,
+		state.projectedShaderArenaUploads,
+		state.projectedShaderArenaFailures,
+		state.projectedShaderArenaWraps,
+		state.projectedShaderArenaSameFrameRejects,
+		state.projectedShaderArenaWaits,
+		state.projectedShaderArenaTimeouts,
+		state.projectedShaderArenaSyncFailures,
+		state.projectedShaderArenaBytes,
+		state.projectedShaderArenaLightRecordUploads,
+		state.projectedShaderArenaListRecordUploads,
+		state.projectedShaderArenaWorldRecords,
+		state.projectedShaderArenaDynamicRecords,
+		state.projectedShaderArenaRangeBinds,
+		state.projectedShaderArenaRangeAttempts,
+		state.projectedShaderArenaRangeFailures,
+		state.projectedShaderArenaRangeClears,
+		state.projectedShaderArenaAuthoritativeBinds,
+		state.projectedShaderArenaAuthoritativeAttempts,
+		state.projectedShaderArenaAuthoritativeFailures,
+		state.projectedShaderArenaAuthoritativeFallbacks,
+		state.projectedShaderArenaAuthoritativeClears,
+		BoolName( state.projectedShaderArenaRangeBound ),
+		state.projectedShaderArenaFrameBytes,
+		state.projectedShaderArenaLastBuffer,
+		state.projectedShaderArenaLastOffset,
+		state.projectedShaderArenaLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader MDI commands: attempts %u, eligible %u, uploads %u, failures %u, skipped %u, records %u, indexes %u, bytes %llu, last %u/%u\n",
+		state.projectedShaderMdiAttempts,
+		state.projectedShaderMdiEligible,
+		state.projectedShaderMdiCommandUploads,
+		state.projectedShaderMdiCommandFailures,
+		state.projectedShaderMdiCommandSkips,
+		state.projectedShaderMdiRecords,
+		state.projectedShaderMdiIndexes,
+		state.projectedShaderMdiCommandBytes,
+		state.projectedShaderMdiLastOffset,
+		state.projectedShaderMdiLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader MDI command ring: reserves %u, commits %u, wraps %u, failures %u, slots %u, cursor %u, last %u/%u/%u/%u\n",
+		state.projectedShaderMdiCommandRingReserves,
+		state.projectedShaderMdiCommandRingCommits,
+		state.projectedShaderMdiCommandRingWraps,
+		state.projectedShaderMdiCommandRingFailures,
+		GLX_PROJECTED_DLIGHT_MDI_COMMAND_RING_LIMIT,
+		state.projectedShaderMdiCommandRingCursor,
+		state.projectedShaderMdiCommandRingLastSlot,
+		state.projectedShaderMdiCommandRingLastBuffer,
+		state.projectedShaderMdiCommandRingLastOffset,
+		state.projectedShaderMdiCommandRingLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader MDI submit: attempts %u, plans %u, ready %u, fallbacks %u, skipped %u, records %u, indexes %u, buffer %u, last %u/%u\n",
+		state.projectedShaderMdiSubmitAttempts,
+		state.projectedShaderMdiSubmitPlans,
+		state.projectedShaderMdiSubmitReady,
+		state.projectedShaderMdiSubmitFallbacks,
+		state.projectedShaderMdiSubmitSkips,
+		state.projectedShaderMdiSubmitRecords,
+		state.projectedShaderMdiSubmitIndexes,
+		state.projectedShaderMdiSubmitLastBuffer,
+		state.projectedShaderMdiSubmitLastOffset,
+		state.projectedShaderMdiSubmitLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader MDI batch: attempts %u, batches %u, ready %u, fallbacks %u, rejects %u, gl errors %u, records %u, indexes %u, submitted %u/%u, largest %u, reject %u, buffer %u, range %u/%u\n",
+		state.projectedShaderMdiBatchAttempts,
+		state.projectedShaderMdiBatchBatches,
+		state.projectedShaderMdiBatchReady,
+		state.projectedShaderMdiBatchFallbacks,
+		state.projectedShaderMdiBatchRejects,
+		state.projectedShaderMdiBatchGlErrors,
+		state.projectedShaderMdiBatchRecords,
+		state.projectedShaderMdiBatchIndexes,
+		state.projectedShaderMdiBatchSubmittedDraws,
+		state.projectedShaderMdiBatchSubmittedIndexes,
+		state.projectedShaderMdiBatchLargest,
+		state.projectedShaderMdiBatchLastReject,
+		state.projectedShaderMdiBatchLastBuffer,
+		state.projectedShaderMdiBatchLastOffset,
+		state.projectedShaderMdiBatchLastBytes );
 }
 
 static const char *GLX_Module_ProfileName( GlxProfile profile )
@@ -2299,9 +3088,14 @@ public:
 		const char *shaderName, int sort, qboolean arenaBound );
 	qboolean PrepareStaticWorldProjectedDlightRun( int firstItem, int itemCount,
 		WorldPacket *packet, ProjectedDlightShaderInput *shaderInput );
-	void StageProjectedDlightShaderInput( const ProjectedDlightShaderInput &shaderInput );
-	void BindStaticWorldProjectedDlightRun( const WorldPacket &packet,
-		const ProjectedDlightShaderInput &shaderInput );
+	qboolean StageProjectedDlightShaderInput( const ProjectedDlightShaderInput &shaderInput,
+		ProjectedDlightResourceRange *resourceRange );
+	qboolean StageProjectedDlightDynamicMdiCommand(
+		const ProjectedDlightDynamicMdiPlan &mdiPlan,
+		ProjectedDlightDynamicMdiCommandUpload *commandUpload );
+	qboolean BindStaticWorldProjectedDlightRun( const WorldPacket &packet,
+		const ProjectedDlightShaderInput &shaderInput,
+		ProjectedDlightShaderExecutionPlan *executionPlan );
 	void ConsumeStaticWorldProjectedDlightRun( const WorldPacket &packet,
 		const ProjectedDlightShaderInput &shaderInput );
 	void ConsumeStaticWorldProjectedDlightRun( int firstItem, int itemCount );
@@ -2876,7 +3670,18 @@ void RendererModule::PrintCaps() const
 		dlight_.projectedShaderUniformDynamicBinds,
 		dlight_.projectedShaderUniformLimitSuppressions,
 		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT );
-	RI().Printf( PRINT_ALL, "  dlight projected shader stream compact: attempts %u, uploads %u, failures %u, skipped %u, records %u, bytes %llu, persistent %u, world %u, dynamic %u, last %u/%u\n",
+	RI().Printf( PRINT_ALL, "  dlight projected shader resource compact: attempts %u, binds %u, executable %u, suppressed %u, promotions %u, failures %u, records %u, world %u, dynamic %u, binding %u\n",
+		dlight_.projectedShaderResourceAttempts,
+		dlight_.projectedShaderResourceBinds,
+		dlight_.projectedShaderResourceExecutableBinds,
+		dlight_.projectedShaderResourceSuppressedBinds,
+		dlight_.projectedShaderResourceLimitPromotions,
+		dlight_.projectedShaderResourceFailures,
+		dlight_.projectedShaderResourceRecords,
+		dlight_.projectedShaderResourceWorldExecutableBinds,
+		dlight_.projectedShaderResourceDynamicExecutableBinds,
+		GLX_PROJECTED_DLIGHT_STREAM_BINDING );
+	RI().Printf( PRINT_ALL, "  dlight projected shader stream compact: attempts %u, uploads %u, failures %u, skipped %u, records %u, bytes %llu, persistent %u, world %u, dynamic %u, range %u/%u, range failures %u, clears %u, last %u/%u\n",
 		dlight_.projectedShaderStreamAttempts,
 		dlight_.projectedShaderStreamUploads,
 		dlight_.projectedShaderStreamFailures,
@@ -2886,8 +3691,89 @@ void RendererModule::PrintCaps() const
 		dlight_.projectedShaderStreamPersistentUploads,
 		dlight_.projectedShaderStreamWorldUploads,
 		dlight_.projectedShaderStreamDynamicUploads,
+		dlight_.projectedShaderStreamRangeBinds,
+		dlight_.projectedShaderStreamRangeAttempts,
+		dlight_.projectedShaderStreamRangeFailures,
+		dlight_.projectedShaderStreamRangeClears,
 		dlight_.projectedShaderStreamLastOffset,
 		dlight_.projectedShaderStreamLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader arena compact: reserves %u, uploads %u, failures %u, wraps %u, rejects %u, waits %u, timeouts %u, sync failures %u, bytes %llu, light records %u, list records %u, world records %u, dynamic records %u, range %u/%u, range failures %u, clears %u, authoritative %u/%u, auth failures %u, auth fallbacks %u, auth clears %u, bound %s, cursor %u, last %u/%u/%u\n",
+		dlight_.projectedShaderArenaReserveAttempts,
+		dlight_.projectedShaderArenaUploads,
+		dlight_.projectedShaderArenaFailures,
+		dlight_.projectedShaderArenaWraps,
+		dlight_.projectedShaderArenaSameFrameRejects,
+		dlight_.projectedShaderArenaWaits,
+		dlight_.projectedShaderArenaTimeouts,
+		dlight_.projectedShaderArenaSyncFailures,
+		dlight_.projectedShaderArenaBytes,
+		dlight_.projectedShaderArenaLightRecordUploads,
+		dlight_.projectedShaderArenaListRecordUploads,
+		dlight_.projectedShaderArenaWorldRecords,
+		dlight_.projectedShaderArenaDynamicRecords,
+		dlight_.projectedShaderArenaRangeBinds,
+		dlight_.projectedShaderArenaRangeAttempts,
+		dlight_.projectedShaderArenaRangeFailures,
+		dlight_.projectedShaderArenaRangeClears,
+		dlight_.projectedShaderArenaAuthoritativeBinds,
+		dlight_.projectedShaderArenaAuthoritativeAttempts,
+		dlight_.projectedShaderArenaAuthoritativeFailures,
+		dlight_.projectedShaderArenaAuthoritativeFallbacks,
+		dlight_.projectedShaderArenaAuthoritativeClears,
+		BoolName( dlight_.projectedShaderArenaRangeBound ),
+		dlight_.projectedShaderArenaFrameBytes,
+		dlight_.projectedShaderArenaLastBuffer,
+		dlight_.projectedShaderArenaLastOffset,
+		dlight_.projectedShaderArenaLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader MDI compact: attempts %u, eligible %u, uploads %u, failures %u, skipped %u, records %u, indexes %u, bytes %llu, last %u/%u\n",
+		dlight_.projectedShaderMdiAttempts,
+		dlight_.projectedShaderMdiEligible,
+		dlight_.projectedShaderMdiCommandUploads,
+		dlight_.projectedShaderMdiCommandFailures,
+		dlight_.projectedShaderMdiCommandSkips,
+		dlight_.projectedShaderMdiRecords,
+		dlight_.projectedShaderMdiIndexes,
+		dlight_.projectedShaderMdiCommandBytes,
+		dlight_.projectedShaderMdiLastOffset,
+		dlight_.projectedShaderMdiLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader MDI command ring compact: reserves %u, commits %u, wraps %u, failures %u, slots %u, cursor %u, last %u/%u/%u/%u\n",
+		dlight_.projectedShaderMdiCommandRingReserves,
+		dlight_.projectedShaderMdiCommandRingCommits,
+		dlight_.projectedShaderMdiCommandRingWraps,
+		dlight_.projectedShaderMdiCommandRingFailures,
+		GLX_PROJECTED_DLIGHT_MDI_COMMAND_RING_LIMIT,
+		dlight_.projectedShaderMdiCommandRingCursor,
+		dlight_.projectedShaderMdiCommandRingLastSlot,
+		dlight_.projectedShaderMdiCommandRingLastBuffer,
+		dlight_.projectedShaderMdiCommandRingLastOffset,
+		dlight_.projectedShaderMdiCommandRingLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader MDI submit compact: attempts %u, plans %u, ready %u, fallbacks %u, skipped %u, records %u, indexes %u, buffer %u, last %u/%u\n",
+		dlight_.projectedShaderMdiSubmitAttempts,
+		dlight_.projectedShaderMdiSubmitPlans,
+		dlight_.projectedShaderMdiSubmitReady,
+		dlight_.projectedShaderMdiSubmitFallbacks,
+		dlight_.projectedShaderMdiSubmitSkips,
+		dlight_.projectedShaderMdiSubmitRecords,
+		dlight_.projectedShaderMdiSubmitIndexes,
+		dlight_.projectedShaderMdiSubmitLastBuffer,
+		dlight_.projectedShaderMdiSubmitLastOffset,
+		dlight_.projectedShaderMdiSubmitLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader MDI batch compact: attempts %u, batches %u, ready %u, fallbacks %u, rejects %u, gl errors %u, records %u, indexes %u, submitted %u/%u, largest %u, reject %u, buffer %u, range %u/%u\n",
+		dlight_.projectedShaderMdiBatchAttempts,
+		dlight_.projectedShaderMdiBatchBatches,
+		dlight_.projectedShaderMdiBatchReady,
+		dlight_.projectedShaderMdiBatchFallbacks,
+		dlight_.projectedShaderMdiBatchRejects,
+		dlight_.projectedShaderMdiBatchGlErrors,
+		dlight_.projectedShaderMdiBatchRecords,
+		dlight_.projectedShaderMdiBatchIndexes,
+		dlight_.projectedShaderMdiBatchSubmittedDraws,
+		dlight_.projectedShaderMdiBatchSubmittedIndexes,
+		dlight_.projectedShaderMdiBatchLargest,
+		dlight_.projectedShaderMdiBatchLastReject,
+		dlight_.projectedShaderMdiBatchLastBuffer,
+		dlight_.projectedShaderMdiBatchLastOffset,
+		dlight_.projectedShaderMdiBatchLastBytes );
 }
 
 void RendererModule::PrintInfo() const
@@ -3510,7 +4396,18 @@ void RendererModule::PrintFrameCounters() const
 		dlight_.projectedShaderUniformDynamicBinds,
 		dlight_.projectedShaderUniformLimitSuppressions,
 		GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT );
-	RI().Printf( PRINT_ALL, "glx: dlight projected shader stream attempts %u uploads %u failures %u skipped %u records %u bytes %llu persistent %u world %u dynamic %u last %u/%u\n",
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader resource attempts %u binds %u executable %u suppressed %u promotions %u failures %u records %u world %u dynamic %u binding %u\n",
+		dlight_.projectedShaderResourceAttempts,
+		dlight_.projectedShaderResourceBinds,
+		dlight_.projectedShaderResourceExecutableBinds,
+		dlight_.projectedShaderResourceSuppressedBinds,
+		dlight_.projectedShaderResourceLimitPromotions,
+		dlight_.projectedShaderResourceFailures,
+		dlight_.projectedShaderResourceRecords,
+		dlight_.projectedShaderResourceWorldExecutableBinds,
+		dlight_.projectedShaderResourceDynamicExecutableBinds,
+		GLX_PROJECTED_DLIGHT_STREAM_BINDING );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader stream attempts %u uploads %u failures %u skipped %u records %u bytes %llu persistent %u world %u dynamic %u range %u/%u rangefail %u clears %u last %u/%u\n",
 		dlight_.projectedShaderStreamAttempts,
 		dlight_.projectedShaderStreamUploads,
 		dlight_.projectedShaderStreamFailures,
@@ -3520,8 +4417,89 @@ void RendererModule::PrintFrameCounters() const
 		dlight_.projectedShaderStreamPersistentUploads,
 		dlight_.projectedShaderStreamWorldUploads,
 		dlight_.projectedShaderStreamDynamicUploads,
+		dlight_.projectedShaderStreamRangeBinds,
+		dlight_.projectedShaderStreamRangeAttempts,
+		dlight_.projectedShaderStreamRangeFailures,
+		dlight_.projectedShaderStreamRangeClears,
 		dlight_.projectedShaderStreamLastOffset,
 		dlight_.projectedShaderStreamLastBytes );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader arena reserves %u uploads %u failures %u wraps %u rejects %u waits %u timeouts %u syncfail %u bytes %llu light-records %u list-records %u world-records %u dynamic-records %u range %u/%u rangefail %u clears %u authoritative %u/%u authfail %u fallbacks %u auth-clears %u bound %s cursor %u last %u/%u/%u\n",
+		dlight_.projectedShaderArenaReserveAttempts,
+		dlight_.projectedShaderArenaUploads,
+		dlight_.projectedShaderArenaFailures,
+		dlight_.projectedShaderArenaWraps,
+		dlight_.projectedShaderArenaSameFrameRejects,
+		dlight_.projectedShaderArenaWaits,
+		dlight_.projectedShaderArenaTimeouts,
+		dlight_.projectedShaderArenaSyncFailures,
+		dlight_.projectedShaderArenaBytes,
+		dlight_.projectedShaderArenaLightRecordUploads,
+		dlight_.projectedShaderArenaListRecordUploads,
+		dlight_.projectedShaderArenaWorldRecords,
+		dlight_.projectedShaderArenaDynamicRecords,
+		dlight_.projectedShaderArenaRangeBinds,
+		dlight_.projectedShaderArenaRangeAttempts,
+		dlight_.projectedShaderArenaRangeFailures,
+		dlight_.projectedShaderArenaRangeClears,
+		dlight_.projectedShaderArenaAuthoritativeBinds,
+		dlight_.projectedShaderArenaAuthoritativeAttempts,
+		dlight_.projectedShaderArenaAuthoritativeFailures,
+		dlight_.projectedShaderArenaAuthoritativeFallbacks,
+		dlight_.projectedShaderArenaAuthoritativeClears,
+		BoolName( dlight_.projectedShaderArenaRangeBound ),
+		dlight_.projectedShaderArenaFrameBytes,
+		dlight_.projectedShaderArenaLastBuffer,
+		dlight_.projectedShaderArenaLastOffset,
+		dlight_.projectedShaderArenaLastBytes );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader MDI attempts %u eligible %u uploads %u failures %u skipped %u records %u idx %u bytes %llu last %u/%u\n",
+		dlight_.projectedShaderMdiAttempts,
+		dlight_.projectedShaderMdiEligible,
+		dlight_.projectedShaderMdiCommandUploads,
+		dlight_.projectedShaderMdiCommandFailures,
+		dlight_.projectedShaderMdiCommandSkips,
+		dlight_.projectedShaderMdiRecords,
+		dlight_.projectedShaderMdiIndexes,
+		dlight_.projectedShaderMdiCommandBytes,
+		dlight_.projectedShaderMdiLastOffset,
+		dlight_.projectedShaderMdiLastBytes );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader MDI command ring reserves %u commits %u wraps %u failures %u slots %u cursor %u last %u/%u/%u/%u\n",
+		dlight_.projectedShaderMdiCommandRingReserves,
+		dlight_.projectedShaderMdiCommandRingCommits,
+		dlight_.projectedShaderMdiCommandRingWraps,
+		dlight_.projectedShaderMdiCommandRingFailures,
+		GLX_PROJECTED_DLIGHT_MDI_COMMAND_RING_LIMIT,
+		dlight_.projectedShaderMdiCommandRingCursor,
+		dlight_.projectedShaderMdiCommandRingLastSlot,
+		dlight_.projectedShaderMdiCommandRingLastBuffer,
+		dlight_.projectedShaderMdiCommandRingLastOffset,
+		dlight_.projectedShaderMdiCommandRingLastBytes );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader MDI submit attempts %u plans %u ready %u fallbacks %u skipped %u records %u idx %u buffer %u last %u/%u\n",
+		dlight_.projectedShaderMdiSubmitAttempts,
+		dlight_.projectedShaderMdiSubmitPlans,
+		dlight_.projectedShaderMdiSubmitReady,
+		dlight_.projectedShaderMdiSubmitFallbacks,
+		dlight_.projectedShaderMdiSubmitSkips,
+		dlight_.projectedShaderMdiSubmitRecords,
+		dlight_.projectedShaderMdiSubmitIndexes,
+		dlight_.projectedShaderMdiSubmitLastBuffer,
+		dlight_.projectedShaderMdiSubmitLastOffset,
+		dlight_.projectedShaderMdiSubmitLastBytes );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader MDI batch attempts %u batches %u ready %u fallbacks %u rejects %u glerr %u records %u idx %u submitted %u/%u largest %u reject %u buffer %u range %u/%u\n",
+		dlight_.projectedShaderMdiBatchAttempts,
+		dlight_.projectedShaderMdiBatchBatches,
+		dlight_.projectedShaderMdiBatchReady,
+		dlight_.projectedShaderMdiBatchFallbacks,
+		dlight_.projectedShaderMdiBatchRejects,
+		dlight_.projectedShaderMdiBatchGlErrors,
+		dlight_.projectedShaderMdiBatchRecords,
+		dlight_.projectedShaderMdiBatchIndexes,
+		dlight_.projectedShaderMdiBatchSubmittedDraws,
+		dlight_.projectedShaderMdiBatchSubmittedIndexes,
+		dlight_.projectedShaderMdiBatchLargest,
+		dlight_.projectedShaderMdiBatchLastReject,
+		dlight_.projectedShaderMdiBatchLastBuffer,
+		dlight_.projectedShaderMdiBatchLastOffset,
+		dlight_.projectedShaderMdiBatchLastBytes );
 	RI().Printf( PRINT_ALL, "glx: stream categories entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, dlight %u/%u, special %u/%u\n",
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_ENTITY],
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_ENTITY],
@@ -3763,9 +4741,14 @@ qboolean RendererModule::DrawElementsClassifiedProjectedDlights( unsigned int mo
 {
 	DynamicDraw draw = GLX_Module_IndexedDrawIR( mode, count, type, indices,
 		legacyReason, profilerPath, materialFlags, categoryMask );
+	ProjectedDlightShaderExecutionPlan projectedExecutionPlan {};
 	ProjectedDlightShaderInput projectedShaderInput {};
+	ProjectedDlightResourceRange projectedResourceRange {};
 	qboolean hasProjectedShaderInput = qfalse;
 	qboolean projectedProgrammable = qfalse;
+	qboolean projectedShaderBound = qfalse;
+	qboolean projectedStreamReady = qfalse;
+	qboolean projectedMdiSubmitted = qfalse;
 
 	if ( draw.role == DynamicDrawRole::DynamicLight && lightMask ) {
 		draw.projectedDlights = GLX_Dlight_BuildProjectedDynamicDlightList(
@@ -3787,11 +4770,77 @@ qboolean RendererModule::DrawElementsClassifiedProjectedDlights( unsigned int mo
 		hasProjectedShaderInput = qtrue;
 		if ( projectedProgrammable &&
 			GLX_RenderIR_TierSupportsDynamicDraw( caps_.tier, draw ) ) {
-			if ( GLX_Dlight_BindProjectedShaderInput( &dlight_,
-					projectedShaderInput ) ) {
-				StageProjectedDlightShaderInput( projectedShaderInput );
+			projectedStreamReady =
+				StageProjectedDlightShaderInput( projectedShaderInput,
+					&projectedResourceRange );
+			projectedShaderBound = GLX_Dlight_BindProjectedShaderInput( &dlight_,
+				projectedShaderInput,
+				projectedStreamReady ? &projectedResourceRange : nullptr,
+				&projectedExecutionPlan );
+			if ( !projectedShaderBound ) {
+				GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
 			}
 		}
+		if ( !projectedShaderBound && GLX_Dlight_CurrentProgram( &dlight_ ) ) {
+			GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+		}
+		ProjectedDlightShaderReplacementPlan replacementPlan =
+			GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+				projectedShaderInput,
+				GLX_Dlight_ProjectedProgramEnabled( dlight_ ),
+				GLX_RenderIR_TierSupportsDynamicDraw( caps_.tier, draw ),
+				projectedExecutionPlan );
+		if ( replacementPlan.legacyFallback ) {
+			GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+			return qfalse;
+		}
+	} else if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {
+		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+	}
+
+	if ( draw.projectedDlights.recordCount > 0 && projectedStreamReady ) {
+		ProjectedDlightDynamicMdiCommandUpload commandUpload {};
+		ProjectedDlightDynamicMdiPlan mdiPlan =
+			GLX_RenderIR_PlanProjectedDlightDynamicMdi( draw, caps_.tier,
+				caps_.features.multiDrawIndirect, qtrue,
+				GLX_Module_IndexStrideBytes( type ),
+				GLX_PROJECTED_DLIGHT_STREAM_ALIGNMENT );
+		if ( StageProjectedDlightDynamicMdiCommand( mdiPlan, &commandUpload ) ) {
+			ProjectedDlightDynamicMdiSubmitPlan submitPlan =
+				GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit( mdiPlan,
+					commandUpload, mode, type,
+					GLX_Dlight_ProjectedMdiEnabled( dlight_ ),
+					&projectedResourceRange,
+					stream_.elementArrayBufferBindingKnown ?
+						stream_.elementArrayBufferBinding : 0u );
+			ProjectedDlightDynamicMdiBatchPlan batchPlan =
+				GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+					&submitPlan, 1, GLX_PROJECTED_DLIGHT_MDI_BATCH_LIMIT );
+			GLX_Dlight_RecordProjectedMdiSubmitPlan( &dlight_, submitPlan );
+			GLX_Dlight_RecordProjectedMdiBatchPlan( &dlight_, batchPlan );
+			GLX_Executor_ConsumeProjectedDlightDynamicMdiPlan(
+				&executor_, mdiPlan );
+			if ( batchPlan.eligible ) {
+				projectedMdiSubmitted =
+					GLX_Dlight_SubmitProjectedMdiBatch( &dlight_, batchPlan );
+			}
+		}
+	}
+
+	if ( projectedMdiSubmitted ) {
+		if ( !GLX_Executor_ConsumeDynamicDraw( &executor_, draw ) ) {
+			dlight_.projectedDynamicIRRejected++;
+		} else {
+			dlight_.projectedDynamicIRProducts++;
+			if ( hasProjectedShaderInput ) {
+				GLX_Dlight_RecordProjectedShaderInput( &dlight_,
+					projectedShaderInput );
+			}
+		}
+		if ( profilerPath >= 0 ) {
+			GLX_Profiler_RecordDraw( &profiler_, count, profilerPath );
+		}
+		return qtrue;
 	}
 
 	if ( !GLX_Executor_ExecuteDynamicDraw( &executor_, draw ) ) {
@@ -3831,6 +4880,9 @@ qboolean RendererModule::DrawArraysClassified( unsigned int mode, int first, int
 		}
 	}
 
+	if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {
+		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+	}
 	if ( !GLX_Executor_ExecuteDynamicDraw( &executor_, draw ) ) {
 		return qfalse;
 	}
@@ -3927,7 +4979,8 @@ void RendererModule::UnbindMaterial()
 qboolean RendererModule::DlightProgramAvailable( qboolean linear, int fogMode,
 	qboolean absLight, qboolean shadow )
 {
-	return GLX_Dlight_ProgramAvailable( &dlight_, linear, fogMode, absLight, shadow );
+	return GLX_Dlight_ProgramAvailable( &dlight_, linear, fogMode, absLight, shadow,
+		GLX_Dlight_ProjectedStreamShaderEnabled( dlight_, caps_.tier ) );
 }
 
 qboolean RendererModule::BindDlightProgram( qboolean linear, int fogMode,
@@ -3939,6 +4992,7 @@ qboolean RendererModule::BindDlightProgram( qboolean linear, int fogMode,
 {
 	GLX_Material_Unbind( &material_ );
 	return GLX_Dlight_BindProgram( &dlight_, linear, fogMode, absLight, shadow,
+		GLX_Dlight_ProjectedStreamShaderEnabled( dlight_, caps_.tier ),
 		eyePos, lightPos, lightColor, lightVector, texFactors, dlightFactors,
 		fogDistanceVector, fogDepthVector, fogEyeT,
 		dlightShadow, shadowAtlas, shadowDepth, shadowFilter );
@@ -4447,16 +5501,23 @@ qboolean RendererModule::PrepareStaticWorldProjectedDlightRun( int firstItem,
 	return GLX_RenderIR_ValidateProjectedDlightShaderInput( *shaderInput );
 }
 
-void RendererModule::StageProjectedDlightShaderInput(
-	const ProjectedDlightShaderInput &shaderInput )
+qboolean RendererModule::StageProjectedDlightShaderInput(
+	const ProjectedDlightShaderInput &shaderInput,
+	ProjectedDlightResourceRange *resourceRange )
 {
-	ProjectedDlightStreamRecord records[GLX_RENDER_IR_PROJECTED_DLIGHT_RECORD_LIMIT] {};
 	StreamReservation reservation {};
 	ProjectedDlightShaderStreamPlan streamPlan {};
+	unsigned int uploadBytes;
+	unsigned int lightRecords;
+	unsigned int listRecords;
+	qboolean rangeReady = qfalse;
 
+	if ( resourceRange ) {
+		*resourceRange = {};
+	}
 	if ( !GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) ||
 		!shaderInput.programmable || !GLX_Dlight_ProjectedProgramEnabled( dlight_ ) ) {
-		return;
+		return qfalse;
 	}
 
 	dlight_.projectedShaderStreamAttempts++;
@@ -4468,30 +5529,46 @@ void RendererModule::StageProjectedDlightShaderInput(
 		GLX_PROJECTED_DLIGHT_STREAM_ALIGNMENT );
 	if ( !streamPlan.upload ) {
 		dlight_.projectedShaderStreamSkips++;
-		return;
+		return qfalse;
 	}
 
-	if ( !GLX_Dlight_FillProjectedStreamRecords( &dlight_, shaderInput, records ) ) {
+	if ( !GLX_Dlight_FillProjectedStreamRecords( &dlight_, shaderInput,
+			dlight_.projectedShaderArenaLightRecords ) ) {
 		dlight_.projectedShaderStreamFailures++;
-		return;
+		dlight_.projectedShaderArenaFailures++;
+		return qfalse;
 	}
+	listRecords = static_cast<unsigned int>(
+		GLX_Dlight_FillProjectedArenaListRecords( &dlight_, shaderInput ) );
+	lightRecords = static_cast<unsigned int>( shaderInput.projectedDlights.recordCount );
+	uploadBytes = streamPlan.uploadPlan.bytes;
 
+	dlight_.projectedShaderArenaReserveAttempts++;
 	if ( !GLX_Stream_Reserve( &stream_, streamPlan.uploadPlan.bytes,
 			static_cast<size_t>( streamPlan.uploadPlan.alignment ), &reservation ) ) {
 		dlight_.projectedShaderStreamFailures++;
-		return;
+		dlight_.projectedShaderArenaFailures++;
+		return qfalse;
 	}
+	GLX_Dlight_RecordProjectedShaderArenaReservation( &dlight_, reservation );
 
-	if ( !GLX_Stream_Upload( &stream_, &reservation, records,
+	if ( !GLX_Stream_Upload( &stream_, &reservation,
+			dlight_.projectedShaderArenaLightRecords,
 			streamPlan.uploadPlan.bytes ) ) {
 		dlight_.projectedShaderStreamFailures++;
+		dlight_.projectedShaderArenaFailures++;
 		GLX_Stream_Commit( &stream_, &reservation );
 		GLX_Stream_RecordDlightReservation( &stream_, reservation );
-		return;
+		return qfalse;
 	}
 
 	GLX_Stream_Commit( &stream_, &reservation );
 	GLX_Stream_RecordDlightReservation( &stream_, reservation );
+	rangeReady = GLX_Dlight_BindProjectedStreamRange( &dlight_, reservation.buffer,
+		reservation.offset, reservation.bytes );
+	GLX_Dlight_RecordProjectedShaderArenaRange( &dlight_, rangeReady );
+	GLX_Dlight_RecordProjectedShaderArenaUpload( &dlight_, shaderInput, reservation,
+		uploadBytes, lightRecords, listRecords );
 	dlight_.projectedShaderStreamUploads++;
 	dlight_.projectedShaderStreamRecords +=
 		static_cast<unsigned int>( shaderInput.projectedDlights.recordCount );
@@ -4509,26 +5586,114 @@ void RendererModule::StageProjectedDlightShaderInput(
 	} else if ( shaderInput.target == ProjectedDlightShaderTarget::DynamicDraw ) {
 		dlight_.projectedShaderStreamDynamicUploads++;
 	}
+	if ( rangeReady && resourceRange ) {
+		resourceRange->valid = qtrue;
+		resourceRange->authoritative = qtrue;
+		resourceRange->buffer = reservation.buffer;
+		resourceRange->offset = dlight_.projectedShaderStreamLastOffset;
+		resourceRange->bytes = dlight_.projectedShaderStreamLastBytes;
+	}
+	return rangeReady;
 }
 
-void RendererModule::BindStaticWorldProjectedDlightRun( const WorldPacket &packet,
-	const ProjectedDlightShaderInput &shaderInput )
+qboolean RendererModule::StageProjectedDlightDynamicMdiCommand(
+	const ProjectedDlightDynamicMdiPlan &mdiPlan,
+	ProjectedDlightDynamicMdiCommandUpload *commandUpload )
 {
+	StreamReservation reservation {};
+	ProjectedDlightDynamicMdiCommandUpload *ringUpload;
+	unsigned int ringSlot;
+
+	if ( commandUpload ) {
+		*commandUpload = {};
+	}
+	dlight_.projectedShaderMdiAttempts++;
+	if ( !mdiPlan.valid || !mdiPlan.commandReady || !mdiPlan.eligible ||
+		mdiPlan.commandUploadPlan.bytes == 0 ) {
+		dlight_.projectedShaderMdiCommandSkips++;
+		return qfalse;
+	}
+
+	dlight_.projectedShaderMdiEligible++;
+	ringSlot = 0u;
+	ringUpload = GLX_Dlight_ReserveProjectedMdiCommandRingSlot( &dlight_,
+		&ringSlot );
+	if ( !ringUpload ) {
+		dlight_.projectedShaderMdiCommandFailures++;
+		dlight_.projectedShaderMdiCommandRingFailures++;
+		return qfalse;
+	}
+
+	if ( !GLX_Stream_Reserve( &stream_, mdiPlan.commandUploadPlan.bytes,
+			static_cast<size_t>( mdiPlan.commandUploadPlan.alignment ), &reservation ) ) {
+		dlight_.projectedShaderMdiCommandFailures++;
+		dlight_.projectedShaderMdiCommandRingFailures++;
+		return qfalse;
+	}
+
+	dlight_.projectedShaderMdiCommandRecords[ringSlot] = mdiPlan.command;
+	if ( !GLX_Stream_Upload( &stream_, &reservation,
+			&dlight_.projectedShaderMdiCommandRecords[ringSlot],
+			mdiPlan.commandUploadPlan.bytes ) ) {
+		dlight_.projectedShaderMdiCommandFailures++;
+		dlight_.projectedShaderMdiCommandRingFailures++;
+		GLX_Stream_Commit( &stream_, &reservation );
+		GLX_Stream_RecordDlightReservation( &stream_, reservation );
+		return qfalse;
+	}
+
+	GLX_Stream_Commit( &stream_, &reservation );
+	GLX_Stream_RecordDlightReservation( &stream_, reservation );
+	dlight_.projectedShaderMdiCommandUploads++;
+	dlight_.projectedShaderMdiRecords += mdiPlan.projectedRecordCount;
+	dlight_.projectedShaderMdiIndexes += mdiPlan.indexCount;
+	dlight_.projectedShaderMdiCommandBytes +=
+		static_cast<unsigned long long>( mdiPlan.commandUploadPlan.bytes );
+	dlight_.projectedShaderMdiLastOffset =
+		static_cast<unsigned int>( reservation.offset > ~0u ? ~0u : reservation.offset );
+	dlight_.projectedShaderMdiLastBytes =
+		static_cast<unsigned int>( reservation.bytes > ~0u ? ~0u : reservation.bytes );
+	ringUpload->valid = qtrue;
+	ringUpload->buffer = reservation.buffer;
+	ringUpload->offset = dlight_.projectedShaderMdiLastOffset;
+	ringUpload->bytes = dlight_.projectedShaderMdiLastBytes;
+	dlight_.projectedShaderMdiCommandRingCommits++;
+	dlight_.projectedShaderMdiCommandRingLastSlot = ringSlot;
+	dlight_.projectedShaderMdiCommandRingLastBuffer = ringUpload->buffer;
+	dlight_.projectedShaderMdiCommandRingLastOffset = ringUpload->offset;
+	dlight_.projectedShaderMdiCommandRingLastBytes = ringUpload->bytes;
+	if ( commandUpload ) {
+		*commandUpload = *ringUpload;
+	}
+	return qtrue;
+}
+
+qboolean RendererModule::BindStaticWorldProjectedDlightRun( const WorldPacket &packet,
+	const ProjectedDlightShaderInput &shaderInput,
+	ProjectedDlightShaderExecutionPlan *executionPlan )
+{
+	if ( executionPlan ) {
+		*executionPlan = {};
+	}
 	if ( !GLX_Dlight_CurrentProgram( &dlight_ ) ) {
-		return;
+		return qfalse;
 	}
 	if ( !GLX_RenderIR_ValidateProjectedDlightShaderInput( shaderInput ) ||
 		!shaderInput.programmable ||
 		!GLX_RenderIR_TierSupportsWorldPacket( caps_.tier, packet ) ) {
 		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
-		return;
+		return qfalse;
 	}
 
-	if ( !GLX_Dlight_BindProjectedShaderInput( &dlight_, shaderInput ) ) {
+	ProjectedDlightResourceRange resourceRange {};
+	qboolean projectedStreamReady =
+		StageProjectedDlightShaderInput( shaderInput, &resourceRange );
+	if ( !GLX_Dlight_BindProjectedShaderInput( &dlight_, shaderInput,
+			projectedStreamReady ? &resourceRange : nullptr, executionPlan ) ) {
 		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
-	} else {
-		StageProjectedDlightShaderInput( shaderInput );
+		return qfalse;
 	}
+	return qtrue;
 }
 
 void RendererModule::ConsumeStaticWorldProjectedDlightRun( const WorldPacket &packet,
@@ -4603,12 +5768,24 @@ qboolean RendererModule::StaticWorldDrawDeviceRun( int indexes, int offsetBytes,
 	const char *shaderName, int sort, qboolean arenaBound )
 {
 	WorldPacket projectedPacket {};
+	ProjectedDlightShaderExecutionPlan projectedExecutionPlan {};
 	ProjectedDlightShaderInput projectedShaderInput {};
 	qboolean hasProjectedShaderInput = PrepareStaticWorldProjectedDlightRun(
 		firstItem, itemCount, &projectedPacket, &projectedShaderInput );
 
 	if ( hasProjectedShaderInput ) {
-		BindStaticWorldProjectedDlightRun( projectedPacket, projectedShaderInput );
+		BindStaticWorldProjectedDlightRun( projectedPacket, projectedShaderInput,
+			&projectedExecutionPlan );
+		ProjectedDlightShaderReplacementPlan replacementPlan =
+			GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+				projectedShaderInput,
+				GLX_Dlight_ProjectedProgramEnabled( dlight_ ),
+				GLX_RenderIR_TierSupportsWorldPacket( caps_.tier, projectedPacket ),
+				projectedExecutionPlan );
+		if ( replacementPlan.legacyFallback ) {
+			GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
+			return qfalse;
+		}
 	} else if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {
 		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
 	}
@@ -4631,6 +5808,22 @@ qboolean RendererModule::StaticWorldDrawDeviceRuns( int runCount, const int *cou
 	const char *shaderName, int sort, qboolean arenaBound )
 {
 	unsigned int totalIndexes = 0;
+
+	if ( GLX_Dlight_ProjectedProgramEnabled( dlight_ ) && counts && firstItems &&
+		itemCounts ) {
+		for ( int i = 0; i < runCount; i++ ) {
+			WorldPacket projectedPacket {};
+			ProjectedDlightShaderInput projectedShaderInput {};
+
+			if ( counts[i] <= 0 ) {
+				continue;
+			}
+			if ( PrepareStaticWorldProjectedDlightRun( firstItems[i],
+				itemCounts[i], &projectedPacket, &projectedShaderInput ) ) {
+				return qfalse;
+			}
+		}
+	}
 
 	if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {
 		GLX_Dlight_ClearProjectedShaderInput( &dlight_ );
@@ -4677,6 +5870,22 @@ int RendererModule::StaticWorldDrawDeviceRunsFiltered( int runCount, const int *
 		shaderName, sort, arenaBound );
 	if ( drawnRunsCount > 0 ) {
 		return drawnRunsCount;
+	}
+
+	if ( GLX_Dlight_ProjectedProgramEnabled( dlight_ ) && counts && firstItems &&
+		itemCounts ) {
+		for ( int i = 0; i < runCount; i++ ) {
+			WorldPacket projectedPacket {};
+			ProjectedDlightShaderInput projectedShaderInput {};
+
+			if ( ( drawnRuns && drawnRuns[i] ) || counts[i] <= 0 ) {
+				continue;
+			}
+			if ( PrepareStaticWorldProjectedDlightRun( firstItems[i],
+				itemCounts[i], &projectedPacket, &projectedShaderInput ) ) {
+				return 0;
+			}
+		}
 	}
 
 	if ( GLX_Dlight_CurrentProgram( &dlight_ ) ) {

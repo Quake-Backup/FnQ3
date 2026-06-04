@@ -584,6 +584,81 @@ static void RB_BeginDrawingView( void ) {
 #ifdef USE_PMLIGHT
 static void RB_LightingPass( void );
 static void RB_CSMShadowReceiverPass( drawSurf_t *drawSurfs, int numDrawSurfs );
+static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs );
+static void RB_RenderDlightShadowAtlas( void );
+static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs );
+
+static qboolean RB_ShadowManagerPreMainPass( shadowManagerPass_t pass )
+{
+	switch ( pass ) {
+		case SHADOW_MANAGER_PASS_CSM_ATLAS:
+		case SHADOW_MANAGER_PASS_POINT_ATLAS:
+		case SHADOW_MANAGER_PASS_SPOT_ATLAS:
+			return qtrue;
+		default:
+			return qfalse;
+	}
+}
+
+static void RB_RunShadowManagerPass( shadowManagerPass_t pass,
+	drawSurf_t *drawSurfs, int numDrawSurfs )
+{
+	switch ( pass ) {
+		case SHADOW_MANAGER_PASS_CSM_ATLAS:
+			RB_RenderCSMShadowAtlas( drawSurfs, numDrawSurfs );
+			break;
+		case SHADOW_MANAGER_PASS_POINT_ATLAS:
+			RB_RenderDlightShadowAtlas();
+			break;
+		case SHADOW_MANAGER_PASS_SPOT_ATLAS:
+			RB_RenderSpotShadowAtlas( drawSurfs, numDrawSurfs );
+			break;
+		case SHADOW_MANAGER_PASS_CSM_RECEIVER:
+			RB_CSMShadowReceiverPass( drawSurfs, numDrawSurfs );
+			break;
+		default:
+			break;
+	}
+}
+
+static void RB_RunScheduledShadowManagerPass( shadowManagerPass_t pass,
+	drawSurf_t *drawSurfs, int numDrawSurfs )
+{
+	if ( tr.shadowManager.planned &&
+		!R_ShadowManagerPassScheduled( &tr.shadowManager, pass ) ) {
+		return;
+	}
+
+	RB_RunShadowManagerPass( pass, drawSurfs, numDrawSurfs );
+}
+
+static void RB_RunScheduledShadowManagerPreMainPasses( drawSurf_t *drawSurfs, int numDrawSurfs )
+{
+	static const shadowManagerPass_t fallbackPassOrder[] = {
+		SHADOW_MANAGER_PASS_CSM_ATLAS,
+		SHADOW_MANAGER_PASS_POINT_ATLAS,
+		SHADOW_MANAGER_PASS_SPOT_ATLAS
+	};
+	const shadowManagerPass_t *passOrder;
+	int passCount;
+	int i;
+
+	if ( tr.shadowManager.planned ) {
+		passOrder = tr.shadowManager.scheduledPassOrder;
+		passCount = MIN( tr.shadowManager.scheduledPasses,
+			SHADOW_MANAGER_MAX_SCHEDULED_PASSES );
+	} else {
+		passOrder = fallbackPassOrder;
+		passCount = (int)ARRAY_LEN( fallbackPassOrder );
+	}
+
+	for ( i = 0; i < passCount; i++ ) {
+		if ( !RB_ShadowManagerPreMainPass( passOrder[i] ) ) {
+			continue;
+		}
+		RB_RunScheduledShadowManagerPass( passOrder[i], drawSurfs, numDrawSurfs );
+	}
+}
 #endif
 
 /*
@@ -673,7 +748,8 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 			if ( backEnd.refdef.numLitSurfs && oldShaderSort < INSERT_POINT && shader->sort >= INSERT_POINT ) {
 				//RB_BeginDrawingLitSurfs(); // no need, already setup in RB_BeginDrawingView()
 				if ( !csmReceiverDrawn ) {
-					RB_CSMShadowReceiverPass( drawSurfs, numDrawSurfs );
+					RB_RunScheduledShadowManagerPass( SHADOW_MANAGER_PASS_CSM_RECEIVER,
+						drawSurfs, numDrawSurfs );
 					csmReceiverDrawn = qtrue;
 					oldEntityNum = -1;
 				}
@@ -826,7 +902,8 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 
 #ifdef USE_PMLIGHT
 	if ( !csmReceiverDrawn ) {
-		RB_CSMShadowReceiverPass( drawSurfs, numDrawSurfs );
+		RB_RunScheduledShadowManagerPass( SHADOW_MANAGER_PASS_CSM_RECEIVER,
+			drawSurfs, numDrawSurfs );
 	}
 #endif
 
@@ -1267,7 +1344,8 @@ static qboolean RB_DlightShadowsNeeded( void )
 	}
 
 	if ( tr.shadowManager.planned ) {
-		return tr.shadowManager.pointAtlasScheduled;
+		return R_ShadowManagerPassScheduled( &tr.shadowManager,
+			SHADOW_MANAGER_PASS_POINT_ATLAS );
 	}
 
 	for ( i = 0; i < backEnd.viewParms.num_dlights; i++ ) {
@@ -2306,7 +2384,9 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 	int surfaces;
 	double originalTime;
 
-	if ( ( tr.shadowManager.planned && !tr.shadowManager.csmAtlasScheduled ) ||
+	if ( ( tr.shadowManager.planned &&
+			!R_ShadowManagerPassScheduled( &tr.shadowManager,
+				SHADOW_MANAGER_PASS_CSM_ATLAS ) ) ||
 		!tr.csm.enabled || !vk_csm_shadow_atlas_available() ||
 		RB_CSMShadowCountDrawSurfs( drawSurfs, numDrawSurfs ) <= 0 ) {
 		return;
@@ -2319,8 +2399,8 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 		rb_csmShadowCache.signature == signature ) {
 		backEnd.pc.c_csmShadowAtlasCacheHits++;
 		vk_mark_csm_shadow_atlas_rendered();
-		tr.shadowManager.csmAtlasPublished = vk_csm_shadow_atlas_ready();
-		tr.shadowManager.csmAtlasGeneration = generation;
+		R_ShadowManagerPublishCSMAtlas( &tr.shadowManager,
+			vk_csm_shadow_atlas_ready(), generation );
 		return;
 	}
 	if ( cacheable ) {
@@ -2372,8 +2452,8 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 	vk_update_mvp( NULL );
 	vk_end_csm_shadow_render_pass();
 	backEnd.pc.c_csmShadowAtlasMsec += ri.Milliseconds() - startMsec;
-	tr.shadowManager.csmAtlasPublished = vk_csm_shadow_atlas_ready();
-	tr.shadowManager.csmAtlasGeneration = generation;
+	R_ShadowManagerPublishCSMAtlas( &tr.shadowManager,
+		vk_csm_shadow_atlas_ready(), generation );
 
 	if ( cacheable && surfaces > 0 ) {
 		rb_csmShadowCache.valid = qtrue;
@@ -2485,7 +2565,9 @@ static void RB_CSMShadowReceiverPass( drawSurf_t *drawSurfs, int numDrawSurfs )
 	int cascadeIndex;
 
 	if ( ( tr.shadowManager.planned &&
-			( !tr.shadowManager.csmReceiverScheduled || !tr.shadowManager.csmAtlasPublished ) ) ||
+			( !R_ShadowManagerPassScheduled( &tr.shadowManager,
+					SHADOW_MANAGER_PASS_CSM_RECEIVER ) ||
+				!tr.shadowManager.csmAtlasPublication.published ) ) ||
 		!tr.csm.enabled ||
 		( !tr.shadowManager.planned && !vk_csm_shadow_atlas_ready() ) ||
 		RB_CSMShadowCountDrawSurfs( drawSurfs, numDrawSurfs ) <= 0 ) {
@@ -2806,7 +2888,9 @@ static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 	int i;
 	double originalTime;
 
-	if ( !tr.shadowManager.planned || !tr.shadowManager.spotAtlasScheduled ||
+	if ( !tr.shadowManager.planned ||
+		!R_ShadowManagerPassScheduled( &tr.shadowManager,
+			SHADOW_MANAGER_PASS_SPOT_ATLAS ) ||
 		tr.shadowManager.spotPlanCount <= 0 || !vk_spot_shadow_atlas_available() ) {
 		return;
 	}
@@ -2856,8 +2940,8 @@ static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 	tess.depthRange = DEPTH_RANGE_NORMAL;
 	vk_update_mvp( NULL );
 	vk_end_spot_shadow_render_pass();
-	tr.shadowManager.spotAtlasPublished = vk_spot_shadow_atlas_ready();
-	tr.shadowManager.spotAtlasGeneration = atlasGeneration;
+	R_ShadowManagerPublishSpotAtlas( &tr.shadowManager,
+		vk_spot_shadow_atlas_ready(), atlasGeneration );
 }
 
 static void RB_RenderDlightShadowAtlas( void )
@@ -2978,8 +3062,8 @@ static void RB_RenderDlightShadowAtlas( void )
 	tess.depthRange = DEPTH_RANGE_NORMAL;
 	vk_update_mvp( NULL );
 	vk_end_dlight_shadow_render_pass();
-	tr.shadowManager.pointAtlasPublished = vk_dlight_shadow_atlas_ready();
-	tr.shadowManager.pointAtlasGeneration = atlasGeneration;
+	R_ShadowManagerPublishPointAtlas( &tr.shadowManager,
+		vk_dlight_shadow_atlas_ready(), atlasGeneration );
 	backEnd.pc.c_dlightShadowAtlasMsec += ri.Milliseconds() - startMsec;
 }
 
@@ -3167,6 +3251,9 @@ static const void *RB_DrawSurfs( const void *data ) {
 #ifdef USE_VULKAN
 	qboolean worldCelOutlineDrawn;
 #endif
+#ifdef USE_PMLIGHT
+	const csmPlan_t *managerCSM;
+#endif
 
 	cmd = (const drawSurfsCommand_t *)data;
 
@@ -3180,8 +3267,9 @@ static const void *RB_DrawSurfs( const void *data ) {
 	backEnd.refdef = cmd->refdef;
 	backEnd.viewParms = cmd->viewParms;
 #ifdef USE_PMLIGHT
-	tr.csm = cmd->csm;
 	tr.shadowManager = cmd->shadowManager;
+	managerCSM = R_ShadowManagerCSMPlan( &tr.shadowManager );
+	tr.csm = managerCSM ? *managerCSM : cmd->csm;
 #endif
 
 #ifdef USE_VBO
@@ -3189,9 +3277,7 @@ static const void *RB_DrawSurfs( const void *data ) {
 #endif
 
 #ifdef USE_PMLIGHT
-	RB_RenderCSMShadowAtlas( cmd->drawSurfs, cmd->numDrawSurfs );
-	RB_RenderDlightShadowAtlas();
-	RB_RenderSpotShadowAtlas( cmd->drawSurfs, cmd->numDrawSurfs );
+	RB_RunScheduledShadowManagerPreMainPasses( cmd->drawSurfs, cmd->numDrawSurfs );
 #endif
 
 	// clear the z buffer, set the modelview, etc

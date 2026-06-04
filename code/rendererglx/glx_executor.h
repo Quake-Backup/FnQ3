@@ -64,6 +64,9 @@ struct ExecutorState {
 	unsigned int highEndAggressiveStaticProducts;
 	unsigned int highEndPostNodes;
 	unsigned int highEndMaterialPlans;
+	unsigned int highEndProjectedDlightMdiCandidates;
+	unsigned int highEndProjectedDlightMdiRecords;
+	unsigned int highEndProjectedDlightMdiIndexes;
 	unsigned int unsupportedStreamUploads;
 	unsigned int unsupportedAdvancedUploads;
 	unsigned int unsupportedPersistentUploads;
@@ -84,7 +87,10 @@ qboolean GLX_Executor_ConsumeMaterial( ExecutorState *state, const MaterialIR &m
 qboolean GLX_Executor_ConsumeUploadPlan( ExecutorState *state, const UploadPlan &plan );
 qboolean GLX_Executor_ConsumePostNode( ExecutorState *state, const PostNode &node );
 qboolean GLX_Executor_ConsumeOutputTransform( ExecutorState *state, const OutputTransform &transform );
+qboolean GLX_Executor_ConsumeDynamicDraw( ExecutorState *state, const DynamicDraw &draw );
 qboolean GLX_Executor_ExecuteDynamicDraw( ExecutorState *state, const DynamicDraw &draw );
+qboolean GLX_Executor_ConsumeProjectedDlightDynamicMdiPlan( ExecutorState *state,
+	const ProjectedDlightDynamicMdiPlan &plan );
 void GLX_Executor_PrintInfo( const ExecutorState &state );
 
 } // namespace glx

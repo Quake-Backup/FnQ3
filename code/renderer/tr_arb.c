@@ -1085,15 +1085,20 @@ static qboolean ARB_DlightShadowParams( const dlight_t *dl, const shadowPointLig
 		atlasFaceSize <= 0 || atlasBaseFace < 0 ||
 		!dlightShadowProgramsCompiled ||
 		( tr.shadowManager.planned ?
-			!tr.shadowManager.pointAtlasPublished : !FBO_DlightShadowsReady() ) ||
+			!tr.shadowManager.pointAtlasPublication.published : !FBO_DlightShadowsReady() ) ||
 		backEnd.currentEntity != &tr.worldEntity ||
 		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
 		backEnd.viewParms.zFar <= 0.0f ) {
 		return qfalse;
 	}
 
-	atlasWidth = FBO_DlightShadowAtlasWidth();
-	atlasHeight = FBO_DlightShadowAtlasHeight();
+	if ( tr.shadowManager.planned ) {
+		atlasWidth = tr.shadowManager.pointAtlasPublication.width;
+		atlasHeight = tr.shadowManager.pointAtlasPublication.height;
+	} else {
+		atlasWidth = FBO_DlightShadowAtlasWidth();
+		atlasHeight = FBO_DlightShadowAtlasHeight();
+	}
 	if ( atlasWidth <= 0 || atlasHeight <= 0 ) {
 		return qfalse;
 	}
@@ -1167,16 +1172,15 @@ static qboolean GLX_SpotShadowParams( const dlight_t *dl, const shadowSpotLightP
 		!dl || !dl->linear || !plan || !plan->atlasAllocated ||
 		plan->atlasTileSize <= 0 || plan->radius <= 0.0f ||
 		!r_spotShadows || !r_spotShadows->integer ||
-		!tr.shadowManager.planned || !tr.shadowManager.spotAtlasPublished ||
-		!FBO_SpotShadowAtlasReady() ||
+		!tr.shadowManager.planned || !tr.shadowManager.spotAtlasPublication.published ||
 		backEnd.currentEntity != &tr.worldEntity ||
 		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
 		backEnd.viewParms.zFar <= 0.0f ) {
 		return qfalse;
 	}
 
-	atlasWidth = FBO_SpotShadowAtlasWidth();
-	atlasHeight = FBO_SpotShadowAtlasHeight();
+	atlasWidth = tr.shadowManager.spotAtlasPublication.width;
+	atlasHeight = tr.shadowManager.spotAtlasPublication.height;
 	if ( atlasWidth <= 0 || atlasHeight <= 0 ) {
 		return qfalse;
 	}
@@ -1221,6 +1225,8 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 	const shadowSpotLightPlan_t *spotPlan;
 	float shadowStrength = 0.0f;
 	float shadowReceiverBiasScale = 0.0f;
+	int atlasWidth;
+	int atlasHeight;
 
 	dlightShadow[0] = dlightShadow[1] = dlightShadow[2] = dlightShadow[3] = 0.0f;
 	shadowAtlas[0] = shadowAtlas[1] = shadowAtlas[2] = shadowAtlas[3] = 0.0f;
@@ -1239,8 +1245,15 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 			R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0];
 	}
 
-	dlightShadow[0] = FBO_DlightShadowAtlasWidth() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasWidth() : 0.0f;
-	dlightShadow[1] = FBO_DlightShadowAtlasHeight() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasHeight() : 0.0f;
+	if ( tr.shadowManager.planned ) {
+		atlasWidth = tr.shadowManager.pointAtlasPublication.width;
+		atlasHeight = tr.shadowManager.pointAtlasPublication.height;
+	} else {
+		atlasWidth = FBO_DlightShadowAtlasWidth();
+		atlasHeight = FBO_DlightShadowAtlasHeight();
+	}
+	dlightShadow[0] = atlasWidth > 0 ? 1.0f / (float)atlasWidth : 0.0f;
+	dlightShadow[1] = atlasHeight > 0 ? 1.0f / (float)atlasHeight : 0.0f;
 	dlightShadow[2] = shadowStrength;
 	dlightShadow[3] = shadowReceiverBiasScale;
 	ARB_DlightShadowFilterOffsets( &shadowFilter[0], &shadowFilter[1] );
@@ -1367,7 +1380,7 @@ qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage )
 #endif
 	} else {
 #ifdef USE_FBO
-		if ( glConfig.numTextureUnits > 2 && tr.shadowManager.spotAtlasPublished &&
+		if ( glConfig.numTextureUnits > 2 && tr.shadowManager.spotAtlasPublication.published &&
 			R_ShadowManagerSpotPlanForDlight( &tr.shadowManager, dl ) ) {
 			FBO_BindSpotShadowTexture( 2 );
 			GL_SelectTexture( 0 );
@@ -1465,7 +1478,7 @@ void ARB_CSMShadowPass( void )
 
 	if ( !programCompiled ||
 		( tr.shadowManager.planned ?
-			!tr.shadowManager.csmAtlasPublished : !FBO_CSMShadowsReady() ) ||
+			!tr.shadowManager.csmAtlasPublication.published : !FBO_CSMShadowsReady() ) ||
 		!tr.csm.enabled || tess.csmCascade < 0 ||
 		tess.csmCascade >= tr.csm.cascadeCount ) {
 		return;
@@ -1473,9 +1486,15 @@ void ARB_CSMShadowPass( void )
 
 	cascadeIndex = tess.csmCascade;
 	cascade = &tr.csm.cascades[cascadeIndex];
-	cascadeSize = FBO_CSMShadowCascadeSize();
-	atlasWidth = FBO_CSMShadowAtlasWidth();
-	atlasHeight = FBO_CSMShadowAtlasHeight();
+	if ( tr.shadowManager.planned ) {
+		cascadeSize = tr.shadowManager.csmAtlasPublication.tileSize;
+		atlasWidth = tr.shadowManager.csmAtlasPublication.width;
+		atlasHeight = tr.shadowManager.csmAtlasPublication.height;
+	} else {
+		cascadeSize = FBO_CSMShadowCascadeSize();
+		atlasWidth = FBO_CSMShadowAtlasWidth();
+		atlasHeight = FBO_CSMShadowAtlasHeight();
+	}
 	if ( cascadeSize <= 0 || atlasWidth <= 0 || atlasHeight <= 0 ) {
 		return;
 	}
@@ -1584,6 +1603,8 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	float shadowFilterOuter = 0.0f;
 	float shadowReceiverBiasScale = 0.0f;
 	float shadowStrength = 0.0f;
+	int atlasWidth;
+	int atlasHeight;
 
 	tess.dlightUpdateParams = qfalse;
 	tess.cullType = tess.shader->cullType;
@@ -1610,6 +1631,13 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	if ( dlightShadow && shadowAtlas[0] > 0.0f ) {
 		shadowReceiverBiasScale =
 			R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0];
+	}
+	if ( tr.shadowManager.planned ) {
+		atlasWidth = tr.shadowManager.pointAtlasPublication.width;
+		atlasHeight = tr.shadowManager.pointAtlasPublication.height;
+	} else {
+		atlasWidth = FBO_DlightShadowAtlasWidth();
+		atlasHeight = FBO_DlightShadowAtlasHeight();
 	}
 
 	if ( dlightShadow && dl->linear ) {
@@ -1648,8 +1676,8 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 		r_dlightFalloff ? r_dlightFalloff->value : 1.0f, 0.0f, 0.0f, 0.0f );
 
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 7,
-		FBO_DlightShadowAtlasWidth() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasWidth() : 0.0f,
-		FBO_DlightShadowAtlasHeight() > 0 ? 1.0f / (float)FBO_DlightShadowAtlasHeight() : 0.0f,
+		atlasWidth > 0 ? 1.0f / (float)atlasWidth : 0.0f,
+		atlasHeight > 0 ? 1.0f / (float)atlasHeight : 0.0f,
 		dlightShadow ? shadowStrength : 0.0f,
 		shadowReceiverBiasScale );
 	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 8, shadowAtlas );
@@ -1667,7 +1695,7 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 #endif
 	} else {
 #ifdef USE_FBO
-		if ( glConfig.numTextureUnits > 2 && tr.shadowManager.spotAtlasPublished &&
+		if ( glConfig.numTextureUnits > 2 && tr.shadowManager.spotAtlasPublication.published &&
 			R_ShadowManagerSpotPlanForDlight( &tr.shadowManager, dl ) ) {
 			FBO_BindSpotShadowTexture( 2 );
 			GL_SelectTexture( 0 );

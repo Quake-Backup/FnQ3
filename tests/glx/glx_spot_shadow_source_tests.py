@@ -16,7 +16,9 @@ def main() -> int:
     failures: list[str] = []
     glx_module = (ROOT / "code/rendererglx/glx_module.cpp").read_text(encoding="utf-8")
     tr_arb = (ROOT / "code/renderer/tr_arb.c").read_text(encoding="utf-8")
+    gl_tr_scene = (ROOT / "code/renderer/tr_scene.c").read_text(encoding="utf-8")
     gl_tr_main = (ROOT / "code/renderer/tr_main.c").read_text(encoding="utf-8")
+    vk_tr_scene = (ROOT / "code/renderervk/tr_scene.c").read_text(encoding="utf-8")
     vk_tr_main = (ROOT / "code/renderervk/tr_main.c").read_text(encoding="utf-8")
     vk_light_frag = (ROOT / "code/renderervk/shaders/light_frag.tmpl").read_text(
         encoding="utf-8"
@@ -144,6 +146,65 @@ def main() -> int:
             source,
             "requestedTileSize = R_ShadowSpotSurfaceRequestedTileSize( proxy,",
             f"{label} surfacelight spot per-proxy tile request",
+            failures,
+        )
+        require(
+            source,
+            "casterRadius = ( proxy->shadowCasterRadius > 0.0f ) ?",
+            f"{label} surfacelight spot bounded caster radius",
+            failures,
+        )
+        require(
+            source,
+            "outerAngle = ( proxy->shadowConeAngle > 0.0f ) ?",
+            f"{label} surfacelight spot per-proxy cone angle",
+            failures,
+        )
+        require(
+            source,
+            "proxy->origin, proxy->normal, proxy->color, casterRadius, proxy->intensity",
+            f"{label} surfacelight spot candidate uses caster radius",
+            failures,
+        )
+        require(
+            source,
+            "R_ShadowManagerAddSpotCandidate( SHADOW_SPOT_SOURCE_STATIC_MAP, i,",
+            f"{label} static sidecar spot atlas candidate",
+            failures,
+        )
+        require(
+            source,
+            "light->innerAngle, light->outerAngle, light->resolution, priority",
+            f"{label} static sidecar spot cone and resolution",
+            failures,
+        )
+        require(
+            source,
+            "manager->spotStaticPlanCount++;",
+            f"{label} static sidecar spot plan accounting",
+            failures,
+        )
+
+    for label, source in (
+        ("OpenGL", gl_tr_scene),
+        ("Vulkan", vk_tr_scene),
+    ):
+        require(
+            source,
+            "RE_AddLinearLightToScene( light->origin, end, light->radius,",
+            f"{label} static sidecar spot preview promotion",
+            failures,
+        )
+        require(
+            source,
+            "dl->shadowSpotSource = SHADOW_SPOT_SOURCE_STATIC_MAP;",
+            f"{label} static sidecar spot source identity",
+            failures,
+        )
+        require(
+            source,
+            "dl->shadowSpotSourceIndex = bestIndex;",
+            f"{label} static sidecar spot source index",
             failures,
         )
 

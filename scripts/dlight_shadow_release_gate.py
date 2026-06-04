@@ -32,6 +32,20 @@ REQUIRED_DLIGHT_SHADOW_CATEGORIES = (
     "alpha-tested-surfaces",
     "portals-mirrors",
     "stress-light-budget",
+    "csm-sky-sun",
+    "csm-shimmer-path",
+    "surfacelight-large-planar",
+    "combined-shadow-atlas",
+    "csm-fallback-no-world",
+    "csm-fallback-no-sun",
+    "csm-fallback-atlas-unavailable",
+    "csm-fallback-zero-cascade",
+)
+REQUIRED_SURFACELIGHT_SPOT_CATEGORIES = (
+    "surfacelight-large-planar",
+)
+REQUIRED_CSM_SHADOW_CATEGORIES = (
+    "csm-sky-sun",
 )
 REQUIRED_RENDERDOC_CHECKS = {
     "glx": (
@@ -223,6 +237,102 @@ def screenshot_categories(shots: list[dict[str, Any]]) -> set[str]:
     return categories
 
 
+def shadow_manager_summary_active(summary: object) -> bool:
+    if not isinstance(summary, dict) or not summary.get("found"):
+        return False
+    maximum = summary.get("max")
+    if not isinstance(maximum, dict):
+        return False
+    return (
+        int_value(maximum.get("scheduledPasses")) > 0
+        and int_value(maximum.get("scheduledMask")) > 0
+        and int_value(maximum.get("pointScheduled")) > 0
+        and int_value(maximum.get("pointPublished")) > 0
+        and int_value(maximum.get("pointPlanned")) > 0
+        and int_value(maximum.get("pointRecords")) > 0
+        and int_value(maximum.get("pointAtlasWidth")) > 0
+        and int_value(maximum.get("pointAtlasHeight")) > 0
+        and int_value(maximum.get("pointAtlasFaceSize")) > 0
+    )
+
+
+def shadow_manager_surface_spot_active(summary: object) -> bool:
+    if not isinstance(summary, dict) or not summary.get("found"):
+        return False
+    maximum = summary.get("max")
+    if not isinstance(maximum, dict):
+        return False
+    return (
+        int_value(maximum.get("spotScheduled")) > 0
+        and int_value(maximum.get("spotPublished")) > 0
+        and int_value(maximum.get("spotSurfacePlans")) > 0
+        and int_value(maximum.get("spotSurfaceCandidates")) > 0
+        and int_value(maximum.get("spotAtlasWidth")) > 0
+        and int_value(maximum.get("spotAtlasHeight")) > 0
+        and int_value(maximum.get("spotAtlasTileSize")) > 0
+    )
+
+
+def surface_light_spot_summary_active(summary: object) -> bool:
+    if not isinstance(summary, dict) or not summary.get("found"):
+        return False
+    maximum = summary.get("max")
+    if not isinstance(maximum, dict):
+        return False
+    return (
+        int_value(maximum.get("surfaceSpotCandidates")) > 0
+        and int_value(maximum.get("surfaceSpotPlans")) > 0
+        and int_value(maximum.get("surfaceSpotAllocated")) > 0
+        and int_value(maximum.get("surfaceSpotAtlasWidth")) > 0
+        and int_value(maximum.get("surfaceSpotAtlasHeight")) > 0
+        and int_value(maximum.get("surfaceSpotAtlasTileSize")) > 0
+        and int_value(maximum.get("surfaceSpotFootprintMax")) > 0
+        and int_value(maximum.get("surfaceSpotCasterRadiusMax")) > 0
+        and int_value(maximum.get("surfaceSpotTileMax")) > 0
+    )
+
+
+def surface_light_spot_lod_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def shadow_manager_csm_active(summary: object) -> bool:
+    if not isinstance(summary, dict) or not summary.get("found"):
+        return False
+    maximum = summary.get("max")
+    if not isinstance(maximum, dict):
+        return False
+    return (
+        int_value(maximum.get("csmAtlasScheduled")) > 0
+        and int_value(maximum.get("csmReceiverScheduled")) > 0
+        and int_value(maximum.get("csmPublished")) > 0
+        and int_value(maximum.get("csmCascadeCount")) > 0
+        and int_value(maximum.get("csmAtlasWidth")) > 0
+        and int_value(maximum.get("csmAtlasHeight")) > 0
+        and int_value(maximum.get("csmGeneration")) > 0
+    )
+
+
+def csm_shadow_runtime_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
+def csm_fallback_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
 def runtime_sweep_failures(renderer: str, manifest: dict[str, Any] | None) -> list[str]:
     failures: list[str] = []
     if manifest is None:
@@ -326,6 +436,16 @@ def runtime_sweep_failures(renderer: str, manifest: dict[str, Any] | None) -> li
         failures.append(f"{renderer} runtime sweep has no active dlight shadow log samples.")
         return failures
 
+    active_manager_logs = [
+        summary.get("shadowManager")
+        for summary in active_logs
+        if shadow_manager_summary_active(summary.get("shadowManager"))
+    ]
+    if not active_manager_logs:
+        failures.append(
+            f"{renderer} runtime sweep has no active shadow manager schedule/publication log samples."
+        )
+
     scene_categories: dict[str, set[str]] = {}
     for shot in shadow_screenshots:
         scene_id = sanitize(shot.get("scene", ""))
@@ -362,6 +482,191 @@ def runtime_sweep_failures(renderer: str, manifest: dict[str, Any] | None) -> li
             + ", ".join(missing_log_categories)
             + "."
         )
+
+    if active_manager_logs:
+        manager_logged_scenes = {
+            sanitize(scene_id)
+            for summary in active_logs
+            if isinstance(summary, dict)
+            and isinstance(summary.get("shadowManager"), dict)
+            and isinstance(summary["shadowManager"].get("scenes"), dict)  # type: ignore[index]
+            for scene_id, scene_summary in summary["shadowManager"]["scenes"].items()  # type: ignore[index]
+            if shadow_manager_summary_active(scene_summary)
+        }
+        manager_logged_categories = {
+            category
+            for scene_id in manager_logged_scenes
+            for category in scene_categories.get(scene_id, set())
+        }
+        missing_manager_categories = [
+            category
+            for category in REQUIRED_DLIGHT_SHADOW_CATEGORIES
+            if category not in manager_logged_categories
+        ]
+        if missing_manager_categories:
+            failures.append(
+                f"{renderer} shadow manager logs are missing category evidence: "
+                + ", ".join(missing_manager_categories)
+                + "."
+            )
+
+    surface_manager_scenes = {
+        sanitize(scene_id)
+        for summary in active_logs
+        if isinstance(summary, dict)
+        and isinstance(summary.get("shadowManager"), dict)
+        and isinstance(summary["shadowManager"].get("scenes"), dict)  # type: ignore[index]
+        for scene_id, scene_summary in summary["shadowManager"]["scenes"].items()  # type: ignore[index]
+        if shadow_manager_surface_spot_active(scene_summary)
+    }
+    if not surface_manager_scenes:
+        failures.append(
+            f"{renderer} runtime sweep has no published surfacelight spot atlas manager samples."
+        )
+    surface_manager_categories = {
+        category
+        for scene_id in surface_manager_scenes
+        for category in scene_categories.get(scene_id, set())
+    }
+    missing_surface_manager_categories = [
+        category
+        for category in REQUIRED_SURFACELIGHT_SPOT_CATEGORIES
+        if category not in surface_manager_categories
+    ]
+    if missing_surface_manager_categories:
+        failures.append(
+            f"{renderer} surfacelight spot atlas manager logs are missing category evidence: "
+            + ", ".join(missing_surface_manager_categories)
+            + "."
+        )
+
+    surface_logged_scenes = {
+        sanitize(scene_id)
+        for summary in shadow_logs
+        if isinstance(summary, dict)
+        and isinstance(summary.get("surfaceLightSpot"), dict)
+        and isinstance(summary["surfaceLightSpot"].get("scenes"), dict)  # type: ignore[index]
+        for scene_id, scene_summary in summary["surfaceLightSpot"]["scenes"].items()  # type: ignore[index]
+        if surface_light_spot_summary_active(scene_summary)
+    }
+    if not surface_logged_scenes:
+        failures.append(f"{renderer} runtime sweep has no active surfacelight spot log samples.")
+    surface_logged_categories = {
+        category
+        for scene_id in surface_logged_scenes
+        for category in scene_categories.get(scene_id, set())
+    }
+    missing_surface_categories = [
+        category
+        for category in REQUIRED_SURFACELIGHT_SPOT_CATEGORIES
+        if category not in surface_logged_categories
+    ]
+    if missing_surface_categories:
+        failures.append(
+            f"{renderer} surfacelight spot logs are missing category evidence: "
+            + ", ".join(missing_surface_categories)
+            + "."
+        )
+
+    surface_lod_scenes = {
+        sanitize(scene_id)
+        for summary in shadow_logs
+        if isinstance(summary, dict)
+        and isinstance(summary.get("surfaceLightSpotLod"), dict)
+        and isinstance(summary["surfaceLightSpotLod"].get("scenes"), dict)  # type: ignore[index]
+        for scene_id, scene_summary in summary["surfaceLightSpotLod"]["scenes"].items()  # type: ignore[index]
+        if surface_light_spot_lod_summary_active(scene_summary)
+    }
+    if not surface_lod_scenes:
+        failures.append(f"{renderer} runtime sweep has no passing surfacelight spot LOD samples.")
+    surface_lod_categories = {
+        category
+        for scene_id in surface_lod_scenes
+        for category in scene_categories.get(scene_id, set())
+    }
+    missing_surface_lod_categories = [
+        category
+        for category in REQUIRED_SURFACELIGHT_SPOT_CATEGORIES
+        if category not in surface_lod_categories
+    ]
+    if missing_surface_lod_categories:
+        failures.append(
+            f"{renderer} surfacelight spot LOD logs are missing category evidence: "
+            + ", ".join(missing_surface_lod_categories)
+            + "."
+        )
+
+    csm_manager_scenes = {
+        sanitize(scene_id)
+        for summary in active_logs
+        if isinstance(summary, dict)
+        and isinstance(summary.get("shadowManager"), dict)
+        and isinstance(summary["shadowManager"].get("scenes"), dict)  # type: ignore[index]
+        for scene_id, scene_summary in summary["shadowManager"]["scenes"].items()  # type: ignore[index]
+        if shadow_manager_csm_active(scene_summary)
+    }
+    if not csm_manager_scenes:
+        failures.append(
+            f"{renderer} runtime sweep has no published CSM atlas manager samples."
+        )
+    csm_manager_categories = {
+        category
+        for scene_id in csm_manager_scenes
+        for category in scene_categories.get(scene_id, set())
+    }
+    missing_csm_manager_categories = [
+        category
+        for category in REQUIRED_CSM_SHADOW_CATEGORIES
+        if category not in csm_manager_categories
+    ]
+    if missing_csm_manager_categories:
+        failures.append(
+            f"{renderer} CSM shadow manager logs are missing category evidence: "
+            + ", ".join(missing_csm_manager_categories)
+            + "."
+        )
+
+    csm_logged_scenes = {
+        sanitize(scene_id)
+        for summary in shadow_logs
+        if isinstance(summary, dict)
+        and isinstance(summary.get("csmShadows"), dict)
+        and isinstance(summary["csmShadows"].get("scenes"), dict)  # type: ignore[index]
+        for scene_id, scene_summary in summary["csmShadows"]["scenes"].items()  # type: ignore[index]
+        if csm_shadow_runtime_summary_active(scene_summary)
+    }
+    if not csm_logged_scenes:
+        failures.append(f"{renderer} runtime sweep has no passing CSM runtime smoke samples.")
+    csm_logged_categories = {
+        category
+        for scene_id in csm_logged_scenes
+        for category in scene_categories.get(scene_id, set())
+    }
+    missing_csm_categories = [
+        category
+        for category in REQUIRED_CSM_SHADOW_CATEGORIES
+        if category not in csm_logged_categories
+    ]
+    if missing_csm_categories:
+        failures.append(
+            f"{renderer} CSM runtime logs are missing category evidence: "
+            + ", ".join(missing_csm_categories)
+            + "."
+        )
+
+    csm_fallback_summaries = [
+        summary
+        for run in shadow_runs
+        for summary in (
+            run.get("csmFallbacks"),
+            run.get("dlightShadow", {}).get("csmFallbacks")
+            if isinstance(run.get("dlightShadow"), dict)
+            else None,
+        )
+        if isinstance(summary, dict)
+    ]
+    if not any(csm_fallback_summary_active(summary) for summary in csm_fallback_summaries):
+        failures.append(f"{renderer} runtime sweep has no passing CSM fallback smoke samples.")
 
     return failures
 

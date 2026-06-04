@@ -44,6 +44,7 @@ def check_backend(
 ) -> None:
     backend = (ROOT / backend_path).read_text(encoding="utf-8")
     header = (ROOT / header_path).read_text(encoding="utf-8")
+    end_render = "FBO_EndCSMShadowAtlas();" if label == "OpenGL" else "vk_end_csm_shadow_render_pass();"
 
     signature = section(
         backend,
@@ -105,8 +106,8 @@ def check_backend(
             "if ( cacheable && rb_csmShadowCache.valid &&",
             "backEnd.pc.c_csmShadowAtlasCacheHits++;",
             mark_rendered,
-            f"tr.shadowManager.csmAtlasPublished = {atlas_ready};",
-            "tr.shadowManager.csmAtlasGeneration = generation;",
+            "R_ShadowManagerPublishCSMAtlas( &tr.shadowManager,",
+            f"{atlas_ready}, generation );",
             "return;",
             "if ( cacheable ) {",
             "backEnd.pc.c_csmShadowAtlasCacheMisses++;",
@@ -119,8 +120,9 @@ def check_backend(
     require_order(
         render,
         [
-            f"tr.shadowManager.csmAtlasPublished = {atlas_ready};",
-            "tr.shadowManager.csmAtlasGeneration = generation;",
+            end_render,
+            "R_ShadowManagerPublishCSMAtlas( &tr.shadowManager,",
+            f"{atlas_ready}, generation );",
             "if ( cacheable && surfaces > 0 ) {",
             "rb_csmShadowCache.valid = qtrue;",
             "rb_csmShadowCache.generation = generation;",
@@ -133,7 +135,7 @@ def check_backend(
     )
     require(
         receiver_gate,
-        "( !tr.shadowManager.csmReceiverScheduled || !tr.shadowManager.csmAtlasPublished )",
+        "( !R_ShadowManagerPassScheduled( &tr.shadowManager,\n\t\t\t\t\tSHADOW_MANAGER_PASS_CSM_RECEIVER ) ||\n\t\t\t\t!tr.shadowManager.csmAtlasPublication.published )",
         f"{label} manager publication receiver gate",
         failures,
     )
@@ -179,6 +181,8 @@ def check_debug(label: str, path: str, failures: list[str]) -> None:
         failures,
     )
     require(debug, "cache h/m/u:%i/%i/%i", f"{label} cache debug label", failures)
+    require(debug, "snap depth:%.0f %.0f %.0f %.0f", f"{label} snapped light-depth debug label", failures)
+    require(debug, "snapDepth[0], snapDepth[1], snapDepth[2], snapDepth[3]", f"{label} snapped light-depth debug args", failures)
     require(debug, "cpu:%ims", f"{label} CSM CPU debug label", failures)
     require(debug, "backEnd.pc.c_csmShadowAtlasCacheHits", f"{label} cache hit debug arg", failures)
     require(debug, "backEnd.pc.c_csmShadowAtlasCacheMisses", f"{label} cache miss debug arg", failures)

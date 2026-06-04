@@ -6,6 +6,7 @@
 #include "../renderercommon/tr_glx_public.h"
 
 #include <cmath>
+#include <cstdint>
 
 namespace glx {
 
@@ -242,6 +243,127 @@ struct ProjectedDlightShaderStreamPlan {
 	int recordCount;
 	unsigned int bytes;
 	UploadPlan uploadPlan;
+};
+
+struct ProjectedDlightResourceRange {
+	qboolean valid;
+	qboolean authoritative;
+	unsigned int buffer;
+	unsigned int offset;
+	unsigned int bytes;
+};
+
+enum class ProjectedDlightShaderBackend {
+	None,
+	UniformWindow,
+	StreamResource
+};
+
+struct ProjectedDlightShaderExecutionPlan {
+	qboolean valid;
+	qboolean execute;
+	qboolean limitSuppressed;
+	qboolean resourcePromoted;
+	qboolean projectedResourceBound;
+	qboolean projectedResourceAuthoritative;
+	ProjectedDlightShaderBackend backend;
+	int requestedRecords;
+	int uniformRecords;
+	unsigned int streamRecords;
+	unsigned int truncatedRecords;
+	unsigned int projectedResourceBuffer;
+	unsigned int projectedResourceOffset;
+	unsigned int projectedResourceBytes;
+};
+
+struct ProjectedDlightShaderReplacementPlan {
+	qboolean requested;
+	qboolean replace;
+	qboolean legacyFallback;
+};
+
+struct DrawElementsIndirectCommand {
+	unsigned int count;
+	unsigned int instanceCount;
+	unsigned int firstIndex;
+	int baseVertex;
+	unsigned int baseInstance;
+};
+
+static_assert( sizeof( DrawElementsIndirectCommand ) == 20,
+	"DrawElementsIndirectCommand must match the OpenGL command layout" );
+
+struct ProjectedDlightDynamicMdiPlan {
+	qboolean valid;
+	qboolean eligible;
+	qboolean resourceReady;
+	qboolean indexed;
+	qboolean commandReady;
+	int drawCount;
+	unsigned int indexCount;
+	unsigned int projectedRecordCount;
+	unsigned int commandBytes;
+	DrawElementsIndirectCommand command;
+	UploadPlan commandUploadPlan;
+};
+
+struct ProjectedDlightDynamicMdiCommandUpload {
+	qboolean valid;
+	unsigned int buffer;
+	unsigned int offset;
+	unsigned int bytes;
+};
+
+struct ProjectedDlightDynamicMdiSubmitPlan {
+	qboolean valid;
+	qboolean eligible;
+	qboolean commandUploaded;
+	qboolean projectedResourceBound;
+	qboolean projectedResourceAuthoritative;
+	unsigned int drawCount;
+	unsigned int indexCount;
+	unsigned int projectedRecordCount;
+	unsigned int primitive;
+	unsigned int indexType;
+	unsigned int indexBuffer;
+	unsigned int projectedResourceBuffer;
+	unsigned int projectedResourceOffset;
+	unsigned int projectedResourceBytes;
+	unsigned int commandBuffer;
+	unsigned int commandOffset;
+	unsigned int commandBytes;
+	unsigned int commandStride;
+};
+
+static constexpr unsigned int GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NONE = 0u;
+static constexpr unsigned int GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INVALID_INPUT = 1u;
+static constexpr unsigned int GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INVALID_PLAN = 2u;
+static constexpr unsigned int GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_STATE = 3u;
+static constexpr unsigned int GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_RESOURCE = 4u;
+static constexpr unsigned int GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INDEX_BUFFER = 5u;
+static constexpr unsigned int GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_COMMAND_BUFFER = 6u;
+static constexpr unsigned int GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NON_CONTIGUOUS_COMMAND = 7u;
+static constexpr unsigned int GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_CAPACITY = 8u;
+
+struct ProjectedDlightDynamicMdiBatchPlan {
+	qboolean valid;
+	qboolean eligible;
+	qboolean projectedResourceAuthoritative;
+	unsigned int drawCount;
+	unsigned int indexCount;
+	unsigned int projectedRecordCount;
+	unsigned int primitive;
+	unsigned int indexType;
+	unsigned int indexBuffer;
+	unsigned int projectedResourceBuffer;
+	unsigned int projectedResourceOffset;
+	unsigned int projectedResourceBytes;
+	unsigned int commandBuffer;
+	unsigned int commandOffset;
+	unsigned int commandBytes;
+	unsigned int commandStride;
+	unsigned int rejectReason;
+	int rejectIndex;
 };
 
 enum class OutputTransfer {
@@ -2066,6 +2188,312 @@ GLX_RenderIR_PlanProjectedDlightStreamUpload(
 	plan.eligible = GLX_RenderIR_TierSupportsUploadPlan( tier, plan.uploadPlan );
 	plan.upload = plan.eligible && persistentStreamReady ? qtrue : qfalse;
 	return plan;
+}
+
+static ID_INLINE ProjectedDlightShaderExecutionPlan
+GLX_RenderIR_PlanProjectedDlightShaderExecution(
+	const ProjectedDlightShaderInput &input, int uniformLimit,
+	qboolean projectedProgramEnabled, qboolean streamShaderAvailable,
+	const ProjectedDlightResourceRange *projectedResource,
+	unsigned int streamRecordBytes, int streamAlignment )
+{
+	ProjectedDlightShaderExecutionPlan plan {};
+	ProjectedDlightShaderUniformPlan uniformPlan;
+	unsigned long long requiredBytes;
+
+	plan.valid = GLX_RenderIR_ValidateProjectedDlightShaderInput( input );
+	if ( !plan.valid ) {
+		return plan;
+	}
+
+	uniformPlan = GLX_RenderIR_PlanProjectedDlightUniformWindow(
+		input, uniformLimit, projectedProgramEnabled );
+	plan.requestedRecords = uniformPlan.requestedRecords;
+	plan.uniformRecords = uniformPlan.uploadRecords;
+	plan.truncatedRecords = uniformPlan.truncatedRecords;
+	plan.limitSuppressed = uniformPlan.limitSuppressed;
+	plan.backend = ProjectedDlightShaderBackend::None;
+
+	requiredBytes = streamRecordBytes == 0 ? 0ull :
+		static_cast<unsigned long long>( plan.requestedRecords ) *
+		static_cast<unsigned long long>( streamRecordBytes );
+	plan.projectedResourceBound =
+		projectedResource && projectedResource->valid &&
+		projectedResource->buffer != 0u && projectedResource->bytes != 0u &&
+		requiredBytes > 0ull && requiredBytes <= projectedResource->bytes &&
+		requiredBytes <= ~0u &&
+		( streamAlignment <= 0 ||
+			( projectedResource->offset % static_cast<unsigned int>( streamAlignment ) ) == 0u )
+			? qtrue : qfalse;
+	plan.projectedResourceAuthoritative = plan.projectedResourceBound &&
+		projectedResource->authoritative ? qtrue : qfalse;
+
+	if ( plan.projectedResourceBound ) {
+		plan.projectedResourceBuffer = projectedResource->buffer;
+		plan.projectedResourceOffset = projectedResource->offset;
+		plan.projectedResourceBytes = projectedResource->bytes;
+	}
+
+	if ( plan.limitSuppressed && input.programmable && projectedProgramEnabled &&
+		streamShaderAvailable && plan.projectedResourceAuthoritative ) {
+		plan.backend = ProjectedDlightShaderBackend::StreamResource;
+		plan.execute = qtrue;
+		plan.limitSuppressed = qfalse;
+		plan.resourcePromoted = qtrue;
+		plan.uniformRecords = 0;
+		plan.streamRecords = static_cast<unsigned int>( plan.requestedRecords );
+		plan.truncatedRecords = 0u;
+		return plan;
+	}
+
+	if ( uniformPlan.execute ) {
+		plan.backend = ProjectedDlightShaderBackend::UniformWindow;
+		plan.execute = qtrue;
+	}
+	return plan;
+}
+
+static ID_INLINE ProjectedDlightShaderReplacementPlan
+GLX_RenderIR_PlanProjectedDlightShaderReplacement(
+	const ProjectedDlightShaderInput &input, qboolean projectedProgramEnabled,
+	qboolean tierSupported, const ProjectedDlightShaderExecutionPlan &executionPlan )
+{
+	ProjectedDlightShaderReplacementPlan plan {};
+
+	if ( !projectedProgramEnabled ||
+		!GLX_RenderIR_ValidateProjectedDlightShaderInput( input ) ) {
+		return plan;
+	}
+
+	plan.requested = qtrue;
+	if ( input.programmable && tierSupported && executionPlan.valid &&
+		executionPlan.execute ) {
+		plan.replace = qtrue;
+	} else {
+		plan.legacyFallback = qtrue;
+	}
+	return plan;
+}
+
+static ID_INLINE qboolean GLX_RenderIR_BuildDrawElementsIndirectCommand(
+	const DynamicDraw &draw, unsigned int indexStrideBytes,
+	DrawElementsIndirectCommand *command )
+{
+	const uintptr_t offsetBytes = reinterpret_cast<uintptr_t>( draw.indices );
+	const uintptr_t firstIndex = indexStrideBytes > 0 ?
+		offsetBytes / indexStrideBytes : 0u;
+
+	if ( command ) {
+		*command = {};
+	}
+	if ( !command || !GLX_RenderIR_ValidateDynamicDraw( draw ) ||
+		draw.kind != DynamicDrawKind::Indexed || draw.count <= 0 ||
+		indexStrideBytes == 0 || offsetBytes % indexStrideBytes != 0 ||
+		firstIndex > static_cast<uintptr_t>( ~0u ) ) {
+		return qfalse;
+	}
+
+	command->count = static_cast<unsigned int>( draw.count );
+	command->instanceCount = 1u;
+	command->firstIndex = static_cast<unsigned int>( firstIndex );
+	command->baseVertex = 0;
+	command->baseInstance = 0u;
+	return qtrue;
+}
+
+static ID_INLINE ProjectedDlightDynamicMdiPlan
+GLX_RenderIR_PlanProjectedDlightDynamicMdi( const DynamicDraw &draw,
+	RenderProductTier tier, qboolean multiDrawIndirectReady,
+	qboolean projectedStreamReady, unsigned int indexStrideBytes, int alignment )
+{
+	ProjectedDlightDynamicMdiPlan plan {};
+
+	plan.valid = GLX_RenderIR_ValidateDynamicDraw( draw );
+	if ( !plan.valid ) {
+		return plan;
+	}
+
+	plan.indexed = draw.kind == DynamicDrawKind::Indexed ? qtrue : qfalse;
+	plan.resourceReady = projectedStreamReady;
+	if ( draw.role != DynamicDrawRole::DynamicLight ||
+		draw.pass != FramePassKind::DynamicLights ||
+		!plan.indexed || draw.count <= 0 ||
+		draw.projectedDlights.recordCount <= 0 ||
+		draw.upload.kind != UploadPlanKind::TransientStream ||
+		draw.legacyReason != GLX_LEGACY_DELEGATION_NONE ) {
+		return plan;
+	}
+
+	plan.commandReady = GLX_RenderIR_BuildDrawElementsIndirectCommand( draw,
+		indexStrideBytes, &plan.command );
+	if ( !plan.commandReady ) {
+		return plan;
+	}
+
+	plan.drawCount = 1;
+	plan.indexCount = static_cast<unsigned int>( draw.count );
+	plan.projectedRecordCount =
+		static_cast<unsigned int>( draw.projectedDlights.recordCount );
+	plan.commandBytes = static_cast<unsigned int>( sizeof( plan.command ) );
+	plan.commandUploadPlan.kind = UploadPlanKind::TransientStream;
+	plan.commandUploadPlan.strategy =
+		static_cast<int>( StreamStrategy::PersistentMapped );
+	plan.commandUploadPlan.bytes = plan.commandBytes;
+	plan.commandUploadPlan.alignment = alignment;
+	plan.commandUploadPlan.sync = UploadSyncPolicy::PersistentFence;
+	plan.eligible = multiDrawIndirectReady && projectedStreamReady &&
+		GLX_RenderIR_TierSupportsUploadPlan( tier, plan.commandUploadPlan ) ?
+		qtrue : qfalse;
+	return plan;
+}
+
+static ID_INLINE ProjectedDlightDynamicMdiSubmitPlan
+GLX_RenderIR_PlanProjectedDlightDynamicMdiSubmit(
+	const ProjectedDlightDynamicMdiPlan &mdiPlan,
+	const ProjectedDlightDynamicMdiCommandUpload &commandUpload,
+	unsigned int primitive, unsigned int indexType, qboolean submitEnabled,
+	const ProjectedDlightResourceRange *projectedResource = nullptr,
+	unsigned int indexBuffer = 0u )
+{
+	ProjectedDlightDynamicMdiSubmitPlan plan {};
+	const unsigned int commandStride =
+		static_cast<unsigned int>( sizeof( DrawElementsIndirectCommand ) );
+
+	plan.commandUploaded = commandUpload.valid &&
+		commandUpload.buffer != 0u &&
+		commandUpload.bytes >= mdiPlan.commandBytes &&
+		commandUpload.offset % 4u == 0u ? qtrue : qfalse;
+	plan.projectedResourceBound = projectedResource &&
+		( projectedResource->valid && projectedResource->buffer != 0u &&
+			projectedResource->bytes != 0u &&
+			projectedResource->offset % 4u == 0u ) ? qtrue : qfalse;
+	plan.projectedResourceAuthoritative = plan.projectedResourceBound &&
+		projectedResource->authoritative ? qtrue : qfalse;
+	plan.valid = mdiPlan.valid && mdiPlan.commandReady && mdiPlan.eligible &&
+		mdiPlan.drawCount > 0 && mdiPlan.commandBytes == commandStride &&
+		plan.commandUploaded && plan.projectedResourceBound &&
+		plan.projectedResourceAuthoritative &&
+		indexType != 0u ? qtrue : qfalse;
+	if ( !plan.valid ) {
+		return plan;
+	}
+
+	plan.drawCount = static_cast<unsigned int>( mdiPlan.drawCount );
+	plan.indexCount = mdiPlan.indexCount;
+	plan.projectedRecordCount = mdiPlan.projectedRecordCount;
+	plan.primitive = primitive;
+	plan.indexType = indexType;
+	plan.indexBuffer = indexBuffer;
+	if ( projectedResource ) {
+		plan.projectedResourceBuffer = projectedResource->buffer;
+		plan.projectedResourceOffset = projectedResource->offset;
+		plan.projectedResourceBytes = projectedResource->bytes;
+	}
+	plan.commandBuffer = commandUpload.buffer;
+	plan.commandOffset = commandUpload.offset;
+	plan.commandBytes = mdiPlan.commandBytes;
+	plan.commandStride = commandStride;
+	plan.eligible = submitEnabled ? qtrue : qfalse;
+	return plan;
+}
+
+static ID_INLINE ProjectedDlightDynamicMdiBatchPlan
+GLX_RenderIR_PlanProjectedDlightDynamicMdiBatch(
+	const ProjectedDlightDynamicMdiSubmitPlan *plans, int planCount,
+	unsigned int maxDrawCount )
+{
+	ProjectedDlightDynamicMdiBatchPlan batch {};
+	const ProjectedDlightDynamicMdiSubmitPlan *first;
+
+	batch.rejectReason = GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INVALID_INPUT;
+	batch.rejectIndex = -1;
+	if ( !plans || planCount <= 0 || maxDrawCount == 0u ) {
+		return batch;
+	}
+
+	first = &plans[0];
+	if ( !first->valid || first->drawCount == 0u ||
+		first->commandStride == 0u || first->commandBytes == 0u ) {
+		batch.rejectReason = GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INVALID_PLAN;
+		batch.rejectIndex = 0;
+		return batch;
+	}
+
+	batch.valid = qtrue;
+	batch.eligible = first->eligible;
+	batch.projectedResourceAuthoritative = first->projectedResourceAuthoritative;
+	batch.drawCount = first->drawCount;
+	batch.indexCount = first->indexCount;
+	batch.projectedRecordCount = first->projectedRecordCount;
+	batch.primitive = first->primitive;
+	batch.indexType = first->indexType;
+	batch.indexBuffer = first->indexBuffer;
+	batch.projectedResourceBuffer = first->projectedResourceBuffer;
+	batch.projectedResourceOffset = first->projectedResourceOffset;
+	batch.projectedResourceBytes = first->projectedResourceBytes;
+	batch.commandBuffer = first->commandBuffer;
+	batch.commandOffset = first->commandOffset;
+	batch.commandBytes = first->commandBytes;
+	batch.commandStride = first->commandStride;
+	batch.rejectReason = GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NONE;
+	batch.rejectIndex = -1;
+
+	for ( int i = 1; i < planCount; i++ ) {
+		const ProjectedDlightDynamicMdiSubmitPlan &next = plans[i];
+		const unsigned int expectedCommandOffset =
+			batch.commandOffset + batch.drawCount * batch.commandStride;
+
+		if ( !next.valid || next.drawCount == 0u ||
+			next.commandStride == 0u || next.commandBytes == 0u ) {
+			batch.rejectReason = GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INVALID_PLAN;
+			batch.rejectIndex = i;
+			break;
+		}
+		if ( batch.drawCount + next.drawCount > maxDrawCount ) {
+			batch.rejectReason = GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_CAPACITY;
+			batch.rejectIndex = i;
+			break;
+		}
+		if ( next.primitive != batch.primitive || next.indexType != batch.indexType ) {
+			batch.rejectReason = GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_STATE;
+			batch.rejectIndex = i;
+			break;
+		}
+		if ( next.projectedResourceBuffer != batch.projectedResourceBuffer ||
+			next.projectedResourceOffset != batch.projectedResourceOffset ||
+			next.projectedResourceBytes != batch.projectedResourceBytes ||
+			next.projectedResourceAuthoritative !=
+				batch.projectedResourceAuthoritative ) {
+			batch.rejectReason = GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_RESOURCE;
+			batch.rejectIndex = i;
+			break;
+		}
+		if ( next.indexBuffer != batch.indexBuffer ) {
+			batch.rejectReason = GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_INDEX_BUFFER;
+			batch.rejectIndex = i;
+			break;
+		}
+		if ( next.commandBuffer != batch.commandBuffer ) {
+			batch.rejectReason = GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_COMMAND_BUFFER;
+			batch.rejectIndex = i;
+			break;
+		}
+		if ( next.commandStride != batch.commandStride ||
+			next.commandBytes != next.drawCount * next.commandStride ||
+			next.commandOffset != expectedCommandOffset ) {
+			batch.rejectReason =
+				GLX_RENDER_IR_PROJECTED_DLIGHT_MDI_BATCH_REJECT_NON_CONTIGUOUS_COMMAND;
+			batch.rejectIndex = i;
+			break;
+		}
+
+		batch.eligible = batch.eligible && next.eligible ? qtrue : qfalse;
+		batch.drawCount += next.drawCount;
+		batch.indexCount += next.indexCount;
+		batch.projectedRecordCount += next.projectedRecordCount;
+		batch.commandBytes += next.commandBytes;
+	}
+	return batch;
 }
 
 static ID_INLINE qboolean GLX_RenderIR_TierSupportsMaterial( RenderProductTier tier,

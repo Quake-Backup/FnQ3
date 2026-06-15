@@ -51,6 +51,10 @@ WinVars_t	g_wv;
 
 #ifndef DEDICATED
 
+// Prefer the high-performance GPU on hybrid Windows systems.
+__declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;		// NVIDIA
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;	// AMD
+
 /*
 ==================
 Sys_LowPhysicalMemory

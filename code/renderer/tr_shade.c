@@ -394,12 +394,15 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 {
 	glxStreamReservation_t reservation;
 	qboolean ok = qtrue;
+	qboolean projectedProgram;
 	int xyzBytes;
 	int colorBytes;
 	int texBytes;
+	int normalBytes;
 	int indexBytes;
 	int colorOffset;
 	int texOffset;
+	int normalOffset;
 	int indexOffset;
 	int totalBytes;
 	int materialFlags;
@@ -435,13 +438,20 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 		return qfalse;
 	}
 
+	// the projected-light shader replacement needs real normals for its
+	// per-fragment front test; stream them only when it can take this draw
+	projectedProgram = ( lightMask && GLX_CompatDlightProjectedProgramEnabled() ) ?
+		qtrue : qfalse;
+
 	xyzBytes = input->numVertexes * (int)sizeof( input->xyz[0] );
 	colorBytes = input->numVertexes * 4 * (int)sizeof( colors[0] );
 	texBytes = input->numVertexes * 2 * (int)sizeof( texCoords[0] );
+	normalBytes = projectedProgram ? input->numVertexes * (int)sizeof( input->normal[0] ) : 0;
 	indexBytes = numIndexes * (int)sizeof( indexes[0] );
 	colorOffset = GLX_CompatAlignInt( xyzBytes, 16 );
 	texOffset = GLX_CompatAlignInt( colorOffset + colorBytes, 16 );
-	indexOffset = GLX_CompatAlignInt( texOffset + texBytes, 16 );
+	normalOffset = GLX_CompatAlignInt( texOffset + texBytes, 16 );
+	indexOffset = GLX_CompatAlignInt( normalOffset + normalBytes, 16 );
 	totalBytes = GLX_CompatAlignInt( indexOffset + indexBytes, 64 );
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
@@ -457,6 +467,10 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 		ok = qfalse;
 	}
 	if ( ok && !GLX_CompatStreamUploadAt( &reservation, texOffset, texCoords, texBytes ) ) {
+		ok = qfalse;
+	}
+	if ( ok && normalBytes > 0 &&
+		!GLX_CompatStreamUploadAt( &reservation, normalOffset, input->normal, normalBytes ) ) {
 		ok = qfalse;
 	}
 	if ( ok && !GLX_CompatStreamUploadAt( &reservation, indexOffset, indexes, indexBytes ) ) {
@@ -475,10 +489,15 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 	oldElementArrayBuffer = GLX_CompatBindStreamElementArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 1, CLS_NONE );
-	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY |
+		( normalBytes > 0 ? CLS_NORMAL_ARRAY : 0 ) );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), (const GLvoid *)(intptr_t)( reservation.offset ) );
 	qglColorPointer( 4, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
+	if ( normalBytes > 0 ) {
+		qglNormalPointer( GL_FLOAT, sizeof( input->normal[0] ),
+			(const GLvoid *)(intptr_t)( reservation.offset + normalOffset ) );
+	}
 
 	if ( !GLX_CompatDrawElementsClassifiedProjectedDlights( GL_TRIANGLES,
 		numIndexes, GL_INDEX_TYPE,
@@ -840,11 +859,13 @@ t1 = most downstream according to spec
 static void DrawMultitextured( const shaderCommands_t *input, int stage ) {
 	const shaderStage_t *pStage;
 	qboolean glxStreamedDraw = qfalse;
+	qboolean depthFade;
 #ifdef RENDERER_GLX
 	GLint glxMultitextureEnv;
 #endif
 
 	pStage = tess.xstages[ stage ];
+	depthFade = RB_DepthFadeActive( pStage );
 
 #ifdef RENDERER_GLX
 	GLX_CompatRecordMaterialStage( pStage, GLX_STAGE_PATH_GENERIC, input->numVertexes, input->numIndexes );
@@ -891,12 +912,12 @@ static void DrawMultitextured( const shaderCommands_t *input, int stage ) {
 	}
 
 #ifdef RENDERER_GLX
-	if ( !RB_DepthFadeActive( pStage ) ) {
+	if ( !depthFade ) {
 		glxStreamedDraw = GLX_TryStreamDrawStage( input, pStage, qtrue, glxMultitextureEnv );
 	}
 #endif
 	if ( !glxStreamedDraw ) {
-		if ( RB_DepthFadeActive( pStage ) )
+		if ( depthFade )
 			RB_DrawDepthFadeStage( input );
 		else
 			R_DrawElements( input->numIndexes, input->indexes );
@@ -1217,9 +1238,12 @@ static void ProjectDlightTexture( void ) {
 
 		glxStreamedDraw = qfalse;
 #ifdef RENDERER_GLX
+		// projected-light records are captured in world space, so only
+		// world-entity batches may carry refs into the shader replacement
 		glxStreamedDraw = GLX_TryStreamDrawDynamicLightPass( &tess, numIndexes,
 			hitIndexes, (const float *)tess.svars.texcoords[0],
-			tess.dlightColors[0], (unsigned int)lightBit );
+			tess.dlightColors[0],
+			backEnd.currentEntity == &tr.worldEntity ? (unsigned int)lightBit : 0u );
 #endif
 		if ( glxStreamedDraw ) {
 			legacyDlightArraysBound = qtrue;
@@ -1632,6 +1656,7 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 		else
 		{
 			qboolean glxStreamedDraw = qfalse;
+			qboolean depthFade = RB_DepthFadeActive( pStage );
 
 #ifdef RENDERER_GLX
 			GLX_CompatRecordMaterialStage( pStage, GLX_STAGE_PATH_GENERIC, input->numVertexes, input->numIndexes );
@@ -1660,13 +1685,13 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 			// draw
 			//
 #ifdef RENDERER_GLX
-			if ( !RB_DepthFadeActive( pStage ) ) {
+			if ( !depthFade ) {
 				glxStreamedDraw = GLX_TryStreamDrawStage( input, pStage, qfalse, 0 );
 			}
 #endif
 			if ( !glxStreamedDraw )
 			{
-				if ( RB_DepthFadeActive( pStage ) )
+				if ( depthFade )
 					RB_DrawDepthFadeStage( input );
 				else
 					R_DrawElements( input->numIndexes, input->indexes );
@@ -1876,11 +1901,17 @@ void RB_EndSurface( void ) {
 
 	if ( tess.shader == tr.enemyRimShader ) {
 		RB_EnemyRimTessEnd();
+		// clear the batch: a later defensive RB_EndSurface would otherwise
+		// re-draw it with whatever modelview matrix is current by then
+		tess.numIndexes = 0;
+		tess.numVertexes = 0;
 		return;
 	}
 
 	if ( tess.shader == tr.enemyOutlineShader ) {
 		RB_EnemyOutlineTessEnd();
+		tess.numIndexes = 0;
+		tess.numVertexes = 0;
 		return;
 	}
 

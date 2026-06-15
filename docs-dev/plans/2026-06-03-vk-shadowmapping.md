@@ -46,7 +46,12 @@ My recommended implementation order is: stabilize skies first, formalize the uni
 - [x] Added static map light sidecar source-contract coverage for malformed roots, forward-compatible key skipping, unsupported/invalid/overflow counters, parser defaults, and parse-failed reset behavior.
 - [x] Added CSM cache telemetry/source-contract coverage for hit, miss, and uncacheable paths, cascade signature inputs, deformed-surface invalidation, cache publication, and receiver publication gates.
 - [x] Added CSM atlas profiling counters/debug output, plus a GLX GPU timing pass for CSM atlas rendering.
-- [x] Added CSM cascade stability coverage and snapped the light-depth coordinate with half-texel padded extents to reduce atlas cache churn and shimmer from small sun-axis camera movement.
+- [x] Added CSM cascade stability coverage with atlas-facing texel snapping,
+  expanded light-depth bounds, and two-texel cascade cull padding so static
+  world casters stay covered without quantizing light-depth projection.
+- [x] Matched Vulkan CSM caster and receiver traversal to GLx by walking sorted
+  draw surfaces per cascade and changing entity state inline, removing
+  per-entity rescans from the sky-sun shadow path.
 - [x] Moved point, spot, and CSM atlas publication metadata into manager-owned publication records, with backend producer/cache paths publishing through manager helpers and planned sampling reading the records before fallback backend checks.
 - [x] Added a manager-owned ordered shadow pass schedule and changed the Vulkan/OpenGL backends to iterate it for pre-main atlas producer passes while routing CSM receiver dispatch through the same scheduled pass executor.
 - [x] Reduced `dlight_t` point-shadow atlas assignment fields to compatibility fallback use by keeping selected point-light atlas allocation only in manager-owned point plans.
@@ -61,7 +66,9 @@ My recommended implementation order is: stabilize skies first, formalize the uni
 - [x] Added GLX/Vulkan CSM runtime smoke parsing and release-gate checks for sky-sun scene coverage, manager CSM atlas/receiver scheduling, atlas publication, cascade/atlas dimensions, generation, and cache telemetry.
 - [x] Documented the surfacelight validation artifact contract for runtime manifest fields, representative scenes, debug cvars, manual large-planar review notes, and release-gate category expectations.
 - [x] Added surfacelight validation documentation contract coverage and recorded the focused docs/release-gate evidence commands.
-- [x] Added deterministic GLX/Vulkan `csm-shimmer-path` runtime camera probes with `setviewpos` micro-movements, per-step screenshots, snapped light-depth telemetry, and `csmStability` summaries for cache/generation churn.
+- [x] Added deterministic GLX/Vulkan `csm-shimmer-path` runtime camera probes
+  with `setviewpos` micro-movements, per-step screenshots, light-depth center
+  telemetry, and `csmStability` summaries for cache/generation churn.
 - [x] Added GLX/Vulkan CSM shimmer screenshot diff smoke, comparing path nudge/micro-yaw captures against the baseline step with bounded RMS and changed-pixel thresholds in runtime manifests.
 - [x] Added GLX/Vulkan `combined-shadow-atlas` runtime smoke on `q3dm6`, staging a static sidecar spot light and requiring one frame to publish point, spot, CSM atlas, and CSM receiver schedule evidence.
 - [x] Added GLX/Vulkan CSM fallback smoke scenes for forced no-world, no-sky-sun, atlas-unavailable, and zero-cascade cases, with `csmFallbacks` summaries requiring zero CSM receiver/atlas publication.
@@ -102,7 +109,10 @@ My recommended implementation order is: stabilize skies first, formalize the uni
 
 ### CSM runtime shimmer and combined atlas smoke
 
-- [x] Add deterministic CSM runtime camera paths with tiny view-origin/view-axis deltas to measure cascade signature stability, snapped light-depth coordinates, cache hits/misses, and atlas generation churn.
+- [x] Add deterministic CSM runtime camera paths with tiny
+  view-origin/view-axis deltas to measure cascade signature stability,
+  light-depth center coordinates, cache hits/misses, and atlas generation
+  churn.
 - [x] Add GLx and Vulkan runtime sweep parsing for CSM-specific manager evidence: scheduled CSM atlas/receiver passes, atlas publication generation, cascade count, atlas dimensions, and cache telemetry.
 - [x] Add screenshot/diff smoke coverage for CSM shimmer, comparing repeated captures from small camera movements against bounded visual-diff thresholds.
 - [x] Add combined sidecar/shadow-atlas smoke scenes that enable CSM, point shadows, sidecar spot shadows, and surfacelight spot proxies in one frame, then require the manager schedule to publish all active atlas types safely.
@@ -290,7 +300,7 @@ Also log the chosen sky shader and resolved vector under `r_csmShadowDebug 1`. T
 
 **Bias policy.** Keep the current three-way caster bias plus receiver bias. For CSM specifically, add slope-aware clamp scaling by cascade texel size, so the effective receiver bias is proportional to world-space texel footprint instead of being a flat world-unit value. This is the cleanest way to reduce near-cascade acne without visibly floating far cascades.
 
-**Optimization policy.** Use cache invalidation conservatively. The docs describe a simple CSM cache, so formalize it: re-render only when camera rotation/translation crosses a texel-snap threshold, when the active sky/sun changes, or when any dynamic caster marked “sun-shadow-dirty” crosses cascade bounds. Continue snapping cascade positions to texels, as the current code already does in light space, because that reduces shimmer. citeturn35view2turn39view0
+**Optimization policy.** Use cache invalidation conservatively. The docs describe a simple CSM cache, so formalize it: re-render only when camera rotation/translation crosses a texel-snap threshold, when the active sky/sun changes, or when any dynamic caster marked “sun-shadow-dirty” crosses cascade bounds. Snap the atlas-facing light-space axes to texels, but leave light depth continuous and expand it for world-caster coverage; quantizing depth can create visible remapping even when the atlas footprint itself is stable. citeturn35view2turn39view0
 
 ### Surfacelights
 

@@ -390,9 +390,9 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			LL( triangle->vertex[1] );
 			LL( triangle->vertex[2] );
 
-			if( triangle->vertex[0] > header->num_vertexes ||
-			    triangle->vertex[1] > header->num_vertexes ||
-			    triangle->vertex[2] > header->num_vertexes ) {
+			if( triangle->vertex[0] >= header->num_vertexes ||
+			    triangle->vertex[1] >= header->num_vertexes ||
+			    triangle->vertex[2] >= header->num_vertexes ) {
 				return qfalse;
 			}
 		}
@@ -1074,6 +1074,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	srfIQModel_t		*surface;
 	int			i, j;
 	qboolean		personalModel;
+	qboolean		personalShadowCaster;
 	int			cull;
 	int			fogNum;
 	shader_t		*shader;
@@ -1092,6 +1093,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 
 	// don't add third_person objects if not in a portal
 	personalModel = (ent->e.renderfx & RF_THIRD_PERSON) && !R_ViewPassIsPortal( &tr.viewParms );
+	personalShadowCaster = personalModel && !(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ));
 
 	if ( data->num_frames > 0 ) {
 		if ( ent->e.renderfx & RF_WRAP_FRAMES ) {
@@ -1138,7 +1140,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 
 #ifdef USE_PMLIGHT
 	numDlights = 0;
-	if ( R_GetDlightMode() >= 2 && ( !personalModel || R_ViewPassIsPortal( &tr.viewParms ) ) ) {
+	if ( R_GetDlightMode() >= 2 && ( !personalModel || personalShadowCaster ) ) {
 		haveDlightBounds = R_IQMModelBounds( data, ent, bounds[0], bounds[1] );
 		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
 			dl = &tr.viewParms.dlights[ n ];
@@ -1196,6 +1198,10 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 			R_AddDrawSurf( (void *)surface, tr.projectionShadowShader, 0, 0 );
 		}
 
+		if ( personalShadowCaster && shader->sort == SS_OPAQUE ) {
+			R_AddDrawSurfFlags( (void *)surface, shader, fogNum, 0, DSF_SHADOW_CASTER_ONLY );
+		}
+
 		if( !personalModel ) {
 			R_AddDrawSurf( (void *)surface, shader, fogNum, 0 );
 		}
@@ -1205,7 +1211,8 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 			for ( n = 0; n < numDlights; n++ ) {
 				dl = dlights[ n ];
 				tr.light = dl;
-				R_AddLitSurf( (void *)surface, shader, fogNum );
+				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
+					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
 			}
 		}
 #endif

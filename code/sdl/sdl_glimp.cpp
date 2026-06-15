@@ -61,6 +61,23 @@ static PFN_vkGetInstanceProcAddr qvkGetInstanceProcAddr;
 #endif
 static qboolean glw_floatFramebufferActive = qfalse;
 
+// framebuffer attributes the current SDL_window was created with;
+// the window can only be reused across \vid_restart while these still match
+// because the pixel format and the OpenGL/Vulkan surface kind are fixed
+// at window creation time
+typedef struct {
+	qboolean valid;
+	qboolean vulkan;
+	int colorBits;
+	int depthBits;
+	int stencilBits;
+	qboolean stereo;
+	qboolean software;
+	qboolean floatFramebuffer;
+} windowRecipe_t;
+
+static windowRecipe_t glw_windowRecipe;
+
 cvar_t *r_stereoEnabled;
 cvar_t *in_nograb;
 
@@ -184,6 +201,8 @@ static void GLW_DestroyWindow( void )
 		SDL_DestroyWindow( SDL_window );
 		SDL_window = NULL;
 	}
+
+	Com_Memset( &glw_windowRecipe, 0, sizeof( glw_windowRecipe ) );
 }
 
 /*
@@ -211,6 +230,21 @@ void GLimp_Shutdown( qboolean unloadDLL )
 
 	if ( unloadDLL )
 		GLW_QuitVideoSubsystem();
+}
+
+
+/*
+===============
+GLimp_InvalidateConfig
+
+The renderer module owning the glconfig_t we feed back into is about to be
+unloaded: drop the pointer so window events arriving before the next
+GLimp_Init/VKimp_Init cannot write through stale memory.
+===============
+*/
+void GLimp_InvalidateConfig( void )
+{
+	glw_state.config = NULL;
 }
 
 
@@ -415,6 +449,245 @@ static SDL_HitTestResult SDL_HitTestFunc( SDL_Window *win, const SDL_Point *area
 
 /*
 ===============
+GLW_ApplyFullscreen
+
+Switch the window into the requested fullscreen mode and refresh the
+reported display frequency.
+===============
+*/
+static qboolean GLW_ApplyFullscreen( glconfig_t *config, SDL_DisplayID display, int colorBits )
+{
+	SDL_DisplayMode mode;
+	const SDL_DisplayMode *currentMode;
+	SDL_DisplayID fullscreenDisplay;
+
+	SDL_zero( mode );
+	mode.displayID = display;
+
+	switch ( colorBits )
+	{
+		case 16: mode.format = SDL_PIXELFORMAT_RGB565; break;
+		case 24: mode.format = SDL_PIXELFORMAT_RGB24;  break;
+		default:
+			Com_DPrintf( "colorBits is %d, can't fullscreen\n", colorBits );
+			return qfalse;
+	}
+
+	mode.w = config->vidWidth;
+	mode.h = config->vidHeight;
+	mode.refresh_rate = /* config->displayFrequency = */ Cvar_VariableIntegerValue( "r_displayRefresh" );
+
+	if ( !GLW_EnterFullscreen( SDL_window, &mode ) ) {
+		return qfalse;
+	}
+
+	GLW_SyncWindow( "fullscreen transition" );
+	GLW_UpdateWindowState();
+
+	if ( ( currentMode = SDL_GetWindowFullscreenMode( SDL_window ) ) != NULL ) {
+		config->displayFrequency = currentMode->refresh_rate;
+	} else {
+		fullscreenDisplay = SDL_GetDisplayForWindow( SDL_window );
+		currentMode = fullscreenDisplay ? SDL_GetCurrentDisplayMode( fullscreenDisplay ) : NULL;
+		if ( currentMode ) {
+			config->displayFrequency = currentMode->refresh_rate;
+		}
+	}
+
+	return qtrue;
+}
+
+
+/*
+===============
+GLW_SetupDrawableContext
+
+Create the OpenGL context on the current window - or just publish the
+framebuffer attributes for Vulkan - and report the resulting configuration.
+===============
+*/
+static qboolean GLW_SetupDrawableContext( glconfig_t *config, qboolean vulkan, int testColorBits, int testDepthBits, int testStencilBits, qboolean requestFloatFramebuffer )
+{
+#ifdef USE_VULKAN_API
+	if ( vulkan )
+	{
+		config->colorBits = testColorBits;
+		config->depthBits = testDepthBits;
+		config->stencilBits = testStencilBits;
+	}
+	else
+#endif
+	{
+		int realColorBits[3];
+
+		if ( !SDL_glContext )
+		{
+			SDL_glContext.reset( SDL_GL_CreateContext( SDL_window ) );
+			if ( !SDL_glContext )
+			{
+				if ( GLW_ShouldRequestGLxDebugContext() )
+				{
+					Com_DPrintf( "SDL_GL_CreateContext with debug flag failed: %s\n", SDL_GetError( ) );
+					SDL_GL_SetAttribute( SDL_GL_CONTEXT_FLAGS, 0 );
+					SDL_glContext.reset( SDL_GL_CreateContext( SDL_window ) );
+				}
+
+				if ( !SDL_glContext )
+				{
+					Com_DPrintf( "SDL_GL_CreateContext failed: %s\n", SDL_GetError( ) );
+					return qfalse;
+				}
+
+				if ( GLW_ShouldRequestGLxDebugContext() )
+				{
+					Com_Printf( "...SDL debug context unavailable, using regular OpenGL context\n" );
+				}
+			}
+			else if ( GLW_ShouldRequestGLxDebugContext() )
+			{
+				Com_Printf( "...created SDL OpenGL debug context\n" );
+			}
+		}
+
+		if ( !SDL_GL_SetSwapInterval( r_swapInterval->integer ) )
+		{
+			Com_DPrintf( "SDL_GL_SetSwapInterval failed: %s\n", SDL_GetError( ) );
+		}
+
+		SDL_GL_GetAttribute( SDL_GL_RED_SIZE, &realColorBits[0] );
+		SDL_GL_GetAttribute( SDL_GL_GREEN_SIZE, &realColorBits[1] );
+		SDL_GL_GetAttribute( SDL_GL_BLUE_SIZE, &realColorBits[2] );
+		SDL_GL_GetAttribute( SDL_GL_DEPTH_SIZE, &config->depthBits );
+		SDL_GL_GetAttribute( SDL_GL_STENCIL_SIZE, &config->stencilBits );
+		{
+			int realFloatFramebuffer = 0;
+			if ( SDL_GL_GetAttribute( SDL_GL_FLOATBUFFERS, &realFloatFramebuffer ) ) {
+				glw_floatFramebufferActive = realFloatFramebuffer ? qtrue : qfalse;
+			} else {
+				glw_floatFramebufferActive = qfalse;
+			}
+			if ( requestFloatFramebuffer && !glw_floatFramebufferActive ) {
+				Com_DPrintf( "SDL did not provide a floating-point OpenGL framebuffer for HDR output: %s\n",
+					SDL_GetError() );
+			}
+		}
+
+		config->colorBits = realColorBits[0] + realColorBits[1] + realColorBits[2];
+	}
+
+	Com_Printf( "Using %d color bits, %d depth, %d stencil display.\n", config->colorBits, config->depthBits, config->stencilBits );
+
+	return qtrue;
+}
+
+
+/*
+===============
+GLW_CanReuseWindow
+===============
+*/
+static qboolean GLW_CanReuseWindow( qboolean vulkan, int colorBits, int depthBits, int stencilBits, qboolean requestFloatFramebuffer )
+{
+	if ( SDL_window == NULL || !glw_windowRecipe.valid ) {
+		return qfalse;
+	}
+
+	if ( glw_windowRecipe.vulkan != vulkan ) {
+		return qfalse;
+	}
+
+	if ( vulkan ) {
+		return qtrue;
+	}
+
+	// the GL pixel format is fixed at window creation time: any change
+	// there requires a full window re-creation
+	if ( glw_windowRecipe.colorBits != colorBits ||
+		glw_windowRecipe.depthBits != depthBits ||
+		glw_windowRecipe.stencilBits != stencilBits ||
+		glw_windowRecipe.stereo != ( r_stereoEnabled->integer ? qtrue : qfalse ) ||
+		glw_windowRecipe.software != ( ( r_allowSoftwareGL && r_allowSoftwareGL->integer ) ? qtrue : qfalse ) ||
+		glw_windowRecipe.floatFramebuffer != requestFloatFramebuffer ) {
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+
+/*
+===============
+GLW_ReuseExistingWindow
+
+\vid_restart fast path: morph the existing window in place - windowed or
+fullscreen state, borders, geometry - and rebuild the drawable context on
+it instead of destroying it. Any failure makes the caller fall back to a
+full window re-creation, so a partially morphed window is never kept.
+===============
+*/
+static qboolean GLW_ReuseExistingWindow( glconfig_t *config, SDL_DisplayID display, qboolean fullscreen, qboolean vulkan, int colorBits, int depthBits, int stencilBits, qboolean requestFloatFramebuffer )
+{
+	SDL_WindowFlags windowFlags;
+
+	if ( !GLW_CanReuseWindow( vulkan, colorBits, depthBits, stencilBits, requestFloatFramebuffer ) ) {
+		return qfalse;
+	}
+
+	config->stereoEnabled = glw_windowRecipe.stereo;
+
+	if ( fullscreen )
+	{
+		if ( !GLW_ApplyFullscreen( config, display, colorBits ) ) {
+			return qfalse;
+		}
+	}
+	else
+	{
+		int x, y;
+
+		if ( !SDL_SetWindowFullscreen( SDL_window, false ) ) {
+			Com_DPrintf( "SDL_SetWindowFullscreen failed: %s\n", SDL_GetError() );
+			return qfalse;
+		}
+
+		SDL_SetWindowBordered( SDL_window, r_noborder->integer ? false : true );
+		SDL_SetWindowSize( SDL_window, config->vidWidth, config->vidHeight );
+
+		x = vid_xpos->integer;
+		y = vid_ypos->integer;
+		FindNearestDisplay( &x, &y, config->vidWidth, config->vidHeight );
+		SDL_SetWindowPosition( SDL_window, x, y );
+
+		GLW_SyncWindow( "windowed transition" );
+		GLW_UpdateWindowState();
+	}
+
+#ifdef USE_VULKAN_API
+	if ( !vulkan )
+#endif
+	{
+		SDL_GL_SetAttribute( SDL_GL_CONTEXT_FLAGS,
+			GLW_ShouldRequestGLxDebugContext() ? SDL_GL_CONTEXT_DEBUG_FLAG : 0 );
+	}
+
+	if ( !GLW_SetupDrawableContext( config, vulkan, colorBits, depthBits, stencilBits, requestFloatFramebuffer ) ) {
+		return qfalse;
+	}
+
+	// the window keeps its focus state through the restart and no focus
+	// events will arrive to refresh these, so derive them from live flags
+	windowFlags = SDL_GetWindowFlags( SDL_window );
+	gw_active = ( windowFlags & SDL_WINDOW_INPUT_FOCUS ) ? qtrue : qfalse;
+	gw_minimized = ( windowFlags & SDL_WINDOW_MINIMIZED ) ? qtrue : qfalse;
+
+	Com_Printf( "...reusing existing window (%s)\n", fullscreen ? "fullscreen" : "windowed" );
+
+	return qtrue;
+}
+
+
+/*
+===============
 GLimp_SetMode
 ===============
 */
@@ -430,6 +703,7 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 	int y;
 	SDL_WindowFlags flags = 0;
 	qboolean requestFloatFramebuffer = qfalse;
+	qboolean reusedWindow;
 
 #ifdef USE_VULKAN_API
 	if ( vulkan ) {
@@ -495,34 +769,6 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 
 	Com_Printf( " %d %d\n", config->vidWidth, config->vidHeight );
 
-	// Destroy existing state if it exists
-	if ( SDL_glContext )
-	{
-		SDL_glContext.reset();
-	}
-
-	if ( SDL_window != NULL )
-	{
-		SDL_GetWindowPosition( SDL_window, &x, &y );
-		Com_DPrintf( "Existing window at %dx%d before being destroyed\n", x, y );
-		GLW_RestoreGamma();
-		GLW_DestroyWindow();
-	}
-
-	gw_active = qfalse;
-	gw_minimized = qtrue;
-
-	if ( fullscreen )
-	{
-		flags |= SDL_WINDOW_HIDDEN;
-	}
-	else if ( r_noborder->integer )
-	{
-		flags |= SDL_WINDOW_BORDERLESS;
-	}
-
-	flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
-
 	colorBits = r_colorbits->value;
 
 	if ( colorBits == 0 || colorBits > 24 )
@@ -545,10 +791,53 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 	if ( depthBits < 24 )
 		stencilBits = 0;
 
-	for ( i = 0; i < 16; i++ )
+	// Destroy existing state if it exists
+	if ( SDL_glContext )
+	{
+		SDL_glContext.reset();
+	}
+
+	reusedWindow = qfalse;
+
+	if ( SDL_window != NULL )
+	{
+		GLW_RestoreGamma();
+
+		// \vid_restart fast keeps the window alive: morph it in place -
+		// the usual case for windowed/fullscreen toggles - and only fall
+		// back to a full re-creation when that is not possible
+		reusedWindow = GLW_ReuseExistingWindow( config, display, fullscreen, vulkan,
+			colorBits, depthBits, stencilBits, requestFloatFramebuffer );
+
+		if ( !reusedWindow )
+		{
+			SDL_GetWindowPosition( SDL_window, &x, &y );
+			Com_DPrintf( "Existing window at %dx%d before being destroyed\n", x, y );
+			GLW_DestroyWindow();
+		}
+	}
+
+	if ( !reusedWindow )
+	{
+		gw_active = qfalse;
+		gw_minimized = qtrue;
+
+		if ( fullscreen )
+		{
+			flags |= SDL_WINDOW_HIDDEN;
+		}
+		else if ( r_noborder->integer )
+		{
+			flags |= SDL_WINDOW_BORDERLESS;
+		}
+
+		flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+	}
+
+	for ( i = 0; i < 16 && !reusedWindow; i++ )
 	{
 		int testColorBits, testDepthBits, testStencilBits;
-		int realColorBits[3];
+		qboolean testFloatFramebuffer;
 
 		// 0 - default
 		// 1 - minus colorBits
@@ -603,6 +892,8 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 		else
 			perChannelColorBits = 4;
 
+		testFloatFramebuffer = ( requestFloatFramebuffer && i < 4 ) ? qtrue : qfalse;
+
 #ifdef USE_VULKAN_API
 		if ( !vulkan )
 #endif
@@ -622,8 +913,7 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 			SDL_GL_SetAttribute( SDL_GL_BLUE_SIZE, perChannelColorBits );
 			SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, testDepthBits );
 			SDL_GL_SetAttribute( SDL_GL_STENCIL_SIZE, testStencilBits );
-			SDL_GL_SetAttribute( SDL_GL_FLOATBUFFERS,
-				( requestFloatFramebuffer && i < 4 ) ? 1 : 0 );
+			SDL_GL_SetAttribute( SDL_GL_FLOATBUFFERS, testFloatFramebuffer ? 1 : 0 );
 
 			SDL_GL_SetAttribute( SDL_GL_MULTISAMPLEBUFFERS, 0 );
 			SDL_GL_SetAttribute( SDL_GL_MULTISAMPLESAMPLES, 0 );
@@ -656,43 +946,9 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 
 		if ( fullscreen )
 		{
-			SDL_DisplayMode mode;
-			const SDL_DisplayMode *currentMode;
-			SDL_DisplayID fullscreenDisplay;
-
-			SDL_zero( mode );
-			mode.displayID = display;
-
-			switch ( testColorBits )
-			{
-				case 16: mode.format = SDL_PIXELFORMAT_RGB565; break;
-				case 24: mode.format = SDL_PIXELFORMAT_RGB24;  break;
-				default:
-					Com_DPrintf( "testColorBits is %d, can't fullscreen\n", testColorBits );
-					GLW_DestroyWindow();
-					continue;
-			}
-
-			mode.w = config->vidWidth;
-			mode.h = config->vidHeight;
-			mode.refresh_rate = /* config->displayFrequency = */ Cvar_VariableIntegerValue( "r_displayRefresh" );
-
-			if ( !GLW_EnterFullscreen( SDL_window, &mode ) ) {
+			if ( !GLW_ApplyFullscreen( config, display, testColorBits ) ) {
 				GLW_DestroyWindow();
 				continue;
-			}
-
-			GLW_SyncWindow( "fullscreen transition" );
-			GLW_UpdateWindowState();
-
-			if ( ( currentMode = SDL_GetWindowFullscreenMode( SDL_window ) ) != NULL ) {
-				config->displayFrequency = currentMode->refresh_rate;
-			} else {
-				fullscreenDisplay = SDL_GetDisplayForWindow( SDL_window );
-				currentMode = fullscreenDisplay ? SDL_GetCurrentDisplayMode( fullscreenDisplay ) : NULL;
-				if ( currentMode ) {
-					config->displayFrequency = currentMode->refresh_rate;
-				}
 			}
 		}
 		else
@@ -701,74 +957,20 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 			GLW_UpdateWindowState();
 		}
 
-#ifdef USE_VULKAN_API
-		if ( vulkan )
+		if ( !GLW_SetupDrawableContext( config, vulkan, testColorBits, testDepthBits, testStencilBits, testFloatFramebuffer ) )
 		{
-			config->colorBits = testColorBits;
-			config->depthBits = testDepthBits;
-			config->stencilBits = testStencilBits;
+			GLW_DestroyWindow();
+			continue;
 		}
-		else
-#endif
-		{
-			if ( !SDL_glContext )
-			{
-				SDL_glContext.reset( SDL_GL_CreateContext( SDL_window ) );
-				if ( !SDL_glContext )
-				{
-					if ( GLW_ShouldRequestGLxDebugContext() )
-					{
-						Com_DPrintf( "SDL_GL_CreateContext with debug flag failed: %s\n", SDL_GetError( ) );
-						SDL_GL_SetAttribute( SDL_GL_CONTEXT_FLAGS, 0 );
-						SDL_glContext.reset( SDL_GL_CreateContext( SDL_window ) );
-					}
 
-					if ( !SDL_glContext )
-					{
-						Com_DPrintf( "SDL_GL_CreateContext failed: %s\n", SDL_GetError( ) );
-						GLW_DestroyWindow();
-						continue;
-					}
-
-					if ( GLW_ShouldRequestGLxDebugContext() )
-					{
-						Com_Printf( "...SDL debug context unavailable, using regular OpenGL context\n" );
-					}
-				}
-				else if ( GLW_ShouldRequestGLxDebugContext() )
-				{
-					Com_Printf( "...created SDL OpenGL debug context\n" );
-				}
-			}
-
-			if ( !SDL_GL_SetSwapInterval( r_swapInterval->integer ) )
-			{
-				Com_DPrintf( "SDL_GL_SetSwapInterval failed: %s\n", SDL_GetError( ) );
-			}
-
-			SDL_GL_GetAttribute( SDL_GL_RED_SIZE, &realColorBits[0] );
-			SDL_GL_GetAttribute( SDL_GL_GREEN_SIZE, &realColorBits[1] );
-			SDL_GL_GetAttribute( SDL_GL_BLUE_SIZE, &realColorBits[2] );
-			SDL_GL_GetAttribute( SDL_GL_DEPTH_SIZE, &config->depthBits );
-			SDL_GL_GetAttribute( SDL_GL_STENCIL_SIZE, &config->stencilBits );
-			{
-				int realFloatFramebuffer = 0;
-				if ( SDL_GL_GetAttribute( SDL_GL_FLOATBUFFERS, &realFloatFramebuffer ) ) {
-					glw_floatFramebufferActive = realFloatFramebuffer ? qtrue : qfalse;
-				} else {
-					glw_floatFramebufferActive = qfalse;
-				}
-				if ( requestFloatFramebuffer && !glw_floatFramebufferActive ) {
-					Com_DPrintf( "SDL did not provide a floating-point OpenGL framebuffer for HDR output: %s\n",
-						SDL_GetError() );
-				}
-			}
-
-			config->colorBits = realColorBits[0] + realColorBits[1] + realColorBits[2];
-		} // if ( !vulkan )
-
-
-		Com_Printf( "Using %d color bits, %d depth, %d stencil display.\n",	config->colorBits, config->depthBits, config->stencilBits );
+		glw_windowRecipe.valid = qtrue;
+		glw_windowRecipe.vulkan = vulkan;
+		glw_windowRecipe.colorBits = testColorBits;
+		glw_windowRecipe.depthBits = testDepthBits;
+		glw_windowRecipe.stencilBits = testStencilBits;
+		glw_windowRecipe.stereo = config->stereoEnabled;
+		glw_windowRecipe.software = ( r_allowSoftwareGL && r_allowSoftwareGL->integer ) ? qtrue : qfalse;
+		glw_windowRecipe.floatFramebuffer = testFloatFramebuffer;
 
 		break;
 	}
@@ -797,6 +999,8 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 
 	if ( !fullscreen && r_noborder->integer )
 		SDL_SetWindowHitTest( SDL_window, SDL_HitTestFunc, NULL );
+	else
+		SDL_SetWindowHitTest( SDL_window, NULL, NULL );
 
 	if ( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_HIDDEN )
 	{

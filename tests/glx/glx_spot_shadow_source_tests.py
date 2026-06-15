@@ -44,6 +44,18 @@ def main() -> int:
     )
     require(
         glx_module,
+        'float inset = 1.0 / tileSize;',
+        "GLX GLSL spot atlas texel inset",
+        failures,
+    )
+    require(
+        glx_module,
+        'uv = clamp(uv, vec2(inset), vec2(1.0 - inset));',
+        "GLX GLSL spot atlas interior clamp",
+        failures,
+    )
+    require(
+        glx_module,
         "float coneRadius2 = dot(uv, uv);",
         "GLX GLSL circular cone gate",
         failures,

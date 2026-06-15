@@ -26,23 +26,260 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 R_PerformanceCounters
 =====================
 */
+static void R_PrintShadowCorrectnessDebug( const char *backendName )
+{
+	const shadowCorrectnessDebug_t *debug = &tr.shadowCorrectnessDebug;
+	const char *depthMode;
+	const char *depthNdc;
+	const char *depthCompare;
+	const char *apiOrigin;
+	const char *sampleOrigin;
+	const char *clipY;
+	int i;
+
+	if ( !r_shadowCorrectness || !r_shadowCorrectness->integer ) {
+		return;
+	}
+
+	if ( !debug->active ) {
+		ri.Printf( PRINT_ALL,
+			"shadow correctness mode:1 backend:%s active:0\n",
+			backendName );
+		return;
+	}
+
+	depthMode = debug->reversedDepth ? "reversed" : "forward";
+	depthNdc = debug->depthZeroToOne ? "0..1" : "-1..1";
+	depthCompare = debug->reversedDepth ? "gequal" : "lequal";
+	apiOrigin = debug->apiViewportTopLeft ? "top-left" : "lower-left";
+	sampleOrigin = debug->samplerTopLeft ? "top-left" : "lower-left";
+	clipY = debug->clipYFlipped ? "flipped" : "native";
+
+	ri.Printf( PRINT_ALL,
+		"shadow correctness mode:1 backend:%s active:1 view:%i frame:%i atlas:%ix%i/%i pub:%i gen:%u depth:%s ndc:%s clear:%.1f compare:%s view-origin:lower-left api-origin:%s sample-origin:%s clip-y:%s bias receiver:%.2f caster-depth:%.2f caster-slope:%.2f caster-normal:%.2f filter requested:%s effective:%s taps:%i offsets:%.2f/%.2f faces:%i\n",
+		backendName, debug->viewCount, debug->frameCount,
+		debug->atlasWidth, debug->atlasHeight, debug->atlasFaceSize,
+		debug->atlasPublished, debug->atlasGeneration, depthMode, depthNdc,
+		debug->clearDepth, depthCompare, apiOrigin, sampleOrigin, clipY,
+		debug->receiverBias, debug->casterDepthBias, debug->casterSlopeBias,
+		debug->casterNormalBias,
+		R_ShadowFilterModeName( debug->requestedFilterMode ),
+		R_ShadowFilterModeName( debug->effectiveFilterMode ),
+		debug->filterSampleCount, debug->filterInnerOffset,
+		debug->filterOuterOffset,
+		debug->faceCount );
+
+	for ( i = 0; i < debug->faceCount && i < SHADOW_CORRECTNESS_MAX_FACE_RECORDS; i++ ) {
+		const shadowCorrectnessFaceDebug_t *record = &debug->faces[i];
+
+		if ( !record->valid ) {
+			continue;
+		}
+
+		ri.Printf( PRINT_ALL,
+			"shadow correctness face light:%i shadow:%i face:%i slot:%i base:%i atlas:%i,%i/%i viewport:%i,%i %ix%i scissor:%i,%i %ix%i api-viewport:%i,%i %ix%i api-scissor:%i,%i %ix%i z:%.2f..%.2f cached:%i rendered:%i surfs:%i\n",
+			record->dlightIndex, record->shadowIndex, record->face,
+			record->atlasBaseFace + record->face, record->atlasBaseFace,
+			record->atlasX, record->atlasY, record->atlasFaceSize,
+			record->viewportX, record->viewportY,
+			record->viewportWidth, record->viewportHeight,
+			record->scissorX, record->scissorY,
+			record->scissorWidth, record->scissorHeight,
+			record->apiViewportX, record->apiViewportY,
+			record->apiViewportWidth, record->apiViewportHeight,
+			record->apiScissorX, record->apiScissorY,
+			record->apiScissorWidth, record->apiScissorHeight,
+			record->zNear, record->zFar,
+			record->cached, record->rendered, record->surfaces );
+
+		ri.Printf( PRINT_ALL,
+			"shadow correctness projection light:%i face:%i matrix:[%.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g]\n",
+			record->dlightIndex, record->face,
+			record->projectionMatrix[0], record->projectionMatrix[1],
+			record->projectionMatrix[2], record->projectionMatrix[3],
+			record->projectionMatrix[4], record->projectionMatrix[5],
+			record->projectionMatrix[6], record->projectionMatrix[7],
+			record->projectionMatrix[8], record->projectionMatrix[9],
+			record->projectionMatrix[10], record->projectionMatrix[11],
+			record->projectionMatrix[12], record->projectionMatrix[13],
+			record->projectionMatrix[14], record->projectionMatrix[15] );
+
+		ri.Printf( PRINT_ALL,
+			"shadow correctness model light:%i face:%i matrix:[%.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g %.6g]\n",
+			record->dlightIndex, record->face,
+			record->modelMatrix[0], record->modelMatrix[1],
+			record->modelMatrix[2], record->modelMatrix[3],
+			record->modelMatrix[4], record->modelMatrix[5],
+			record->modelMatrix[6], record->modelMatrix[7],
+			record->modelMatrix[8], record->modelMatrix[9],
+			record->modelMatrix[10], record->modelMatrix[11],
+			record->modelMatrix[12], record->modelMatrix[13],
+			record->modelMatrix[14], record->modelMatrix[15] );
+	}
+}
+
+static void R_PrintCSMCascadeDebug( const csmPlan_t *csm, const char *backendName,
+	qboolean apiTopLeft, qboolean sampleYInverted, qboolean clipYFlipped,
+	qboolean depthZeroToOne )
+{
+	const shadowManager_t *manager = &tr.shadowManager;
+	const char *sampleY = sampleYInverted ? "inverted" : "native";
+	const char *clipY = clipYFlipped ? "flipped" : "native";
+	const char *ndc = depthZeroToOne ? "0..1" : "-1..1";
+	int cascadeSize;
+	int atlasHeight;
+	int i;
+
+	if ( !csm || csm->cascadeCount <= 0 ) {
+		return;
+	}
+
+	cascadeSize = manager->csmAtlasPublication.tileSize > 0 ?
+		manager->csmAtlasPublication.tileSize : manager->csmAtlasHeight;
+	if ( cascadeSize <= 0 ) {
+		cascadeSize = csm->resolution;
+	}
+	atlasHeight = manager->csmAtlasPublication.height > 0 ?
+		manager->csmAtlasPublication.height : manager->csmAtlasHeight;
+	if ( atlasHeight <= 0 ) {
+		atlasHeight = cascadeSize;
+	}
+
+	for ( i = 0; i < csm->cascadeCount && i < CSM_MAX_CASCADES; i++ ) {
+		const csmCascadePlan_t *cascade = &csm->cascades[i];
+		int atlasX = i * cascadeSize;
+		int atlasY = 0;
+		int apiY = apiTopLeft ? atlasHeight - cascadeSize : 0;
+
+		ri.Printf( PRINT_ALL,
+			"csm cascade backend:%s index:%i split:%.0f..%.0f atlas:%i,%i/%i view:%i,%i %ix%i api:%i,%i %ix%i sample-y:%s clip-y:%s depth:forward ndc:%s clear:1.0 compare:lequal bounds x:%.0f..%.0f y:%.0f..%.0f z:%.0f..%.0f origin:%.0f %.0f %.0f texel:%.2f\n",
+			backendName, i, cascade->splitNear, cascade->splitFar,
+			atlasX, atlasY, cascadeSize,
+			atlasX, atlasY, cascadeSize, cascadeSize,
+			atlasX, apiY, cascadeSize, cascadeSize,
+			sampleY, clipY, ndc,
+			cascade->bounds[0][0], cascade->bounds[1][0],
+			cascade->bounds[0][1], cascade->bounds[1][1],
+			cascade->bounds[0][2], cascade->bounds[1][2],
+			cascade->origin[0], cascade->origin[1], cascade->origin[2],
+			cascade->texelSize );
+	}
+}
+
+static int R_ShadowAtlasFillPercent( int records, int tileSize, int width, int height )
+{
+	int64_t usedPixels;
+	int64_t atlasPixels;
+	int fill;
+
+	if ( records <= 0 || tileSize <= 0 || width <= 0 || height <= 0 ) {
+		return 0;
+	}
+
+	usedPixels = (int64_t)records * tileSize * tileSize;
+	atlasPixels = (int64_t)width * height;
+	if ( atlasPixels <= 0 ) {
+		return 0;
+	}
+
+	fill = (int)( usedPixels * 100 / atlasPixels );
+	return Com_Clamp( 1, 100, fill );
+}
+
+static void R_PrintShadowAtlasContractLine( const char *backendName, const char *atlasName,
+	qboolean active, int width, int height, int tileSize, int records, int fill,
+	int filterMode, const char *allocation )
+{
+	ri.Printf( PRINT_ALL,
+		"shadow atlas contract backend:%s atlas:%s active:%i tile:%i size:%ix%i records:%i fill:%i%% filter:%s pad:%i clamp:%i sampler:clamp-edge allocation:%s deterministic:1\n",
+		backendName, atlasName, active,
+		tileSize, width, height, records, fill,
+		R_ShadowFilterModeName( filterMode ),
+		R_ShadowFilterPadTexels( filterMode ),
+		R_ShadowAtlasClampTexels( filterMode ),
+		allocation );
+}
+
+static void R_PrintShadowAtlasContractDebug( const shadowManager_t *manager,
+	const csmPlan_t *csm, const char *backendName )
+{
+	int requestedDlightFilter;
+	int dlightFilter;
+	int csmFilter;
+	int csmWidth;
+	int csmHeight;
+	int csmTileSize;
+	int csmRecords;
+	int csmFill;
+
+	if ( !manager ) {
+		return;
+	}
+
+	requestedDlightFilter = r_dlightShadowFilter ?
+		r_dlightShadowFilter->integer : SHADOW_FILTER_POISSON_4;
+	dlightFilter = ( r_shadowCorrectness && r_shadowCorrectness->integer ) ?
+		SHADOW_FILTER_HARD : R_ShadowClampFilterMode( requestedDlightFilter );
+	csmFilter = ( csm && csm->enabled ) ? csm->filterMode :
+		R_ShadowClampFilterMode( r_csmShadowFilter ?
+			r_csmShadowFilter->integer : SHADOW_FILTER_POISSON_4 );
+	if ( r_shadowCorrectness && r_shadowCorrectness->integer ) {
+		csmFilter = SHADOW_FILTER_HARD;
+	}
+
+	R_PrintShadowAtlasContractLine( backendName, "point",
+		( manager->pointAtlasPublication.published && manager->pointPlanCount > 0 ) ? qtrue : qfalse,
+		manager->dlightAtlasWidth, manager->dlightAtlasHeight,
+		manager->dlightAtlasFaceSize, manager->pointPlanCount,
+		manager->dlightAtlasFill, dlightFilter, "priority-dlight-index" );
+
+	R_PrintShadowAtlasContractLine( backendName, "spot",
+		( manager->spotAtlasPublication.published && manager->spotPlanCount > 0 ) ? qtrue : qfalse,
+		manager->spotAtlasWidth, manager->spotAtlasHeight,
+		manager->spotAtlasTileSize, manager->spotPlanCount,
+		manager->spotAtlasFill, dlightFilter, "priority-source-index" );
+
+	csmWidth = manager->csmAtlasWidth;
+	csmHeight = manager->csmAtlasHeight;
+	csmTileSize = manager->csmResolution;
+	if ( manager->csmAtlasPublication.width > 0 ) {
+		csmWidth = manager->csmAtlasPublication.width;
+	}
+	if ( manager->csmAtlasPublication.height > 0 ) {
+		csmHeight = manager->csmAtlasPublication.height;
+	}
+	if ( manager->csmAtlasPublication.tileSize > 0 ) {
+		csmTileSize = manager->csmAtlasPublication.tileSize;
+	}
+	csmRecords = csm ? csm->cascadeCount : manager->csmCascadeCount;
+	csmFill = R_ShadowAtlasFillPercent( csmRecords, csmTileSize, csmWidth, csmHeight );
+
+	R_PrintShadowAtlasContractLine( backendName, "csm",
+		( manager->csmAtlasPublication.published && csmRecords > 0 ) ? qtrue : qfalse,
+		csmWidth, csmHeight, csmTileSize, csmRecords, csmFill,
+		csmFilter, "cascade-index" );
+}
+
 static void R_PerformanceCounters( void ) {
 	qboolean shadowDebug;
 	qboolean csmDebug;
 	qboolean spotShadowDebug;
 	qboolean staticLightDebug;
 	qboolean surfaceLightDebug;
+	qboolean shadowCorrectnessDebug;
 
 	shadowDebug = ( r_dlightShadowDebug && r_dlightShadowDebug->integer ) ? qtrue : qfalse;
 	csmDebug = ( r_csmDebug && r_csmDebug->integer ) ? qtrue : qfalse;
 	spotShadowDebug = ( r_spotShadowDebug && r_spotShadowDebug->integer ) ? qtrue : qfalse;
 	staticLightDebug = ( r_staticLightDebug && r_staticLightDebug->integer ) ? qtrue : qfalse;
 	surfaceLightDebug = ( r_surfaceLightProxyDebug && r_surfaceLightProxyDebug->integer ) ? qtrue : qfalse;
+	shadowCorrectnessDebug = ( r_shadowCorrectness && r_shadowCorrectness->integer ) ? qtrue : qfalse;
 
-	if ( !r_speeds->integer && !shadowDebug && !csmDebug && !spotShadowDebug && !staticLightDebug && !surfaceLightDebug ) {
+	if ( !r_speeds->integer && !shadowDebug && !csmDebug && !spotShadowDebug && !staticLightDebug && !surfaceLightDebug && !shadowCorrectnessDebug ) {
 		// clear the counters even if we aren't printing
 		Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 		Com_Memset( &tr.shadowManager, 0, sizeof( tr.shadowManager ) );
+		Com_Memset( &tr.shadowCorrectnessDebug, 0, sizeof( tr.shadowCorrectnessDebug ) );
 		Com_Memset( &tr.csmDebugPlan, 0, sizeof( tr.csmDebugPlan ) );
 		Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
 		return;
@@ -105,6 +342,7 @@ static void R_PerformanceCounters( void ) {
 			manager->csmCascadeCount,
 			manager->csmAtlasWidth, manager->csmAtlasHeight,
 			manager->csmAtlasPublication.generation );
+		R_PrintShadowAtlasContractDebug( manager, &manager->csmPlan, "vulkan" );
 
 		if ( r_speeds->integer == 4 || spotShadowDebug || surfaceLightDebug ) {
 			ri.Printf( PRINT_ALL,
@@ -125,6 +363,16 @@ static void R_PerformanceCounters( void ) {
 				manager->spotSurfaceRejectedOffView,
 				manager->spotSurfaceRejectedOverBudget,
 				manager->spotSurfaceRejectedMalformed );
+		}
+
+		if ( ( r_speeds->integer == 4 || spotShadowDebug ) &&
+			( backEnd.pc.c_spotShadowAtlasCacheHits ||
+				backEnd.pc.c_spotShadowAtlasCacheMisses ||
+				backEnd.pc.c_spotShadowAtlasCacheUncacheable ) ) {
+			ri.Printf( PRINT_ALL, "spot shadow atlas cache h/m/u:%i/%i/%i\n",
+				backEnd.pc.c_spotShadowAtlasCacheHits,
+				backEnd.pc.c_spotShadowAtlasCacheMisses,
+				backEnd.pc.c_spotShadowAtlasCacheUncacheable );
 		}
 	}
 
@@ -171,13 +419,25 @@ static void R_PerformanceCounters( void ) {
 #ifdef USE_PMLIGHT
 	if ( ( r_speeds->integer == 4 || shadowDebug ) &&
 		( tr.pc.c_dlightShadowConsidered || tr.pc.c_dlightShadowSkippedDisabled ) ) {
+		int requestedFilter = r_dlightShadowFilter ?
+			r_dlightShadowFilter->integer : SHADOW_FILTER_POISSON_4;
+		int effectiveFilter = ( r_shadowCorrectness && r_shadowCorrectness->integer ) ?
+			SHADOW_FILTER_HARD : R_ShadowClampFilterMode( requestedFilter );
+		float filterInner = 0.0f;
+		float filterOuter = 0.0f;
+
+		R_ShadowFilterOffsets( effectiveFilter, &filterInner, &filterOuter );
+
 		ri.Printf( PRINT_ALL,
-			"dlight shadows plan:%i/%i cand:%i atlas:%ix%i/%i fill:%i%% render lights:%i faces:%i batches:%i draws:%i surfs:%i cpu:%ims skip disabled:%i linear:%i nosurf:%i proj:%i budget:%i lowvalue:%i\n",
+			"dlight shadows plan:%i/%i cand:%i atlas:%ix%i/%i fill:%i%% filter:%s taps:%i offsets:%.2f/%.2f render lights:%i faces:%i batches:%i draws:%i surfs:%i cpu:%ims skip disabled:%i linear:%i nosurf:%i proj:%i budget:%i lowvalue:%i\n",
 			tr.pc.c_dlightShadowPlanned, tr.pc.c_dlightShadowConsidered,
 			tr.pc.c_dlightShadowCandidates,
 			tr.pc.c_dlightShadowAtlasWidth, tr.pc.c_dlightShadowAtlasHeight,
 			tr.pc.c_dlightShadowAtlasFaceSize,
 			tr.pc.c_dlightShadowAtlasFill,
+			R_ShadowFilterModeName( effectiveFilter ),
+			R_ShadowFilterSampleCount( effectiveFilter ),
+			filterInner, filterOuter,
 			backEnd.pc.c_dlightShadowAtlasLights,
 			backEnd.pc.c_dlightShadowAtlasFaces,
 			backEnd.pc.c_dlightShadowAtlasBatches,
@@ -191,25 +451,29 @@ static void R_PerformanceCounters( void ) {
 	}
 #endif
 
+	if ( shadowCorrectnessDebug ) {
+		R_PrintShadowCorrectnessDebug( "vulkan" );
+	}
+
 	if ( ( r_speeds->integer == 4 || csmDebug ) &&
 		( tr.csmDebugPlan.enabled || ( csmDebug && r_csmShadows && r_csmShadows->integer ) ) ) {
 		if ( tr.csmDebugPlan.enabled && tr.csmDebugPlan.cascadeCount > 0 ) {
 			const csmPlan_t *csm = &tr.csmDebugPlan;
 			float splitFar[CSM_MAX_CASCADES] = { 0.0f };
 			float texelSize[CSM_MAX_CASCADES] = { 0.0f };
-			float snapDepth[CSM_MAX_CASCADES] = { 0.0f };
+			float depthCenter[CSM_MAX_CASCADES] = { 0.0f };
 			const char *skyShaderName;
 			int i;
 
 			for ( i = 0; i < csm->cascadeCount && i < CSM_MAX_CASCADES; i++ ) {
 				splitFar[i] = csm->cascades[i].splitFar;
 				texelSize[i] = csm->cascades[i].texelSize;
-				snapDepth[i] = 0.5f * ( csm->cascades[i].bounds[0][0] + csm->cascades[i].bounds[1][0] );
+				depthCenter[i] = 0.5f * ( csm->cascades[i].bounds[0][0] + csm->cascades[i].bounds[1][0] );
 			}
 			skyShaderName = csm->skyShaderName[0] ? csm->skyShaderName : "<unknown>";
 
 			ri.Printf( PRINT_ALL,
-				"csm shadows sky:%s cascades:%i res:%i max:%i lambda:%.2f filter:%s strength:%.2f rbias:%.2f cbias:%.2f/%.2f/%.2f light-dir:%.2f %.2f %.2f to-sun:%.2f %.2f %.2f split far:%.0f %.0f %.0f %.0f texel:%.2f %.2f %.2f %.2f snap depth:%.0f %.0f %.0f %.0f caster:%i cache h/m/u:%i/%i/%i cpu:%ims recv world:%i ent:%i\n",
+				"csm shadows sky:%s cascades:%i res:%i max:%i lambda:%.2f filter:%s strength:%.2f rbias:%.2f cbias:%.2f/%.2f/%.2f light-dir:%.2f %.2f %.2f to-sun:%.2f %.2f %.2f split far:%.0f %.0f %.0f %.0f texel:%.2f %.2f %.2f %.2f depth center:%.0f %.0f %.0f %.0f caster:%i cache h/m/u:%i/%i/%i cpu:%ims recv world:%i ent:%i\n",
 				skyShaderName,
 				tr.pc.c_csmCascades, tr.pc.c_csmResolution, tr.pc.c_csmMaxDistance,
 				csm->splitLambda, R_ShadowFilterModeName( csm->filterMode ),
@@ -219,7 +483,7 @@ static void R_PerformanceCounters( void ) {
 				csm->directionToSun[0], csm->directionToSun[1], csm->directionToSun[2],
 				splitFar[0], splitFar[1], splitFar[2], splitFar[3],
 				texelSize[0], texelSize[1], texelSize[2], texelSize[3],
-				snapDepth[0], snapDepth[1], snapDepth[2], snapDepth[3],
+				depthCenter[0], depthCenter[1], depthCenter[2], depthCenter[3],
 				backEnd.pc.c_csmShadowAtlasSurfaces,
 				backEnd.pc.c_csmShadowAtlasCacheHits,
 				backEnd.pc.c_csmShadowAtlasCacheMisses,
@@ -227,6 +491,7 @@ static void R_PerformanceCounters( void ) {
 				backEnd.pc.c_csmShadowAtlasMsec,
 				backEnd.pc.c_csmShadowReceiverWorldSurfaces,
 				backEnd.pc.c_csmShadowReceiverEntitySurfaces );
+			R_PrintCSMCascadeDebug( csm, "vulkan", qtrue, qtrue, qtrue, qtrue );
 		} else if ( tr.pc.c_csmSkippedNoWorldRef ) {
 			ri.Printf( PRINT_ALL, "csm plan cascades:0 skip no-world\n" );
 		} else if ( tr.pc.c_csmSkippedNoSun ) {
@@ -246,6 +511,7 @@ static void R_PerformanceCounters( void ) {
 
 	Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 	Com_Memset( &tr.shadowManager, 0, sizeof( tr.shadowManager ) );
+	Com_Memset( &tr.shadowCorrectnessDebug, 0, sizeof( tr.shadowCorrectnessDebug ) );
 	Com_Memset( &tr.csmDebugPlan, 0, sizeof( tr.csmDebugPlan ) );
 	Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
 }

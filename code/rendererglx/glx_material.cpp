@@ -1078,6 +1078,7 @@ static void GLX_Material_ResetRuntime( MaterialState *state, qboolean deleteProg
 
 	state->fns = {};
 	state->programCount = 0;
+	state->lastFoundProgram = 0;
 	state->currentProgram = 0;
 	state->ready = qfalse;
 	GLX_Material_SetReason( state, "not initialized" );
@@ -1090,10 +1091,22 @@ static MaterialProgram *GLX_Material_FindProgram( MaterialState *state,
 		return nullptr;
 	}
 
+	/* Draws arrive sorted by shader, so consecutive binds usually repeat the
+	   same stage key; try the most recently found program before scanning. */
+	if ( state->lastFoundProgram >= 0 && state->lastFoundProgram < state->programCount ) {
+		MaterialProgram *last = &state->programs[state->lastFoundProgram];
+
+		if ( last->valid && GLX_Material_StageKeyEquals( last->stageKey, stageKey ) ) {
+			state->cacheHits++;
+			return last;
+		}
+	}
+
 	for ( int i = 0; i < state->programCount; i++ ) {
 		if ( state->programs[i].valid &&
 			GLX_Material_StageKeyEquals( state->programs[i].stageKey, stageKey ) ) {
 			state->cacheHits++;
+			state->lastFoundProgram = i;
 			return &state->programs[i];
 		}
 	}

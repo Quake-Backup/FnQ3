@@ -86,6 +86,7 @@ struct MaterialState {
 	MaterialProgram programs[GLX_MATERIAL_PROGRAM_LIMIT];
 	RenderProductTier tier;
 	int programCount;
+	int lastFoundProgram;
 	GLuint currentProgram;
 	qboolean ready;
 	char reason[128];

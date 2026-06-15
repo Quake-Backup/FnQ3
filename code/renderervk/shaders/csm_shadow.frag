@@ -70,8 +70,13 @@ void main() {
 	float forward_depth = clamp(light_coord.x - csmInvExtents.w, 0.0, 1.0);
 	float reversed_depth = clamp(1.0 - light_coord.x + csmInvExtents.w, 0.0, 1.0);
 	float receiver_depth = mix(forward_depth, reversed_depth, csmShadowColor.w);
-	vec2 atlas_uv = vec2(csmSplitAtlas.z + light_coord.y * csmSplitAtlas.w, light_coord.z);
 	vec2 texel = 1.0 / vec2(textureSize(csm_shadow_texture, 0));
+	float atlas_x = csmSplitAtlas.z + light_coord.y * csmSplitAtlas.w;
+	float atlas_x_min = csmSplitAtlas.z + texel.x;
+	float atlas_x_max = csmSplitAtlas.z + csmSplitAtlas.w - texel.x;
+	vec2 atlas_uv = vec2(
+		clamp(atlas_x, atlas_x_min, atlas_x_max),
+		clamp(1.0 - light_coord.z, texel.y, 1.0 - texel.y));
 	vec2 filter_a = vec2(texFactors.z);
 	vec2 filter_b = vec2(texFactors.w);
 	float occlusion = sample_shadow(atlas_uv, receiver_depth, texel, filter_a, filter_b);

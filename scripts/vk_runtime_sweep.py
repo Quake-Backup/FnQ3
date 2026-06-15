@@ -79,7 +79,9 @@ DLIGHT_SHADOW_PLAN_RE = re.compile(
     r"dlight shadows plan:(?P<planned>\d+)/(?P<considered>\d+)\s+"
     r"cand:(?P<candidates>\d+)\s+"
     r"atlas:(?P<atlasWidth>\d+)x(?P<atlasHeight>\d+)/(?P<faceSize>\d+)\s+"
-    r"fill:(?P<fill>\d+)%\s+render lights:(?P<renderLights>\d+)\s+"
+    r"fill:(?P<fill>\d+)%\s+"
+    r"(?:filter:\S+\s+taps:\d+\s+offsets:[+-]?\d+(?:\.\d+)?/[+-]?\d+(?:\.\d+)?\s+)?"
+    r"render lights:(?P<renderLights>\d+)\s+"
     r"faces:(?P<faces>\d+)\s+batches:(?P<batches>\d+)\s+"
     r"draws:(?P<draws>\d+)\s+surfs:(?P<surfs>\d+)\s+"
     r"cpu:(?P<cpuMsec>\d+)ms",
@@ -106,6 +108,22 @@ SHADOW_MANAGER_RE = re.compile(
     r"csm:(?P<csmCascadeCount>\d+)\s+"
     r"atlas:(?P<csmAtlasWidth>\d+)x(?P<csmAtlasHeight>\d+)\s+"
     r"gen:(?P<csmGeneration>\d+)",
+    re.IGNORECASE,
+)
+SHADOW_ATLAS_CONTRACT_RE = re.compile(
+    r"shadow atlas contract backend:(?P<shadowAtlasBackend>\S+)\s+"
+    r"atlas:(?P<shadowAtlasName>\S+)\s+"
+    r"active:(?P<shadowAtlasActive>\d+)\s+"
+    r"tile:(?P<shadowAtlasTileSize>\d+)\s+"
+    r"size:(?P<shadowAtlasWidth>\d+)x(?P<shadowAtlasHeight>\d+)\s+"
+    r"records:(?P<shadowAtlasRecords>\d+)\s+"
+    r"fill:(?P<shadowAtlasFill>\d+)%\s+"
+    r"filter:(?P<shadowAtlasFilter>\S+)\s+"
+    r"pad:(?P<shadowAtlasPadTexels>\d+)\s+"
+    r"clamp:(?P<shadowAtlasClampTexels>\d+)\s+"
+    r"sampler:(?P<shadowAtlasSampler>\S+)\s+"
+    r"allocation:(?P<shadowAtlasAllocation>\S+)\s+"
+    r"deterministic:(?P<shadowAtlasDeterministic>\d+)",
     re.IGNORECASE,
 )
 SURFACELIGHT_SPOT_PLAN_RE = re.compile(
@@ -136,7 +154,7 @@ CSM_SHADOWS_RE = re.compile(
     r"lambda:\S+\s+filter:\S+\s+strength:\S+\s+rbias:\S+\s+"
     r"cbias:\S+\s+light-dir:\S+\s+\S+\s+\S+\s+to-sun:\S+\s+\S+\s+\S+\s+"
     r"split far:\S+\s+\S+\s+\S+\s+\S+\s+texel:\S+\s+\S+\s+\S+\s+\S+\s+"
-    r"(?:snap depth:(?P<csmSnapDepth0>-?\d+(?:\.\d+)?)\s+"
+    r"(?:(?:depth center|snap depth):(?P<csmSnapDepth0>-?\d+(?:\.\d+)?)\s+"
     r"(?P<csmSnapDepth1>-?\d+(?:\.\d+)?)\s+"
     r"(?P<csmSnapDepth2>-?\d+(?:\.\d+)?)\s+"
     r"(?P<csmSnapDepth3>-?\d+(?:\.\d+)?)\s+)?"
@@ -144,6 +162,23 @@ CSM_SHADOWS_RE = re.compile(
     r"cache h/m/u:(?P<csmCacheHits>\d+)/(?P<csmCacheMisses>\d+)/(?P<csmCacheUncacheable>\d+)\s+"
     r"cpu:(?P<csmCpuMsec>\d+)ms\s+"
     r"recv world:(?P<csmReceiverWorldSurfaces>\d+)\s+ent:(?P<csmReceiverEntitySurfaces>\d+)",
+    re.IGNORECASE,
+)
+CSM_CASCADE_RE = re.compile(
+    r"csm cascade backend:(?P<csmCascadeBackend>\S+)\s+"
+    r"index:(?P<csmCascadeIndex>\d+)\s+"
+    r"split:(?P<csmCascadeSplitNear>-?\d+(?:\.\d+)?)\.\.(?P<csmCascadeSplitFar>-?\d+(?:\.\d+)?)\s+"
+    r"atlas:(?P<csmCascadeAtlasX>-?\d+),(?P<csmCascadeAtlasY>-?\d+)/(?P<csmCascadeAtlasSize>\d+)\s+"
+    r"view:(?P<csmCascadeViewX>-?\d+),(?P<csmCascadeViewY>-?\d+)\s+(?P<csmCascadeViewWidth>\d+)x(?P<csmCascadeViewHeight>\d+)\s+"
+    r"api:(?P<csmCascadeApiX>-?\d+),(?P<csmCascadeApiY>-?\d+)\s+(?P<csmCascadeApiWidth>\d+)x(?P<csmCascadeApiHeight>\d+)\s+"
+    r"sample-y:(?P<csmCascadeSampleY>\S+)\s+clip-y:(?P<csmCascadeClipY>\S+)\s+"
+    r"depth:(?P<csmCascadeDepth>\S+)\s+ndc:(?P<csmCascadeNdc>\S+)\s+"
+    r"clear:(?P<csmCascadeClear>-?\d+(?:\.\d+)?)\s+compare:(?P<csmCascadeCompare>\S+)\s+"
+    r"bounds x:(?P<csmCascadeBoundMinX>-?\d+(?:\.\d+)?)\.\.(?P<csmCascadeBoundMaxX>-?\d+(?:\.\d+)?)\s+"
+    r"y:(?P<csmCascadeBoundMinY>-?\d+(?:\.\d+)?)\.\.(?P<csmCascadeBoundMaxY>-?\d+(?:\.\d+)?)\s+"
+    r"z:(?P<csmCascadeBoundMinZ>-?\d+(?:\.\d+)?)\.\.(?P<csmCascadeBoundMaxZ>-?\d+(?:\.\d+)?)\s+"
+    r"origin:(?P<csmCascadeOriginX>-?\d+(?:\.\d+)?)\s+(?P<csmCascadeOriginY>-?\d+(?:\.\d+)?)\s+(?P<csmCascadeOriginZ>-?\d+(?:\.\d+)?)\s+"
+    r"texel:(?P<csmCascadeTexel>-?\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 CSM_PLAN_SKIP_RE = re.compile(
@@ -883,6 +918,15 @@ def combined_shadow_atlas_summary_active(summary: object) -> bool:
     )
 
 
+def shadow_profile_summary_active(summary: object) -> bool:
+    return (
+        isinstance(summary, dict)
+        and bool(summary.get("found"))
+        and bool(summary.get("profileReady"))
+        and str(summary.get("status", "")).lower() == "passed"
+    )
+
+
 def combined_shadow_atlas_summary(dlight_shadow: object) -> dict[str, object]:
     if not isinstance(dlight_shadow, dict):
         return {
@@ -1233,7 +1277,7 @@ def csm_stability_summary(
     if csm_field("csmDebugCascades") <= 0 or csm_field("csmDebugResolution") <= 0:
         failures.append("CSM shimmer path did not report cascade debug telemetry.")
     if csm_field("csmSnapDepthSamples") <= 0:
-        failures.append("CSM shimmer path is missing snapped light-depth telemetry.")
+        failures.append("CSM shimmer path is missing light-depth center telemetry.")
     if (
         csm_field("csmCacheHits")
         + csm_field("csmCacheMisses")
@@ -1247,7 +1291,7 @@ def csm_stability_summary(
         )
     if max_snap_depth_delta > CSM_SHIMMER_MAX_SNAP_DEPTH_DELTA_MILLI:
         failures.append(
-            "CSM shimmer path snapped light-depth delta exceeded smoke bound: "
+            "CSM shimmer path light-depth center delta exceeded smoke bound: "
             f"{max_snap_depth_delta}>{CSM_SHIMMER_MAX_SNAP_DEPTH_DELTA_MILLI} milli-units."
         )
 
@@ -2106,6 +2150,107 @@ def shadow_manager_sample(match: re.Match[str]) -> dict[str, int]:
     return sample
 
 
+def shadow_atlas_contract_sample(match: re.Match[str]) -> dict[str, int]:
+    backend = match.group("shadowAtlasBackend").lower()
+    atlas = match.group("shadowAtlasName").lower()
+    sampler = match.group("shadowAtlasSampler").lower()
+    allocation = match.group("shadowAtlasAllocation").lower()
+
+    return {
+        "shadowAtlasSamples": 1,
+        "shadowAtlasBackendGlx": 1 if backend == "glx" else 0,
+        "shadowAtlasBackendVulkan": 1 if backend == "vulkan" else 0,
+        "shadowAtlasPoint": 1 if atlas == "point" else 0,
+        "shadowAtlasSpot": 1 if atlas == "spot" else 0,
+        "shadowAtlasCsm": 1 if atlas == "csm" else 0,
+        "shadowAtlasActive": int(match.group("shadowAtlasActive")),
+        "shadowAtlasTileSize": int(match.group("shadowAtlasTileSize")),
+        "shadowAtlasWidth": int(match.group("shadowAtlasWidth")),
+        "shadowAtlasHeight": int(match.group("shadowAtlasHeight")),
+        "shadowAtlasRecords": int(match.group("shadowAtlasRecords")),
+        "shadowAtlasFill": int(match.group("shadowAtlasFill")),
+        "shadowAtlasPadTexels": int(match.group("shadowAtlasPadTexels")),
+        "shadowAtlasClampTexels": int(match.group("shadowAtlasClampTexels")),
+        "shadowAtlasSamplerClampEdge": 1 if sampler == "clamp-edge" else 0,
+        "shadowAtlasAllocationPriorityDlightIndex": (
+            1 if allocation == "priority-dlight-index" else 0
+        ),
+        "shadowAtlasAllocationPrioritySourceIndex": (
+            1 if allocation == "priority-source-index" else 0
+        ),
+        "shadowAtlasAllocationCascadeIndex": 1 if allocation == "cascade-index" else 0,
+        "shadowAtlasDeterministic": int(match.group("shadowAtlasDeterministic")),
+    }
+
+
+def shadow_atlas_contract_summary(samples: list[dict[str, int]]) -> dict[str, object]:
+    if not samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "sampleCount": 0,
+            "atlasCoverage": {"point": False, "spot": False, "csm": False},
+            "activeAtlasCoverage": {"point": False, "spot": False, "csm": False},
+            "latest": {},
+            "max": {},
+            "failures": [],
+        }
+
+    summary = summarize_int_samples(samples)
+    failures: list[str] = []
+    atlas_fields = {
+        "point": ("shadowAtlasPoint", "shadowAtlasAllocationPriorityDlightIndex"),
+        "spot": ("shadowAtlasSpot", "shadowAtlasAllocationPrioritySourceIndex"),
+        "csm": ("shadowAtlasCsm", "shadowAtlasAllocationCascadeIndex"),
+    }
+    atlas_coverage = {
+        name: any(sample.get(field, 0) > 0 for sample in samples)
+        for name, (field, _allocation_field) in atlas_fields.items()
+    }
+    active_atlas_coverage = {
+        name: any(
+            sample.get(field, 0) > 0 and sample.get("shadowAtlasActive", 0) > 0
+            for sample in samples
+        )
+        for name, (field, _allocation_field) in atlas_fields.items()
+    }
+
+    for name, (field, allocation_field) in atlas_fields.items():
+        for sample in samples:
+            if sample.get(field, 0) <= 0:
+                continue
+            if sample.get("shadowAtlasClampTexels", 0) < sample.get("shadowAtlasPadTexels", 0):
+                failures.append(f"{name} atlas clamp is smaller than its filter pad.")
+            if sample.get("shadowAtlasSamplerClampEdge", 0) <= 0:
+                failures.append(f"{name} atlas sampler is not clamp-edge.")
+            if sample.get(allocation_field, 0) <= 0:
+                failures.append(f"{name} atlas allocation policy is unexpected.")
+            if sample.get("shadowAtlasDeterministic", 0) <= 0:
+                failures.append(f"{name} atlas did not report deterministic allocation.")
+            if sample.get("shadowAtlasActive", 0) <= 0:
+                continue
+            if sample.get("shadowAtlasWidth", 0) <= 0 or sample.get("shadowAtlasHeight", 0) <= 0:
+                failures.append(f"{name} atlas active sample reported no dimensions.")
+            if sample.get("shadowAtlasTileSize", 0) <= 0:
+                failures.append(f"{name} atlas active sample reported no tile size.")
+            if sample.get("shadowAtlasRecords", 0) <= 0:
+                failures.append(f"{name} atlas active sample reported no records.")
+            fill = sample.get("shadowAtlasFill", 0)
+            if fill <= 0 or fill > 100:
+                failures.append(f"{name} atlas pressure is outside 1..100 percent.")
+
+    return {
+        "found": True,
+        "status": "failed" if failures else "passed",
+        "sampleCount": summary["sampleCount"],
+        "atlasCoverage": atlas_coverage,
+        "activeAtlasCoverage": active_atlas_coverage,
+        "latest": summary["latest"],
+        "max": summary["max"],
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
 def csm_shadow_sample(match: re.Match[str]) -> dict[str, int]:
     sample: dict[str, int] = {}
     snap_depth_present = False
@@ -2125,6 +2270,291 @@ def csm_shadow_sample(match: re.Match[str]) -> dict[str, int]:
             sample[name] = int(value)
     sample["csmSnapDepthSamples"] = 1 if snap_depth_present else 0
     return sample
+
+
+def csm_cascade_sample(match: re.Match[str]) -> dict[str, int]:
+    def milli(name: str) -> int:
+        return int(round(float(match.group(name)) * 1000.0))
+
+    backend = match.group("csmCascadeBackend").lower()
+    sample_y = match.group("csmCascadeSampleY").lower()
+    clip_y = match.group("csmCascadeClipY").lower()
+    depth = match.group("csmCascadeDepth").lower()
+    ndc = match.group("csmCascadeNdc")
+    compare = match.group("csmCascadeCompare").lower()
+
+    sample = {
+        "csmCascadeSamples": 1,
+        "csmCascadeBackendGlx": 1 if backend == "glx" else 0,
+        "csmCascadeBackendVulkan": 1 if backend == "vulkan" else 0,
+        "csmCascadeIndex": int(match.group("csmCascadeIndex")),
+        "csmCascadeSplitNearMilli": milli("csmCascadeSplitNear"),
+        "csmCascadeSplitFarMilli": milli("csmCascadeSplitFar"),
+        "csmCascadeAtlasX": int(match.group("csmCascadeAtlasX")),
+        "csmCascadeAtlasY": int(match.group("csmCascadeAtlasY")),
+        "csmCascadeAtlasSize": int(match.group("csmCascadeAtlasSize")),
+        "csmCascadeViewX": int(match.group("csmCascadeViewX")),
+        "csmCascadeViewY": int(match.group("csmCascadeViewY")),
+        "csmCascadeViewWidth": int(match.group("csmCascadeViewWidth")),
+        "csmCascadeViewHeight": int(match.group("csmCascadeViewHeight")),
+        "csmCascadeApiX": int(match.group("csmCascadeApiX")),
+        "csmCascadeApiY": int(match.group("csmCascadeApiY")),
+        "csmCascadeApiWidth": int(match.group("csmCascadeApiWidth")),
+        "csmCascadeApiHeight": int(match.group("csmCascadeApiHeight")),
+        "csmCascadeSampleYInverted": 1 if sample_y == "inverted" else 0,
+        "csmCascadeClipYFlipped": 1 if clip_y == "flipped" else 0,
+        "csmCascadeDepthForward": 1 if depth == "forward" else 0,
+        "csmCascadeNdcZeroToOne": 1 if ndc == "0..1" else 0,
+        "csmCascadeClearMilli": milli("csmCascadeClear"),
+        "csmCascadeCompareLequal": 1 if compare == "lequal" else 0,
+        "csmCascadeBoundMinXMilli": milli("csmCascadeBoundMinX"),
+        "csmCascadeBoundMaxXMilli": milli("csmCascadeBoundMaxX"),
+        "csmCascadeBoundMinYMilli": milli("csmCascadeBoundMinY"),
+        "csmCascadeBoundMaxYMilli": milli("csmCascadeBoundMaxY"),
+        "csmCascadeBoundMinZMilli": milli("csmCascadeBoundMinZ"),
+        "csmCascadeBoundMaxZMilli": milli("csmCascadeBoundMaxZ"),
+        "csmCascadeOriginXMilli": milli("csmCascadeOriginX"),
+        "csmCascadeOriginYMilli": milli("csmCascadeOriginY"),
+        "csmCascadeOriginZMilli": milli("csmCascadeOriginZ"),
+        "csmCascadeTexelMilli": milli("csmCascadeTexel"),
+    }
+    return sample
+
+
+def csm_cascade_contract_summary(samples: list[dict[str, int]]) -> dict[str, object]:
+    summary = summarize_int_samples(samples)
+    failures: list[str] = []
+    maximum = summary["max"] if isinstance(summary.get("max"), dict) else {}
+
+    if not samples:
+        return {
+            "found": False,
+            "status": "missing",
+            "sampleCount": 0,
+            "latest": {},
+            "max": {},
+            "failures": [],
+        }
+
+    if int(maximum.get("csmCascadeAtlasSize", 0)) <= 0:
+        failures.append("CSM cascade contract reported no atlas tile size.")
+    if int(maximum.get("csmCascadeViewWidth", 0)) <= 0 or int(maximum.get("csmCascadeViewHeight", 0)) <= 0:
+        failures.append("CSM cascade contract reported no renderer viewport dimensions.")
+    if int(maximum.get("csmCascadeApiWidth", 0)) <= 0 or int(maximum.get("csmCascadeApiHeight", 0)) <= 0:
+        failures.append("CSM cascade contract reported no API viewport dimensions.")
+    if int(maximum.get("csmCascadeDepthForward", 0)) <= 0 or int(maximum.get("csmCascadeCompareLequal", 0)) <= 0:
+        failures.append("CSM cascade contract did not report forward lequal depth.")
+    if int(maximum.get("csmCascadeTexelMilli", 0)) <= 0:
+        failures.append("CSM cascade contract reported no texel size.")
+
+    return {
+        "found": True,
+        "status": "failed" if failures else "passed",
+        "sampleCount": summary["sampleCount"],
+        "latest": summary["latest"],
+        "max": maximum,
+        "failures": list(dict.fromkeys(failures)),
+    }
+
+
+def shadow_profile_summary(
+    dlight_samples: list[dict[str, int]],
+    manager_samples: list[dict[str, int]],
+    shadow_atlas_samples: list[dict[str, int]],
+    surface_spot_samples: list[dict[str, int]],
+    csm_samples: list[dict[str, int]],
+    csm_cascade_samples: list[dict[str, int]],
+) -> dict[str, object]:
+    total_samples = (
+        len(dlight_samples)
+        + len(manager_samples)
+        + len(shadow_atlas_samples)
+        + len(surface_spot_samples)
+        + len(csm_samples)
+        + len(csm_cascade_samples)
+    )
+    empty_buckets = {
+        "rasterWork": {},
+        "samplerPressure": {},
+        "orchestrationPressure": {},
+        "cpuTiming": {},
+    }
+    if total_samples <= 0:
+        return {
+            "found": False,
+            "status": "missing",
+            "profileReady": False,
+            "sampleCount": 0,
+            "sampleCounts": {
+                "dlight": 0,
+                "manager": 0,
+                "atlas": 0,
+                "surfaceSpot": 0,
+                "csm": 0,
+                "csmCascade": 0,
+            },
+            "costBuckets": empty_buckets,
+            "failures": [],
+        }
+
+    dlight_max = summarize_int_samples(dlight_samples)["max"] if dlight_samples else {}
+    manager_max = summarize_int_samples(manager_samples)["max"] if manager_samples else {}
+    atlas_summary = shadow_atlas_contract_summary(shadow_atlas_samples)
+    atlas_max = atlas_summary.get("max", {}) if isinstance(atlas_summary, dict) else {}
+    surface_spot_max = (
+        summarize_int_samples(surface_spot_samples)["max"] if surface_spot_samples else {}
+    )
+    csm_runtime = csm_shadow_runtime_summary(manager_samples, csm_samples)
+    csm_max = summarize_int_samples(csm_samples)["max"] if csm_samples else {}
+    cascade_contract = csm_cascade_contract_summary(csm_cascade_samples)
+
+    def field(maximum: object, name: str) -> int:
+        return int_sample_field(maximum, name) if isinstance(maximum, dict) else 0
+
+    def atlas_field(atlas_name: str, field_name: str) -> int:
+        atlas_flag = f"shadowAtlas{atlas_name}"
+        return max(
+            (
+                int_sample_field(sample, field_name)
+                for sample in shadow_atlas_samples
+                if int_sample_field(sample, atlas_flag) > 0
+            ),
+            default=0,
+        )
+
+    point_work = (
+        field(manager_max, "pointScheduled") > 0
+        or field(manager_max, "pointPublished") > 0
+        or field(manager_max, "pointRecords") > 0
+        or field(dlight_max, "planned") > 0
+        or field(dlight_max, "renderLights") > 0
+    )
+    spot_work = (
+        field(manager_max, "spotScheduled") > 0
+        or field(manager_max, "spotPublished") > 0
+        or field(manager_max, "spotPlans") > 0
+        or field(surface_spot_max, "surfaceSpotPlans") > 0
+    )
+    csm_work = (
+        field(manager_max, "csmAtlasScheduled") > 0
+        or field(manager_max, "csmReceiverScheduled") > 0
+        or field(manager_max, "csmPublished") > 0
+        or field(manager_max, "csmCascadeCount") > 0
+        or field(csm_max, "csmDebugCascades") > 0
+    )
+    atlas_work = (
+        point_work
+        or spot_work
+        or csm_work
+        or field(atlas_max, "shadowAtlasActive") > 0
+        or field(atlas_max, "shadowAtlasRecords") > 0
+    )
+
+    raster_work = {
+        "pointRenderLights": field(dlight_max, "renderLights"),
+        "pointFaces": field(dlight_max, "faces"),
+        "pointBatches": field(dlight_max, "batches"),
+        "pointDraws": field(dlight_max, "draws"),
+        "pointSurfaces": field(dlight_max, "surfs"),
+        "spotPlans": field(manager_max, "spotPlans"),
+        "spotSurfacePlans": field(manager_max, "spotSurfacePlans"),
+        "spotAllocated": field(surface_spot_max, "surfaceSpotAllocated"),
+        "csmCascades": max(field(manager_max, "csmCascadeCount"), field(csm_max, "csmDebugCascades")),
+        "csmCasterSurfaces": field(csm_max, "csmCasterSurfaces"),
+        "csmReceiverWorldSurfaces": field(csm_max, "csmReceiverWorldSurfaces"),
+        "csmReceiverEntitySurfaces": field(csm_max, "csmReceiverEntitySurfaces"),
+        "csmReceiverSurfaces": (
+            field(csm_max, "csmReceiverWorldSurfaces")
+            + field(csm_max, "csmReceiverEntitySurfaces")
+        ),
+    }
+    point_atlas_fill = max(field(manager_max, "pointAtlasFill"), atlas_field("Point", "shadowAtlasFill"))
+    spot_atlas_fill = max(field(manager_max, "spotAtlasFill"), atlas_field("Spot", "shadowAtlasFill"))
+    csm_atlas_fill = atlas_field("Csm", "shadowAtlasFill")
+    sampler_pressure = {
+        "pointAtlasFill": point_atlas_fill,
+        "spotAtlasFill": spot_atlas_fill,
+        "csmAtlasFill": csm_atlas_fill,
+        "maxAtlasFill": max(point_atlas_fill, spot_atlas_fill, csm_atlas_fill),
+        "maxAtlasRecords": max(
+            field(manager_max, "pointRecords"),
+            field(manager_max, "spotPlans"),
+            atlas_field("Point", "shadowAtlasRecords"),
+            atlas_field("Spot", "shadowAtlasRecords"),
+            atlas_field("Csm", "shadowAtlasRecords"),
+        ),
+        "maxFilterPadTexels": field(atlas_max, "shadowAtlasPadTexels"),
+        "maxClampTexels": field(atlas_max, "shadowAtlasClampTexels"),
+        "samplerClampEdge": field(atlas_max, "shadowAtlasSamplerClampEdge"),
+        "deterministicAtlas": field(atlas_max, "shadowAtlasDeterministic"),
+    }
+    orchestration_pressure = {
+        "scheduledPasses": field(manager_max, "scheduledPasses"),
+        "scheduledMask": field(manager_max, "scheduledMask"),
+        "pointScheduled": field(manager_max, "pointScheduled"),
+        "spotScheduled": field(manager_max, "spotScheduled"),
+        "csmAtlasScheduled": field(manager_max, "csmAtlasScheduled"),
+        "csmReceiverScheduled": field(manager_max, "csmReceiverScheduled"),
+        "publishedAtlases": (
+            field(manager_max, "pointPublished")
+            + field(manager_max, "spotPublished")
+            + field(manager_max, "csmPublished")
+        ),
+    }
+    cpu_timing = {
+        "pointCpuMsec": field(dlight_max, "cpuMsec"),
+        "csmCpuMsec": field(csm_max, "csmCpuMsec"),
+        "maxCpuMsec": max(field(dlight_max, "cpuMsec"), field(csm_max, "csmCpuMsec")),
+        "timedPointSamples": len(dlight_samples),
+        "timedCsmSamples": len(csm_samples),
+    }
+
+    failures: list[str] = []
+    if not manager_samples:
+        failures.append("Shadow profile is missing shadow manager scheduling samples.")
+    if point_work and not dlight_samples:
+        failures.append("Shadow profile is missing point shadow raster and CPU timing samples.")
+    if csm_work and not csm_samples:
+        failures.append("Shadow profile is missing CSM raster and CPU timing samples.")
+    if not point_work and not spot_work and not csm_work:
+        failures.append("Shadow profile found no scheduled shadow work to profile.")
+    if atlas_work:
+        if not shadow_atlas_samples:
+            failures.append("Shadow profile is missing shadow atlas contract samples.")
+        elif atlas_summary.get("status") != "passed":
+            failures.append("Shadow profile is blocked by failing shadow atlas contract evidence.")
+            failures.extend(str(failure) for failure in atlas_summary.get("failures", [])[:4])
+    if csm_work:
+        if csm_runtime.get("status") != "passed":
+            failures.append("Shadow profile is blocked by failing CSM runtime evidence.")
+            failures.extend(str(failure) for failure in csm_runtime.get("failures", [])[:4])
+        if not csm_cascade_samples:
+            failures.append("Shadow profile is missing CSM cascade contract samples.")
+        elif cascade_contract.get("status") != "passed":
+            failures.append("Shadow profile is blocked by failing CSM cascade contract evidence.")
+            failures.extend(str(failure) for failure in cascade_contract.get("failures", [])[:4])
+
+    return {
+        "found": True,
+        "status": "failed" if failures else "passed",
+        "profileReady": not failures,
+        "sampleCount": total_samples,
+        "sampleCounts": {
+            "dlight": len(dlight_samples),
+            "manager": len(manager_samples),
+            "atlas": len(shadow_atlas_samples),
+            "surfaceSpot": len(surface_spot_samples),
+            "csm": len(csm_samples),
+            "csmCascade": len(csm_cascade_samples),
+        },
+        "costBuckets": {
+            "rasterWork": raster_work,
+            "samplerPressure": sampler_pressure,
+            "orchestrationPressure": orchestration_pressure,
+            "cpuTiming": cpu_timing,
+        },
+        "failures": list(dict.fromkeys(failures)),
+    }
 
 
 def csm_fallback_sample(match: re.Match[str]) -> dict[str, int]:
@@ -2295,9 +2725,12 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
             "scenes": {},
         },
         "surfaceLightSpotLod": surface_light_spot_lod_summary([]),
+        "shadowAtlasContract": shadow_atlas_contract_summary([]),
         "csmShadows": csm_shadow_runtime_summary([], []),
         "csmStability": csm_stability_summary([], []),
+        "csmCascadeContract": csm_cascade_contract_summary([]),
         "csmFallbacks": csm_fallback_summary([], [], CSM_FALLBACK_REQUIRED_REASONS),
+        "shadowProfile": shadow_profile_summary([], [], [], [], [], []),
     }
     if not log_path.exists():
         return info
@@ -2307,10 +2740,14 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
     scene_samples: dict[str, list[dict[str, int]]] = {}
     manager_samples: list[dict[str, int]] = []
     manager_scene_samples: dict[str, list[dict[str, int]]] = {}
+    shadow_atlas_samples: list[dict[str, int]] = []
+    shadow_atlas_scene_samples: dict[str, list[dict[str, int]]] = {}
     surface_spot_samples: list[dict[str, int]] = []
     surface_spot_scene_samples: dict[str, list[dict[str, int]]] = {}
     csm_samples: list[dict[str, int]] = []
     csm_scene_samples: dict[str, list[dict[str, int]]] = {}
+    csm_cascade_samples: list[dict[str, int]] = []
+    csm_cascade_scene_samples: dict[str, list[dict[str, int]]] = {}
     csm_fallback_samples: list[dict[str, int]] = []
     csm_fallback_scene_samples: dict[str, list[dict[str, int]]] = {}
     current_scene = ""
@@ -2319,8 +2756,10 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
             current_scene = sanitize(match.group("scene"))
             scene_samples.setdefault(current_scene, [])
             manager_scene_samples.setdefault(current_scene, [])
+            shadow_atlas_scene_samples.setdefault(current_scene, [])
             surface_spot_scene_samples.setdefault(current_scene, [])
             csm_scene_samples.setdefault(current_scene, [])
+            csm_cascade_scene_samples.setdefault(current_scene, [])
             csm_fallback_scene_samples.setdefault(current_scene, [])
             continue
         if match := DLIGHT_SHADOW_SCENE_END_RE.search(line):
@@ -2333,6 +2772,12 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
             if current_scene:
                 manager_scene_samples.setdefault(current_scene, []).append(sample)
             continue
+        if match := SHADOW_ATLAS_CONTRACT_RE.search(line):
+            sample = shadow_atlas_contract_sample(match)
+            shadow_atlas_samples.append(sample)
+            if current_scene:
+                shadow_atlas_scene_samples.setdefault(current_scene, []).append(sample)
+            continue
         if match := SURFACELIGHT_SPOT_PLAN_RE.search(line):
             sample = {name: int(value) for name, value in match.groupdict().items()}
             surface_spot_samples.append(sample)
@@ -2344,6 +2789,12 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
             csm_samples.append(sample)
             if current_scene:
                 csm_scene_samples.setdefault(current_scene, []).append(sample)
+            continue
+        if match := CSM_CASCADE_RE.search(line):
+            sample = csm_cascade_sample(match)
+            csm_cascade_samples.append(sample)
+            if current_scene:
+                csm_cascade_scene_samples.setdefault(current_scene, []).append(sample)
             continue
         if match := CSM_PLAN_SKIP_RE.search(line):
             sample = csm_fallback_sample(match)
@@ -2384,6 +2835,14 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
             if records
         }
         info["surfaceLightSpotLod"] = surface_spot_lod
+    if shadow_atlas_samples:
+        atlas_contract = shadow_atlas_contract_summary(shadow_atlas_samples)
+        atlas_contract["scenes"] = {
+            scene_id: shadow_atlas_contract_summary(records)
+            for scene_id, records in sorted(shadow_atlas_scene_samples.items())
+            if records
+        }
+        info["shadowAtlasContract"] = atlas_contract
     if manager_samples or csm_samples:
         csm_runtime = csm_shadow_runtime_summary(manager_samples, csm_samples)
         csm_runtime["scenes"] = {
@@ -2419,6 +2878,14 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
             for scene_id in stability_scene_ids
         }
         info["csmStability"] = csm_stability
+    if csm_cascade_samples:
+        cascade_contract = csm_cascade_contract_summary(csm_cascade_samples)
+        cascade_contract["scenes"] = {
+            scene_id: csm_cascade_contract_summary(records)
+            for scene_id, records in sorted(csm_cascade_scene_samples.items())
+            if records
+        }
+        info["csmCascadeContract"] = cascade_contract
     if manager_samples or csm_fallback_samples:
         fallback_scene_ids = sorted(
             scene_id
@@ -2449,6 +2916,54 @@ def analyze_dlight_shadow_log(log_path: Path) -> dict[str, object]:
             for scene_id in fallback_scene_ids
         }
         info["csmFallbacks"] = csm_fallbacks
+
+    if (
+        samples
+        or manager_samples
+        or shadow_atlas_samples
+        or surface_spot_samples
+        or csm_samples
+        or csm_cascade_samples
+    ):
+        profile = shadow_profile_summary(
+            samples,
+            manager_samples,
+            shadow_atlas_samples,
+            surface_spot_samples,
+            csm_samples,
+            csm_cascade_samples,
+        )
+        profile_scene_ids = sorted(
+            (
+                set(scene_samples)
+                | set(manager_scene_samples)
+                | set(shadow_atlas_scene_samples)
+                | set(surface_spot_scene_samples)
+                | set(csm_scene_samples)
+                | set(csm_cascade_scene_samples)
+            )
+            - set(CSM_FALLBACK_SCENE_REASONS)
+        )
+        profile["scenes"] = {
+            scene_id: shadow_profile_summary(
+                scene_samples.get(scene_id, []),
+                manager_scene_samples.get(scene_id, []),
+                shadow_atlas_scene_samples.get(scene_id, []),
+                surface_spot_scene_samples.get(scene_id, []),
+                csm_scene_samples.get(scene_id, []),
+                csm_cascade_scene_samples.get(scene_id, []),
+            )
+            for scene_id in profile_scene_ids
+            if (
+                scene_samples.get(scene_id)
+                or manager_scene_samples.get(scene_id)
+                or shadow_atlas_scene_samples.get(scene_id)
+                or surface_spot_scene_samples.get(scene_id)
+                or csm_scene_samples.get(scene_id)
+                or csm_cascade_scene_samples.get(scene_id)
+            )
+        }
+        info["shadowProfile"] = profile
 
     if not samples:
         return info

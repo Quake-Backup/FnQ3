@@ -77,6 +77,9 @@ qboolean GLX_Renderer_BindDlightProgram( qboolean linear, int fogMode,
 	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
 	const float *shadowAtlas, const float *shadowDepth, const float *shadowFilter );
 void GLX_Renderer_UnbindDlightProgram( void );
+qboolean GLX_Renderer_DlightProjectedProgramEnabled( void );
+qboolean GLX_Renderer_ProjectedDlightWorldOverlayActive( void );
+qboolean GLX_Renderer_BindProjectedDlightOverlayProgram( void );
 qboolean GLX_Renderer_DlightScissorEnabled( void );
 void GLX_Renderer_RecordDlightState( int event );
 void GLX_Renderer_RecordDlightBuild( int legacyLights, int legacySkippedLights,
@@ -175,6 +178,10 @@ qboolean GLX_Renderer_StaticWorldDrawDeviceRuns( int runCount, const int *counts
 qboolean GLX_Renderer_StaticWorldDrawSoftIndexes( int indexes, const void *indexData,
 	unsigned int indexType, int indexBytes, const char *shaderName, int sort, qboolean arenaBound );
 int GLX_Renderer_StaticWorldDrawDeviceRunsFiltered( int runCount, const int *counts,
+	const void *const *offsets, const int *firstItems, const int *itemCounts,
+	int *drawnRuns, unsigned int indexType, int indexBytes,
+	const char *shaderName, int sort, qboolean arenaBound );
+int GLX_Renderer_StaticWorldDrawProjectedDlightRuns( int runCount, const int *counts,
 	const void *const *offsets, const int *firstItems, const int *itemCounts,
 	int *drawnRuns, unsigned int indexType, int indexBytes,
 	const char *shaderName, int sort, qboolean arenaBound );

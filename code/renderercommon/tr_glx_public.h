@@ -76,6 +76,7 @@ any later version.
 
 #define GLX_PROJECTED_DLIGHT_FLAG_ADDITIVE 0x00000001u
 #define GLX_PROJECTED_DLIGHT_FLAG_LINEAR 0x00000002u
+#define GLX_PROJECTED_DLIGHT_FLAG_FRONT_CULL 0x00000004u
 
 typedef struct glxProjectedDlightRecord_s {
 	float origin[3];

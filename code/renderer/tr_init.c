@@ -140,6 +140,7 @@ cvar_t	*r_csmCasterSlopeBias;
 cvar_t	*r_csmCasterNormalBias;
 cvar_t	*r_csmDebug;
 cvar_t	*r_csmDebugFallback;
+cvar_t	*r_shadowCorrectness;
 
 #ifdef USE_VBO
 cvar_t	*r_vbo;
@@ -2759,6 +2760,10 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_csmDebugFallback, "0", "4", CV_INTEGER );
 	ri.Cvar_SetDescription( r_csmDebugFallback, "Forces CSM fallback diagnostics: 0 off, 1 no-world, 2 no-sun, 3 atlas-unavailable, 4 zero-cascade." );
 	ri.Cvar_SetGroup( r_csmDebugFallback, CVG_RENDERER );
+	r_shadowCorrectness = ri.Cvar_Get( "r_shadowCorrectness", "0", CVAR_CHEAT );
+	ri.Cvar_CheckRange( r_shadowCorrectness, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_shadowCorrectness, "Forces the minimal shadow-map correctness path: one hard-filtered dynamic light, no spot or CSM passes, and no alpha-tested shadow casters." );
+	ri.Cvar_SetGroup( r_shadowCorrectness, CVG_RENDERER );
 
 #ifdef USE_FBO
 	r_ext_multisample = ri.Cvar_Get( "r_ext_multisample", "0", CVAR_ARCHIVE_ND );

@@ -326,6 +326,7 @@ static void R_GetCelOutlineColor( const trRefEntity_t *ent, color4ub_t *outColor
 	count = Com_Split( buffer, parts, 4, ' ' );
 	if ( count < 3 ) {
 		*outColor = cachedColor;
+		outColor->rgba[3] = R_CelOutlineAlpha( ent, outColor->rgba[3] );
 		return;
 	}
 

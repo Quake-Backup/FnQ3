@@ -450,9 +450,9 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			LL( triangle->vertex[1] );
 			LL( triangle->vertex[2] );
 
-			if( triangle->vertex[0] > header->num_vertexes ||
-			    triangle->vertex[1] > header->num_vertexes ||
-			    triangle->vertex[2] > header->num_vertexes ) {
+			if( triangle->vertex[0] >= header->num_vertexes ||
+			    triangle->vertex[1] >= header->num_vertexes ||
+			    triangle->vertex[2] >= header->num_vertexes ) {
 				return qfalse;
 			}
 		}

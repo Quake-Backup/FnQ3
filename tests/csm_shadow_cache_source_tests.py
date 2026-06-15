@@ -12,6 +12,11 @@ def require(text: str, needle: str, label: str, failures: list[str]) -> None:
         failures.append(f"missing {label}: {needle}")
 
 
+def reject(text: str, needle: str, label: str, failures: list[str]) -> None:
+    if needle in text:
+        failures.append(f"unexpected {label}: {needle}")
+
+
 def require_order(text: str, needles: list[str], label: str, failures: list[str]) -> None:
     position = 0
     for needle in needles:
@@ -56,9 +61,7 @@ def check_backend(
     render = section(
         backend,
         "static void RB_RenderCSMShadowAtlas",
-        "static void RB_CSMShadowReceiverPass"
-        if label == "OpenGL"
-        else "static int RB_RenderCSMShadowEntityReceivers",
+        "static void RB_CSMShadowReceiverPass",
         f"{label} atlas render",
         failures,
     )
@@ -85,6 +88,37 @@ def check_backend(
     require(signature, "RB_DlightShadowCacheHashFloat( hash, cascade->axis[0][j] )", f"{label} cascade forward axis hash", failures)
     require(signature, "RB_DlightShadowCacheHashFloat( hash, cascade->axis[1][j] )", f"{label} cascade side axis hash", failures)
     require(signature, "RB_DlightShadowCacheHashFloat( hash, cascade->axis[2][j] )", f"{label} cascade up axis hash", failures)
+    require(
+        backend,
+        "static float RB_CSMShadowCacheQuantizeDepth( float value, float texelSize )",
+        f"{label} light-depth bound quantize helper",
+        failures,
+    )
+    require(backend, "return floorf( value / texelSize );", f"{label} light-depth bound quantize floor", failures)
+    require(
+        signature,
+        "RB_CSMShadowCacheQuantizeDepth( cascade->bounds[0][0], cascade->texelSize )",
+        f"{label} quantized min light-depth bound hash",
+        failures,
+    )
+    require(
+        signature,
+        "RB_CSMShadowCacheQuantizeDepth( cascade->bounds[1][0], cascade->texelSize )",
+        f"{label} quantized max light-depth bound hash",
+        failures,
+    )
+    reject(
+        signature,
+        "RB_DlightShadowCacheHashFloat( hash, cascade->bounds[0][0] )",
+        f"{label} raw min light-depth bound hash defeats the atlas cache",
+        failures,
+    )
+    reject(
+        signature,
+        "RB_DlightShadowCacheHashFloat( hash, cascade->bounds[1][0] )",
+        f"{label} raw max light-depth bound hash defeats the atlas cache",
+        failures,
+    )
     require_order(
         signature,
         [
@@ -173,6 +207,11 @@ def check_glx_gpu_pass(failures: list[str]) -> None:
 
 def check_debug(label: str, path: str, failures: list[str]) -> None:
     source = (ROOT / path).read_text(encoding="utf-8")
+    cascade_call = (
+        'R_PrintCSMCascadeDebug( csm, "glx", qfalse, qfalse, qfalse, qfalse );'
+        if label == "OpenGL"
+        else 'R_PrintCSMCascadeDebug( csm, "vulkan", qtrue, qtrue, qtrue, qtrue );'
+    )
     debug = section(
         source,
         '"csm shadows sky:%s',
@@ -181,13 +220,27 @@ def check_debug(label: str, path: str, failures: list[str]) -> None:
         failures,
     )
     require(debug, "cache h/m/u:%i/%i/%i", f"{label} cache debug label", failures)
-    require(debug, "snap depth:%.0f %.0f %.0f %.0f", f"{label} snapped light-depth debug label", failures)
-    require(debug, "snapDepth[0], snapDepth[1], snapDepth[2], snapDepth[3]", f"{label} snapped light-depth debug args", failures)
+    require(debug, "depth center:%.0f %.0f %.0f %.0f", f"{label} light-depth center debug label", failures)
+    require(debug, "depthCenter[0], depthCenter[1], depthCenter[2], depthCenter[3]", f"{label} light-depth center debug args", failures)
     require(debug, "cpu:%ims", f"{label} CSM CPU debug label", failures)
     require(debug, "backEnd.pc.c_csmShadowAtlasCacheHits", f"{label} cache hit debug arg", failures)
     require(debug, "backEnd.pc.c_csmShadowAtlasCacheMisses", f"{label} cache miss debug arg", failures)
     require(debug, "backEnd.pc.c_csmShadowAtlasCacheUncacheable", f"{label} cache uncacheable debug arg", failures)
     require(debug, "backEnd.pc.c_csmShadowAtlasMsec", f"{label} CSM CPU debug arg", failures)
+    require(source, "static void R_PrintCSMCascadeDebug", f"{label} per-cascade debug helper", failures)
+    require(
+        source,
+        '"csm cascade backend:%s index:%i split:%.0f..%.0f',
+        f"{label} per-cascade debug label",
+        failures,
+    )
+    require(
+        source,
+        "sample-y:%s clip-y:%s depth:forward ndc:%s clear:1.0 compare:lequal",
+        f"{label} CSM convention debug label",
+        failures,
+    )
+    require(source, cascade_call, f"{label} backend-specific CSM convention debug call", failures)
 
 
 def main() -> int:

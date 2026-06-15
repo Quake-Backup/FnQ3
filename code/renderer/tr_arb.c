@@ -33,6 +33,7 @@ static int programCompiled = 0;
 static int programEnabled	= 0;
 static qboolean dlightShadowProgramsCompiled = qfalse;
 static qboolean csmShadowProgramsCompiled = qfalse;
+static qboolean dlightShadowCasterVPCompiled = qfalse;
 #ifdef RENDERER_GLX
 typedef void (APIENTRY *PFNGLXCSMUSEPROGRAMPROC)( GLuint program );
 static PFNGLXCSMUSEPROGRAMPROC glxCsmUseProgram;
@@ -1138,21 +1139,10 @@ static void ARB_DlightShadowFilterOffsets( float *inner, float *outer )
 {
 	int filter = r_dlightShadowFilter ? r_dlightShadowFilter->integer : SHADOW_FILTER_POISSON_4;
 
-	filter = R_ShadowClampFilterMode( filter );
-	switch ( filter ) {
-		case SHADOW_FILTER_HARD:
-			*inner = 0.0f;
-			*outer = 0.0f;
-			break;
-		case SHADOW_FILTER_PCF_2X2:
-			*inner = 0.5f;
-			*outer = 0.5f;
-			break;
-		default:
-			*inner = 0.25f;
-			*outer = 0.75f;
-			break;
+	if ( r_shadowCorrectness && r_shadowCorrectness->integer ) {
+		filter = SHADOW_FILTER_HARD;
 	}
+	R_ShadowFilterOffsets( filter, inner, outer );
 }
 
 #ifdef RENDERER_GLX
@@ -1221,12 +1211,32 @@ static qboolean GLX_SpotShadowParams( const dlight_t *dl, const shadowSpotLightP
 static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShadow,
 	vec4_t shadowAtlas, vec4_t shadowDepth, vec4_t shadowFilter )
 {
+	// one-entry cache: the plan lookups below are linear scans that run twice
+	// per lit batch (program eligibility + program setup) with identical
+	// inputs for every batch of the same light. tess.dlightUpdateParams is
+	// set whenever the light, fog or cull state changes, which covers every
+	// input this function reads (shadow manager and atlas state are constant
+	// across a lit pass).
+	static const dlight_t *cachedLight;
+	static qboolean cachedResult;
+	static vec4_t cachedShadow;
+	static vec4_t cachedAtlas;
+	static vec4_t cachedDepth;
+	static vec4_t cachedFilter;
 	const shadowPointLightPlan_t *shadowPlan;
 	const shadowSpotLightPlan_t *spotPlan;
 	float shadowStrength = 0.0f;
 	float shadowReceiverBiasScale = 0.0f;
 	int atlasWidth;
 	int atlasHeight;
+
+	if ( !tess.dlightUpdateParams && dl == cachedLight ) {
+		Vector4Copy( cachedShadow, dlightShadow );
+		Vector4Copy( cachedAtlas, shadowAtlas );
+		Vector4Copy( cachedDepth, shadowDepth );
+		Vector4Copy( cachedFilter, shadowFilter );
+		return cachedResult;
+	}
 
 	dlightShadow[0] = dlightShadow[1] = dlightShadow[2] = dlightShadow[3] = 0.0f;
 	shadowAtlas[0] = shadowAtlas[1] = shadowAtlas[2] = shadowAtlas[3] = 0.0f;
@@ -1237,28 +1247,36 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 	if ( glConfig.numTextureUnits <= 2 ||
 		!ARB_DlightShadowParams( dl, shadowPlan, shadowAtlas, shadowDepth, &shadowStrength ) ) {
 		spotPlan = R_ShadowManagerSpotPlanForDlight( &tr.shadowManager, dl );
-		return GLX_SpotShadowParams( dl, spotPlan, dlightShadow, shadowAtlas,
+		cachedResult = GLX_SpotShadowParams( dl, spotPlan, dlightShadow, shadowAtlas,
 			shadowDepth, shadowFilter );
-	}
-	if ( shadowAtlas[0] > 0.0f ) {
-		shadowReceiverBiasScale =
-			R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0];
-	}
-
-	if ( tr.shadowManager.planned ) {
-		atlasWidth = tr.shadowManager.pointAtlasPublication.width;
-		atlasHeight = tr.shadowManager.pointAtlasPublication.height;
 	} else {
-		atlasWidth = FBO_DlightShadowAtlasWidth();
-		atlasHeight = FBO_DlightShadowAtlasHeight();
-	}
-	dlightShadow[0] = atlasWidth > 0 ? 1.0f / (float)atlasWidth : 0.0f;
-	dlightShadow[1] = atlasHeight > 0 ? 1.0f / (float)atlasHeight : 0.0f;
-	dlightShadow[2] = shadowStrength;
-	dlightShadow[3] = shadowReceiverBiasScale;
-	ARB_DlightShadowFilterOffsets( &shadowFilter[0], &shadowFilter[1] );
+		if ( shadowAtlas[0] > 0.0f ) {
+			shadowReceiverBiasScale =
+				R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0];
+		}
 
-	return dlightShadow[0] > 0.0f && dlightShadow[1] > 0.0f && shadowStrength > 0.0f ? qtrue : qfalse;
+		if ( tr.shadowManager.planned ) {
+			atlasWidth = tr.shadowManager.pointAtlasPublication.width;
+			atlasHeight = tr.shadowManager.pointAtlasPublication.height;
+		} else {
+			atlasWidth = FBO_DlightShadowAtlasWidth();
+			atlasHeight = FBO_DlightShadowAtlasHeight();
+		}
+		dlightShadow[0] = atlasWidth > 0 ? 1.0f / (float)atlasWidth : 0.0f;
+		dlightShadow[1] = atlasHeight > 0 ? 1.0f / (float)atlasHeight : 0.0f;
+		dlightShadow[2] = shadowStrength;
+		dlightShadow[3] = shadowReceiverBiasScale;
+		ARB_DlightShadowFilterOffsets( &shadowFilter[0], &shadowFilter[1] );
+
+		cachedResult = dlightShadow[0] > 0.0f && dlightShadow[1] > 0.0f && shadowStrength > 0.0f ? qtrue : qfalse;
+	}
+
+	cachedLight = dl;
+	Vector4Copy( dlightShadow, cachedShadow );
+	Vector4Copy( shadowAtlas, cachedAtlas );
+	Vector4Copy( shadowDepth, cachedDepth );
+	Vector4Copy( shadowFilter, cachedFilter );
+	return cachedResult;
 }
 
 static qboolean GLX_LightingLinearVector( const dlight_t *dl, vec4_t lightVector )
@@ -1297,6 +1315,14 @@ qboolean GLX_LightingProgramEligible( const shader_t *shader, int fogNum )
 	vec4_t shadowFilter;
 
 	if ( !shader || !tess.light || shader->lightingStage < 0 ) {
+		return qfalse;
+	}
+	// the VBO dlight path sources lighting texcoords from per-stage VBO
+	// offsets that only exist for TESS_ST* stages; an env-mapped lighting
+	// stage must fall back to the CPU path, which computes them per vertex
+	if ( shader->stages[ shader->lightingStage ] &&
+		!( shader->stages[ shader->lightingStage ]->tessFlags &
+			( shader->lightingBundle ? TESS_ST1 : TESS_ST0 ) ) ) {
 		return qfalse;
 	}
 	if ( !GLX_LightingLinearVector( tess.light, lightVector ) ) {
@@ -1439,25 +1465,47 @@ void GLX_LightingProgramUnbind( void )
 }
 #endif
 
+#ifdef USE_PMLIGHT
+/*
+Bind the depth-only caster vertex program for the VBO shadow-caster fast
+path: world surfaces render straight from the world VBO while the program
+applies the same normal bias the CPU path applies per vertex in
+RB_ApplyDlightShadowCasterNormalBias().
+*/
+qboolean ARB_DlightShadowCasterVBOBegin( const vec3_t lightOrigin )
+{
+	float normalBias;
+
+	if ( !programCompiled || !dlightShadowCasterVPCompiled ) {
+		return qfalse;
+	}
+
+	normalBias = R_ShadowClampCasterNormalBias( r_dlightShadowCasterNormalBias ?
+		r_dlightShadowCasterNormalBias->value : 0.25f );
+	if ( normalBias < 0.0f ) {
+		normalBias = 0.0f;
+	}
+
+	ARB_ProgramEnableExt( programs[ DLIGHT_SHADOW_CASTER_VERTEX ], 0 );
+	qglProgramLocalParameter4fARB( GL_VERTEX_PROGRAM_ARB, 0,
+		lightOrigin[0], lightOrigin[1], lightOrigin[2], normalBias );
+	return qtrue;
+}
+
+void ARB_DlightShadowCasterVBOEnd( void )
+{
+	GL_ProgramDisable();
+}
+#endif // USE_PMLIGHT
+
 static void ARB_CSMShadowFilterOffsets( float *inner, float *outer )
 {
 	int filter = r_csmShadowFilter ? r_csmShadowFilter->integer : SHADOW_FILTER_POISSON_4;
 
-	filter = R_ShadowClampFilterMode( filter );
-	switch ( filter ) {
-		case SHADOW_FILTER_HARD:
-			*inner = 0.0f;
-			*outer = 0.0f;
-			break;
-		case SHADOW_FILTER_PCF_2X2:
-			*inner = 0.5f;
-			*outer = 0.5f;
-			break;
-		default:
-			*inner = 0.25f;
-			*outer = 0.75f;
-			break;
+	if ( r_shadowCorrectness && r_shadowCorrectness->integer ) {
+		filter = SHADOW_FILTER_HARD;
 	}
+	R_ShadowFilterOffsets( filter, inner, outer );
 }
 
 void ARB_CSMShadowPass( void )
@@ -1867,6 +1915,49 @@ static const char *dlightVP = {
 	"SUB ev, posEye, vertex.position; \n"
 	"MOV n, vertex.normal; \n"
 	"%s" // fog shader if needed
+	"END \n"
+};
+
+/*
+Depth-only caster program for the VBO shadow-caster fast path. Reproduces
+RB_ApplyDlightShadowCasterNormalBias() for point/spot lights on the GPU:
+displace each vertex along its unit normal by
+sign(dot(n,L)) * normalBias * (0.75 - 0.5 * min(|dot(n,L)|, 1))
+where L is the light-to-vertex direction. local[0].xyz = light origin in
+model space (world casters only, so model == world), local[0].w = bias.
+*/
+static const char *dlightShadowCasterVP = {
+	"!!ARBvp1.0 \n"
+	"PARAM mvp[4] = { state.matrix.mvp }; \n"
+	"PARAM lightOrigin = program.local[0]; \n"
+	"PARAM consts = { 0.75, 0.5, 1.0, 0.000001 }; \n"
+	"TEMP n; \n"
+	"TEMP L; \n"
+	"TEMP d; \n"
+	"TEMP pos; \n"
+	"DP3 n.w, vertex.normal, vertex.normal; \n"
+	"MAX n.w, n.w, consts.w; \n"
+	"RSQ n.w, n.w; \n"
+	"MUL n.xyz, vertex.normal, n.w; \n"
+	"SUB L.xyz, vertex.position, lightOrigin; \n"
+	"DP3 L.w, L, L; \n"
+	"MAX L.w, L.w, consts.w; \n"
+	"RSQ L.w, L.w; \n"
+	"MUL L.xyz, L, L.w; \n"
+	"DP3 d.x, n, L; \n"
+	"ABS d.y, d.x; \n"
+	"MIN d.y, d.y, consts.z; \n"
+	"MAD d.z, -d.y, consts.y, consts.x; \n"
+	"MUL d.z, d.z, lightOrigin.w; \n"
+	"SLT d.w, d.x, 0.0; \n"
+	"MAD d.w, d.w, -2.0, 1.0; \n"
+	"MUL d.z, d.z, d.w; \n"
+	"MAD pos.xyz, n, d.z, vertex.position; \n"
+	"MOV pos.w, 1.0; \n"
+	"DP4 result.position.x, mvp[0], pos; \n"
+	"DP4 result.position.y, mvp[1], pos; \n"
+	"DP4 result.position.z, mvp[2], pos; \n"
+	"DP4 result.position.w, mvp[3], pos; \n"
 	"END \n"
 };
 
@@ -3015,7 +3106,9 @@ qboolean ARB_UpdatePrograms( void )
 	}
 
 	dlightShadowProgramsCompiled = qfalse;
-	if ( r_dlightShadows && r_dlightShadows->integer && glConfig.numTextureUnits > 2 ) {
+	if ( ( ( r_dlightShadows && r_dlightShadows->integer ) ||
+		( r_shadowCorrectness && r_shadowCorrectness->integer ) ) &&
+		glConfig.numTextureUnits > 2 ) {
 		qboolean shadowProgramsOk = qtrue;
 
 		for ( i = DLIGHT_SHADOW_FRAGMENT; i <= DLIGHT_SHADOW_LINEAR_ABS_FRAGMENT_FOG; i++ ) {
@@ -3042,6 +3135,10 @@ qboolean ARB_UpdatePrograms( void )
 			ri.Printf( PRINT_ALL, S_COLOR_YELLOW "WARNING: ARB sky-sun shadow programs failed; disabling r_csmShadows on GLx for this session.\n" );
 		}
 	}
+
+	// optional: the caster loops fall back to CPU tessellation when absent
+	dlightShadowCasterVPCompiled = ARB_CompileProgramInternal( Vertex,
+		dlightShadowCasterVP, programs[ DLIGHT_SHADOW_CASTER_VERTEX ], qfalse );
 #endif // USE_PMLIGHT
 
 	if ( !ARB_CompileProgram( Vertex, dummyVP, programs[ DUMMY_VERTEX ] ) )
@@ -3130,6 +3227,7 @@ void FBO_Clean( frameBuffer_t *fb )
 			{
 				qglFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0 );
 				qglDeleteTextures( 1, &fb->color );
+				GL_InvalidateDeletedTexture( fb->color );
 				fb->color = 0;
 			}
 			if ( fb->depthStencil )
@@ -3149,6 +3247,7 @@ void FBO_Clean( frameBuffer_t *fb )
 				if ( fb->depthStencil && fb->depthStencil != commonDepthStencil )
 				{
 					qglDeleteTextures( 1, &fb->depthStencil );
+					GL_InvalidateDeletedTexture( fb->depthStencil );
 					fb->depthStencil = 0;
 				}
 #endif
@@ -3210,6 +3309,7 @@ static void FBO_CleanDlightShadowAtlas( void )
 	{
 		GL_BindTexture( 1, 0 );
 		qglDeleteTextures( 1, &dlightShadowAtlasTexture );
+		GL_InvalidateDeletedTexture( dlightShadowAtlasTexture );
 		dlightShadowAtlasTexture = 0;
 	}
 	Com_Memset( &dlightShadowAtlasLayout, 0, sizeof( dlightShadowAtlasLayout ) );
@@ -3230,6 +3330,7 @@ static void FBO_CleanSpotShadowAtlas( void )
 		GL_BindTexture( 1, 0 );
 		GL_SelectTexture( 0 );
 		qglDeleteTextures( 1, &spotShadowAtlasTexture );
+		GL_InvalidateDeletedTexture( spotShadowAtlasTexture );
 		spotShadowAtlasTexture = 0;
 	}
 	Com_Memset( &spotShadowAtlasLayout, 0, sizeof( spotShadowAtlasLayout ) );
@@ -3250,6 +3351,7 @@ static void FBO_CleanCSMShadowAtlas( void )
 		GL_BindTexture( 1, 0 );
 		GL_SelectTexture( 0 );
 		qglDeleteTextures( 1, &csmShadowAtlasTexture );
+		GL_InvalidateDeletedTexture( csmShadowAtlasTexture );
 		csmShadowAtlasTexture = 0;
 	}
 	Com_Memset( &csmShadowAtlasLayout, 0, sizeof( csmShadowAtlasLayout ) );
@@ -3274,6 +3376,7 @@ static void FBO_CleanDepth( void )
 				commonDepthStencil = 0;
 			}
 			qglDeleteTextures( 1, &depthFadeTexture );
+			GL_InvalidateDeletedTexture( depthFadeTexture );
 		}
 		depthFadeTexture = 0;
 		depthFadeCopied = qfalse;
@@ -3288,6 +3391,7 @@ static void FBO_CleanDepth( void )
 #else
 		GL_BindTexture( 0, 0 );
 		qglDeleteTextures( 1, &commonDepthStencil );
+		GL_InvalidateDeletedTexture( commonDepthStencil );
 #endif
 		commonDepthStencil = 0;
 	}
@@ -3319,13 +3423,15 @@ static GLuint FBO_CreateDepthFadeTexture( GLsizei width, GLsizei height, qboolea
 static qboolean FBO_DlightShadowAtlasWanted( dlightShadowAtlasLayout_t *layout )
 {
 #ifdef USE_PMLIGHT
-	if ( !r_dlightShadows || !r_dlightShadows->integer ||
-		!r_dlightMode || !R_GetDlightMode() ||
-		!r_dlightShadowMaxLights || r_dlightShadowMaxLights->integer <= 0 ) {
+	qboolean correctnessMode = ( r_shadowCorrectness && r_shadowCorrectness->integer ) ? qtrue : qfalse;
+
+	if ( ( !correctnessMode && ( !r_dlightShadows || !r_dlightShadows->integer ||
+		!r_dlightShadowMaxLights || r_dlightShadowMaxLights->integer <= 0 ) ) ||
+		!r_dlightMode || !R_GetDlightMode() ) {
 		return qfalse;
 	}
 
-	return R_DlightShadowAtlasLayout( r_dlightShadowMaxLights->integer,
+	return R_DlightShadowAtlasLayout( correctnessMode ? 1 : r_dlightShadowMaxLights->integer,
 		r_dlightShadowResolution ? r_dlightShadowResolution->integer : 256,
 		glConfig.maxTextureSize, layout );
 #else
@@ -3385,7 +3491,8 @@ static qboolean FBO_CreateDlightShadowAtlas( void )
 static qboolean FBO_SpotShadowAtlasWanted( spotShadowAtlasLayout_t *layout )
 {
 #ifdef USE_PMLIGHT
-	if ( !r_spotShadows || !r_spotShadows->integer ||
+	if ( ( r_shadowCorrectness && r_shadowCorrectness->integer ) ||
+		!r_spotShadows || !r_spotShadows->integer ||
 		!r_spotShadowMaxLights || r_spotShadowMaxLights->integer <= 0 ) {
 		return qfalse;
 	}
@@ -3451,7 +3558,8 @@ static qboolean FBO_CreateSpotShadowAtlas( void )
 static qboolean FBO_CSMShadowAtlasWanted( csmShadowAtlasLayout_t *layout )
 {
 #ifdef USE_PMLIGHT
-	if ( !r_csmShadows || !r_csmShadows->integer ) {
+	if ( ( r_shadowCorrectness && r_shadowCorrectness->integer ) ||
+		!r_csmShadows || !r_csmShadows->integer ) {
 		return qfalse;
 	}
 
@@ -4053,7 +4161,8 @@ qboolean FBO_DlightShadowsAvailable( void )
 	return ( FBO_DlightShadowAtlasAvailable() &&
 		dlightShadowProgramsCompiled &&
 		r_dlightMode && r_dlightMode->integer &&
-		r_dlightShadows && r_dlightShadows->integer &&
+		( ( r_dlightShadows && r_dlightShadows->integer ) ||
+			( r_shadowCorrectness && r_shadowCorrectness->integer ) ) &&
 		glConfig.numTextureUnits > 2 ) ? qtrue : qfalse;
 #else
 	return qfalse;
@@ -4191,6 +4300,7 @@ qboolean FBO_CSMShadowsAvailable( void )
 {
 #ifdef USE_PMLIGHT
 	if ( !csmShadowProgramsCompiled ||
+		( r_shadowCorrectness && r_shadowCorrectness->integer ) ||
 		!r_csmShadows || !r_csmShadows->integer ||
 		glConfig.numTextureUnits <= 1 || !qglGenFramebuffers ) {
 		return qfalse;
@@ -4330,20 +4440,14 @@ void FBO_BindDlightShadowTexture( int texUnit )
 
 void FBO_BindSpotShadowTexture( int texUnit )
 {
-	GLuint texnum = FBO_SpotShadowAtlasReady() ? spotShadowAtlasTexture : 0;
-
-	GL_SelectTexture( texUnit );
-	glState.currenttextures[ texUnit ] = texnum;
-	qglBindTexture( GL_TEXTURE_2D, texnum );
+	// the cached bind is safe because every atlas delete path runs
+	// GL_InvalidateDeletedTexture(), so a recycled name cannot be skipped
+	GL_BindTexture( texUnit, FBO_SpotShadowAtlasReady() ? spotShadowAtlasTexture : 0 );
 }
 
 void FBO_BindCSMShadowTexture( int texUnit )
 {
-	GLuint texnum = FBO_CSMShadowsReady() ? csmShadowAtlasTexture : 0;
-
-	GL_SelectTexture( texUnit );
-	glState.currenttextures[ texUnit ] = texnum;
-	qglBindTexture( GL_TEXTURE_2D, texnum );
+	GL_BindTexture( texUnit, FBO_CSMShadowsReady() ? csmShadowAtlasTexture : 0 );
 }
 
 void FBO_DrawWorldCelOutline( void )

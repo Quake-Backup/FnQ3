@@ -99,6 +99,18 @@ typedef struct motifHints_s
 
 glwstate_t glw_state;
 
+/*
+** GLimp_InvalidateConfig
+**
+** The renderer module owning the glconfig_t we feed back into is about to
+** be unloaded: drop the pointer so nothing dereferences stale memory before
+** the next GLimp_Init/VKimp_Init.
+*/
+void GLimp_InvalidateConfig( void )
+{
+	glw_state.config = NULL;
+}
+
 Display *dpy = NULL;
 int scrnum;
 

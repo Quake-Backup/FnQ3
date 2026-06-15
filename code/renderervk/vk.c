@@ -4701,10 +4701,12 @@ static void vk_alloc_persistent_pipelines( void )
 
 #ifdef USE_PMLIGHT
 		def.state_bits = GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
-		def.depth_fade = ( ( r_dlightShadows && r_dlightShadows->integer &&
+		def.depth_fade = ( ( ( ( r_dlightShadows && r_dlightShadows->integer ) ||
+				( r_shadowCorrectness && r_shadowCorrectness->integer ) ) &&
 				r_dlightMode && r_dlightMode->integer &&
 				vk_dlight_shadow_atlas_available() ) ||
-			( r_spotShadows && r_spotShadows->integer &&
+			( !( r_shadowCorrectness && r_shadowCorrectness->integer ) &&
+				r_spotShadows && r_spotShadows->integer &&
 				vk_spot_shadow_atlas_available() ) ) ? 1 : 0;
 		//def.shader_type = TYPE_SIGNLE_TEXTURE_LIGHTING;
 		for (i = 0; i < 3; i++) { // cullType
@@ -4731,7 +4733,8 @@ static void vk_alloc_persistent_pipelines( void )
 		def.polygon_offset = qfalse;
 		def.mirror = qfalse;
 		vk.csm_shadow_pipeline = vk_find_pipeline_ext( 0, &def,
-			( r_csmShadows && r_csmShadows->integer &&
+			( !( r_shadowCorrectness && r_shadowCorrectness->integer ) &&
+			r_csmShadows && r_csmShadows->integer &&
 			vk_csm_shadow_atlas_available() ) ? qtrue : qfalse );
 #endif // USE_PMLIGHT
 	}
@@ -5638,14 +5641,16 @@ static void vk_clear_csm_shadow_atlas_layout( void )
 static qboolean vk_dlight_shadow_atlas_layout( dlightShadowAtlasLayout_t *layout )
 {
 #ifdef USE_PMLIGHT
-	if ( !r_dlightShadows || !r_dlightShadows->integer ||
+	qboolean correctnessMode = ( r_shadowCorrectness && r_shadowCorrectness->integer ) ? qtrue : qfalse;
+
+	if ( ( !correctnessMode && ( !r_dlightShadows || !r_dlightShadows->integer ||
+		!r_dlightShadowMaxLights || r_dlightShadowMaxLights->integer <= 0 ) ) ||
 		!r_dlightMode || !r_dlightMode->integer ||
-		!r_dlightShadowMaxLights || r_dlightShadowMaxLights->integer <= 0 ||
 		!vk_depth_format_sampled_supported() ) {
 		return qfalse;
 	}
 
-	return R_DlightShadowAtlasLayout( r_dlightShadowMaxLights->integer,
+	return R_DlightShadowAtlasLayout( correctnessMode ? 1 : r_dlightShadowMaxLights->integer,
 		r_dlightShadowResolution ? r_dlightShadowResolution->integer : 256,
 		glConfig.maxTextureSize, layout );
 #else
@@ -5657,7 +5662,8 @@ static qboolean vk_dlight_shadow_atlas_layout( dlightShadowAtlasLayout_t *layout
 static qboolean vk_spot_shadow_atlas_layout( spotShadowAtlasLayout_t *layout )
 {
 #ifdef USE_PMLIGHT
-	if ( !r_spotShadows || !r_spotShadows->integer ||
+	if ( ( r_shadowCorrectness && r_shadowCorrectness->integer ) ||
+		!r_spotShadows || !r_spotShadows->integer ||
 		!r_spotShadowMaxLights || r_spotShadowMaxLights->integer <= 0 ||
 		!vk_depth_format_sampled_supported() ) {
 		return qfalse;
@@ -5675,7 +5681,8 @@ static qboolean vk_spot_shadow_atlas_layout( spotShadowAtlasLayout_t *layout )
 static qboolean vk_csm_shadow_atlas_layout( csmShadowAtlasLayout_t *layout )
 {
 #ifdef USE_PMLIGHT
-	if ( !r_csmShadows || !r_csmShadows->integer ||
+	if ( ( r_shadowCorrectness && r_shadowCorrectness->integer ) ||
+		!r_csmShadows || !r_csmShadows->integer ||
 		!vk_depth_format_sampled_supported() ) {
 		return qfalse;
 	}
@@ -9557,8 +9564,13 @@ static void get_mvp_transform( float *mvp )
 		float proj[16];
 		Com_Memcpy( proj, p, 64 );
 
-		// update q3's proj matrix (opengl) to vulkan conventions: z - [0, 1] instead of [-1, 1] and invert y direction
+		// Update q3's OpenGL-style projection to Vulkan's clip-space Y convention.
+		// Negate the whole clip-Y row: orthographic shadow projections carry
+		// their light-space vertical offset in projectionMatrix[13].
+		proj[1] = -p[1];
 		proj[5] = -p[5];
+		proj[9] = -p[9];
+		proj[13] = -p[13];
 		//proj[10] = ( p[10] - 1.0f ) / 2.0f;
 		//proj[14] = p[14] / 2.0f;
 		myGlMultMatrix( vk_world.modelview_transform, proj, mvp );
@@ -10041,8 +10053,8 @@ static void vk_set_csm_shadow_depth_bias( void )
 		return;
 	}
 
-	depthBias = r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.0f;
-	slopeBias = r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.0f;
+	depthBias = r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f;
+	slopeBias = r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f;
 	depthBias = R_ShadowClampCasterDepthBias( depthBias );
 	slopeBias = R_ShadowClampCasterSlopeBias( slopeBias );
 

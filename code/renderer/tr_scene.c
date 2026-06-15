@@ -635,6 +635,7 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 {
 	qboolean selected[MAX_STATIC_MAP_LIGHTS];
 	qboolean visible[MAX_STATIC_MAP_LIGHTS];
+	float priorities[MAX_STATIC_MAP_LIGHTS];
 	int budget;
 	int shadowBudget;
 	int shadowPromoted;
@@ -675,6 +676,9 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 		if ( R_StaticMapLightVisibleInPVS( fd, light ) ) {
 			visible[i] = qtrue;
 			visibleCount++;
+			// priority only depends on (light, refdef), so compute it once
+			// instead of re-evaluating per selection pass
+			priorities[i] = R_StaticMapLightScenePriority( light, fd );
 		} else {
 			tr.staticMapLights.skippedPVSThisFrame++;
 		}
@@ -693,14 +697,11 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 		bestPriority = 0.0f;
 		bestIndex = -1;
 		for ( i = 0; i < tr.staticMapLights.count; i++ ) {
-			float priority;
-
 			if ( selected[i] || !visible[i] ) {
 				continue;
 			}
-			priority = R_StaticMapLightScenePriority( &tr.staticMapLights.lights[i], fd );
-			if ( priority > bestPriority ) {
-				bestPriority = priority;
+			if ( priorities[i] > bestPriority ) {
+				bestPriority = priorities[i];
 				bestIndex = i;
 			}
 		}
@@ -807,6 +808,7 @@ static void R_AddSurfaceLightProxiesToScene( const refdef_t *fd )
 {
 	qboolean selected[MAX_SURFACELIGHT_PROXIES];
 	qboolean visible[MAX_SURFACELIGHT_PROXIES];
+	float priorities[MAX_SURFACELIGHT_PROXIES];
 	int budget;
 	int shadowBudget;
 	int shadowPromoted;
@@ -852,6 +854,10 @@ static void R_AddSurfaceLightProxiesToScene( const refdef_t *fd )
 			proxy->leafCluster, proxy->leafArea ) ) {
 			visible[i] = qtrue;
 			visibleCount++;
+			// priority only depends on (proxy, refdef), so compute it once
+			// instead of re-evaluating per selection pass
+			priorities[i] = R_SurfaceLightProxyScenePriority( proxy, fd,
+				tanHalfFovX, tanHalfFovY );
 		} else {
 			tr.surfaceLightProxies.skippedPVSThisFrame++;
 		}
@@ -872,15 +878,11 @@ static void R_AddSurfaceLightProxiesToScene( const refdef_t *fd )
 		bestPriority = 0.0f;
 		bestIndex = -1;
 		for ( i = 0; i < tr.surfaceLightProxies.count; i++ ) {
-			float priority;
-
 			if ( selected[i] || !visible[i] ) {
 				continue;
 			}
-			priority = R_SurfaceLightProxyScenePriority( &tr.surfaceLightProxies.proxies[i], fd,
-				tanHalfFovX, tanHalfFovY );
-			if ( priority > bestPriority ) {
-				bestPriority = priority;
+			if ( priorities[i] > bestPriority ) {
+				bestPriority = priorities[i];
 				bestIndex = i;
 			}
 		}

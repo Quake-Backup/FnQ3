@@ -140,6 +140,29 @@ void GL_BindTexture( int unit, GLuint texnum )
 }
 
 
+/*
+** GL_InvalidateDeletedTexture
+**
+** Deleting a texture unbinds it from every unit in GL; drop matching bind
+** cache entries so a later texture reusing the recycled name is not skipped
+** by the redundant-bind filter.
+*/
+void GL_InvalidateDeletedTexture( GLuint texnum )
+{
+	int i;
+
+	if ( texnum == 0 ) {
+		return;
+	}
+
+	for ( i = 0; i < MAX_TEXTURE_UNITS; i++ ) {
+		if ( glState.currenttextures[ i ] == texnum ) {
+			glState.currenttextures[ i ] = 0;
+		}
+	}
+}
+
+
 void GL_ColorMask( GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha )
 {
 	if ( glState.colorMaskValid &&
@@ -718,7 +741,7 @@ static qboolean RB_DrawSurfNeedsDepthFadeSnapshot( const drawSurf_t *drawSurf ) 
 	int			fogNum;
 	int			dlighted;
 
-	if ( !drawSurf ) {
+	if ( !drawSurf || ( drawSurf->flags & DSF_SHADOW_CASTER_ONLY ) ) {
 		return qfalse;
 	}
 
@@ -805,6 +828,9 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 	backEnd.pc.c_surfaces += numDrawSurfs;
 
 	for (i = 0, drawSurf = drawSurfs ; i < numDrawSurfs ; i++, drawSurf++) {
+		if ( drawSurf->flags & DSF_SHADOW_CASTER_ONLY ) {
+			continue;
+		}
 		if ( drawSurf->sort == oldSort ) {
 			// fast path, same as previous sort
 			rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
@@ -822,6 +848,12 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 					oldShader = NULL;
 				}
 				FBO_CopyDepthFade();
+				// force RB_BeginSurface and entity re-setup for this surface:
+				// an entityMergable continuation of the previous sort would
+				// otherwise accumulate into the flushed-but-never-rebegun tess
+				// and be dropped at the next shader change (matches renderervk)
+				oldSort = MAX_UINT;
+				oldEntityNum = -1;
 			}
 			depthFadeSnapshot = qtrue;
 		}
@@ -1056,6 +1088,9 @@ static void RB_RenderLitSurfList( dlight_t* dl ) {
 	tess.dlightUpdateParams = qtrue;
 
 	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
+		if ( litSurf->flags & LSF_SHADOW_CASTER_ONLY ) {
+			continue;
+		}
 		//if ( litSurf->sort == sort ) {
 		if ( litSurf->sort == oldSort ) {
 			// fast path, same as previous sort
@@ -1373,7 +1408,8 @@ static qboolean RB_DlightShadowsNeeded( void )
 {
 	int i;
 
-	if ( !r_dlightShadows || !r_dlightShadows->integer ) {
+	if ( ( !r_dlightShadows || !r_dlightShadows->integer ) &&
+		( !r_shadowCorrectness || !r_shadowCorrectness->integer ) ) {
 		return qfalse;
 	}
 
@@ -1384,6 +1420,25 @@ static qboolean RB_DlightShadowsNeeded( void )
 
 	for ( i = 0; i < backEnd.viewParms.num_dlights; i++ ) {
 		if ( backEnd.viewParms.dlights[i].shadowPlanned ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static qboolean RB_ShadowCorrectnessRejectsAlphaTest( const shader_t *shader )
+{
+	int i;
+
+	if ( !r_shadowCorrectness || !r_shadowCorrectness->integer || !shader ) {
+		return qfalse;
+	}
+
+	for ( i = 0; i < shader->numUnfoggedPasses; i++ ) {
+		const shaderStage_t *stage = shader->stages[i];
+
+		if ( stage && ( stage->stateBits & GLS_ATEST_BITS ) ) {
 			return qtrue;
 		}
 	}
@@ -1526,6 +1581,94 @@ static void RB_BuildDlightShadowView( const dlight_t *dl, const shadowPointLight
 	RB_SetDlightShadowProjectionZ( shadowParms, zNear, zFar );
 }
 
+static void RB_RecordShadowCorrectnessFace( const dlight_t *dl,
+	const shadowPointLightPlan_t *plan, int face, int atlasWidth, int atlasHeight,
+	unsigned int atlasGeneration, const viewParms_t *shadowParms,
+	qboolean cached, qboolean rendered, int surfaces )
+{
+	shadowCorrectnessDebug_t *debug;
+	shadowCorrectnessFaceDebug_t *record;
+	int recordIndex;
+
+	if ( !r_shadowCorrectness || !r_shadowCorrectness->integer || !dl || !shadowParms ) {
+		return;
+	}
+
+	debug = &tr.shadowCorrectnessDebug;
+	if ( !debug->active ) {
+		Com_Memset( debug, 0, sizeof( *debug ) );
+		debug->active = qtrue;
+		debug->frameSceneNum = tr.shadowManager.frameSceneNum;
+		debug->frameCount = tr.shadowManager.frameCount;
+		debug->viewCount = tr.shadowManager.viewCount;
+		debug->atlasWidth = atlasWidth;
+		debug->atlasHeight = atlasHeight;
+		debug->atlasGeneration = atlasGeneration;
+		debug->atlasFaceSize = plan ? plan->atlasFaceSize : dl->shadowAtlasFaceSize;
+		debug->reversedDepth = qfalse;
+		debug->depthZeroToOne = qfalse;
+		debug->apiViewportTopLeft = qfalse;
+		debug->samplerTopLeft = qfalse;
+		debug->clipYFlipped = qfalse;
+		debug->clearDepth = 1.0f;
+		debug->receiverBias = R_ShadowClampReceiverBias(
+			r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f );
+		debug->casterDepthBias = R_ShadowClampCasterDepthBias(
+			r_dlightShadowCasterDepthBias ? r_dlightShadowCasterDepthBias->value : 1.0f );
+		debug->casterSlopeBias = R_ShadowClampCasterSlopeBias(
+			r_dlightShadowCasterSlopeBias ? r_dlightShadowCasterSlopeBias->value : 1.0f );
+		debug->casterNormalBias = R_ShadowClampCasterNormalBias(
+			r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.25f );
+		debug->requestedFilterMode =
+			r_dlightShadowFilter ? r_dlightShadowFilter->integer : SHADOW_FILTER_POISSON_4;
+		debug->effectiveFilterMode = SHADOW_FILTER_HARD;
+		debug->filterSampleCount = R_ShadowFilterSampleCount( debug->effectiveFilterMode );
+		R_ShadowFilterOffsets( debug->effectiveFilterMode,
+			&debug->filterInnerOffset, &debug->filterOuterOffset );
+	}
+
+	if ( debug->faceCount >= SHADOW_CORRECTNESS_MAX_FACE_RECORDS ) {
+		return;
+	}
+
+	recordIndex = debug->faceCount++;
+	record = &debug->faces[recordIndex];
+	Com_Memset( record, 0, sizeof( *record ) );
+	record->valid = qtrue;
+	record->dlightIndex = plan ? plan->dlightIndex : -1;
+	record->shadowIndex = plan ? plan->shadowIndex : dl->shadowIndex;
+	record->face = face;
+	record->atlasBaseFace = plan ? plan->atlasBaseFace : dl->shadowAtlasBaseFace;
+	record->atlasFaceSize = plan ? plan->atlasFaceSize : dl->shadowAtlasFaceSize;
+	record->atlasX = plan ? plan->atlasX[face] : dl->shadowAtlasX[face];
+	record->atlasY = plan ? plan->atlasY[face] : dl->shadowAtlasY[face];
+	record->viewportX = shadowParms->viewportX;
+	record->viewportY = shadowParms->viewportY;
+	record->viewportWidth = shadowParms->viewportWidth;
+	record->viewportHeight = shadowParms->viewportHeight;
+	record->scissorX = shadowParms->scissorX;
+	record->scissorY = shadowParms->scissorY;
+	record->scissorWidth = shadowParms->scissorWidth;
+	record->scissorHeight = shadowParms->scissorHeight;
+	record->apiViewportX = shadowParms->viewportX;
+	record->apiViewportY = shadowParms->viewportY;
+	record->apiViewportWidth = shadowParms->viewportWidth;
+	record->apiViewportHeight = shadowParms->viewportHeight;
+	record->apiScissorX = shadowParms->scissorX;
+	record->apiScissorY = shadowParms->scissorY;
+	record->apiScissorWidth = shadowParms->scissorWidth;
+	record->apiScissorHeight = shadowParms->scissorHeight;
+	record->zNear = 1.0f;
+	record->zFar = shadowParms->zFar;
+	record->cached = cached ? qtrue : qfalse;
+	record->rendered = rendered ? qtrue : qfalse;
+	record->surfaces = surfaces;
+	Com_Memcpy( record->projectionMatrix, shadowParms->projectionMatrix,
+		sizeof( record->projectionMatrix ) );
+	Com_Memcpy( record->modelMatrix, shadowParms->world.modelMatrix,
+		sizeof( record->modelMatrix ) );
+}
+
 static void RB_SetDlightShadowView( const viewParms_t *shadowParms )
 {
 	backEnd.viewParms = *shadowParms;
@@ -1564,6 +1707,9 @@ static qboolean RB_DlightShadowCasterAllowed( const shader_t *shader, const surf
 		return qfalse;
 	}
 	if ( shader->lightingStage < 0 ) {
+		return qfalse;
+	}
+	if ( RB_ShadowCorrectnessRejectsAlphaTest( shader ) ) {
 		return qfalse;
 	}
 
@@ -1749,18 +1895,72 @@ static qboolean RB_DlightShadowSurfaceBounds( const surfaceType_t *surface, vec3
 	}
 }
 
-static qboolean RB_DlightShadowSurfaceCulledForOrientation( const surfaceType_t *surface, const orientationr_t *or )
+#define RB_DLIGHT_CASTER_BOUNDS_MEMO_SLOTS 1024
+
+typedef struct {
+	unsigned int serial;
+	const surfaceType_t *surface;
+	int entityNum;
+	qboolean hasBounds;
+	vec3_t mins;
+	vec3_t maxs;
+} dlightCasterBoundsMemoSlot_t;
+
+static dlightCasterBoundsMemoSlot_t rb_dlightCasterBoundsMemo[RB_DLIGHT_CASTER_BOUNDS_MEMO_SLOTS];
+static unsigned int rb_dlightCasterBoundsMemoSerial;
+
+// caster bounds are cube-face-invariant for a point light; the lit-surface
+// chain walks in the same order for every face, so slots are keyed by chain
+// position and validated against the surface and entity they were derived from
+static void RB_DlightShadowCasterBoundsMemoReset( void )
+{
+	rb_dlightCasterBoundsMemoSerial++;
+	if ( rb_dlightCasterBoundsMemoSerial == 0 ) {
+		Com_Memset( rb_dlightCasterBoundsMemo, 0, sizeof( rb_dlightCasterBoundsMemo ) );
+		rb_dlightCasterBoundsMemoSerial = 1;
+	}
+}
+
+static qboolean RB_DlightShadowSurfaceBoundsMemo( const surfaceType_t *surface, int entityNum,
+	int chainIndex, vec3_t mins, vec3_t maxs )
+{
+	dlightCasterBoundsMemoSlot_t *slot;
+
+	if ( chainIndex < 0 || chainIndex >= RB_DLIGHT_CASTER_BOUNDS_MEMO_SLOTS ) {
+		return RB_DlightShadowSurfaceBounds( surface, mins, maxs );
+	}
+
+	slot = &rb_dlightCasterBoundsMemo[chainIndex];
+	if ( slot->serial == rb_dlightCasterBoundsMemoSerial &&
+		slot->surface == surface && slot->entityNum == entityNum ) {
+		if ( !slot->hasBounds ) {
+			return qfalse;
+		}
+		VectorCopy( slot->mins, mins );
+		VectorCopy( slot->maxs, maxs );
+		return qtrue;
+	}
+
+	slot->serial = rb_dlightCasterBoundsMemoSerial;
+	slot->surface = surface;
+	slot->entityNum = entityNum;
+	slot->hasBounds = RB_DlightShadowSurfaceBounds( surface, mins, maxs );
+	if ( slot->hasBounds ) {
+		VectorCopy( mins, slot->mins );
+		VectorCopy( maxs, slot->maxs );
+	}
+
+	return slot->hasBounds;
+}
+
+static qboolean RB_DlightShadowBoundsCulledForOrientation( const vec3_t mins, const vec3_t maxs,
+	const orientationr_t *or )
 {
 	const cplane_t *plane;
-	vec3_t mins, maxs;
 	vec3_t local;
 	vec3_t transformed[8];
 	int i, j;
 	qboolean front;
-
-	if ( r_nocull->integer || !or || !RB_DlightShadowSurfaceBounds( surface, mins, maxs ) ) {
-		return qfalse;
-	}
 
 	for ( i = 0; i < 8; i++ ) {
 		local[0] = (i & 1) ? maxs[0] : mins[0];
@@ -1788,6 +1988,30 @@ static qboolean RB_DlightShadowSurfaceCulledForOrientation( const surfaceType_t 
 	}
 
 	return qfalse;
+}
+
+static qboolean RB_DlightShadowSurfaceCulledForOrientation( const surfaceType_t *surface, const orientationr_t *or )
+{
+	vec3_t mins, maxs;
+
+	if ( r_nocull->integer || !or || !RB_DlightShadowSurfaceBounds( surface, mins, maxs ) ) {
+		return qfalse;
+	}
+
+	return RB_DlightShadowBoundsCulledForOrientation( mins, maxs, or );
+}
+
+static qboolean RB_DlightShadowSurfaceCulledForOrientationMemo( const surfaceType_t *surface,
+	const orientationr_t *or, int entityNum, int chainIndex )
+{
+	vec3_t mins, maxs;
+
+	if ( r_nocull->integer || !or ||
+		!RB_DlightShadowSurfaceBoundsMemo( surface, entityNum, chainIndex, mins, maxs ) ) {
+		return qfalse;
+	}
+
+	return RB_DlightShadowBoundsCulledForOrientation( mins, maxs, or );
 }
 
 static qboolean RB_DlightShadowSurfaceCulled( const surfaceType_t *surface )
@@ -2032,6 +2256,9 @@ static qboolean RB_CSMShadowSurfaceAllowed( const shader_t *shader, const surfac
 		(shader->surfaceFlags & ( SURF_SKY | SURF_NODLIGHT )) ) {
 		return qfalse;
 	}
+	if ( RB_ShadowCorrectnessRejectsAlphaTest( shader ) ) {
+		return qfalse;
+	}
 
 	switch ( *surface ) {
 		case SF_FACE:
@@ -2052,6 +2279,7 @@ static qboolean RB_CSMShadowSurfaceCulledForCascade( const surfaceType_t *surfac
 	vec3_t mins, maxs;
 	vec3_t local;
 	vec3_t transformed[8];
+	float cullMargin;
 	int axis, side;
 	int i;
 
@@ -2071,10 +2299,11 @@ static qboolean RB_CSMShadowSurfaceCulledForCascade( const surfaceType_t *surfac
 		VectorMA( transformed[i], local[2], or->axis[2], transformed[i] );
 	}
 
+	cullMargin = cascade->texelSize * 2.0f;
 	for ( axis = 0; axis < 3; axis++ ) {
 		for ( side = 0; side < 2; side++ ) {
 			qboolean outside = qtrue;
-			float bound = cascade->bounds[side][axis];
+			float bound = cascade->bounds[side][axis] + ( side ? cullMargin : -cullMargin );
 
 			for ( i = 0; i < 8; i++ ) {
 				float d = DotProduct( transformed[i], cascade->axis[axis] );
@@ -2126,6 +2355,15 @@ static int RB_CSMShadowCountDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs )
 	return count;
 }
 
+static float RB_CSMShadowCacheQuantizeDepth( float value, float texelSize )
+{
+	if ( texelSize <= 0.0f ) {
+		return value;
+	}
+
+	return floorf( value / texelSize );
+}
+
 static qboolean RB_CSMShadowCacheSignature( drawSurf_t *drawSurfs, int numDrawSurfs,
 	unsigned int *signature )
 {
@@ -2141,9 +2379,21 @@ static qboolean RB_CSMShadowCacheSignature( drawSurf_t *drawSurfs, int numDrawSu
 	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)tr.csm.resolution );
 	for ( i = 0; i < tr.csm.cascadeCount; i++ ) {
 		const csmCascadePlan_t *cascade = &tr.csm.cascades[i];
-		for ( j = 0; j < 3; j++ ) {
+
+		/* R_CSMPlanCascade leaves the light-depth bounds unsnapped, so they
+		   drift with every camera move; hash them at texel granularity so
+		   sub-texel drift still reuses the cached atlas. The doubled depth
+		   extent keeps that <1 texel of staleness harmless to receivers. */
+		hash = RB_DlightShadowCacheHashFloat( hash,
+			RB_CSMShadowCacheQuantizeDepth( cascade->bounds[0][0], cascade->texelSize ) );
+		hash = RB_DlightShadowCacheHashFloat( hash,
+			RB_CSMShadowCacheQuantizeDepth( cascade->bounds[1][0], cascade->texelSize ) );
+
+		for ( j = 1; j < 3; j++ ) {
 			hash = RB_DlightShadowCacheHashFloat( hash, cascade->bounds[0][j] );
 			hash = RB_DlightShadowCacheHashFloat( hash, cascade->bounds[1][j] );
+		}
+		for ( j = 0; j < 3; j++ ) {
 			hash = RB_DlightShadowCacheHashFloat( hash, cascade->axis[0][j] );
 			hash = RB_DlightShadowCacheHashFloat( hash, cascade->axis[1][j] );
 			hash = RB_DlightShadowCacheHashFloat( hash, cascade->axis[2][j] );
@@ -2263,8 +2513,8 @@ static void RB_SetCSMShadowView( const viewParms_t *shadowParms )
 static void RB_SetCSMShadowCasterDepthBias( qboolean enable )
 {
 	if ( enable ) {
-		float slopeBias = r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.0f;
-		float depthBias = r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.0f;
+		float slopeBias = r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f;
+		float depthBias = r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f;
 
 		slopeBias = R_ShadowClampCasterSlopeBias( slopeBias );
 		depthBias = R_ShadowClampCasterDepthBias( depthBias );
@@ -2408,6 +2658,10 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 		return;
 	}
 
+	// the cached cull mode may have been issued for a mirror view, whose
+	// actual glCullFace is flipped; the atlas pass uses its own viewParms
+	glState.faceCulling = -1;
+
 	startMsec = ri.Milliseconds();
 	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_CSM_SHADOW );
 	savedRefdef = backEnd.refdef;
@@ -2501,6 +2755,9 @@ static void RB_CSMShadowReceiverPass( drawSurf_t *drawSurfs, int numDrawSurfs )
 			int fogNum;
 			int dlighted;
 
+			if ( drawSurf->flags & DSF_SHADOW_CASTER_ONLY ) {
+				continue;
+			}
 			R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
 			if ( !RB_CSMShadowEntityAllowed( entityNum ) ||
 				!RB_CSMShadowSurfaceAllowed( shader, drawSurf->surface ) ) {
@@ -2584,16 +2841,22 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 	int currentEntityNum;
 	int entityNum;
 	int fogNum;
+	int chainIndex;
 	int surfaces;
 	double originalTime;
 	qboolean surfaceActive;
+#ifdef USE_VBO
+	qboolean vboCasterBound = qfalse;
+#endif
 
 	originalTime = backEnd.refdef.floatTime;
 	surfaces = 0;
 	surfaceActive = qfalse;
 	currentEntityNum = -1;
+	chainIndex = -1;
 
 	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
+		chainIndex++;
 		R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
 		if ( !RB_DlightShadowEntityCasterAllowed( entityNum ) ) {
 			continue;
@@ -2614,9 +2877,44 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 			currentEntityNum = entityNum;
 		}
 
-		if ( RB_DlightShadowSurfaceCulled( litSurf->surface ) ) {
+		if ( RB_DlightShadowSurfaceCulledForOrientationMemo( litSurf->surface, &backEnd.or,
+			entityNum, chainIndex ) ) {
 			continue;
 		}
+
+#ifdef USE_VBO
+		// static world casters draw straight from the world VBO with the
+		// caster-bias vertex program instead of re-tessellating per face
+		if ( entityNum == REFENTITYNUM_WORLD && r_vbo->integer ) {
+			int itemIndex = VBO_WorldSurfaceItemIndex( litSurf->surface );
+
+			if ( itemIndex > 0 ) {
+				if ( surfaceActive ) {
+					RB_EndSurface();
+					backEnd.pc.c_dlightShadowAtlasBatches++;
+					backEnd.pc.c_dlightShadowAtlasDraws++;
+					surfaceActive = qfalse;
+				}
+				if ( !vboCasterBound &&
+					ARB_DlightShadowCasterVBOBegin( backEnd.viewParms.or.origin ) ) {
+					GL_Cull( tr.defaultShader->cullType ); // match the tess batches
+					vboCasterBound = qtrue;
+				}
+				if ( vboCasterBound && VBO_DrawDepthCasterItem( shader, itemIndex ) ) {
+					backEnd.pc.c_dlightShadowAtlasDraws++;
+					surfaces++;
+					continue;
+				}
+			}
+		}
+		if ( vboCasterBound ) {
+			// switching to a tess batch: release buffers and the program
+			VBO_FinishDepthCasterDraw();
+			ARB_DlightShadowCasterVBOEnd();
+			backEnd.pc.c_dlightShadowAtlasBatches++;
+			vboCasterBound = qfalse;
+		}
+#endif
 
 		if ( !surfaceActive ) {
 			RB_BeginSurface( tr.defaultShader, 0 );
@@ -2633,6 +2931,13 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 		backEnd.pc.c_dlightShadowAtlasBatches++;
 		backEnd.pc.c_dlightShadowAtlasDraws++;
 	}
+#ifdef USE_VBO
+	if ( vboCasterBound ) {
+		VBO_FinishDepthCasterDraw();
+		ARB_DlightShadowCasterVBOEnd();
+		backEnd.pc.c_dlightShadowAtlasBatches++;
+	}
+#endif
 
 	RB_SetDlightShadowCasterEntity( REFENTITYNUM_WORLD, originalTime );
 	return surfaces;
@@ -2725,6 +3030,9 @@ static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
 	int surfaces;
 	qboolean surfaceActive;
 	int i;
+#ifdef USE_VBO
+	qboolean vboCasterBound = qfalse;
+#endif
 
 	currentEntityNum = -1;
 	surfaces = 0;
@@ -2756,6 +3064,33 @@ static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
 			continue;
 		}
 
+#ifdef USE_VBO
+		if ( entityNum == REFENTITYNUM_WORLD && r_vbo->integer ) {
+			int itemIndex = VBO_WorldSurfaceItemIndex( drawSurf->surface );
+
+			if ( itemIndex > 0 ) {
+				if ( surfaceActive ) {
+					RB_EndSurface();
+					surfaceActive = qfalse;
+				}
+				if ( !vboCasterBound &&
+					ARB_DlightShadowCasterVBOBegin( backEnd.viewParms.or.origin ) ) {
+					GL_Cull( tr.defaultShader->cullType ); // match the tess batches
+					vboCasterBound = qtrue;
+				}
+				if ( vboCasterBound && VBO_DrawDepthCasterItem( shader, itemIndex ) ) {
+					surfaces++;
+					continue;
+				}
+			}
+		}
+		if ( vboCasterBound ) {
+			VBO_FinishDepthCasterDraw();
+			ARB_DlightShadowCasterVBOEnd();
+			vboCasterBound = qfalse;
+		}
+#endif
+
 		if ( !surfaceActive ) {
 			RB_BeginSurface( tr.defaultShader, 0 );
 			tess.allowVBO = qfalse;
@@ -2769,9 +3104,81 @@ static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
 	if ( surfaceActive ) {
 		RB_EndSurface();
 	}
+#ifdef USE_VBO
+	if ( vboCasterBound ) {
+		VBO_FinishDepthCasterDraw();
+		ARB_DlightShadowCasterVBOEnd();
+	}
+#endif
 
 	RB_SetDlightShadowCasterEntity( REFENTITYNUM_WORLD, originalTime );
 	return surfaces;
+}
+
+typedef struct {
+	qboolean valid;
+	unsigned int generation;
+	unsigned int signature;
+} spotShadowCache_t;
+
+static spotShadowCache_t rb_spotShadowCache;
+
+static qboolean RB_SpotShadowCacheSignature( drawSurf_t *drawSurfs, int numDrawSurfs,
+	unsigned int *signature )
+{
+	unsigned int hash;
+	int i;
+
+	if ( !signature || tr.shadowManager.spotPlanCount <= 0 ) {
+		return qfalse;
+	}
+
+	hash = 2166136261U;
+	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)tr.shadowManager.spotPlanCount );
+	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)FBO_SpotShadowAtlasHeight() );
+	for ( i = 0; i < tr.shadowManager.spotPlanCount; i++ ) {
+		const shadowSpotLightPlan_t *plan = &tr.shadowManager.spotPlans[i];
+		int axis;
+
+		hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)plan->atlasAllocated );
+		hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)plan->atlasX );
+		hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)plan->atlasY );
+		hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)plan->atlasTileSize );
+		hash = RB_DlightShadowCacheHashFloat( hash, plan->radius );
+		hash = RB_DlightShadowCacheHashFloat( hash, plan->outerAngle );
+		for ( axis = 0; axis < 3; axis++ ) {
+			hash = RB_DlightShadowCacheHashFloat( hash, plan->origin[axis] );
+			hash = RB_DlightShadowCacheHashFloat( hash, plan->direction[axis] );
+		}
+	}
+
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		const drawSurf_t *drawSurf = &drawSurfs[i];
+		shader_t *shader;
+		int entityNum;
+		int fogNum;
+		int dlighted;
+
+		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+		if ( !RB_DlightShadowEntityCasterAllowed( entityNum ) ||
+			!RB_DlightShadowCasterAllowed( shader, drawSurf->surface ) ) {
+			continue;
+		}
+		// entity and brush-model casters move independently of the spot
+		// plans; mirror the world-only dlight tile cache policy and re-render
+		if ( entityNum != REFENTITYNUM_WORLD ) {
+			return qfalse;
+		}
+		if ( shader->numDeforms > 0 ) {
+			return qfalse;
+		}
+
+		hash = RB_DlightShadowCacheHashUInt( hash, drawSurf->sort );
+		hash = RB_DlightShadowCacheHashPtr( hash, drawSurf->surface );
+	}
+
+	*signature = hash;
+	return qtrue;
 }
 
 static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
@@ -2787,6 +3194,9 @@ static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 #endif
 	int atlasHeight;
 	unsigned int atlasGeneration;
+	unsigned int signature = 0;
+	qboolean cacheable;
+	int surfaces;
 	int i;
 	double originalTime;
 
@@ -2797,10 +3207,31 @@ static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 		return;
 	}
 
+	atlasGeneration = FBO_SpotShadowAtlasGeneration();
+	cacheable = RB_SpotShadowCacheSignature( drawSurfs, numDrawSurfs, &signature );
+	if ( cacheable && rb_spotShadowCache.valid &&
+		rb_spotShadowCache.generation == atlasGeneration &&
+		rb_spotShadowCache.signature == signature ) {
+		backEnd.pc.c_spotShadowAtlasCacheHits++;
+		FBO_MarkSpotShadowAtlasRendered();
+		R_ShadowManagerPublishSpotAtlas( &tr.shadowManager,
+			FBO_SpotShadowAtlasReady(), atlasGeneration );
+		return;
+	}
+	if ( cacheable ) {
+		backEnd.pc.c_spotShadowAtlasCacheMisses++;
+	} else {
+		backEnd.pc.c_spotShadowAtlasCacheUncacheable++;
+	}
+
 	RB_EndSurface();
 	if ( !FBO_BeginSpotShadowAtlas() ) {
 		return;
 	}
+
+	// the cached cull mode may have been issued for a mirror view, whose
+	// actual glCullFace is flipped; the atlas pass uses its own viewParms
+	glState.faceCulling = -1;
 
 	savedRefdef = backEnd.refdef;
 	savedViewParms = backEnd.viewParms;
@@ -2813,9 +3244,9 @@ static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 #endif
 	backEnd.projection2D = qfalse;
 	atlasHeight = FBO_SpotShadowAtlasHeight();
-	atlasGeneration = FBO_SpotShadowAtlasGeneration();
 	originalTime = backEnd.refdef.floatTime;
 	RB_SetDlightShadowCasterDepthBias( qtrue );
+	surfaces = 0;
 
 	for ( i = 0; i < tr.shadowManager.spotPlanCount; i++ ) {
 		const shadowSpotLightPlan_t *plan;
@@ -2829,7 +3260,7 @@ static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 		RB_SetDlightShadowView( &shadowParms );
 		GL_State( GLS_DEFAULT );
 		qglClear( GL_DEPTH_BUFFER_BIT );
-		RB_RenderSpotShadowCasters( drawSurfs, numDrawSurfs, originalTime );
+		surfaces += RB_RenderSpotShadowCasters( drawSurfs, numDrawSurfs, originalTime );
 	}
 
 	RB_SetDlightShadowCasterDepthBias( qfalse );
@@ -2845,6 +3276,14 @@ static void RB_RenderSpotShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 	FBO_EndSpotShadowAtlas();
 	R_ShadowManagerPublishSpotAtlas( &tr.shadowManager,
 		FBO_SpotShadowAtlasReady(), atlasGeneration );
+
+	if ( cacheable && surfaces > 0 ) {
+		rb_spotShadowCache.valid = qtrue;
+		rb_spotShadowCache.generation = atlasGeneration;
+		rb_spotShadowCache.signature = signature;
+	} else {
+		rb_spotShadowCache.valid = qfalse;
+	}
 #endif
 }
 
@@ -2863,6 +3302,7 @@ static void RB_RenderDlightShadowAtlas( void )
 	int atlasHeight;
 	int startMsec;
 	unsigned int atlasGeneration;
+	qboolean correctnessMode;
 	int i, face;
 
 	if ( !RB_DlightShadowsNeeded() ) {
@@ -2873,6 +3313,11 @@ static void RB_RenderDlightShadowAtlas( void )
 	if ( !FBO_BeginDlightShadowAtlas() ) {
 		return;
 	}
+
+	// the cached cull mode may have been issued for a mirror view, whose
+	// actual glCullFace is flipped; the atlas pass uses its own viewParms
+	glState.faceCulling = -1;
+
 	startMsec = ri.Milliseconds();
 	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_DLIGHT_SHADOW );
 	savedRefdef = backEnd.refdef;
@@ -2887,6 +3332,7 @@ static void RB_RenderDlightShadowAtlas( void )
 	backEnd.projection2D = qfalse;
 	atlasHeight = FBO_DlightShadowAtlasHeight();
 	atlasGeneration = FBO_DlightShadowAtlasGeneration();
+	correctnessMode = ( r_shadowCorrectness && r_shadowCorrectness->integer ) ? qtrue : qfalse;
 	RB_SetDlightShadowCasterDepthBias( qtrue );
 
 	for ( i = 0; i < ( tr.shadowManager.planned ?
@@ -2911,18 +3357,33 @@ static void RB_RenderDlightShadowAtlas( void )
 			}
 		}
 
+		RB_DlightShadowCasterBoundsMemoReset();
 		cacheSignature = 0;
 		cacheable = RB_DlightShadowCacheSignature( dl, plan, &cacheSignature );
 		lightRendered = qfalse;
 		for ( face = 0; face < DLIGHT_SHADOW_FACES; face++ ) {
 			viewParms_t shadowParms;
+			qboolean shadowParmsBuilt;
 			int surfaces;
 
+			shadowParmsBuilt = qfalse;
+			if ( correctnessMode ) {
+				RB_BuildDlightShadowView( dl, plan, face, atlasHeight, &shadowParms );
+				shadowParmsBuilt = qtrue;
+			}
+
 			if ( cacheable && RB_DlightShadowCacheLookup( dl, plan, face, cacheSignature, atlasGeneration ) ) {
+				if ( correctnessMode ) {
+					RB_RecordShadowCorrectnessFace( dl, plan, face,
+						tr.shadowManager.dlightAtlasWidth, atlasHeight, atlasGeneration,
+						&shadowParms, qtrue, qfalse, -1 );
+				}
 				continue;
 			}
 
-			RB_BuildDlightShadowView( dl, plan, face, atlasHeight, &shadowParms );
+			if ( !shadowParmsBuilt ) {
+				RB_BuildDlightShadowView( dl, plan, face, atlasHeight, &shadowParms );
+			}
 			RB_SetDlightShadowView( &shadowParms );
 			GL_State( GLS_DEFAULT );
 			qglClear( GL_DEPTH_BUFFER_BIT );
@@ -2935,6 +3396,9 @@ static void RB_RenderDlightShadowAtlas( void )
 			} else {
 				RB_DlightShadowCacheInvalidate( dl, plan, face );
 			}
+			RB_RecordShadowCorrectnessFace( dl, plan, face,
+				tr.shadowManager.dlightAtlasWidth, atlasHeight, atlasGeneration,
+				&shadowParms, qfalse, qtrue, surfaces );
 			if ( surfaces <= 0 ) {
 				continue;
 			}
@@ -2962,6 +3426,10 @@ static void RB_RenderDlightShadowAtlas( void )
 	FBO_EndDlightShadowAtlas();
 	R_ShadowManagerPublishPointAtlas( &tr.shadowManager,
 		FBO_DlightShadowsReady(), atlasGeneration );
+	if ( correctnessMode && tr.shadowCorrectnessDebug.active ) {
+		tr.shadowCorrectnessDebug.atlasPublished =
+			tr.shadowManager.pointAtlasPublication.published;
+	}
 #endif
 }
 
@@ -3043,7 +3511,10 @@ static qboolean RB_SetDlightScissor( const dlight_t *dl )
 			for ( zSide = 0; zSide < 2; zSide++ ) {
 				point[2] = zSide ? maxs[2] : mins[2];
 				if ( !RB_ProjectDlightScissorPoint( point, &minX, &minY, &maxX, &maxY ) ) {
-					SetViewportAndScissor();
+					// only the scissor was narrowed by previous lights; do not
+					// reload the projection matrix mid draw-list
+					qglScissor( backEnd.viewParms.scissorX, backEnd.viewParms.scissorY,
+						backEnd.viewParms.scissorWidth, backEnd.viewParms.scissorHeight );
 					return qtrue;
 				}
 			}
@@ -3098,7 +3569,10 @@ static void RB_LightingPass( void )
 		}
 	}
 
-	SetViewportAndScissor();
+	// only the scissor was changed by the per-light passes; restoring the
+	// projection matrix here would stomp a depth-hack projection mid-list
+	qglScissor( backEnd.viewParms.scissorX, backEnd.viewParms.scissorY,
+		backEnd.viewParms.scissorWidth, backEnd.viewParms.scissorHeight );
 	tess.dlightPass = qfalse;
 
 	backEnd.viewParms.num_dlights = 0;

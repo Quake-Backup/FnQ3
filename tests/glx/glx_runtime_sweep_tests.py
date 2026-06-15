@@ -2559,6 +2559,15 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("GLX_Dlight_RecordProjectedDlights", glx_module)
         self.assertIn("GLX_Dlight_RecordProjectedDlightList", glx_module)
         self.assertIn("GLX_Dlight_RecordProjectedPacketDlightList", glx_module)
+        # Recording must not wipe earlier views' projected packet lists before
+        # the backend consumes them at end-of-frame: an unchanged light set
+        # keeps the accumulated frame state and FrameComplete owns the clear.
+        self.assertIn("GLX_Dlight_ProjectedRecordsEqual", glx_module)
+        self.assertNotIn(
+            "GLX_Dlight_ClearProjectedFrame( state );\n\tstate->projectedSourceFrames++;",
+            glx_module,
+        )
+        self.assertIn("GLX_Dlight_ClearProjectedFrame( &dlight_ );", glx_module)
         self.assertIn("GLX_Dlight_RecordProjectedShaderInput", glx_module)
         self.assertIn("GLX_Dlight_ProjectedShaderProgrammable", glx_module)
         self.assertIn("GLX_PROJECTED_DLIGHT_UNIFORM_LIMIT", glx_module)
@@ -2721,7 +2730,8 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         static_filtered = glx_module[static_filtered_start:static_filtered_end]
         self.assertIn("StaticWorldDrawProjectedDlightRunsFiltered", static_filtered)
         self.assertIn(
-            "if ( GLX_Dlight_ProjectedProgramEnabled( dlight_ ) && counts && firstItems &&\n"
+            "if ( GLX_Dlight_CurrentProgram( &dlight_ ) &&\n"
+            "\t\tGLX_Dlight_ProjectedProgramEnabled( dlight_ ) && counts && firstItems &&\n"
             "\t\titemCounts )",
             static_filtered,
         )
@@ -3285,10 +3295,10 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         failures: int = 0,
         executable: int = 1,
         suppressed: int = 0,
-        world_inputs: int = 0,
+        world_inputs: int = 1,
         dynamic_inputs: int = 1,
-        world_executable: int = 0,
-        world_binds: int = 0,
+        world_executable: int = 1,
+        world_binds: int = 1,
         dynamic_executable: int | None = None,
         dynamic_binds: int | None = None,
         uniform_records: int | None = None,
@@ -3910,7 +3920,8 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
                 dynamic_inputs=4,
                 dynamic_executable=1,
                 dynamic_binds=1,
-                uniform_records=0,
+                # the world packet still binds through the uniform window
+                uniform_records=1,
                 resource_attempts=1,
                 resource_binds=1,
                 resource_executable=1,
@@ -3937,6 +3948,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
         failures = glx_runtime_sweep.evaluate_gate(manifest)
         evidence = glx_runtime_sweep.projected_dlight_shader_parity_evidence(manifest)
+        proof = glx_runtime_sweep.proof_status(manifest)
 
         self.assertEqual(failures, [])
         self.assertEqual(evidence["status"], "passed")
@@ -3948,6 +3960,10 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertGreater(evidence["worldExecutable"], 0)
         self.assertGreater(evidence["dynamicExecutable"], 0)
         self.assertGreater(evidence["resourcePromotions"], 0)
+        self.assertEqual(proof["visual"]["status"], "passed")
+        self.assertEqual(proof["visual"]["screenshots"], 2)
+        self.assertEqual(proof["visual"]["references"], 2)
+        self.assertEqual(proof["visual"]["totalScreenshots"], 4)
 
     def test_projected_dlight_shader_visual_parity_rejects_incomplete_proof(self) -> None:
         manifest = projected_dlight_shader_parity_manifest(
@@ -4004,6 +4020,18 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
         self.assertIn("same-run legacy fallback capture", text)
         self.assertIn("legacy fallback reference", text)
+
+    def test_projected_dlight_shader_visual_parity_rejects_stale_passed_rollup(self) -> None:
+        manifest = projected_dlight_shader_parity_manifest()
+        # Keep the precomputed passed evidence but remove the dynamic-demo screenshot pair.
+        manifest["runs"][1]["screenshots"] = []
+
+        failures = glx_runtime_sweep.evaluate_gate(manifest)
+        text = "\n".join(failures)
+
+        self.assertIn("rollup is missing dynamic-demo candidate", text)
+        self.assertIn("insufficient candidate screenshots", text)
+        self.assertIn("missing timedemo screenshot coverage", text)
 
     def test_projected_dlight_shader_visual_parity_dossier_summarizes_evidence(self) -> None:
         manifest = projected_dlight_shader_parity_manifest()
@@ -5695,6 +5723,10 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                 "r_glxProfile": "rc",
                 **glx_runtime_sweep.GLX_RC_PROFILE_CVARS,
                 "r_dynamiclight": "1",
+                # legacy world dlight mode + classic VBO world path: the only
+                # configuration where projected world-packet binds can execute
+                "r_dlightMode": "0",
+                "r_glxMaterialRenderer": "0",
                 "r_glxDlightProjectedProgram": "1",
             },
         )
@@ -5704,6 +5736,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                 "r_glxProfile": "rc",
                 **glx_runtime_sweep.GLX_RC_PROFILE_CVARS,
                 "r_dynamiclight": "1",
+                "r_dlightMode": "0",
                 "r_glxDlightProjectedProgram": "1",
                 "r_glxDlightProjectedMdi": "1",
             },
@@ -6267,19 +6300,37 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                         "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
                         "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
                         "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "shadow atlas contract backend:glx atlas:point active:1 "
+                        "tile:128 size:1024x512 records:2 fill:75% filter:poisson4 "
+                        "pad:1 clamp:1 sampler:clamp-edge "
+                        "allocation:priority-dlight-index deterministic:1",
+                        "shadow atlas contract backend:glx atlas:spot active:0 "
+                        "tile:0 size:0x0 records:0 fill:0% filter:poisson4 "
+                        "pad:1 clamp:1 sampler:clamp-edge "
+                        "allocation:priority-source-index deterministic:1",
+                        "shadow atlas contract backend:glx atlas:csm active:1 "
+                        "tile:512 size:2048x512 records:4 fill:100% filter:poisson4 "
+                        "pad:1 clamp:1 sampler:clamp-edge "
+                        "allocation:cascade-index deterministic:1",
                         "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100 200 300 400 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100 200 300 400 "
                         "caster:20 cache h/m/u:1/1/0 "
                         "cpu:2ms recv world:12 ent:3",
+                        "csm cascade backend:glx index:0 split:1..64 atlas:0,0/512 "
+                        "view:0,0 512x512 api:0,0 512x512 sample-y:native "
+                        "clip-y:native depth:forward ndc:-1..1 clear:1.0 compare:lequal "
+                        "bounds x:-924..1124 y:-256..256 z:-256..256 "
+                        "origin:100 0 0 texel:1.00",
                         "surfacelight spot plan cand:3 plan:2 req:128-512 "
                         "foot:96-640 caster:256-1200 planreq:128-512 "
                         "tile:128-256 cone:0-0/45-65 alloc:2 "
                         "atlas:1024x1024/256 fill:12% reject weak:1 offview:2 "
                         "budget:1 malformed:1",
                         "dlight shadows plan:2/4 cand:3 atlas:1024x512/128 fill:75% "
+                        "filter:poisson4 taps:4 offsets:0.25/0.75 "
                         "render lights:2 faces:10 batches:5 draws:5 surfs:20 cpu:1ms",
                         "DLIGHT_SHADOW_SCENE_END world-geometry",
                         "DLIGHT_SHADOW_SCENE_BEGIN csm-shimmer-path",
@@ -6292,7 +6343,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100.0 200.0 300.0 400.0 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100.0 200.0 300.0 400.0 "
                         "caster:20 cache h/m/u:0/1/0 cpu:2ms recv world:12 ent:3",
                         "shadow manager view:1 frame:4 noworld:0 sched:3 mask:d "
                         "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
@@ -6303,7 +6354,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100.5 200.0 300.0 400.0 "
                         "caster:20 cache h/m/u:1/1/0 cpu:0ms recv world:12 ent:3",
                         "shadow manager view:1 frame:5 noworld:0 sched:3 mask:d "
                         "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
@@ -6314,7 +6365,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100.5 200.0 300.0 400.0 "
                         "caster:20 cache h/m/u:2/1/0 cpu:0ms recv world:12 ent:3",
                         "shadow manager view:1 frame:6 noworld:0 sched:3 mask:d "
                         "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
@@ -6325,7 +6376,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100.5 200.0 300.0 400.0 "
                         "caster:20 cache h/m/u:2/2/0 cpu:1ms recv world:12 ent:3",
                         "DLIGHT_SHADOW_SCENE_END csm-shimmer-path",
                     ]
@@ -6350,6 +6401,21 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             manager["scenes"]["world-geometry"]["max"]["pointRecords"],
             2,
         )
+        atlas = analysis["shadowAtlasContract"]
+        self.assertTrue(atlas["found"])
+        self.assertEqual(atlas["status"], "passed")
+        self.assertEqual(atlas["sampleCount"], 3)
+        self.assertEqual(
+            atlas["atlasCoverage"],
+            {"point": True, "spot": True, "csm": True},
+        )
+        self.assertEqual(
+            atlas["activeAtlasCoverage"],
+            {"point": True, "spot": False, "csm": True},
+        )
+        self.assertEqual(atlas["max"]["shadowAtlasBackendGlx"], 1)
+        self.assertEqual(atlas["max"]["shadowAtlasClampTexels"], 1)
+        self.assertEqual(atlas["max"]["shadowAtlasDeterministic"], 1)
         surface_spot = analysis["surfaceLightSpot"]
         self.assertTrue(surface_spot["found"])
         self.assertEqual(surface_spot["max"]["surfaceSpotCandidates"], 3)
@@ -6390,6 +6456,66 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(stability["maxSnapDepthDeltaMilli"], 500)
         self.assertEqual(stability["max"]["csmCacheEvents"], 4)
         self.assertEqual(stability["scenes"]["csm-shimmer-path"]["status"], "passed")
+        cascade = analysis["csmCascadeContract"]
+        self.assertEqual(cascade["status"], "passed")
+        self.assertEqual(cascade["max"]["csmCascadeBackendGlx"], 1)
+        self.assertEqual(cascade["max"]["csmCascadeSampleYInverted"], 0)
+        self.assertEqual(cascade["max"]["csmCascadeClipYFlipped"], 0)
+        self.assertEqual(cascade["max"]["csmCascadeNdcZeroToOne"], 0)
+        profile = analysis["shadowProfile"]
+        self.assertTrue(profile["found"])
+        self.assertEqual(profile["status"], "passed")
+        self.assertTrue(profile["profileReady"])
+        self.assertEqual(profile["sampleCounts"]["atlas"], 3)
+        self.assertEqual(
+            profile["costBuckets"]["rasterWork"]["pointDraws"],
+            5,
+        )
+        self.assertEqual(
+            profile["costBuckets"]["rasterWork"]["csmCasterSurfaces"],
+            20,
+        )
+        self.assertEqual(
+            profile["costBuckets"]["samplerPressure"]["maxAtlasFill"],
+            100,
+        )
+        self.assertEqual(
+            profile["costBuckets"]["orchestrationPressure"]["scheduledPasses"],
+            3,
+        )
+        self.assertEqual(profile["costBuckets"]["cpuTiming"]["maxCpuMsec"], 2)
+        self.assertEqual(profile["scenes"]["world-geometry"]["status"], "passed")
+
+    def test_shadow_profile_waits_for_correctness_contracts(self) -> None:
+        summary = glx_runtime_sweep.shadow_profile_summary(
+            dlight_samples=[
+                {
+                    "planned": 1,
+                    "renderLights": 1,
+                    "draws": 2,
+                    "cpuMsec": 1,
+                }
+            ],
+            manager_samples=[
+                {
+                    "scheduledPasses": 1,
+                    "scheduledMask": 1,
+                    "pointScheduled": 1,
+                    "pointPublished": 1,
+                    "pointRecords": 1,
+                }
+            ],
+            shadow_atlas_samples=[],
+            surface_spot_samples=[],
+            csm_samples=[],
+            csm_cascade_samples=[],
+        )
+
+        self.assertEqual(summary["status"], "failed")
+        self.assertFalse(summary["profileReady"])
+        self.assertTrue(
+            any("shadow atlas contract" in failure for failure in summary["failures"])
+        )
 
     def test_surface_light_spot_lod_smoke_reports_bad_ranges(self) -> None:
         summary = glx_runtime_sweep.surface_light_spot_lod_summary(

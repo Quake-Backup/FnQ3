@@ -405,7 +405,7 @@ static void RB_ApplyDlightShadowCasterNormalBias( void )
 		}
 
 		if ( tess.csmCasterPass ) {
-			VectorCopy( tr.csm.lightDirection, lightToVertex );
+			VectorScale( tr.csm.lightDirection, -1.0f, lightToVertex );
 		} else {
 			world[0] = backEnd.or.origin[0] +
 				tess.xyz[i][0] * backEnd.or.axis[0][0] +
@@ -1406,7 +1406,8 @@ static qboolean VK_DlightShadowParams( const dlight_t *dl,
 	if ( ( tr.shadowManager.planned && !plan ) ||
 		!dl || dl->linear || ( !tr.shadowManager.planned && !dl->shadowPlanned ) ||
 		atlasFaceSize <= 0 || atlasBaseFace < 0 ||
-		!r_dlightShadows || !r_dlightShadows->integer ||
+		( ( !r_dlightShadows || !r_dlightShadows->integer ) &&
+			( !r_shadowCorrectness || !r_shadowCorrectness->integer ) ) ||
 		!r_dlightMode || !r_dlightMode->integer ||
 		( tr.shadowManager.planned ?
 			!tr.shadowManager.pointAtlasPublication.published : !vk_dlight_shadow_atlas_ready() ) ||
@@ -1460,21 +1461,10 @@ static void VK_DlightShadowFilterOffsets( float *inner, float *outer )
 {
 	int filter = r_dlightShadowFilter ? r_dlightShadowFilter->integer : SHADOW_FILTER_POISSON_4;
 
-	filter = R_ShadowClampFilterMode( filter );
-	switch ( filter ) {
-		case SHADOW_FILTER_HARD:
-			*inner = 0.0f;
-			*outer = 0.0f;
-			break;
-		case SHADOW_FILTER_PCF_2X2:
-			*inner = 0.5f;
-			*outer = 0.5f;
-			break;
-		default:
-			*inner = 0.25f;
-			*outer = 0.75f;
-			break;
+	if ( r_shadowCorrectness && r_shadowCorrectness->integer ) {
+		filter = SHADOW_FILTER_HARD;
 	}
+	R_ShadowFilterOffsets( filter, inner, outer );
 }
 
 static qboolean VK_SpotShadowParams( const dlight_t *dl, const shadowSpotLightPlan_t *plan,
@@ -1615,21 +1605,10 @@ static void VK_CSMShadowFilterOffsets( float *inner, float *outer )
 {
 	int filter = r_csmShadowFilter ? r_csmShadowFilter->integer : SHADOW_FILTER_POISSON_4;
 
-	filter = R_ShadowClampFilterMode( filter );
-	switch ( filter ) {
-		case SHADOW_FILTER_HARD:
-			*inner = 0.0f;
-			*outer = 0.0f;
-			break;
-		case SHADOW_FILTER_PCF_2X2:
-			*inner = 0.5f;
-			*outer = 0.5f;
-			break;
-		default:
-			*inner = 0.25f;
-			*outer = 0.75f;
-			break;
+	if ( r_shadowCorrectness && r_shadowCorrectness->integer ) {
+		filter = SHADOW_FILTER_HARD;
 	}
+	R_ShadowFilterOffsets( filter, inner, outer );
 }
 
 void VK_CSMShadowPass( void )
@@ -2015,11 +1994,17 @@ void RB_EndSurface( void ) {
 
 	if ( tess.shader == tr.enemyRimShader ) {
 		RB_EnemyRimTessEnd();
+		// clear the batch: a later defensive RB_EndSurface would otherwise
+		// re-draw it with whatever modelview matrix is current by then
+		tess.numIndexes = 0;
+		tess.numVertexes = 0;
 		return;
 	}
 
 	if ( tess.shader == tr.enemyOutlineShader ) {
 		RB_EnemyOutlineTessEnd();
+		tess.numIndexes = 0;
+		tess.numVertexes = 0;
 		return;
 	}
 

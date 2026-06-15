@@ -859,6 +859,7 @@ static void R_CSMPlanCascade( int cascadeIndex, float splitNear, float splitFar,
 	vec3_t lightCenter;
 	float radiusSquared;
 	float halfExtent;
+	float depthHalfExtent;
 	int i;
 
 	cascade = &tr.csm.cascades[cascadeIndex];
@@ -890,11 +891,13 @@ static void R_CSMPlanCascade( int cascadeIndex, float splitNear, float splitFar,
 		cascade->texelSize ) * cascade->texelSize;
 	cascade->texelSize = ( halfExtent * 2.0f ) / (float)resolution;
 
+	/* Keep atlas X/Y stable while leaving light depth continuous for casters. */
+	depthHalfExtent = halfExtent * 2.0f;
+
 	for ( i = 0; i < 3; i++ ) {
 		lightCenter[i] = DotProduct( center, lightAxis[i] );
 		VectorCopy( lightAxis[i], cascade->axis[i] );
 	}
-	lightCenter[0] = R_CSMSnapLightCoord( lightCenter[0], cascade->texelSize );
 	lightCenter[1] = R_CSMSnapLightCoord( lightCenter[1], cascade->texelSize );
 	lightCenter[2] = R_CSMSnapLightCoord( lightCenter[2], cascade->texelSize );
 
@@ -903,8 +906,8 @@ static void R_CSMPlanCascade( int cascadeIndex, float splitNear, float splitFar,
 		VectorMA( cascade->origin, lightCenter[i], lightAxis[i], cascade->origin );
 	}
 
-	cascade->bounds[0][0] = lightCenter[0] - halfExtent;
-	cascade->bounds[1][0] = lightCenter[0] + halfExtent;
+	cascade->bounds[0][0] = lightCenter[0] - depthHalfExtent;
+	cascade->bounds[1][0] = lightCenter[0] + depthHalfExtent;
 	cascade->bounds[0][1] = lightCenter[1] - halfExtent;
 	cascade->bounds[1][1] = lightCenter[1] + halfExtent;
 	cascade->bounds[0][2] = lightCenter[2] - halfExtent;
@@ -934,6 +937,11 @@ static void R_PlanCascadedShadows( void )
 
 	R_ClearCSMPlan();
 	debugFallback = r_csmDebugFallback ? r_csmDebugFallback->integer : 0;
+
+	if ( r_shadowCorrectness && r_shadowCorrectness->integer ) {
+		tr.pc.c_csmSkippedDisabled++;
+		return;
+	}
 
 	if ( !r_csmShadows || !r_csmShadows->integer ) {
 		tr.pc.c_csmSkippedDisabled++;
@@ -1292,10 +1300,10 @@ static void R_SortLitsurfs( dlight_t* dl )
 
 /*
 =================
-R_AddLitSurf
+R_AddLitSurfFlags
 =================
 */
-void R_AddLitSurf( surfaceType_t *surface, shader_t *shader, int fogIndex )
+void R_AddLitSurfFlags( surfaceType_t *surface, shader_t *shader, int fogIndex, unsigned int flags )
 {
 	struct litSurf_s *litsurf;
 
@@ -1309,6 +1317,7 @@ void R_AddLitSurf( surfaceType_t *surface, shader_t *shader, int fogIndex )
 	litsurf->sort = (shader->sortedIndex << QSORT_SHADERNUM_SHIFT) 
 		| tr.shiftedEntityNum | ( fogIndex << QSORT_FOGNUM_SHIFT );
 	litsurf->surface = surface;
+	litsurf->flags = flags;
 
 	if ( !tr.light->head )
 		tr.light->head = litsurf;
@@ -1317,6 +1326,16 @@ void R_AddLitSurf( surfaceType_t *surface, shader_t *shader, int fogIndex )
 
 	tr.light->tail = litsurf;
 	tr.light->tail->next = NULL;
+}
+
+/*
+=================
+R_AddLitSurf
+=================
+*/
+void R_AddLitSurf( surfaceType_t *surface, shader_t *shader, int fogIndex )
+{
+	R_AddLitSurfFlags( surface, shader, fogIndex, 0 );
 }
 
 
@@ -1588,6 +1607,27 @@ static shadowPointLightPlan_t *R_ShadowManagerAddPointPlan( const shadowPointLig
 	record = &manager->pointPlans[manager->pointPlanCount++];
 	Com_Memcpy( record, source, sizeof( *record ) );
 	return record;
+}
+
+static qboolean R_ShadowPointCandidateBetter( const shadowPointLightPlan_t *candidate,
+	int candidateIndex, const shadowPointLightPlan_t *best, int bestIndex )
+{
+	if ( !candidate || candidate->priority <= 0.0f ) {
+		return qfalse;
+	}
+	if ( !best || bestIndex < 0 ) {
+		return qtrue;
+	}
+	if ( candidate->priority > best->priority ) {
+		return qtrue;
+	}
+	if ( candidate->priority < best->priority ) {
+		return qfalse;
+	}
+	if ( candidate->dlightIndex != best->dlightIndex ) {
+		return candidate->dlightIndex < best->dlightIndex ? qtrue : qfalse;
+	}
+	return candidateIndex < bestIndex ? qtrue : qfalse;
 }
 
 static void R_ShadowManagerAssignPointAtlas( shadowPointLightPlan_t *record, int shadowIndex,
@@ -2008,6 +2048,30 @@ static shadowSpotLightPlan_t *R_ShadowManagerAddSpotPlan( const shadowSpotLightP
 	return record;
 }
 
+static qboolean R_ShadowSpotCandidateBetter( const shadowSpotLightPlan_t *candidate,
+	int candidateIndex, const shadowSpotLightPlan_t *best, int bestIndex )
+{
+	if ( !candidate || candidate->priority <= 0.0f ) {
+		return qfalse;
+	}
+	if ( !best || bestIndex < 0 ) {
+		return qtrue;
+	}
+	if ( candidate->priority > best->priority ) {
+		return qtrue;
+	}
+	if ( candidate->priority < best->priority ) {
+		return qfalse;
+	}
+	if ( candidate->source != best->source ) {
+		return candidate->source < best->source ? qtrue : qfalse;
+	}
+	if ( candidate->sourceIndex != best->sourceIndex ) {
+		return candidate->sourceIndex < best->sourceIndex ? qtrue : qfalse;
+	}
+	return candidateIndex < bestIndex ? qtrue : qfalse;
+}
+
 static int R_ShadowSpotEffectiveTileSize( int requestedTileSize,
 	const spotShadowAtlasLayout_t *atlasLayout )
 {
@@ -2163,6 +2227,7 @@ static void R_ShadowManagerSelectSpotPlans( int maxLights )
 	Com_Memset( selected, 0, sizeof( selected ) );
 	for ( pass = 0; pass < maxLights; pass++ ) {
 		const shadowSpotLightPlan_t *candidate;
+		const shadowSpotLightPlan_t *bestCandidate;
 		shadowSpotLightPlan_t *plan;
 		float bestPriority;
 		int bestIndex;
@@ -2170,11 +2235,14 @@ static void R_ShadowManagerSelectSpotPlans( int maxLights )
 
 		bestPriority = 0.0f;
 		bestIndex = -1;
+		bestCandidate = NULL;
 		for ( i = 0; i < tr.shadowManager.spotCandidateCount; i++ ) {
 			candidate = &tr.shadowManager.spotCandidates[i];
-			if ( !selected[i] && candidate->priority > bestPriority ) {
+			if ( !selected[i] &&
+				R_ShadowSpotCandidateBetter( candidate, i, bestCandidate, bestIndex ) ) {
 				bestPriority = candidate->priority;
 				bestIndex = i;
+				bestCandidate = candidate;
 			}
 		}
 
@@ -2210,7 +2278,8 @@ static void R_PlanSpotShadows( void )
 	shadowManager_t *manager = &tr.shadowManager;
 	int maxLights;
 
-	if ( !r_spotShadows || !r_spotShadows->integer ||
+	if ( ( r_shadowCorrectness && r_shadowCorrectness->integer ) ||
+		!r_spotShadows || !r_spotShadows->integer ||
 		( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
 		return;
 	}
@@ -2242,11 +2311,13 @@ static void R_PlanDlightShadows( void )
 	int planned;
 	float strongestPriority;
 	float throttleFloor;
+	qboolean correctnessMode;
 
 	candidates = 0;
 	planned = 0;
 	strongestPriority = 0.0f;
 	throttleFloor = 0.0f;
+	correctnessMode = ( r_shadowCorrectness && r_shadowCorrectness->integer ) ? qtrue : qfalse;
 	maxLights = r_dlightShadowMaxLights ? r_dlightShadowMaxLights->integer : 4;
 	if ( maxLights < 0 ) {
 		maxLights = 0;
@@ -2254,13 +2325,17 @@ static void R_PlanDlightShadows( void )
 	if ( maxLights > MAX_DLIGHTS ) {
 		maxLights = MAX_DLIGHTS;
 	}
+	if ( correctnessMode ) {
+		maxLights = 1;
+	}
 
 	for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
 		R_ClearDlightShadowPlan( &tr.viewParms.dlights[i] );
 	}
 	Com_Memset( selected, 0, sizeof( selected ) );
 
-	if ( !r_dlightShadows || !r_dlightShadows->integer || !r_dlightMode || !r_dlightMode->integer ||
+	if ( ( !correctnessMode && ( !r_dlightShadows || !r_dlightShadows->integer ) ) ||
+		!r_dlightMode || !r_dlightMode->integer ||
 		( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
 		tr.pc.c_dlightShadowSkippedDisabled += tr.viewParms.num_dlights;
 		return;
@@ -2320,17 +2395,21 @@ static void R_PlanDlightShadows( void )
 
 	for ( pass = 0; pass < maxLights; pass++ ) {
 		const shadowPointLightPlan_t *candidate;
+		const shadowPointLightPlan_t *bestCandidate;
 		shadowPointLightPlan_t *plan;
 		float bestPriority;
 		int bestIndex;
 
 		bestPriority = 0.0f;
 		bestIndex = -1;
+		bestCandidate = NULL;
 		for ( i = 0; i < tr.shadowManager.pointCandidateCount; i++ ) {
 			candidate = &tr.shadowManager.pointCandidates[i];
-			if ( !selected[i] && candidate->priority > bestPriority ) {
+			if ( !selected[i] &&
+				R_ShadowPointCandidateBetter( candidate, i, bestCandidate, bestIndex ) ) {
 				bestPriority = candidate->priority;
 				bestIndex = i;
+				bestCandidate = candidate;
 			}
 		}
 
@@ -2399,6 +2478,7 @@ static void R_PlanDlightShadows( void )
 static void R_ClearShadowManager( void )
 {
 	Com_Memset( &tr.shadowManager, 0, sizeof( tr.shadowManager ) );
+	Com_Memset( &tr.shadowCorrectnessDebug, 0, sizeof( tr.shadowCorrectnessDebug ) );
 	tr.shadowManager.frameSceneNum = tr.viewParms.frameSceneNum;
 	tr.shadowManager.frameCount = tr.viewParms.frameCount;
 	tr.shadowManager.viewCount = tr.viewCount;
@@ -2510,11 +2590,11 @@ static void R_PlanFrameShadows( void )
 
 /*
 =================
-R_AddDrawSurf
+R_AddDrawSurfFlags
 =================
 */
-void R_AddDrawSurf( surfaceType_t *surface, shader_t *shader, 
-				   int fogIndex, int dlightMap ) {
+void R_AddDrawSurfFlags( surfaceType_t *surface, shader_t *shader,
+				   int fogIndex, int dlightMap, unsigned int flags ) {
 	int			index;
 
 	// instead of checking for overflow, we just mask the index
@@ -2525,7 +2605,18 @@ void R_AddDrawSurf( surfaceType_t *surface, shader_t *shader,
 	tr.refdef.drawSurfs[index].sort = (shader->sortedIndex << QSORT_SHADERNUM_SHIFT) 
 		| tr.shiftedEntityNum | ( fogIndex << QSORT_FOGNUM_SHIFT ) | (int)dlightMap;
 	tr.refdef.drawSurfs[index].surface = surface;
+	tr.refdef.drawSurfs[index].flags = flags;
 	tr.refdef.numDrawSurfs++;
+}
+
+/*
+=================
+R_AddDrawSurf
+=================
+*/
+void R_AddDrawSurf( surfaceType_t *surface, shader_t *shader,
+				   int fogIndex, int dlightMap ) {
+	R_AddDrawSurfFlags( surface, shader, fogIndex, dlightMap, 0 );
 }
 
 

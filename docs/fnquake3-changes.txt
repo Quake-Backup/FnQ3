@@ -1,3 +1,9 @@
+11-Jun-2026:
+* SDL: \vid_restart fast now reuses the existing window - windowed/fullscreen toggles, border and geometry changes are applied in place, with automatic fallback to full window re-creation when framebuffer attributes changed
+* SDL: Alt+Enter toggles fullscreen via \vid_restart fast instead of a full restart
+* Win32: refresh kept-window styles, geometry and display-settings tracking when fullscreen state changes across \vid_restart fast (non-SDL builds)
+* Client: invalidate the platform-side glconfig pointer after renderer module unload to prevent stale writes from window events
+
 21-Mar-2026:
 * SDL: migrate SDL backend, vendored dependency, and build wiring from SDL2 to SDL3
 * renderer2: restore \r_gamma through the final postprocess path when hardware gamma is unavailable

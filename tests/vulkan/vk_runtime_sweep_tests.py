@@ -688,19 +688,37 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
                         "point:2/4 cand:3 records:2/3 atlas:1024x512/128 "
                         "fill:75% gen:7 spot:0/0 src static:0/0 surface:0/0 "
                         "atlas:0x0/0 fill:0% gen:0 csm:4 atlas:2048x512 gen:7",
+                        "shadow atlas contract backend:vulkan atlas:point active:1 "
+                        "tile:128 size:1024x512 records:2 fill:75% filter:poisson4 "
+                        "pad:1 clamp:1 sampler:clamp-edge "
+                        "allocation:priority-dlight-index deterministic:1",
+                        "shadow atlas contract backend:vulkan atlas:spot active:0 "
+                        "tile:0 size:0x0 records:0 fill:0% filter:poisson4 "
+                        "pad:1 clamp:1 sampler:clamp-edge "
+                        "allocation:priority-source-index deterministic:1",
+                        "shadow atlas contract backend:vulkan atlas:csm active:1 "
+                        "tile:512 size:2048x512 records:4 fill:100% filter:poisson4 "
+                        "pad:1 clamp:1 sampler:clamp-edge "
+                        "allocation:cascade-index deterministic:1",
                         "csm shadows sky:textures/skies/dimclouds cascades:4 res:512 max:2048 "
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100 200 300 400 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100 200 300 400 "
                         "caster:20 cache h/m/u:1/1/0 "
                         "cpu:2ms recv world:12 ent:3",
+                        "csm cascade backend:vulkan index:0 split:1..64 atlas:0,0/512 "
+                        "view:0,0 512x512 api:0,0 512x512 sample-y:inverted "
+                        "clip-y:flipped depth:forward ndc:0..1 clear:1.0 compare:lequal "
+                        "bounds x:-924..1124 y:-256..256 z:-256..256 "
+                        "origin:100 0 0 texel:1.00",
                         "surfacelight spot plan cand:3 plan:2 req:128-512 "
                         "foot:96-640 caster:256-1200 planreq:128-512 "
                         "tile:128-256 cone:0-0/45-65 alloc:2 "
                         "atlas:1024x1024/256 fill:12% reject weak:1 offview:2 "
                         "budget:1 malformed:1",
                         "dlight shadows plan:2/4 cand:3 atlas:1024x512/128 fill:75% "
+                        "filter:poisson4 taps:4 offsets:0.25/0.75 "
                         "render lights:2 faces:10 batches:5 draws:5 surfs:20 cpu:1ms",
                         "DLIGHT_SHADOW_SCENE_END world-geometry",
                         "DLIGHT_SHADOW_SCENE_BEGIN csm-shimmer-path",
@@ -713,7 +731,7 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100.0 200.0 300.0 400.0 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100.0 200.0 300.0 400.0 "
                         "caster:20 cache h/m/u:0/1/0 cpu:2ms recv world:12 ent:3",
                         "shadow manager view:1 frame:4 noworld:0 sched:3 mask:d "
                         "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
@@ -724,7 +742,7 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100.5 200.0 300.0 400.0 "
                         "caster:20 cache h/m/u:1/1/0 cpu:0ms recv world:12 ent:3",
                         "shadow manager view:1 frame:5 noworld:0 sched:3 mask:d "
                         "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
@@ -735,7 +753,7 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100.5 200.0 300.0 400.0 "
                         "caster:20 cache h/m/u:2/1/0 cpu:0ms recv world:12 ent:3",
                         "shadow manager view:1 frame:6 noworld:0 sched:3 mask:d "
                         "p:1 s:0 ca:1 cr:1 pub p:1 s:0 c:1 inputs dlight:4 "
@@ -746,7 +764,7 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
                         "lambda:0.65 filter:poisson-4 strength:1.00 rbias:8.00 "
                         "cbias:1.50/1.50/0.50 light-dir:0.00 -0.71 -0.71 "
                         "to-sun:0.00 0.71 0.71 split far:64 256 768 2048 "
-                        "texel:1.00 2.00 4.00 8.00 snap depth:100.5 200.0 300.0 400.0 "
+                        "texel:1.00 2.00 4.00 8.00 depth center:100.5 200.0 300.0 400.0 "
                         "caster:20 cache h/m/u:2/2/0 cpu:1ms recv world:12 ent:3",
                         "DLIGHT_SHADOW_SCENE_END csm-shimmer-path",
                     ]
@@ -771,6 +789,21 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
             manager["scenes"]["world-geometry"]["max"]["pointRecords"],
             2,
         )
+        atlas = analysis["shadowAtlasContract"]
+        self.assertTrue(atlas["found"])
+        self.assertEqual(atlas["status"], "passed")
+        self.assertEqual(atlas["sampleCount"], 3)
+        self.assertEqual(
+            atlas["atlasCoverage"],
+            {"point": True, "spot": True, "csm": True},
+        )
+        self.assertEqual(
+            atlas["activeAtlasCoverage"],
+            {"point": True, "spot": False, "csm": True},
+        )
+        self.assertEqual(atlas["max"]["shadowAtlasBackendVulkan"], 1)
+        self.assertEqual(atlas["max"]["shadowAtlasClampTexels"], 1)
+        self.assertEqual(atlas["max"]["shadowAtlasDeterministic"], 1)
         surface_spot = analysis["surfaceLightSpot"]
         self.assertTrue(surface_spot["found"])
         self.assertEqual(surface_spot["max"]["surfaceSpotCandidates"], 3)
@@ -811,6 +844,66 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
         self.assertEqual(stability["maxSnapDepthDeltaMilli"], 500)
         self.assertEqual(stability["max"]["csmCacheEvents"], 4)
         self.assertEqual(stability["scenes"]["csm-shimmer-path"]["status"], "passed")
+        cascade = analysis["csmCascadeContract"]
+        self.assertEqual(cascade["status"], "passed")
+        self.assertEqual(cascade["max"]["csmCascadeBackendVulkan"], 1)
+        self.assertEqual(cascade["max"]["csmCascadeSampleYInverted"], 1)
+        self.assertEqual(cascade["max"]["csmCascadeClipYFlipped"], 1)
+        self.assertEqual(cascade["max"]["csmCascadeNdcZeroToOne"], 1)
+        profile = analysis["shadowProfile"]
+        self.assertTrue(profile["found"])
+        self.assertEqual(profile["status"], "passed")
+        self.assertTrue(profile["profileReady"])
+        self.assertEqual(profile["sampleCounts"]["atlas"], 3)
+        self.assertEqual(
+            profile["costBuckets"]["rasterWork"]["pointDraws"],
+            5,
+        )
+        self.assertEqual(
+            profile["costBuckets"]["rasterWork"]["csmCasterSurfaces"],
+            20,
+        )
+        self.assertEqual(
+            profile["costBuckets"]["samplerPressure"]["maxAtlasFill"],
+            100,
+        )
+        self.assertEqual(
+            profile["costBuckets"]["orchestrationPressure"]["scheduledPasses"],
+            3,
+        )
+        self.assertEqual(profile["costBuckets"]["cpuTiming"]["maxCpuMsec"], 2)
+        self.assertEqual(profile["scenes"]["world-geometry"]["status"], "passed")
+
+    def test_shadow_profile_waits_for_correctness_contracts(self) -> None:
+        summary = vk_runtime_sweep.shadow_profile_summary(
+            dlight_samples=[
+                {
+                    "planned": 1,
+                    "renderLights": 1,
+                    "draws": 2,
+                    "cpuMsec": 1,
+                }
+            ],
+            manager_samples=[
+                {
+                    "scheduledPasses": 1,
+                    "scheduledMask": 1,
+                    "pointScheduled": 1,
+                    "pointPublished": 1,
+                    "pointRecords": 1,
+                }
+            ],
+            shadow_atlas_samples=[],
+            surface_spot_samples=[],
+            csm_samples=[],
+            csm_cascade_samples=[],
+        )
+
+        self.assertEqual(summary["status"], "failed")
+        self.assertFalse(summary["profileReady"])
+        self.assertTrue(
+            any("shadow atlas contract" in failure for failure in summary["failures"])
+        )
 
     def test_surface_light_spot_lod_smoke_reports_bad_ranges(self) -> None:
         summary = vk_runtime_sweep.surface_light_spot_lod_summary(

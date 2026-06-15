@@ -3422,6 +3422,10 @@ static void CL_ShutdownRef( refShutdownCode_t code ) {
 	if ( rendererLib ) {
 		Sys_UnloadLibrary( rendererLib );
 		rendererLib = nullptr;
+
+		// the glconfig_t fed back to the platform layer lived inside the
+		// renderer module: make sure nothing dereferences it anymore
+		GLimp_InvalidateConfig();
 	}
 #endif
 

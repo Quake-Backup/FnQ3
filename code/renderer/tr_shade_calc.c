@@ -1241,11 +1241,16 @@ static void RB_CalcDiffuseColor_scalar( unsigned char *colors )
 	vec3_t			lightDir;
 	vec3_t			directedLight;
 	int				numVertexes;
+	qboolean		celQuantize;
 	ent = backEnd.currentEntity;
 	ambientLightInt = ent->ambientLightInt;
 	VectorCopy( ent->ambientLight, ambientLight );
 	VectorCopy( ent->directedLight, directedLight );
 	VectorCopy( ent->lightDir, lightDir );
+
+	// loop-invariant: the entity and cel-shading cvars cannot change mid-batch
+	celQuantize = R_CelShadingActive( ent ) &&
+		r_celShadingModelShadows && r_celShadingModelShadows->integer;
 
 	normal = tess.normal[0];
 
@@ -1254,7 +1259,9 @@ static void RB_CalcDiffuseColor_scalar( unsigned char *colors )
 		incoming = DotProduct (normal, lightDir);
 		if ( incoming <= 0 ) {
 			*(int *)&colors[i*4] = ambientLightInt;
-			R_CelQuantizeModelLighting( ent, &colors[i*4] );
+			if ( celQuantize ) {
+				R_CelQuantizeModelLighting( ent, &colors[i*4] );
+			}
 			continue;
 		}
 		j = myftol( ambientLight[0] + incoming * directedLight[0] );
@@ -1276,7 +1283,9 @@ static void RB_CalcDiffuseColor_scalar( unsigned char *colors )
 		colors[i*4+2] = j;
 
 		colors[i*4+3] = 255;
-		R_CelQuantizeModelLighting( ent, &colors[i*4] );
+		if ( celQuantize ) {
+			R_CelQuantizeModelLighting( ent, &colors[i*4] );
+		}
 	}
 }
 

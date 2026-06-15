@@ -290,6 +290,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 	int				lod;
 	int				fogNum;
 	qboolean		personalModel;
+	qboolean		personalShadowCaster;
 #ifdef USE_PMLIGHT
 	dlight_t		*dl;
 	int				n;
@@ -299,6 +300,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 
 	// don't add third_person objects if not in a portal
 	personalModel = (ent->e.renderfx & RF_THIRD_PERSON) && !R_ViewPassIsPortal( &tr.viewParms );
+	personalShadowCaster = personalModel && !(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ));
 
 	if ( ent->e.renderfx & RF_WRAP_FRAMES ) {
 		ent->e.frame %= tr.currentModel->md3[0]->numFrames;
@@ -347,7 +349,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 
 #ifdef USE_PMLIGHT
 	numDlights = 0;
-	if ( R_GetDlightMode() >= 2 && ( !personalModel || R_ViewPassIsPortal( &tr.viewParms ) ) ) {
+	if ( R_GetDlightMode() >= 2 && ( !personalModel || personalShadowCaster ) ) {
 		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
 			dl = &tr.viewParms.dlights[ n ];
 			if ( R_DlightCullEntityBounds( dl, ent, bounds[0], bounds[1] ) ) {
@@ -422,6 +424,10 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 			R_AddDrawSurf( (void *)surface, tr.projectionShadowShader, 0, 0 );
 		}
 
+		if ( personalShadowCaster && shader->sort == SS_OPAQUE ) {
+			R_AddDrawSurfFlags( (void *)surface, shader, fogNum, 0, DSF_SHADOW_CASTER_ONLY );
+		}
+
 		// don't add third_person objects if not viewing through a portal
 		if ( !personalModel ) {
 			R_AddDrawSurf( (void *)surface, shader, fogNum, 0 );
@@ -432,7 +438,8 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 			for ( n = 0; n < numDlights; n++ ) {
 				dl = dlights[ n ];
 				tr.light = dl;
-				R_AddLitSurf( (void *)surface, shader, fogNum );
+				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
+					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
 			}
 		}
 #endif

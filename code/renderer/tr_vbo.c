@@ -732,7 +732,7 @@ static qboolean isStaticShader( shader_t *shader )
 	world_vbo.fogFPindex = getFPindex( 0, 0, FP_FOG_ONLY );
 
 	CompileVertexProgram( world_vbo.fogVPindex[0], 0, VP_FOG_EYE_IN, 0 );
-	CompileVertexProgram( world_vbo.fogVPindex[0], 0, VP_FOG_EYE_OUT, 0 );
+	CompileVertexProgram( world_vbo.fogVPindex[1], 0, VP_FOG_EYE_OUT, 0 );
 
 	CompileFragmentProgram( world_vbo.fogFPindex, 0 /*mtx*/, 0 /*atest*/, FP_FOG_ONLY );
 
@@ -960,6 +960,106 @@ void VBO_UnBind( void )
 
 	tess.vboIndex = 0;
 }
+
+
+#ifdef USE_PMLIGHT
+
+/*
+=============================================================
+DEPTH-ONLY CASTER FAST PATH
+
+Shadow atlas passes re-render their casters for every face of every
+shadowed light, and moving lights can never reuse cached faces. Drawing
+static world casters straight from the world VBO avoids re-tessellating
+them on the CPU per face; the caster vertex program applies the normal
+bias the CPU path would otherwise apply per vertex.
+=============================================================
+*/
+
+static qboolean depthCasterActive = qfalse;
+static int depthCasterVertexOffset = -1;
+static int depthCasterNormalOffset = -1;
+
+int VBO_WorldSurfaceItemIndex( const surfaceType_t *surface )
+{
+	if ( !surface ) {
+		return 0;
+	}
+
+	switch ( *surface ) {
+		case SF_FACE:
+			return ((const srfSurfaceFace_t *)surface)->vboItemIndex;
+		case SF_GRID:
+			return ((const srfGridMesh_t *)surface)->vboItemIndex;
+		case SF_TRIANGLES:
+			return ((const srfTriangles_t *)surface)->vboItemIndex;
+		default:
+			return 0;
+	}
+}
+
+qboolean VBO_DrawDepthCasterItem( const shader_t *shader, int itemIndex )
+{
+	const vbo_t *vbo = &world_vbo;
+	const vbo_item_t *vi;
+	intptr_t indexOffset;
+
+	if ( !shader || itemIndex <= 0 || itemIndex > vbo->items_count || !vbo->items ) {
+		return qfalse;
+	}
+
+	vi = &vbo->items[ itemIndex ];
+	if ( vi->index_offset < 0 || vi->num_indexes <= 0 ) {
+		return qfalse;
+	}
+
+	if ( !depthCasterActive ) {
+		if ( curr_vertex_bind ) {
+			return qfalse; // unexpected binding owner; use the tess path
+		}
+		VBO_BindData();
+		VBO_BindIndex( qtrue );
+		GL_ClientState( 1, CLS_NONE );
+		GL_ClientState( 0, CLS_NORMAL_ARRAY );
+		depthCasterVertexOffset = -1;
+		depthCasterNormalOffset = -1;
+		depthCasterActive = qtrue;
+	}
+
+	if ( shader->vboOffset != depthCasterVertexOffset ) {
+		qglVertexPointer( 3, GL_FLOAT, 16, (const GLvoid *)(intptr_t)shader->vboOffset );
+		depthCasterVertexOffset = shader->vboOffset;
+	}
+	if ( shader->normalOffset != depthCasterNormalOffset ) {
+		qglNormalPointer( GL_FLOAT, 16, (const GLvoid *)(intptr_t)shader->normalOffset );
+		depthCasterNormalOffset = shader->normalOffset;
+	}
+
+	indexOffset = shader->iboOffset + vi->index_offset * (intptr_t)sizeof( glIndex_t );
+#ifdef RENDERER_GLX
+	GLX_CompatDrawElements( GL_TRIANGLES, vi->num_indexes, GL_INDEX_TYPE,
+		(const GLvoid *)indexOffset, GLX_LEGACY_DELEGATION_VBO_DEVICE,
+		GLX_DRAW_VBO_DEVICE );
+#else
+	qglDrawElements( GL_TRIANGLES, vi->num_indexes, GL_INDEX_TYPE,
+		(const GLvoid *)indexOffset );
+#endif
+	return qtrue;
+}
+
+void VBO_FinishDepthCasterDraw( void )
+{
+	if ( !depthCasterActive ) {
+		return;
+	}
+
+	VBO_UnBind();
+	depthCasterActive = qfalse;
+	depthCasterVertexOffset = -1;
+	depthCasterNormalOffset = -1;
+}
+
+#endif // USE_PMLIGHT
 
 
 static int surfSortFunc( const void *a, const void *b )
@@ -1685,6 +1785,67 @@ static const fogProgramParms_t *VBO_SetupFog( int VPindex, int FPindex, GLuint *
 }
 
 
+#if defined( USE_LEGACY_DLIGHTS ) && defined( RENDERER_GLX )
+/*
+** VBO_RenderProjectedDlightOverlay
+**
+** Legacy world dlight mode keeps dlit surfaces out of the VBO queue, but the
+** packets they belong to still carry compact projected-light refs. When the
+** GLX projected-light program is opted in, draw those packet runs once more
+** as an additive depth-equal overlay with the dlight program bound, so the
+** shader evaluates the per-packet light records instead of a CPU extra pass.
+*/
+static void VBO_RenderProjectedDlightOverlay( const shaderCommands_t *input )
+{
+	vbo_t *vbo = &world_vbo;
+	const shaderStage_t *pStage = input->xstages[0];
+
+	if ( !vbo->ibo_items_count || !vbo->ibo_drawn || !vbo->ibo_counts ||
+		!vbo->ibo_offsets || !vbo->ibo_first_items || !vbo->ibo_item_counts ||
+		!pStage ) {
+		return;
+	}
+#ifdef USE_PMLIGHT
+	if ( R_GetDlightMode() ) {
+		return; // projected-light records exist only in legacy world dlight mode
+	}
+#endif
+	if ( !backEnd.refdef.num_dlights ) {
+		return;
+	}
+	if ( input->shader->sort > SS_OPAQUE ||
+		( input->shader->surfaceFlags & ( SURF_NODLIGHT | SURF_SKY ) ) ) {
+		return;
+	}
+	if ( !GLX_CompatProjectedDlightWorldOverlayActive() ) {
+		return;
+	}
+	if ( !GLX_CompatBindProjectedDlightOverlayProgram() ) {
+		return;
+	}
+
+	// same blend/depth shape as the legacy projected dlight pass
+	GL_State( GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_NORMAL_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, 16, (const GLvoid *)(intptr_t)input->shader->vboOffset );
+	qglNormalPointer( GL_FLOAT, 16, (const GLvoid *)(intptr_t)input->shader->normalOffset );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)pStage->tex_offset[0] );
+	GL_SelectTexture( 0 );
+	GL_Bind( tr.whiteImage );
+
+	VBO_BindIndex( qtrue );
+	memset( vbo->ibo_drawn, 0, vbo->ibo_items_count * sizeof( vbo->ibo_drawn[0] ) );
+	GLX_CompatStaticWorldDrawProjectedDlightRuns( vbo->ibo_items_count,
+		vbo->ibo_counts, vbo->ibo_offsets, vbo->ibo_first_items, vbo->ibo_item_counts,
+		vbo->ibo_drawn, GL_INDEX_TYPE, (int)sizeof( glIndex_t ),
+		input->shader->name, (int)input->shader->sort,
+		curr_index_bind && curr_index_bind != VBO_world_indexes ? qtrue : qfalse );
+	GLX_CompatUnbindDlightProgram();
+}
+#endif // USE_LEGACY_DLIGHTS && RENDERER_GLX
+
+
 /*
 ** RB_IterateStagesVBO
 */
@@ -1714,10 +1875,8 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 
 	qglVertexPointer( 3, GL_FLOAT, 16, (const GLvoid *)(intptr_t)tess.shader->vboOffset );
 
-	if ( qglLockArraysEXT ) {
-		// FIXME: not needed for VBOs?
-		qglLockArraysEXT( 0, world_vbo.items_queue_vertexes );
-	}
+	// no compiled-vertex-array lock here: CVA only helps client-memory arrays,
+	// all attributes are sourced from the static VBO
 
 	for ( i = 0; i < MAX_VBO_STAGES; i++ ) {
 		if ( !input->xstages[i] )
@@ -1834,10 +1993,13 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 
 	ARB_ProgramEnableExt( 0, 0 );
 
-	if ( r_showtris->integer ) {
+#if defined( USE_LEGACY_DLIGHTS ) && defined( RENDERER_GLX )
+	VBO_RenderProjectedDlightOverlay( input );
+#endif
 
-		if ( r_showtris->integer == 1 && backEnd.drawConsole )
-			return;
+	// an early return here would skip the r_speeds accounting below, so only
+	// the overlay itself is conditional
+	if ( r_showtris->integer && !( r_showtris->integer == 1 && backEnd.drawConsole ) ) {
 
 		ARB_ProgramEnableExt( 0, 0 );
 
@@ -1852,7 +2014,7 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 		// green for IBO items
 		qglColor4f( 0.25f, 1.0f, 0.25f, 1.0f );
 		VBO_RenderIBOItems();
-		
+
 		// cyan for soft-index items
 		qglColor4f( 0.25f, 1.0f, 0.55f, 1.0f );
 		VBO_RenderSoftItems();
@@ -1860,10 +2022,6 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 		qglDepthRange( 0, 1 );
 
 		qglEnable( GL_TEXTURE_2D );
-	}
-
-	if ( qglUnlockArraysEXT ) {
-		qglUnlockArraysEXT();
 	}
 
 	if ( r_speeds->integer == 1 ) {

@@ -705,6 +705,41 @@ static ID_INLINE const char *R_ShadowFilterModeDescription( void ) {
 	return "Selects shadow filtering: 0 hard, 1 2x2 PCF, 2 four-tap poisson PCF.";
 }
 
+static ID_INLINE void R_ShadowFilterOffsets( int mode, float *inner, float *outer ) {
+	switch ( R_ShadowClampFilterMode( mode ) ) {
+		case SHADOW_FILTER_HARD:
+			*inner = 0.0f;
+			*outer = 0.0f;
+			break;
+		case SHADOW_FILTER_PCF_2X2:
+			*inner = 0.5f;
+			*outer = 0.5f;
+			break;
+		default:
+			*inner = 0.25f;
+			*outer = 0.75f;
+			break;
+	}
+}
+
+static ID_INLINE int R_ShadowFilterSampleCount( int mode ) {
+	return R_ShadowClampFilterMode( mode ) == SHADOW_FILTER_HARD ? 1 : 4;
+}
+
+static ID_INLINE int R_ShadowFilterPadTexels( int mode ) {
+	float inner = 0.0f;
+	float outer = 0.0f;
+
+	R_ShadowFilterOffsets( mode, &inner, &outer );
+	return ( inner > 0.0f || outer > 0.0f ) ? 1 : 0;
+}
+
+static ID_INLINE int R_ShadowAtlasClampTexels( int mode ) {
+	int pad = R_ShadowFilterPadTexels( mode );
+
+	return pad > 0 ? pad : 1;
+}
+
 static ID_INLINE float R_ShadowClampReceiverBias( float bias ) {
 	return Com_Clamp( 0.0f, 64.0f, bias );
 }
@@ -992,6 +1027,71 @@ typedef struct {
 #endif
 } shadowManager_t;
 
+#define SHADOW_CORRECTNESS_MAX_FACE_RECORDS DLIGHT_SHADOW_FACES
+
+typedef struct {
+	qboolean	valid;
+	int			dlightIndex;
+	int			shadowIndex;
+	int			face;
+	int			atlasBaseFace;
+	int			atlasFaceSize;
+	int			atlasX;
+	int			atlasY;
+	int			viewportX;
+	int			viewportY;
+	int			viewportWidth;
+	int			viewportHeight;
+	int			scissorX;
+	int			scissorY;
+	int			scissorWidth;
+	int			scissorHeight;
+	int			apiViewportX;
+	int			apiViewportY;
+	int			apiViewportWidth;
+	int			apiViewportHeight;
+	int			apiScissorX;
+	int			apiScissorY;
+	int			apiScissorWidth;
+	int			apiScissorHeight;
+	float		zNear;
+	float		zFar;
+	qboolean	cached;
+	qboolean	rendered;
+	int			surfaces;
+	float		projectionMatrix[16];
+	float		modelMatrix[16];
+} shadowCorrectnessFaceDebug_t;
+
+typedef struct {
+	qboolean	active;
+	int			frameSceneNum;
+	int			frameCount;
+	int			viewCount;
+	unsigned int	atlasGeneration;
+	int			atlasWidth;
+	int			atlasHeight;
+	int			atlasFaceSize;
+	qboolean	atlasPublished;
+	qboolean	reversedDepth;
+	qboolean	depthZeroToOne;
+	qboolean	apiViewportTopLeft;
+	qboolean	samplerTopLeft;
+	qboolean	clipYFlipped;
+	float		clearDepth;
+	float		receiverBias;
+	float		casterDepthBias;
+	float		casterSlopeBias;
+	float		casterNormalBias;
+	int			requestedFilterMode;
+	int			effectiveFilterMode;
+	int			filterSampleCount;
+	float		filterInnerOffset;
+	float		filterOuterOffset;
+	int			faceCount;
+	shadowCorrectnessFaceDebug_t faces[SHADOW_CORRECTNESS_MAX_FACE_RECORDS];
+} shadowCorrectnessDebug_t;
+
 static ID_INLINE qboolean R_ShadowManagerPassScheduled( const shadowManager_t *manager,
 	shadowManagerPass_t pass )
 {
@@ -1173,14 +1273,20 @@ typedef enum {
 typedef struct drawSurf_s {
 	unsigned int		sort;			// bit combination for fast compares
 	surfaceType_t		*surface;		// any of surface*_t
+	unsigned int		flags;
 } drawSurf_t;
+
+#define DSF_SHADOW_CASTER_ONLY 0x00000001u
 
 #ifdef USE_PMLIGHT
 typedef struct litSurf_s {
 	unsigned int		sort;			// bit combination for fast compares
 	surfaceType_t		*surface;		// any of surface*_t
+	unsigned int		flags;
 	struct litSurf_s	*next;
 } litSurf_t;
+
+#define LSF_SHADOW_CASTER_ONLY 0x00000001u
 #endif
 
 #define	MAX_FACE_POINTS		64
@@ -1368,6 +1474,8 @@ typedef struct msurface_s {
 #ifdef USE_PMLIGHT
 	int					vcVisible;		// if == tr.viewCount, is actually VISIBLE in this frame, i.e. passed facecull and has been added to the drawsurf list
 	int					lightCount;		// if == tr.lightCount, already added to the litsurf list for the current light
+	int					pmLitFrame;		// if == tr.viewCount, pmLitMask is valid for this view
+	unsigned int		pmLitMask;		// world lights already attempted for this surface this view
 #endif // USE_PMLIGHT
 	surfaceType_t		*data;			// any of srf*_t
 } msurface_t;
@@ -1617,6 +1725,9 @@ typedef struct {
 	int		c_dlightShadowAtlasDraws;
 	int		c_dlightShadowAtlasSurfaces;
 	int		c_dlightShadowAtlasMsec;
+	int		c_spotShadowAtlasCacheHits;
+	int		c_spotShadowAtlasCacheMisses;
+	int		c_spotShadowAtlasCacheUncacheable;
 	int		c_csmShadowAtlasSurfaces;
 	int		c_csmShadowAtlasCacheHits;
 	int		c_csmShadowAtlasCacheMisses;
@@ -1775,6 +1886,7 @@ typedef struct {
 	staticMapLights_t		staticMapLights;
 	surfaceLightProxies_t	surfaceLightProxies;
 	shadowManager_t			shadowManager;
+	shadowCorrectnessDebug_t shadowCorrectnessDebug;
 	csmPlan_t				csm;
 	csmPlan_t				csmDebugPlan;
 
@@ -1917,6 +2029,7 @@ extern cvar_t	*r_csmCasterSlopeBias;	// 0.0 - 8.0
 extern cvar_t	*r_csmCasterNormalBias;	// 0.0 - 8.0
 extern cvar_t	*r_csmDebug;			// 0 - 1
 extern cvar_t	*r_csmDebugFallback;		// 0 - 4
+extern cvar_t	*r_shadowCorrectness;	// 0 - 1
 #ifdef USE_VBO
 extern cvar_t	*r_vbo;
 #endif
@@ -2054,9 +2167,11 @@ void R_DecomposeSort( unsigned sort, int *entityNum, shader_t **shader,
 					 int *fogNum, int *dlightMap );
 
 void R_AddDrawSurf( surfaceType_t *surface, shader_t *shader, int fogIndex, int dlightMap );
+void R_AddDrawSurfFlags( surfaceType_t *surface, shader_t *shader, int fogIndex, int dlightMap, unsigned int flags );
 #ifdef USE_PMLIGHT
 void R_DecomposeLitSort( unsigned sort, int *entityNum, shader_t **shader, int *fogNum );
 void R_AddLitSurf( surfaceType_t *surface, shader_t *shader, int fogIndex );
+void R_AddLitSurfFlags( surfaceType_t *surface, shader_t *shader, int fogIndex, unsigned int flags );
 #endif
 
 #define	CULL_IN		0		// completely unclipped
@@ -2081,6 +2196,7 @@ void	GL_Bind( image_t *image );
 void	GL_BindTexNum( GLuint texnum );
 void	GL_SelectTexture( int unit );
 void	GL_BindTexture( int unit, GLuint texnum );
+void	GL_InvalidateDeletedTexture( GLuint texnum );
 void	GL_ColorMask( GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha );
 void	GL_GetColorMask( GLboolean rgba[4] );
 void	GL_TextureMode( const char *string );
@@ -2325,6 +2441,8 @@ int R_LightForPoint( vec3_t point, vec3_t ambientLight, vec3_t directedLight, ve
 void ARB_SetupLightParams( const shaderStage_t *pStage );
 void ARB_LightingPass( void );
 void ARB_CSMShadowPass( void );
+qboolean ARB_DlightShadowCasterVBOBegin( const vec3_t lightOrigin );
+void ARB_DlightShadowCasterVBOEnd( void );
 #ifdef RENDERER_GLX
 qboolean GLX_LightingProgramEligible( const shader_t *shader, int fogNum );
 qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage );
@@ -2774,6 +2892,11 @@ extern void VBO_Cleanup( void );
 extern void VBO_QueueItem( int itemIndex );
 extern void VBO_ClearQueue( void );
 extern void VBO_Flush( void );
+#ifdef USE_PMLIGHT
+extern qboolean VBO_DrawDepthCasterItem( const shader_t *shader, int itemIndex );
+extern void VBO_FinishDepthCasterDraw( void );
+extern int VBO_WorldSurfaceItemIndex( const surfaceType_t *surface );
+#endif
 #endif
 
 // ARB shaders definitions
@@ -2824,6 +2947,8 @@ typedef enum {
 
 	CSM_SHADOW_VERTEX,
 	CSM_SHADOW_FRAGMENT,
+
+	DLIGHT_SHADOW_CASTER_VERTEX,
 #endif
 	SPRITE_FRAGMENT,
 	DEPTH_FADE_FRAGMENT,

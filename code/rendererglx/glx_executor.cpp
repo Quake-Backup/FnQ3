@@ -154,10 +154,8 @@ static qboolean GLX_Executor_GL46OutputTransform( const OutputTransform &transfo
 
 static qboolean GLX_Executor_SubmitDynamicDraw( const DynamicDraw &draw )
 {
-	if ( !GLX_RenderIR_ValidateDynamicDraw( draw ) ) {
-		return qfalse;
-	}
-
+	// precondition: every caller has already validated the draw through
+	// GLX_RenderIR_TierSupportsDynamicDraw(), which runs ValidateDynamicDraw
 	if ( draw.kind == DynamicDrawKind::Indexed ) {
 		return GLX_Draw_DrawElements( draw.primitive, draw.count, draw.indexType, draw.indices );
 	}
@@ -658,6 +656,9 @@ qboolean GLX_Executor_ConsumeOutputTransform( ExecutorState *state, const Output
 	return qtrue;
 }
 
+static void GLX_Executor_RecordAcceptedDynamicDraw( ExecutorState *state,
+	const DynamicDraw &draw );
+
 static qboolean GLX_Executor_AcceptDynamicDraw( ExecutorState *state,
 	const DynamicDraw &draw )
 {
@@ -671,6 +672,13 @@ static qboolean GLX_Executor_AcceptDynamicDraw( ExecutorState *state,
 		return qfalse;
 	}
 
+	GLX_Executor_RecordAcceptedDynamicDraw( state, draw );
+	return qtrue;
+}
+
+static void GLX_Executor_RecordAcceptedDynamicDraw( ExecutorState *state,
+	const DynamicDraw &draw )
+{
 	state->dynamicDraws++;
 	if ( draw.projectedDlights.recordCount > 0 ) {
 		state->dynamicDrawsWithProjectedDlights++;
@@ -707,7 +715,6 @@ static qboolean GLX_Executor_AcceptDynamicDraw( ExecutorState *state,
 	} else {
 		state->dynamicVertices += static_cast<unsigned int>( draw.count );
 	}
-	return qtrue;
 }
 
 qboolean GLX_Executor_ConsumeDynamicDraw( ExecutorState *state, const DynamicDraw &draw )
@@ -730,7 +737,10 @@ qboolean GLX_Executor_ExecuteDynamicDraw( ExecutorState *state, const DynamicDra
 		GLX_Executor_RecordReject( state );
 		return qfalse;
 	}
-	return GLX_Executor_AcceptDynamicDraw( state, draw );
+	// the draw is already validated for this tier; record accounting without
+	// re-running tier consume/support validation a third time
+	GLX_Executor_RecordAcceptedDynamicDraw( state, draw );
+	return qtrue;
 }
 
 qboolean GLX_Executor_ConsumeProjectedDlightDynamicMdiPlan( ExecutorState *state,

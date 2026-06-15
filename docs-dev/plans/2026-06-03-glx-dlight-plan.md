@@ -328,6 +328,15 @@ In practical terms, the fastest credible route is about ten to twelve weeks for 
 - [x] Added same-run projected-dlight shader parity capture automation: GLX switch sweeps now capture a shader-off legacy fallback reference before the shader candidate, approve reviewed candidate baselines from that legacy image, emit direct legacy-vs-shader diff sidecars, and require the paired reference in projected-dlight proof evidence.
 - [x] Extended projected-dlight parity capture into the dynamic timedemo corpus: GLX `glx-dlight-shader` timedemo configs now chain a shader-off legacy pass into a shader-candidate pass, capture both frames through `nextdemo`, baseline the candidate from the legacy frame, and require the dynamic-demo screenshot pair alongside timedemo metrics and executable bind diagnostics.
 - [x] Added projected-dlight shader parity rollups to proof reporting: release-proof manifest records, Markdown summaries, and visual dossiers now surface static-map candidates, dynamic-demo candidates, legacy references, reviewed baseline comparisons, same-run legacy comparisons, and shader-resource promotion counts from the same evidence object.
+- [x] Hardened projected-dlight shader proof gates against stale manifests: `evaluate_gate()` now cross-checks the rollup for required map/demo candidates, legacy references, reviewed comparisons, same-run comparisons, timedemo screenshot coverage, timedemo metrics, executable binds, and shader-resource promotion evidence even when a cached evidence object claims `passed`.
+
+2026-06-11 fixed the projected-light bind reachability gap (lists recorded only in legacy mode while the dlight program bound only in the PM lighting pass, so executable binds were impossible in every configuration and the sweep's world gates passed vacuously):
+
+- [x] Bound a projected-only dlight program variant (per-pixel light term neutralized via zero light color/alpha) around legacy-mode classified streamed dlight draws when `r_glxDlightProjectedProgram` is enabled, unbinding after each draw; with the cvar off the uniform-bind attempt is skipped instead of failing 100% (was attempts==failures≈29k per run).
+- [x] Added a legacy-mode static-world projected overlay pass: after the base VBO stages, packets carrying projected refs draw once more as an additive depth-equal overlay (white texture, `GLS_SRCBLEND_DST_COLOR|GLS_DSTBLEND_ONE|GLS_DEPTHFUNC_EQUAL`) under the projected-only program through `StaticWorldDrawProjectedDlightRunsFiltered`, making executable world-packet binds and projected `WorldPacket` products reachable; base-pass device runs no longer pre-scan-split or consume projected evidence while the program is opted in but not current.
+- [x] Streamed normals into projected-owned dynamic-light draws, restricted dynamic projected refs to world-entity batches (source records are world-space), and added `GLX_PROJECTED_DLIGHT_FLAG_FRONT_CULL` from `!r_dlightBacks` so the shader front test matches legacy backface semantics.
+- [x] Pinned the `glx-dlight-shader` profile to `r_dlightMode 0` + `r_glxMaterialRenderer 0` (and `glx-dlight-mdi` to `r_dlightMode 0`) so the projected paths are actually exercised, and made world/dynamic products, inputs, binds, and executable binds unconditional sweep requirements for the shader profile — the world-bind gate can no longer pass vacuously.
+- [x] Fixed projected stream/arena range accounting to count the implicit clear when rebinding over a live range, keeping the cumulative stale-range gates exact, and validated live on q3dm0 (GL46, r_dlightTest): shader-on runs show attempts==binds==executable with zero failures for both targets (world 675/675 executable with 675 SSBO resource promotions over 5400 records, dynamic ≈52k/52k), shader-off runs show zero attempts with evidence-only products preserved, and PM-mode runs show zero projected activity.
 
 Remaining implementation checkpoints:
 
@@ -350,10 +359,11 @@ Remaining implementation checkpoints:
   - [x] Add native RenderIR/executor tests for batch grouping, reject reasons, command offsets, fallback behavior, and GL46-only eligibility.
   - [x] Extend runtime-sweep performance parsing and proof budgets so high-end profiles can require positive MDI batch evidence without affecting compatibility profiles.
 
-Current verification:
+Current verification (2026-06-11):
 
 - [x] `python -m py_compile scripts\glx_runtime_sweep.py`
-- [x] `python tests\glx\glx_runtime_sweep_tests.py`
-- [x] `meson test -C .tmp\meson-glx-verification-local fnq3_glx_logic fnq3_glx_header_boundary --print-errorlogs`
-- [x] `meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64`
+- [x] `python tests\glx\glx_runtime_sweep_tests.py` (190 tests)
+- [x] `meson test -C .tmp\meson-glx-verification-local --print-errorlogs` (11 tests)
+- [x] `meson compile -C .tmp\meson-glx-verification-local fnquake3_glx_x86_64 fnquake3_opengl_x86_64`
+- [x] Live q3dm0 runs (shader on / shader off / PM mode) via `.tmp\live-projected-dlight\run_test.py`
 - [x] `git diff --check` (passes with existing LF-to-CRLF warnings only)

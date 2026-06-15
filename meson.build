@@ -981,6 +981,9 @@ if get_option('glx-tests')
   test('fnq3_shadow_manager_source', python,
     args: files('tests/shadow_manager_source_tests.py'),
   )
+  test('fnq3_vid_restart_fast_source', python,
+    args: files('tests/vid_restart_fast_source_tests.py'),
+  )
 endif
 
 curl_summary = 'disabled'

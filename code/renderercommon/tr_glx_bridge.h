@@ -339,6 +339,33 @@ static ID_INLINE void GLX_CompatUnbindDlightProgram( void )
 #endif
 }
 
+static ID_INLINE qboolean GLX_CompatDlightProjectedProgramEnabled( void )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_DlightProjectedProgramEnabled();
+#else
+	return qfalse;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatProjectedDlightWorldOverlayActive( void )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_ProjectedDlightWorldOverlayActive();
+#else
+	return qfalse;
+#endif
+}
+
+static ID_INLINE qboolean GLX_CompatBindProjectedDlightOverlayProgram( void )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_BindProjectedDlightOverlayProgram();
+#else
+	return qfalse;
+#endif
+}
+
 static ID_INLINE qboolean GLX_CompatDlightScissorEnabled( void )
 {
 #ifdef RENDERER_GLX
@@ -1067,6 +1094,31 @@ static ID_INLINE int GLX_CompatStaticWorldDrawDeviceRunsFiltered( int runCount,
 {
 #ifdef RENDERER_GLX
 	return GLX_Renderer_StaticWorldDrawDeviceRunsFiltered( runCount, counts, offsets,
+		firstItems, itemCounts, drawnRuns, indexType, indexBytes, shaderName, sort,
+		arenaBound );
+#else
+	(void)runCount;
+	(void)counts;
+	(void)offsets;
+	(void)firstItems;
+	(void)itemCounts;
+	(void)drawnRuns;
+	(void)indexType;
+	(void)indexBytes;
+	(void)shaderName;
+	(void)sort;
+	(void)arenaBound;
+	return 0;
+#endif
+}
+
+static ID_INLINE int GLX_CompatStaticWorldDrawProjectedDlightRuns( int runCount,
+	const int *counts, const void *const *offsets, const int *firstItems,
+	const int *itemCounts, int *drawnRuns, unsigned int indexType, int indexBytes,
+	const char *shaderName, int sort, qboolean arenaBound )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_StaticWorldDrawProjectedDlightRuns( runCount, counts, offsets,
 		firstItems, itemCounts, drawnRuns, indexType, indexBytes, shaderName, sort,
 		arenaBound );
 #else

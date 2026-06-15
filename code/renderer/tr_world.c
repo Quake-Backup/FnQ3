@@ -27,6 +27,7 @@ static void R_GLXRecordProjectedDlights( const dlight_t *dlights, int count )
 {
 #ifdef RENDERER_GLX
 	glxProjectedDlightRecord_t records[MAX_DLIGHTS];
+	unsigned int cullFlags;
 	int i;
 
 	if ( count <= 0 || !dlights ) {
@@ -37,11 +38,15 @@ static void R_GLXRecordProjectedDlights( const dlight_t *dlights, int count )
 		count = MAX_DLIGHTS;
 	}
 
+	// mirror the legacy projected pass: backface fragments are culled only
+	// when r_dlightBacks is disabled
+	cullFlags = r_dlightBacks->integer ? 0u : GLX_PROJECTED_DLIGHT_FLAG_FRONT_CULL;
+
 	for ( i = 0; i < count; i++ ) {
 		VectorCopy( dlights[i].transformed, records[i].origin );
 		records[i].radius = dlights[i].radius;
 		VectorCopy( dlights[i].color, records[i].color );
-		records[i].flags = 0u;
+		records[i].flags = cullFlags;
 		if ( dlights[i].additive ) {
 			records[i].flags |= GLX_PROJECTED_DLIGHT_FLAG_ADDITIVE;
 		}
@@ -508,6 +513,12 @@ static int r_worldPMLightMaxStamp;
 static int r_worldPMLightStamps[MAX_DLIGHTS];
 
 static void R_AddWorldSurfacePMLights( msurface_t *surf, unsigned int pmlightBits );
+
+#ifdef USE_LEGACY_DLIGHTS
+// R_GetDlightMode() cannot change mid-view; cache it per surface walk so the
+// per-node and per-surface paths avoid a cross-module call in the hot loop
+static int r_worldDlightMode;
+#endif
 #endif
 
 
@@ -524,7 +535,7 @@ static void R_AddWorldSurface( msurface_t *surf, int dlightBits, unsigned int pm
 	if ( surf->viewCount == tr.viewCount ) {
 #ifdef USE_PMLIGHT
 #ifdef USE_LEGACY_DLIGHTS
-		if ( R_GetDlightMode() )
+		if ( r_worldDlightMode )
 #endif
 		{
 			R_AddWorldSurfacePMLights( surf, pmlightBits );
@@ -543,7 +554,7 @@ static void R_AddWorldSurface( msurface_t *surf, int dlightBits, unsigned int pm
 
 #ifdef USE_PMLIGHT
 #ifdef USE_LEGACY_DLIGHTS
-	if ( R_GetDlightMode() ) 
+	if ( r_worldDlightMode )
 #endif
 	{
 #ifdef USE_LEGACY_DLIGHTS
@@ -636,6 +647,21 @@ static void R_AddWorldSurfacePMLights( msurface_t *surf, unsigned int pmlightBit
 		return;
 	}
 
+	// a surface shared by several visible leaves re-enters this function once
+	// per leaf; surf->lightCount only remembers the last attempted light, so a
+	// per-view mask of attempted lights is needed to keep one attempt per light
+	// (multiple attempts would append duplicate litsurfs and double the
+	// additive lighting contribution)
+	if ( surf->pmLitFrame != tr.viewCount ) {
+		surf->pmLitFrame = tr.viewCount;
+		surf->pmLitMask = 0;
+	}
+	pmlightBits &= ~surf->pmLitMask;
+	if ( !pmlightBits ) {
+		return;
+	}
+	surf->pmLitMask |= pmlightBits;
+
 	for ( i = 0; i < tr.viewParms.num_dlights && i < MAX_DLIGHTS; i++ ) {
 		if ( !( pmlightBits & ( 1u << i ) ) ) {
 			continue;
@@ -679,7 +705,8 @@ void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 
 #ifdef USE_PMLIGHT
 #ifdef USE_LEGACY_DLIGHTS
-	if ( R_GetDlightMode() ) 
+	r_worldDlightMode = R_GetDlightMode();
+	if ( r_worldDlightMode )
 #endif
 	{
 		dlight_t *dl;
@@ -802,7 +829,7 @@ static void R_RecursiveWorldNode( mnode_t *node, unsigned int planeBits, unsigne
 		// being tested against every surface in unrelated BSP branches.
 #ifdef USE_LEGACY_DLIGHTS
 #ifdef USE_PMLIGHT
-		if ( !R_GetDlightMode() )
+		if ( !r_worldDlightMode )
 #endif
 		if ( dlightBits ) {
 			int i;
@@ -845,7 +872,7 @@ static void R_RecursiveWorldNode( mnode_t *node, unsigned int planeBits, unsigne
 #endif
 #ifdef USE_LEGACY_DLIGHTS
 #ifdef USE_PMLIGHT
-		if ( !R_GetDlightMode() )
+		if ( !r_worldDlightMode )
 #endif
 		if ( dlightBits ) {
 			int	i;
@@ -1063,7 +1090,10 @@ R_LeafClusterInCurrentPVS
 =====================
 */
 qboolean R_LeafClusterInCurrentPVS( const vec3_t vieworg, int cluster, int area ) {
-	const mnode_t *viewLeaf;
+	static vec3_t cachedViewOrg;
+	static const world_t *cachedWorld;
+	static int cachedViewCluster;
+	static int cachedFrameCount;
 	const byte *vis;
 	int viewCluster;
 
@@ -1071,8 +1101,19 @@ qboolean R_LeafClusterInCurrentPVS( const vec3_t vieworg, int cluster, int area 
 		return qtrue;
 	}
 
-	viewLeaf = R_PointInLeaf( vieworg );
-	viewCluster = viewLeaf->cluster;
+	// the view-origin leaf descent is loop-invariant across the many
+	// per-frame candidate tests (static map lights, surface-light proxies,
+	// spot shadow planning), so memoize it per frame/origin
+	if ( cachedFrameCount != tr.frameCount || cachedWorld != tr.world ||
+		!VectorCompare( cachedViewOrg, vieworg ) ) {
+		const mnode_t *viewLeaf = R_PointInLeaf( vieworg );
+
+		cachedViewCluster = viewLeaf->cluster;
+		VectorCopy( vieworg, cachedViewOrg );
+		cachedWorld = tr.world;
+		cachedFrameCount = tr.frameCount;
+	}
+	viewCluster = cachedViewCluster;
 	if ( viewCluster < 0 || cluster < 0 ||
 		viewCluster >= tr.world->numClusters || cluster >= tr.world->numClusters ) {
 		return qtrue;
@@ -1202,6 +1243,10 @@ void R_AddWorldSurfaces( void ) {
 	unsigned int dlightBits;
 #endif
 
+#if defined( USE_PMLIGHT ) && defined( USE_LEGACY_DLIGHTS )
+	r_worldDlightMode = R_GetDlightMode();
+#endif
+
 	if ( !r_drawworld->integer ) {
 		return;
 	}
@@ -1228,17 +1273,16 @@ void R_AddWorldSurfaces( void ) {
 	r_worldPMLightMask = 0;
 	r_worldPMLightMaxStamp = tr.lightCount;
 #ifdef USE_LEGACY_DLIGHTS
-	if ( R_GetDlightMode() )
+	if ( r_worldDlightMode )
 #endif
 	{
 		// Populate transformed world-space light positions once, then let the normal
 		// visible-surface walk append surfaces to each light. This avoids a second
 		// BSP traversal for every dynamic light in GLX per-pixel dlight mode.
 		R_TransformDlights( tr.viewParms.num_dlights, tr.viewParms.dlights, &tr.viewParms.world );
-		for ( i = 0; i < tr.viewParms.num_dlights && i < MAX_DLIGHTS; i++ ) 
+		for ( i = 0; i < tr.viewParms.num_dlights && i < MAX_DLIGHTS; i++ )
 		{
-			dl = &tr.viewParms.dlights[i];	
-			dl->head = dl->tail = NULL;
+			dl = &tr.viewParms.dlights[i];
 			if ( R_CullDlight( dl ) == CULL_OUT ) {
 				tr.pc.c_light_cull_out++;
 				continue;
@@ -1255,7 +1299,7 @@ void R_AddWorldSurfaces( void ) {
 	dlightBits = 0;
 	R_GLXRecordProjectedDlights( NULL, 0 );
 #ifdef USE_PMLIGHT
-	if ( !R_GetDlightMode() )
+	if ( !r_worldDlightMode )
 #endif
 	{
 #ifdef USE_PMLIGHT
@@ -1304,7 +1348,7 @@ void R_AddWorldSurfaces( void ) {
 
 #ifdef USE_PMLIGHT
 #ifdef USE_LEGACY_DLIGHTS
-	if ( !R_GetDlightMode() )
+	if ( !r_worldDlightMode )
 		return;
 #endif // USE_LEGACY_DLIGHTS
 #endif // USE_PMLIGHT

@@ -101,6 +101,18 @@ void		QVK_Shutdown( qboolean unloadDLL );
 //
 glwstate_t glw_state;
 
+/*
+** GLimp_InvalidateConfig
+**
+** The renderer module owning the glconfig_t we feed back into is about to
+** be unloaded: drop the pointer so nothing dereferences stale memory before
+** the next GLimp_Init/VKimp_Init.
+*/
+void GLimp_InvalidateConfig( void )
+{
+	glw_state.config = NULL;
+}
+
 // GLimp-specific cvars
 #ifdef USE_OPENGL_API
 static cvar_t *r_maskMinidriver;		// allow a different dll name to be treated as if it were opengl32.dll
@@ -819,7 +831,64 @@ static qboolean GLW_CreateWindow( int width, int height, int colorbits, qboolean
 	}
 	else
 	{
-		Com_Printf( "...window already present, CreateWindowEx skipped\n" );
+		//
+		// window is kept across \vid_restart fast: refresh its styles and
+		// geometry so windowed<->fullscreen toggles are applied correctly
+		//
+		g_wv.borderless = 0;
+
+		if ( cdsFullscreen )
+		{
+			exstyle = WINDOW_ESTYLE_FULLSCREEN;
+			stylebits = WINDOW_STYLE_FULLSCREEN;
+
+			w = width;
+			h = height;
+			x = glw_state.desktopX;
+			y = glw_state.desktopY;
+		}
+		else
+		{
+			exstyle = WINDOW_ESTYLE_NORMAL;
+			if ( r_noborder->integer ) {
+				stylebits = WINDOW_STYLE_NORMAL_NB;
+				g_wv.borderless = r_noborder->integer;
+			} else {
+				stylebits = WINDOW_STYLE_NORMAL;
+			}
+			AdjustWindowRect( &r, stylebits, FALSE );
+
+			w = r.right - r.left;
+			h = r.bottom - r.top;
+
+			x = vid_xpos->integer;
+			y = vid_ypos->integer;
+
+			// adjust window coordinates if necessary
+			// so that the window is completely on screen
+			if ( w < glw_state.desktopWidth && (x + w) > glw_state.desktopWidth + glw_state.desktopX )
+				x = ( glw_state.desktopWidth + glw_state.desktopX - w );
+			if ( h < glw_state.desktopHeight && (y + h) > glw_state.desktopHeight + glw_state.desktopY )
+				y = ( glw_state.desktopHeight + glw_state.desktopY - h );
+
+			if ( x < glw_state.desktopX )
+				x = glw_state.desktopX;
+			if ( y < glw_state.desktopY )
+				y = glw_state.desktopY;
+		}
+
+		glw_state.cdsFullscreen = cdsFullscreen;
+
+		SetWindowLong( g_wv.hWnd, GWL_EXSTYLE, exstyle );
+		SetWindowLong( g_wv.hWnd, GWL_STYLE, stylebits );
+		SetWindowPos( g_wv.hWnd, NULL, x, y, w, h, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW );
+
+		// we must reflect actual drawable dimensions in glconfig
+		GetClientRect( g_wv.hWnd, &r );
+		glw_state.config->vidWidth = r.right - r.left;
+		glw_state.config->vidHeight = r.bottom - r.top;
+
+		Com_Printf( "...window already present, updated styles@%d,%d (%dx%d)\n", x, y, w, h );
 	}
 
 	if ( colorbits == 0 )

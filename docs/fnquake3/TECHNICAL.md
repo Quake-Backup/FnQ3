@@ -128,6 +128,187 @@ Renderer-focused verification lives beside the release packaging flow:
 
 Dry-run renderer gate artifacts are planning evidence only. Blocking release evidence requires non-dry-run runtime artifacts on the documented platform matrix with retail `baseq3` assets. Tagged release packaging requires `--glx-proof-root`; the release script revalidates passing `rc-smoke`, `rc-parity`, and `rc-proof` manifests for `windows-x64` and `linux-x86_64` before it writes the release manifest. Each blocking manifest must carry passing versioned `rendererSwitchEvidence` for the generated `renderer_switch` run, including the keep-window `CL_Vid_Restart` path, every expected map/round/step screenshot transition, GLx diagnostics, and GLx performance samples. The `rc-parity` and `rc-proof` manifests must also carry passing versioned `worldProofEvidence` proving the selected stock/high-geometry/lightmap/fog/visibility world maps, GLx screenshot histograms, static-world draw/index counters, zero static packet misses/fallbacks/errors, and lightmap/fog path evidence. The `rc-proof` manifest must carry passing versioned `materialProofEvidence` proving material-stage/tcgen corpus tags, GLx screenshot histograms, material renderer readiness, compile/program activity, zero material failures or unsupported plans, parameter-block fingerprints, required stream-material feature counters, and forbidden screen-map/video-map guards for the conservative proof surface. The `rc-proof` manifest must also carry passing versioned `dynamicProofEvidence` proving dynamic entity, first-person weapon, dynamic-light stream/ownership, and planar-shadow corpus coverage with required stream-category/feature counters, tier-support evidence, screenshots or timedemos for the selected dynamic scenes, and zero stream/category fallbacks. The `rc-proof` manifest must also carry passing versioned `postProofEvidence` proving greyscale and render-scale corpus coverage with found GLx screenshots, histograms, ready FBO state, positive postprocess frame/screenshot counters, render-scale dimension evidence, no minimized output, direct-final post shader diagnostics, and a valid color contract. The staged `rc-stress` material proof additionally covers animated-image, screen-map, and video-map stage flags, staged `rc-stress` dynamic proof covers particle, transient-poly, mark/decal, and beam counters, and staged `rc-stress` post proof keeps greyscale/render-scale evidence active before those content-sensitive paths can be considered for conservative defaults. Promotion proof roots must also carry passing versioned `ownershipProofEvidence` in the non-dry-run `glx-ownership` manifests for both blocking platforms, including executable GLx-owned post/output counts and post shader direct-final diagnostics rather than planned-only post/output diagnostics. The `rc-proof` manifest must also carry the current proof-corpus version, parity-suite version, and the screenshot, demo-playback, HUD, shadow, bloom, cel-shading, greyscale, and render-scale suite records. Release packaging records the GLx promotion report and refuses a source tree that has promoted renderer defaults before `scripts/glx_promotion.py --require-ready --proof-root <dir> --rollback-metadata <json>` can pass. For promoted releases, pass the same reviewed rollback metadata to `scripts/release.py --glx-rollback-metadata <json>` so `.install/release-manifest.json` records the matched rollback archive and checksum. The GLx runtime sweep applies built-in global and per-tier performance budgets by default; use `--performance-budget` only to add reviewed runner-specific thresholds.
 
+## Shadowmapping
+
+Shadowmapping in FnQuake3 is a renderer-local lighting layer. It may improve
+how maps, effects, and authored light cues read on screen, but it must not
+change retail demo playback, protocol behavior, VM execution, filesystem
+search order, map loading, or game-side entity state. Treat every
+shadowmapping change as visual and compatibility-sensitive at the same time:
+the visuals are optional, while the render order, asset acceptance, and
+fallback behavior must stay predictable.
+
+The subsystem is organized around three atlas families:
+
+- Point-light cubemap atlas: transient gameplay lights, renderer-injected test
+  lights, and point-capable sidecar/static lights. Each selected light owns six
+  atlas faces, and the planner trades light count against face resolution.
+- Directional CSM atlas: sky-sun shadows derived from the active world's
+  `q3map_sun`, `q3map_sunExt`, or `q3map_sunExt2` shader metadata. Cascades
+  are split, laterally snapped, depth-expanded, rendered, cached where valid,
+  and sampled by a receiver pass after the atlas is published.
+- 2D spotlight atlas: sidecar spot lights and surfacelight proxy lights,
+  including large planar emitters that need representative cone projection,
+  per-light tile sizing, and bounded atlas fill. The backend caches the
+  rendered atlas against a plan/world-caster signature so unchanged frames —
+  and the repeated per-view spot pass on portal/mirror frames — skip the
+  clear and re-render, while entity casters force a redraw.
+
+`shadowManager_t` is the per-view owner for shadow planning. Front-end scene
+work collects candidates, rejects invalid or low-value work, assigns atlas
+regions, records publication state, and writes an ordered pass schedule into
+the draw command. GLx and Vulkan backends then consume that schedule for
+depth-only atlas producer passes and sample only manager-published atlas
+generations in lighting or receiver passes. Backend-global atlas readiness is
+a compatibility fallback, not the canonical source of truth.
+
+`r_shadowCorrectness 1` is the first-pass diagnostic mode for shadow-map
+contract work. It is intentionally default-off and cheat-gated. When enabled,
+GLx and Vulkan force the minimal correctness path: point-light shadows only,
+one selected dynamic light, hard filtering, no spot atlas, no CSM producer or
+receiver pass, and no alpha-tested shadow casters. Use it to validate raw
+light-space projection, depth output, compare direction, bias separation, and
+backend resource readiness before reintroducing filtering, spot/CSM work, or
+multi-light atlas pressure. While enabled, the end-of-frame diagnostics emit
+`shadow correctness` records for the point-shadow atlas: backend depth
+convention, clear/compare state, publication generation, face viewports and
+scissors, API-space viewports and scissors, cache/render status, and the full
+projection/model matrices used to write each face.
+
+The shadow coordinate contract is intentionally explicit:
+
+- Shadow atlas plans use a top-left tile origin. `viewParms_t` stores the
+  producer viewport in the renderer's historical lower-left convention by
+  writing `atlasHeight - atlasY - tileSize`.
+- GLx consumes that lower-left `viewParms_t` viewport directly. Dynamic-light
+  and CSM sampling compensate by addressing atlas rows from the lower-left
+  texture convention.
+- Vulkan converts the same lower-left `viewParms_t` viewport back to top-left
+  `VkViewport`/`VkRect2D` coordinates, negates the clip-space Y projection row
+  before MVP upload, and samples dynamic-light atlas rows directly. Vulkan CSM
+  still samples `1.0 - light_coord.z` because the receiver reconstructs a
+  light-space atlas coordinate from world space rather than from the producer
+  viewport.
+- GLx point and spot shadow depths are forward OpenGL depth (`[-1, 1]` clip,
+  clear `1.0`, `GL_LEQUAL`). Vulkan point and spot shadow depths are
+  zero-to-one clip depths and currently follow the backend's reversed-depth
+  build (`clear 0.0`, `VK_COMPARE_OP_GREATER_OR_EQUAL`). Vulkan CSM remains a
+  forward-depth producer pass (`clear 1.0`, `VK_COMPARE_OP_LESS_OR_EQUAL`) and
+  carries the compare direction as a receiver shader mode.
+
+Bias is also a four-part contract, not one interchangeable tuning knob.
+Receiver bias (`r_dlightShadowBias` / `r_csmShadowBias`) is applied only while
+sampling and is clamped by angle and texel footprint where the shader has that
+information. Constant caster depth bias and slope-scaled caster bias are
+applied only while rendering depth producers (`glPolygonOffset` on GLx,
+`vkCmdSetDepthBias` on Vulkan). Caster normal bias is a separate vertex offset
+before rasterization, using the point/spot light-to-vertex vector or the
+negated CSM sunlight direction. `r_shadowCorrectness 1` prints all four
+dynamic-light bias values separately so a capture can distinguish receiver
+compare tuning from producer raster tuning.
+
+Filtering is reintroduced only after the hard-shadow path is known-good. The
+shared filter contract is: hard mode is one effective center sample represented
+by four zero-offset taps in the receiver shader, 2x2 PCF uses four half-texel
+taps, and four-tap Poisson PCF uses the shared `0.25/0.75` inner/outer offset
+pair. GLx and Vulkan both derive dynamic-light and CSM filter offsets from the
+same helper, while `r_shadowCorrectness 1` still forces the effective filter to
+hard and reports the requested filter, effective filter, tap count, and offsets
+in the correctness summary. Ordinary dynamic-light shadow debug output reports
+the same effective filter fields for production captures.
+
+Keep the GLx and Vulkan paths mechanically aligned. Shared rules include
+angle-aware caster normal bias, texel-limited receiver bias, bounded filter
+selection, cascade atlas snapping, atlas publication before sampling, and
+explicit fallbacks when there is no world, no active sky sun, no atlas, or no
+valid cascade. For CSM, the light direction is an incoming sunlight vector for
+planning, while the caster normal-bias helper needs the vector from light to
+vertex; GLx and Vulkan must both use the negated `tr.csm.lightDirection` in
+that path. A sign drift here can produce healthy-looking planner telemetry and
+still leave the final scene visually unshadowed.
+
+CSM cascade planning intentionally snaps only the atlas-facing light-space
+axes, not the light-depth axis. Quantizing depth can make static world shadows
+appear to shimmer or partially remap even when model shadows are aligned. The
+depth bounds are expanded beyond the receiver slice so world geometry just
+outside the visible split can still cast into it, while the X/Y atlas footprint
+stays texel-snapped for stable sampling. Surface culling also keeps a two-texel
+margin around cascade bounds so edge casters do not pop as the camera crosses
+snap thresholds.
+
+CSM caster and receiver passes must walk the sorted draw-surface list in the
+same order as the main backend, changing entity state inline when the sort key
+changes. Do not regroup CSM work by first collecting entities and then
+rescanning surfaces per entity: that can change batch/state lifetime from the
+main draw order and has caused partial or unstable Vulkan world-shadow output
+even when individual model shadows appear aligned.
+
+`r_csmDebug 1` emits both the compact `csm shadows` summary and one
+`csm cascade` line per active cascade. The cascade lines are the Round 6
+coordinate evidence: split near/far, atlas tile, renderer-space viewport,
+API-space viewport, sample-Y rule, clip-Y rule, depth convention, compare
+rule, light-space bounds, origin, and texel size. GLx reports native sample Y,
+native clip Y, OpenGL `[-1, 1]` clip depth, and `lequal` forward-depth CSM.
+Vulkan reports inverted CSM sample Y, flipped clip Y, `[0, 1]` clip depth, and
+the same forward `lequal` CSM producer/receiver compare. Keep these lines in
+sync with the CSM producer and receiver shader contract when changing cascade
+math.
+
+`r_dlightShadowDebug 1`, `r_spotShadowDebug 1`, or `r_csmDebug 1` also emits
+`shadow atlas contract` lines for the point, spot, and CSM atlases. These
+Round 7 lines report whether the atlas is active, tile size, atlas dimensions,
+record count, fill pressure, filter padding in texels, UV clamp inset, sampler
+wrap policy, and deterministic allocation policy. Point lights allocate by
+priority with `dlightIndex` tie-breaks, spot lights allocate by priority with
+source/source-index tie-breaks, and CSM allocates by cascade index. Current PCF
+kernels never sample beyond one texel, and the receiver shaders clamp UVs
+inside the tile before applying taps, so the logged clamp must remain at least
+as large as the logged filter pad.
+
+The GLx and Vulkan runtime sweep analyzers derive a `shadowProfile` object
+from the same debug stream only after the correctness contracts above are
+present and passing. It records raster work, sampler pressure, pass
+orchestration, and CPU timing buckets from the dlight, spot, CSM, atlas, and
+manager samples. Treat `profileReady: true` as permission to start looking for
+cost reductions in captures or vendor profilers; a failed profile means the
+correctness evidence is still incomplete or unstable and should be fixed first.
+
+CSM producer and receiver projection must stay a single contract. GLx writes
+OpenGL-style atlas depth directly from the planned light-space bounds; Vulkan
+converts the same projection to Vulkan clip space by negating the full clip-Y
+row (`projectionMatrix[1]`, `[5]`, `[9]`, and `[13]`) before MVP upload. The
+`[13]` term is important because CSM orthographic projections store the
+atlas-vertical light-space offset there. Receiver shaders then sample the
+published atlas with `light_coord.y` as atlas X. GLx samples
+`light_coord.z` as atlas Y because its FBO texture coordinates use the same
+bottom-left convention as the producer viewport. Vulkan samples
+`1.0 - light_coord.z` because the rendered depth image is addressed with a
+top-left image origin after the clip-Y conversion. Keep that difference local
+to the Vulkan CSM receiver shader, and clamp the PCF center inside the cascade
+tile to avoid cross-cascade taps.
+
+Documentation and evidence are split by audience. Player-facing controls live
+in [`docs/DISPLAY.md`](../DISPLAY.md#dynamic-lighting-and-shadowing). The
+maintainer implementation ledger lives in
+[`DLIGHT_SHADOWMAP_ROADMAP.md`](./DLIGHT_SHADOWMAP_ROADMAP.md), with the
+broader historical plan in
+[`docs-dev/plans/2026-06-03-vk-shadowmapping.md`](../../docs-dev/plans/2026-06-03-vk-shadowmapping.md).
+Before enabling real shadow maps by default, require non-dry-run GLx and
+Vulkan runtime evidence with retail assets, passing release-gate summaries,
+reviewed screenshots or diffs, and RenderDoc inspection notes for atlas
+contents, receiver sampling, and combined point/spot/CSM scheduling.
+
+Useful focused checks for ordinary shadowmapping changes:
+
+```powershell
+python tests\shadow_correctness_source_tests.py
+python tests\dlight_shadow_bias_tests.py
+python tests\shadow_manager_source_tests.py
+python tests\vulkan\vk_runtime_sweep_tests.py
+python tests\glx\glx_runtime_sweep_tests.py
+meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64 fnquake3_vulkan_x86_64
+```
+
 ## Audio Backend Notes
 
 - [`AUDIO_ENGINE.md`](./AUDIO_ENGINE.md) is the detailed architecture and source-layout reference for the modern audio engine.

@@ -62,6 +62,19 @@ seta r_customHeight "900"
 vid_restart
 ```
 
+### Fast Windowed/Fullscreen Toggle
+
+`vid_restart fast` (alias: `vid_restart keep_window`) restarts the renderer while keeping the game window alive. When only the windowed/fullscreen state, borders, size, or position changed, the existing window is morphed in place instead of being destroyed and re-created, which avoids the desktop flicker and focus churn of a full restart:
+
+```cfg
+seta r_fullscreen "0"
+vid_restart fast
+```
+
+Alt+Enter toggles `r_fullscreen` and issues `vid_restart fast` automatically.
+
+The fast path is safe to use unconditionally: if the window cannot be reused — for example after changing `r_colorbits`, `r_stencilbits`, `r_depthbits`, `r_stereoEnabled`, HDR output requests, or switching between OpenGL and Vulkan renderers — the engine automatically falls back to a full window re-creation. The console prints `...reusing existing window` when the in-place toggle was taken.
+
 ## Framebuffer Path, Internal Resolution, And Anti-Aliasing
 
 These settings control the render path behind the display output.
@@ -508,6 +521,8 @@ Use `vid_restart` after changes to:
 - OpenGL or GLx `r_bloom_passes`
 - OpenGL or GLx `r_hdrBloomFormat`
 - Vulkan `r_bloom`
+
+For pure window-state changes (`r_fullscreen`, `r_mode`, `r_noborder`, window size or position), prefer `vid_restart fast`: it applies the change on the existing window when possible and falls back to a full restart automatically. See [Fast Windowed/Fullscreen Toggle](#fast-windowedfullscreen-toggle).
 
 Settings that are usually safe to tune live:
 

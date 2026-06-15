@@ -144,6 +144,16 @@ static qboolean GLX_StaticWorld_ResolveFns()
 		s_fns.BufferData && s_fns.GetIntegerv && s_fns.GetError ? qtrue : qfalse;
 }
 
+static void GLX_StaticWorld_ClearGLErrors()
+{
+	if ( !s_fns.GetError ) {
+		return;
+	}
+
+	for ( int i = 0; i < 8 && s_fns.GetError() != GL_NO_ERROR; i++ ) {
+	}
+}
+
 static qboolean GLX_StaticWorld_ResolveDrawFn()
 {
 	if ( s_fns.DrawElements ) {
@@ -1087,6 +1097,16 @@ static void GLX_StaticWorld_DeleteArena( StaticWorldStats *stats )
 	s_fns.GetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
 	s_fns.GetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
 
+	/* Never restore a name this delete is about to free. */
+	if ( (GLuint)oldArrayBuffer == stats->arenaVertexBuffer ||
+		(GLuint)oldArrayBuffer == stats->arenaIndexBuffer ) {
+		oldArrayBuffer = 0;
+	}
+	if ( (GLuint)oldElementArrayBuffer == stats->arenaVertexBuffer ||
+		(GLuint)oldElementArrayBuffer == stats->arenaIndexBuffer ) {
+		oldElementArrayBuffer = 0;
+	}
+
 	if ( stats->arenaVertexBuffer ) {
 		s_fns.DeleteBuffers( 1, &stats->arenaVertexBuffer );
 		stats->arenaVertexBuffer = 0;
@@ -1468,7 +1488,7 @@ void GLX_StaticWorld_UploadArena( StaticWorldStats *stats, const void *vertexDat
 
 	s_fns.GetIntegerv( GL_ARRAY_BUFFER_BINDING_ARB, &oldArrayBuffer );
 	s_fns.GetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, &oldElementArrayBuffer );
-	s_fns.GetError();
+	GLX_StaticWorld_ClearGLErrors();
 
 	s_fns.GenBuffers( 1, &stats->arenaVertexBuffer );
 	err = s_fns.GetError();
@@ -1566,7 +1586,13 @@ void GLX_StaticWorld_UploadIndirectCommands( StaticWorldStats *stats, qboolean d
 			command = &stats->indirectPackets[packetIndex];
 		}
 		if ( !command || command->count == 0 || command->instanceCount == 0 ) {
-			continue;
+			/*
+			Compacting over a skipped slot would desync every later
+			indirectPacketToCommand byte offset used at draw time, so refuse
+			the whole upload and let draws use the non-indirect path.
+			*/
+			stats->indirectBufferFailures++;
+			return;
 		}
 
 		uploadCommands[uploadCount++] = *command;
@@ -1580,7 +1606,7 @@ void GLX_StaticWorld_UploadIndirectCommands( StaticWorldStats *stats, qboolean d
 	uploadBytes = uploadCount * static_cast<int>( sizeof( uploadCommands[0] ) );
 
 	oldDrawIndirectBuffer = GLX_StaticWorld_CurrentIndirectBufferBinding( stats );
-	s_fns.GetError();
+	GLX_StaticWorld_ClearGLErrors();
 
 	s_fns.GenBuffers( 1, &stats->indirectCommandBuffer );
 	err = s_fns.GetError();
@@ -1661,7 +1687,7 @@ static qboolean GLX_StaticWorld_DrawPacketIndirect( StaticWorldStats *stats,
 		static_cast<std::intptr_t>( commandIndex * static_cast<int>( sizeof( *command ) ) ) );
 
 	oldDrawIndirectBuffer = GLX_StaticWorld_CurrentIndirectBufferBinding( stats );
-	s_fns.GetError();
+	GLX_StaticWorld_ClearGLErrors();
 	GLX_StaticWorld_BindIndirectBufferTracked( stats, stats->indirectCommandBuffer );
 	s_fns.DrawElementsIndirect( GL_TRIANGLES, indexType, commandOffset );
 	err = s_fns.GetError();
@@ -2093,7 +2119,7 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 	}
 
 	oldDrawIndirectBuffer = GLX_StaticWorld_CurrentIndirectBufferBinding( stats );
-	s_fns.GetError();
+	GLX_StaticWorld_ClearGLErrors();
 
 	if ( useCompactBuffer ) {
 		if ( !stats->indirectCompactCommandBuffer ) {
@@ -2111,19 +2137,19 @@ static qboolean GLX_StaticWorld_FlushFilteredMultiDrawIndirect( StaticWorldStats
 		}
 
 		GLX_StaticWorld_BindIndirectBufferTracked( stats, stats->indirectCompactCommandBuffer );
-		if ( s_fns.BufferSubData &&
-			stats->indirectCompactBufferCapacityBytes >= static_cast<unsigned int>( uploadBytes ) ) {
-			s_fns.BufferSubData( GL_DRAW_INDIRECT_BUFFER, 0, uploadBytes, compactCommands );
-			stats->multiDrawIndirectCompactSubDatas++;
-		} else {
-			if ( stats->indirectCompactBufferCapacityBytes > 0 &&
-				stats->indirectCompactBufferCapacityBytes < static_cast<unsigned int>( uploadBytes ) ) {
-				stats->multiDrawIndirectCompactGrows++;
-			}
-			s_fns.BufferData( GL_DRAW_INDIRECT_BUFFER, uploadBytes, compactCommands, GL_STREAM_DRAW );
-			stats->indirectCompactBufferCapacityBytes = static_cast<unsigned int>( uploadBytes );
-			stats->multiDrawIndirectCompactOrphans++;
+		/*
+		Always orphan: BufferSubData at offset 0 would add an implicit sync
+		against earlier compact batches of this frame the GPU may still be
+		consuming, while a fresh GL_STREAM_DRAW store lets the driver ghost
+		the tiny command block without stalling.
+		*/
+		if ( stats->indirectCompactBufferCapacityBytes > 0 &&
+			stats->indirectCompactBufferCapacityBytes < static_cast<unsigned int>( uploadBytes ) ) {
+			stats->multiDrawIndirectCompactGrows++;
 		}
+		s_fns.BufferData( GL_DRAW_INDIRECT_BUFFER, uploadBytes, compactCommands, GL_STREAM_DRAW );
+		stats->indirectCompactBufferCapacityBytes = static_cast<unsigned int>( uploadBytes );
+		stats->multiDrawIndirectCompactOrphans++;
 		err = s_fns.GetError();
 		if ( err != GL_NO_ERROR ) {
 			stats->multiDrawIndirectErrors++;

@@ -575,6 +575,19 @@ static void GLX_Stream_OrphanBuffer( StreamState *state )
 	state->orphans++;
 }
 
+static qboolean GLX_Stream_StrategyNeedsFrameFence( const StreamState *state )
+{
+	/*
+	Orphan and map-range frames re-specify the backing store at offset zero
+	(BufferData orphan or MAP_INVALIDATE_BUFFER), so the driver ghosts data
+	still referenced by in-flight draws and no cross-frame fence is needed.
+	Only the persistently mapped ring rewrites the same storage every frame
+	and must therefore wait on the previous frame's fence. Skipping the
+	fence elsewhere restores CPU/GPU frame overlap for streamed draws.
+	*/
+	return state && state->strategy == StreamStrategy::PersistentMapped ? qtrue : qfalse;
+}
+
 static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 {
 	GLuint oldArrayBuffer = 0;
@@ -894,7 +907,7 @@ void GLX_Stream_FrameComplete( StreamState *state )
 		return;
 	}
 
-	if ( state->syncReady && state->frameTouched ) {
+	if ( state->syncReady && state->frameTouched && GLX_Stream_StrategyNeedsFrameFence( state ) ) {
 		if ( state->frameSync ) {
 			state->syncFenceSkips++;
 		} else if ( s_fns.FenceSync ) {
@@ -976,8 +989,18 @@ qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment,
 	oldArrayBuffer = GLX_Stream_BindPreserving( state, state->buffer );
 
 	if ( state->strategy == StreamStrategy::MapBufferRange && s_fns.MapBufferRange && s_fns.UnmapBuffer ) {
-		GLbitfield access = GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
-		access |= ( offset == 0 ) ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT;
+		GLbitfield access = GL_MAP_WRITE_BIT;
+
+		if ( offset == 0 ) {
+			/*
+			First reservation of the frame: re-specify the store so the
+			driver orphans data still referenced by in-flight draws. Not
+			unsynchronized here - the orphan replaces the cross-frame fence.
+			*/
+			access |= GL_MAP_INVALIDATE_BUFFER_BIT;
+		} else {
+			access |= GL_MAP_UNSYNCHRONIZED_BIT | GL_MAP_INVALIDATE_RANGE_BIT;
+		}
 
 		reservation->ptr = s_fns.MapBufferRange( GL_ARRAY_BUFFER, static_cast<ptrdiff_t>( offset ),
 			static_cast<ptrdiff_t>( bytes ), access );

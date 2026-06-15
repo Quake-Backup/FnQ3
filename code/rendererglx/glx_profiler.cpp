@@ -511,7 +511,11 @@ void GLX_Profiler_BeginBackendTimer( ProfilerState *state )
 		return;
 	}
 
-	GLX_Profiler_CollectResults( state );
+	// results normally drain once per frame in GLX_Profiler_FrameComplete;
+	// poll the driver here only when this ring slot is still pending
+	if ( state->pending[state->writeIndex] ) {
+		GLX_Profiler_CollectResults( state );
+	}
 
 	if ( state->pending[state->writeIndex] ) {
 		state->queryRingFullSkips++;
@@ -544,7 +548,11 @@ void GLX_Profiler_BeginGpuPassTimer( ProfilerState *state, int pass )
 		return;
 	}
 
-	GLX_Profiler_CollectResults( state );
+	// results normally drain once per frame in GLX_Profiler_FrameComplete;
+	// poll the driver here only when the next ring slot is still pending
+	if ( state->passQueries[state->passWriteIndex].pending ) {
+		GLX_Profiler_CollectResults( state );
+	}
 
 	if ( state->passStackDepth >= GLX_PASS_STACK_DEPTH ) {
 		state->passQueryRingFullSkips++;

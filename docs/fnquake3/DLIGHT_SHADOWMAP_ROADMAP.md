@@ -73,6 +73,18 @@ As of June 4, 2026:
   casters when the light parameters, receiver count, lit-surface set, atlas
   face size, and atlas resource generation match. Non-cacheable entity,
   brush-model, and deformed-shader caster tiles are invalidated and redrawn.
+- `[x]` GLx and Vulkan cache the spotlight shadow atlas against a signature of
+  every spot plan (origin, direction, radius, outer angle, atlas rect) plus
+  the world-only caster set, skipping the per-tile clear and re-render on a
+  match — including the repeated spot pass that per-view shadow planning
+  schedules on portal/mirror frames. Entity, brush-model, and deformed-shader
+  casters force a re-render, mirroring the dlight tile cache policy, and
+  cache hit/miss/uncacheable counters report through `r_spotShadowDebug`.
+- `[x]` GLx and Vulkan memoize per-light dlight shadow caster bounds across
+  the six cube-face lit-surface walks: face-invariant local bounds (including
+  MD3 vertex-walk bounds) are derived once on the first face and reused for
+  the remaining faces, keyed by chain position and validated against the
+  surface and entity that produced them.
 - `[x]` When shadow candidates exceed the configured atlas light budget, GLx and
   Vulkan stop assigning atlas slots to candidates below 1/16th of the strongest
   candidate priority and report those skips separately from hard budget skips.
@@ -86,14 +98,40 @@ As of June 4, 2026:
   render-pass timestamp span through `r_speeds 7`.
 - `[x]` Directional CSM is defined as a separate, disabled-by-default feature
   path with `r_csm*` cvars. GLx and Vulkan compute deterministic
-  practical-split cascades, stable sphere-derived light-space bounds, texel
-  snapping from the planned cascade resolution, allocate sampled shadow atlases,
-  and render sky-sun shadows for opaque BSP world geometry, entity models, and
-  brush models.
+  practical-split cascades, stable sphere-derived light-space bounds,
+  atlas-facing texel snapping from the planned cascade resolution, expanded
+  light-depth bounds for off-slice world casters, allocate sampled shadow
+  atlases, and render sky-sun shadows for opaque BSP world geometry, entity
+  models, and brush models.
 - `[x]` GLx and Vulkan share shadow filter and bias utility policy between
   dlight shadows and CSM where practical. Dlight and CSM sampling/atlas
   rendering use the common filter/bias clamps, while CSM keeps separate
   receiver-bias, caster-bias, and strength settings in cvars and debug output.
+- `[x]` Vulkan CSM caster normal bias now matches the GLx incoming-light
+  convention. Both backends bias CSM casters with the negated
+  `tr.csm.lightDirection`, so healthy CSM manager telemetry cannot be paired
+  with a shadow atlas displaced by a renderer-specific light-vector sign drift.
+- `[x]` Vulkan CSM producer projection now converts the full OpenGL clip-Y row
+  before MVP upload, including the orthographic translation term used by
+  cascade atlas bounds. This keeps world-geometry receivers sampling
+  a depth map rendered with the same light-space projection used for receiver
+  lookup.
+- `[x]` Vulkan CSM receiver sampling now accounts for the top-left Vulkan image
+  origin by sampling `1.0 - light_coord.z` for atlas Y, while GLx keeps
+  `light_coord.z`. The Vulkan receiver also clamps the PCF center within the
+  cascade tile so filter taps cannot bleed into neighboring cascades.
+- `[x]` CSM world-caster planning now snaps only the atlas-facing light-space
+  axes, expands light-depth bounds, and pads cascade culling by two texels.
+  This keeps static BSP caster coverage from partially clipping or shimmering
+  while preserving the stable texel grid used by receiver sampling.
+- `[x]` CSM atlas cache signatures quantize the unsnapped light-depth bounds
+  to texel granularity. Stationary and sub-texel camera motion keep reusing
+  the cached atlas despite continuous light depth, while the expanded depth
+  extent keeps the bounded receiver staleness harmless.
+- `[x]` Vulkan CSM caster and receiver passes now match GLx by walking the
+  sorted draw-surface list once per cascade and switching entity transforms
+  inline. This avoids per-entity rescans that could reorder state lifetime and
+  leave static-world CSM output partial or unstable.
 - `[x]` GLx `rc-parity` and Vulkan `vk-modern` runtime gates plan dedicated
   `dlight-shadow-scenes` runs. These runs launch with latched dlight shadow
   cvars, load retail maps with `devmap`, inject persistent `r_dlightTest`
@@ -123,10 +161,10 @@ As of June 4, 2026:
 - `[x]` GLx and Vulkan runtime sweeps include the `csm-shimmer-path` shadow
   scene on `q3dm17`, with deterministic `setviewpos` micro-movements for
   tiny origin and view-axis deltas.
-- `[x]` CSM debug output reports snapped light-depth centers per cascade, and
-  runtime sweep manifests summarize CSM shimmer stability through
-  `csmStability` sample counts, cache events, atlas generation delta, and
-  snapped light-depth delta.
+- `[x]` CSM debug output reports light-depth centers per cascade, and runtime
+  sweep manifests summarize CSM shimmer stability through `csmStability`
+  sample counts, cache events, atlas generation delta, and light-depth center
+  delta.
 - `[x]` GLx and Vulkan runtime sweeps compare each `csm-shimmer-path` nudge
   and micro-yaw screenshot against the path baseline step. Dlight shadow scene
   runs now report `csmShimmerScreenshots` summaries, per-candidate
@@ -432,6 +470,16 @@ Manual review notes for CSM fallback smoke:
 - `[x]` Track planned light count, face count, and submitted caster surface
   count.
 - `[x]` Track atlas fill, shadow draw counts, and GPU time.
+- `[x]` Draw static-world casters from the world VBO in the dlight/spot atlas
+  passes (June 11, 2026): a depth-only ARB caster vertex program
+  (`dlightShadowCasterVP`) applies the point-light normal bias on the GPU, so
+  moving (uncacheable) weapon/projectile lights no longer force per-face CPU
+  re-tessellation of world geometry. Measured on q3dm0 (GL46, 1080p, plasma
+  fire, `r_dynamiclight 1`): firing frame-time delta dropped from +2.3 ms to
+  +0.9 ms on GLx and to ~0 ms on the opengl renderer; entity casters keep the
+  CPU tess path and `RB_ApplyDlightShadowCasterNormalBias`. A/B screenshots
+  (`r_vbo 1` fast path vs `r_vbo 0` CPU path, stationary `r_dlightTest` light)
+  show no shadow-region differences.
 
 ### Phase 7: Directional Shadows And CSM
 
@@ -899,6 +947,71 @@ Build and script evidence:
 - `[x]` `git diff --check` passed after the GLx ARB shadow-program scalar
   swizzle compatibility fix on May 22, 2026; Git reported only existing
   LF-to-CRLF working-copy warnings.
+- `[x]` `python tests\dlight_shadow_bias_tests.py` passed after the Vulkan CSM
+  caster-bias direction fix on June 4, 2026.
+- `[x]` `python tests\shadow_manager_source_tests.py` passed after the Vulkan
+  CSM caster-bias direction fix on June 4, 2026.
+- `[x]` `python tests\vulkan\vk_runtime_sweep_tests.py` passed after the
+  Vulkan CSM caster-bias direction fix on June 4, 2026.
+- `[x]` `meson compile -C .tmp\meson-dlight fnquake3_vulkan_x86_64` passed
+  after the Vulkan CSM caster-bias direction fix on June 4, 2026.
+- `[x]` `python tests\shadow_projection_source_tests.py` passed after the
+  Vulkan CSM producer/receiver projection contract fix on June 5, 2026.
+- `[x]` `python tests\csm_plan_source_tests.py` passed after the Vulkan CSM
+  producer/receiver projection contract fix on June 5, 2026.
+- `[x]` `python tests\dlight_shadow_bias_tests.py` passed after the Vulkan CSM
+  producer/receiver projection contract fix on June 5, 2026.
+- `[x]` `python tests\shadow_manager_source_tests.py` passed after the Vulkan
+  CSM producer/receiver projection contract fix on June 5, 2026.
+- `[x]` `python tests\vulkan\vk_runtime_sweep_tests.py` passed after the
+  Vulkan CSM producer/receiver projection contract fix on June 5, 2026.
+- `[x]` `meson compile -C .tmp\meson-dlight fnquake3_vulkan_x86_64` passed
+  after the Vulkan CSM producer/receiver projection contract fix on June 5,
+  2026.
+- `[x]` `python tests\csm_plan_source_tests.py` passed after the CSM
+  world-caster projection/stability fix on June 5, 2026.
+- `[x]` `python tests\csm_shadow_cache_source_tests.py` passed after the CSM
+  world-caster projection/stability fix on June 5, 2026.
+- `[x]` `python tests\shadow_projection_source_tests.py` passed after the CSM
+  world-caster projection/stability fix on June 5, 2026.
+- `[x]` `python tests\vulkan\vk_runtime_sweep_tests.py` passed after the CSM
+  world-caster projection/stability fix on June 5, 2026.
+- `[x]` `python tests\glx\glx_runtime_sweep_tests.py` passed after the CSM
+  world-caster projection/stability fix on June 5, 2026.
+- `[x]` `python tests\dlight_shadow_bias_tests.py` passed after the CSM
+  world-caster projection/stability fix on June 5, 2026.
+- `[x]` `python tests\shadow_manager_source_tests.py` passed after the CSM
+  world-caster projection/stability fix on June 5, 2026.
+- `[x]` `python tests\personal_shadow_source_tests.py` passed after the CSM
+  world-caster projection/stability fix on June 5, 2026.
+- `[x]` `meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64
+  fnquake3_vulkan_x86_64` passed after the CSM world-caster
+  projection/stability fix on June 5, 2026.
+- `[x]` `python tests\dlight_shadow_bias_tests.py` passed after the Vulkan CSM
+  sorted traversal parity fix on June 5, 2026.
+- `[x]` `python tests\csm_shadow_cache_source_tests.py` passed after the
+  Vulkan CSM sorted traversal parity fix on June 5, 2026.
+- `[x]` `python tests\shadow_manager_source_tests.py` passed after the Vulkan
+  CSM sorted traversal parity fix on June 5, 2026.
+- `[x]` `python tests\vulkan\vk_runtime_sweep_tests.py` passed after the
+  Vulkan CSM sorted traversal parity fix on June 5, 2026.
+- `[x]` `python tests\glx\glx_runtime_sweep_tests.py` passed after the Vulkan
+  CSM sorted traversal parity fix on June 5, 2026.
+- `[x]` `python tests\csm_plan_source_tests.py` passed after the Vulkan CSM
+  sorted traversal parity fix on June 5, 2026.
+- `[x]` `python tests\shadow_projection_source_tests.py` passed after the
+  Vulkan CSM sorted traversal parity fix on June 5, 2026.
+- `[x]` `meson compile -C .tmp\meson-dlight fnquake3_glx_x86_64
+  fnquake3_vulkan_x86_64` passed after the Vulkan CSM sorted traversal parity
+  fix on June 5, 2026.
+- `[x]` `meson test -C .tmp\meson-glx-verification-local --print-errorlogs`
+  (11 tests), `python tests\dlight_shadow_bias_tests.py`,
+  `python tests\glx\glx_runtime_sweep_tests.py`,
+  `python tests\shadow_projection_source_tests.py`,
+  `python tests\personal_shadow_source_tests.py`, and
+  `meson compile -C .tmp\meson-glx-verification-local fnquake3_glx_x86_64
+  fnquake3_opengl_x86_64` passed after the VBO shadow-caster fast path on
+  June 11, 2026, with live q3dm0 perf/parity runs recorded in Phase 6.
 
 ## Maintenance Rule
 

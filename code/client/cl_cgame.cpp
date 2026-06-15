@@ -391,8 +391,19 @@ static EnemyHighlightColor CL_GetEnemyHighlightColorSlot( const refEntity_t *ent
 	}
 
 	state = CL_FindEnemyHighlightPlayerState( ent );
+	CL_GetEnemyHighlightMatchOrigin( ent, matchOrigin );
+	VectorSubtract( matchOrigin, cl.snap.ps.origin, delta );
 	if ( state ) {
 		if ( state->clientNum == cl.snap.ps.clientNum || ( state->eFlags & EF_DEAD ) != 0 ) {
+			return EnemyHighlightColor::None;
+		}
+
+		/*
+		The local third-person model can be predicted ahead of the snapshot
+		playerstate. If another player is nearby, do not let a looser snapshot
+		match override a stronger local-player origin match.
+		*/
+		if ( DotProduct( delta, delta ) <= DistanceSquared( matchOrigin, state->origin ) ) {
 			return EnemyHighlightColor::None;
 		}
 	} else {
@@ -401,9 +412,7 @@ static EnemyHighlightColor CL_GetEnemyHighlightColorSlot( const refEntity_t *ent
 		match. Prefer lightingOrigin so multipart player models compare against
 		the shared player origin instead of head/tag attachment points.
 		*/
-		CL_GetEnemyHighlightMatchOrigin( ent, matchOrigin );
-		VectorSubtract( matchOrigin, cl.snap.ps.origin, delta );
-		if ( DotProduct( delta, delta ) <= ( 24.0f * 24.0f ) ) {
+		if ( DotProduct( delta, delta ) <= Square( kEnemyHighlightMatchRadius ) ) {
 			return EnemyHighlightColor::None;
 		}
 	}

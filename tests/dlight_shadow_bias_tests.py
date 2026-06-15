@@ -27,6 +27,33 @@ class DlightShadowBiasTests(unittest.TestCase):
                 self.assert_cvar_default(source, "r_dlightShadowCasterNormalBias", "0.25")
                 self.assertIn("angle-aware, texel-aware dynamic-light shadow-map sampling", source)
 
+    def test_csm_shadow_bias_defaults_match_between_renderers(self):
+        for path in ("code/renderer/tr_init.c", "code/renderervk/tr_init.c"):
+            with self.subTest(path=path):
+                source = read_text(path)
+                self.assert_cvar_default(source, "r_csmShadowBias", "8")
+                self.assert_cvar_default(source, "r_csmCasterDepthBias", "1.5")
+                self.assert_cvar_default(source, "r_csmCasterSlopeBias", "1.5")
+                self.assert_cvar_default(source, "r_csmCasterNormalBias", "0.5")
+                self.assertIn("Maximum receiver bias in world units for directional sky-sun shadow-map sampling", source)
+
+    def test_correctness_mode_reports_separated_bias_classes(self):
+        for renderer in ("code/renderer", "code/renderervk"):
+            with self.subTest(renderer=renderer):
+                header = read_text(f"{renderer}/tr_local.h")
+                backend = read_text(f"{renderer}/tr_backend.c")
+                cmds = read_text(f"{renderer}/tr_cmds.c")
+
+                self.assertIn("float\t\treceiverBias;", header)
+                self.assertIn("float\t\tcasterDepthBias;", header)
+                self.assertIn("float\t\tcasterSlopeBias;", header)
+                self.assertIn("float\t\tcasterNormalBias;", header)
+                self.assertIn("debug->receiverBias = R_ShadowClampReceiverBias", backend)
+                self.assertIn("debug->casterDepthBias = R_ShadowClampCasterDepthBias", backend)
+                self.assertIn("debug->casterSlopeBias = R_ShadowClampCasterSlopeBias", backend)
+                self.assertIn("debug->casterNormalBias = R_ShadowClampCasterNormalBias", backend)
+                self.assertIn("bias receiver:%.2f caster-depth:%.2f caster-slope:%.2f caster-normal:%.2f", cmds)
+
     def test_vulkan_receiver_bias_is_angle_aware_and_texel_limited(self):
         source = read_text("code/renderervk/shaders/light_frag.tmpl")
 
@@ -69,14 +96,26 @@ class DlightShadowBiasTests(unittest.TestCase):
                 source = read_text(path)
                 self.assertIn("r_dlightShadowCasterNormalBias->value : 0.25f", source)
                 self.assertIn(expected_normal_scale, source)
+                self.assertIn(
+                    "VectorScale( tr.csm.lightDirection, -1.0f, lightToVertex );",
+                    source,
+                )
+                self.assertNotIn(
+                    "VectorCopy( tr.csm.lightDirection, lightToVertex );",
+                    source,
+                )
 
         glx_backend = read_text("code/renderer/tr_backend.c")
         self.assertIn("r_dlightShadowCasterSlopeBias->value : 1.0f", glx_backend)
         self.assertIn("r_dlightShadowCasterDepthBias->value : 1.0f", glx_backend)
+        self.assertIn("r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f", glx_backend)
+        self.assertIn("r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f", glx_backend)
 
         vk_backend = read_text("code/renderervk/vk.c")
         self.assertIn("r_dlightShadowCasterDepthBias->value : 1.0f", vk_backend)
         self.assertIn("r_dlightShadowCasterSlopeBias->value : 1.0f", vk_backend)
+        self.assertIn("r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f", vk_backend)
+        self.assertIn("r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f", vk_backend)
 
     def test_glx_shadow_atlas_avoids_duplicate_caster_probe(self):
         source = read_text("code/renderer/tr_backend.c")
@@ -93,19 +132,24 @@ class DlightShadowBiasTests(unittest.TestCase):
         self.assertNotIn("RB_CollectDlightShadowCasterEntities", dlight_block)
         self.assertIn("if ( entityNum != currentEntityNum )", dlight_block)
 
-        csm_cascade_start = source.index("static int RB_RenderCSMShadowCascade(")
-        csm_cascade_end = source.index("static void RB_RenderCSMShadowAtlas(", csm_cascade_start)
-        csm_cascade_block = source[csm_cascade_start:csm_cascade_end]
-        self.assertNotIn("entityQueued[MAX_REFENTITIES]", csm_cascade_block)
-        self.assertNotIn("RB_RenderCSMShadowEntityCasters", csm_cascade_block)
-        self.assertIn("RB_SetCSMShadowEntity( entityNum, &backEnd.viewParms, originalTime );", csm_cascade_block)
+        for path in ("code/renderer/tr_backend.c", "code/renderervk/tr_backend.c"):
+            with self.subTest(path=path):
+                source = read_text(path)
+                csm_cascade_start = source.index("static int RB_RenderCSMShadowCascade(")
+                csm_cascade_end = source.index("static void RB_RenderCSMShadowAtlas(", csm_cascade_start)
+                csm_cascade_block = source[csm_cascade_start:csm_cascade_end]
+                self.assertNotIn("entityQueued[MAX_REFENTITIES]", csm_cascade_block)
+                self.assertNotIn("RB_RenderCSMShadowEntityCasters", csm_cascade_block)
+                self.assertIn("if ( entityNum != currentEntityNum )", csm_cascade_block)
+                self.assertIn("RB_SetCSMShadowEntity( entityNum, &backEnd.viewParms, originalTime );", csm_cascade_block)
 
-        csm_receiver_start = source.index("static void RB_CSMShadowReceiverPass(")
-        csm_receiver_end = source.index("static void RB_SetDlightShadowCasterEntity(", csm_receiver_start)
-        csm_receiver_block = source[csm_receiver_start:csm_receiver_end]
-        self.assertNotIn("entityQueued[MAX_REFENTITIES]", csm_receiver_block)
-        self.assertNotIn("RB_RenderCSMShadowEntityReceivers", csm_receiver_block)
-        self.assertNotIn("RB_RenderCSMShadowWorldReceivers", csm_receiver_block)
+                csm_receiver_start = source.index("static void RB_CSMShadowReceiverPass(")
+                csm_receiver_end = source.index("static void RB_SetDlightShadowCasterEntity(", csm_receiver_start)
+                csm_receiver_block = source[csm_receiver_start:csm_receiver_end]
+                self.assertNotIn("entityQueued[MAX_REFENTITIES]", csm_receiver_block)
+                self.assertNotIn("RB_RenderCSMShadowEntityReceivers", csm_receiver_block)
+                self.assertNotIn("RB_RenderCSMShadowWorldReceivers", csm_receiver_block)
+                self.assertIn("if ( entityNum != currentEntityNum )", csm_receiver_block)
 
 
 if __name__ == "__main__":

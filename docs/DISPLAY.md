@@ -10,7 +10,7 @@ For HUD, menu, and cinematic layout on widescreen displays, use the separate [As
 
 - `cl_renderer opengl`: Legacy OpenGL renderer and current compatibility default.
 - `cl_renderer glx`: Canonical OpenGL-lineage renderer module. Normal modular builds include it, and it preserves the OpenGL display and bloom surface while adding GLx-owned capability tiers, streaming, static-world, material, postprocess, output, and profiling paths.
-- `cl_renderer vulkan`: Modern backend with the same core display path controls for FBO rendering, HDR, multisampling, supersampling, render scaling, gamma, and greyscale. Bloom is available here too, but the exposed control set is smaller.
+- `cl_renderer vulkan`: Modern backend with the same core display path controls for FBO rendering, HDR, multisampling, supersampling, render scaling, shader-based SDR gamma/overbright, and greyscale. Bloom is available here too, but the exposed control set is smaller.
 
 Use `glx` for OpenGL-lineage validation, GLx diagnostics, and the renderer path intended for promotion once [GLX_PROMOTION.md](fnquake3/GLX_PROMOTION.md) is green. Use `opengl` when you need the current legacy default for comparison or rollback. If you want the simpler cross-platform path and do not need the OpenGL-only bloom extras, `vulkan` is fine. See [GLX.md](GLX.md) for GLx migration and troubleshooting notes.
 

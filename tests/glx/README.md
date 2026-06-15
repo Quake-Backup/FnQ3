@@ -22,6 +22,7 @@ The harness currently checks:
 - Release-proof validation requiring passing non-dry-run `rc-smoke`, `rc-parity`, and `rc-proof` manifests for the blocking Windows/Linux runtime matrix before tagged release packaging.
 - Promotion-gate validation that keeps `opengl` from becoming a GLx alias until the feature matrix, runtime proof, ownership proof, migration notes, and rollback policy are all green.
 - Built-in global and per-tier performance budgets for draw pressure, upload volume, fallback/error counters, shader binds, static packet misses, same-frame stream wrap rejects, and GPU frame time.
+- Generated post-shader feature keys and final-pass eligibility covering both scene-linear output and display-referred SDR legacy gamma.
 - The broad `r_glxStreamDrawKeyMode 2` developer escape hatch staying behind hard multitexture and depth-fragment gates.
 - Capability version/extension parsing and tier selection.
 - Dynamic-stream strategy selection across persistent, map-range, and orphan/subdata fallbacks.

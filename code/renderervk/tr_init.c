@@ -2324,6 +2324,12 @@ static void VkInfo_f( void )
 	ri.Printf(PRINT_ALL, "tone map: %s, exposure %.2f\n",
 		r_tonemap->integer == 2 ? "ACES" : ( r_tonemap->integer == 1 ? "Reinhard" : "legacy" ),
 		r_tonemapExposure->value );
+	ri.Printf(PRINT_ALL, "post gamma: domain %s, shader %s, r_gamma %.2f, exponent %.3f, overbright scale %.2f\n",
+		( r_hdr && r_hdr->integer > 0 ) ? "scene-linear" : "display-referred-sdr",
+		vk.fboActive ? "enabled" : "inactive",
+		r_gamma ? r_gamma->value : 1.0f,
+		( r_gamma && r_gamma->value != 0.0f ) ? 1.0f / r_gamma->value : 1.0f,
+		(float)( 1 << tr.overbrightBits ) );
 	ri.Printf(PRINT_ALL, "bloom: threshold %.2f, soft knee %.2f, intensity %.2f\n",
 		r_bloom_threshold->value, r_bloom_soft_knee->value, r_bloom_intensity->value );
 	ri.Printf(PRINT_ALL, "modern Vulkan: sync2 %s, dynamic rendering %s%s\n",

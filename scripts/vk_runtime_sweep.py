@@ -43,6 +43,14 @@ TONE_MAP_RE = re.compile(
     r"tone map:\s*(?P<mode>.*?),\s*exposure\s*(?P<exposure>\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
+POST_GAMMA_RE = re.compile(
+    r"post gamma:\s*domain\s*(?P<domain>[A-Za-z0-9_-]+),\s*"
+    r"shader\s*(?P<shader>\w+),\s*"
+    r"r_gamma\s*(?P<gamma>-?\d+(?:\.\d+)?),\s*"
+    r"exponent\s*(?P<exponent>-?\d+(?:\.\d+)?),\s*"
+    r"overbright scale\s*(?P<overbright>-?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
 BLOOM_RE = re.compile(
     r"bloom:\s*threshold\s*(?P<threshold>\d+(?:\.\d+)?),\s*"
     r"soft knee\s*(?P<softKnee>\d+(?:\.\d+)?),\s*"
@@ -3031,6 +3039,15 @@ def parse_vkinfo_text(text: str) -> dict[str, object]:
                 "mode": match.group("mode").strip(),
                 "exposure": float(match.group("exposure")),
             }
+        elif match := POST_GAMMA_RE.search(line):
+            info["found"] = True
+            info["gamma"] = {
+                "domain": match.group("domain").lower(),
+                "shader": match.group("shader").lower(),
+                "rGamma": float(match.group("gamma")),
+                "exponent": float(match.group("exponent")),
+                "overbright": float(match.group("overbright")),
+            }
         elif match := BLOOM_RE.search(line):
             info["found"] = True
             info["bloom"] = {
@@ -3100,7 +3117,7 @@ def analyze_vk_log(log_path: Path, profile: str) -> dict[str, object]:
     if not info.get("found"):
         failures.append("vkinfo output was not found.")
 
-    for required_key in ("pipelineCache", "displayHdr", "outputBackend", "toneMap", "bloom", "modernVulkan", "barriers", "descriptors", "commandPools", "memory"):
+    for required_key in ("pipelineCache", "displayHdr", "outputBackend", "toneMap", "gamma", "bloom", "modernVulkan", "barriers", "descriptors", "commandPools", "memory"):
         if required_key not in info:
             failures.append(f"vkinfo field is missing: {required_key}.")
 

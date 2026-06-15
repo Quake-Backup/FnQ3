@@ -256,7 +256,7 @@ struct ProjectedDlightResourceRange {
 };
 
 enum class ProjectedDlightShaderBackend {
-	None,
+	NoBackend,
 	UniformWindow,
 	StreamResource
 };
@@ -2214,7 +2214,7 @@ GLX_RenderIR_PlanProjectedDlightShaderExecution(
 	plan.uniformRecords = uniformPlan.uploadRecords;
 	plan.truncatedRecords = uniformPlan.truncatedRecords;
 	plan.limitSuppressed = uniformPlan.limitSuppressed;
-	plan.backend = ProjectedDlightShaderBackend::None;
+	plan.backend = ProjectedDlightShaderBackend::NoBackend;
 
 	requiredBytes = streamRecordBytes == 0 ? 0ull :
 		static_cast<unsigned long long>( plan.requestedRecords ) *

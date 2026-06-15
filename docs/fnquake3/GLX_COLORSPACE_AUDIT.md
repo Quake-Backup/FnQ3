@@ -21,7 +21,7 @@ This document records the GLx/OpenGL-lineage color rules used by the HDR-capable
 | `r_colorGrade` | `0` | Enables the scene-linear grading stage for `r_hdr 1`; the default is disabled and identity-safe. |
 | `r_colorGradeLUT` | empty | Optional 3D LUT atlas. Atlases are sampled as linear data and use width `N*N`, height `N`, with blue slices laid out horizontally. |
 | `r_glxPostShaderTarget` | `0` | Selects the generated post/output GLSL target. `0` chooses conservatively from the GLx tier and context version, with GLSL 1.20 as the fallback; explicit values can request `120`, `130`, `150`, `330`, or `410`. |
-| `r_glxPostShaderExecute` | `0` | Opts in to binding the generated GLx post/output shader for eligible final passes. The legacy ARB path remains the default fallback. |
+| `r_glxPostShaderExecute` | `0` | Opts in to binding the generated GLx post/output shader for eligible display-referred SDR gamma and scene-linear final passes. The legacy ARB path remains the default fallback. |
 
 ## Texture Classes
 

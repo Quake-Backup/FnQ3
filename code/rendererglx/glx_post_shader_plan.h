@@ -30,6 +30,18 @@ static constexpr unsigned int GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT = 0x00
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_GAMUT_CLIP = 0x00020000u;
 static constexpr unsigned int GLX_POST_SHADER_FEATURE_CRT = 0x00040000u;
 
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_NONE = 0x00000000u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_DISABLED = 0x00000001u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_NOT_READY = 0x00000002u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_INVALID_PLAN = 0x00000004u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_NOT_SCENE_LINEAR = 0x00000008u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_GRADE = 0x00000010u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_TRANSFER = 0x00000020u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_OUTPUT_COLORIMETRY = 0x00000040u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_GREYSCALE = 0x00000080u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_PROGRAM = 0x00000100u;
+static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_UNIFORM = 0x00000200u;
+
 struct PostShaderKey {
 	qboolean sceneLinear;
 	qboolean outputTransform;
@@ -95,6 +107,96 @@ static ID_INLINE qboolean GLX_PostShader_TransferUsesHdrHeadroom(
 	return transfer == OutputTransfer::LinearSrgb ||
 		transfer == OutputTransfer::ScRgb ||
 		transfer == OutputTransfer::MacEdr ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean GLX_PostShader_FinalTransferSupported(
+	OutputTransfer transfer )
+{
+	switch ( transfer ) {
+	case OutputTransfer::SdrSrgb:
+	case OutputTransfer::ScreenshotSrgb:
+	case OutputTransfer::LinearSrgb:
+	case OutputTransfer::ScRgb:
+	case OutputTransfer::Hdr10Pq:
+	case OutputTransfer::MacEdr:
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
+static ID_INLINE qboolean GLX_PostShader_LegacyGammaTransferSupported(
+	OutputTransfer transfer )
+{
+	return transfer == OutputTransfer::SdrSrgb ||
+		transfer == OutputTransfer::ScreenshotSrgb ? qtrue : qfalse;
+}
+
+static ID_INLINE qboolean GLX_PostShader_FinalOutputDomainSupported(
+	const PostShaderPlan &plan, const OutputTransform &output,
+	qboolean outputTransform )
+{
+	if ( !outputTransform || plan.key.crt ) {
+		return qtrue;
+	}
+	if ( plan.key.sceneLinear &&
+		output.sceneColorSpace == SceneColorSpace::SceneLinear &&
+		output.hdrMode > 0 ) {
+		return qtrue;
+	}
+	if ( !plan.key.sceneLinear &&
+		output.sceneColorSpace == SceneColorSpace::DisplayReferredSdr &&
+		output.hdrMode == 0 &&
+		( plan.featureMask & GLX_POST_SHADER_FEATURE_LEGACY_GAMMA ) != 0u &&
+		GLX_PostShader_LegacyGammaTransferSupported( output.transfer ) ) {
+		return qtrue;
+	}
+	return qfalse;
+}
+
+static ID_INLINE unsigned int GLX_PostShader_FinalCompatibilityRejectMask(
+	const PostShaderPlan &plan, const OutputTransform &output,
+	qboolean bloomComposite, qboolean outputTransform )
+{
+	unsigned int rejectMask = GLX_POST_SHADER_DIRECT_REJECT_NONE;
+
+	if ( !plan.valid || !GLX_RenderIR_ValidateOutputTransform( output ) ) {
+		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_INVALID_PLAN;
+	}
+	if ( plan.key.bloomComposite != bloomComposite ||
+		plan.key.outputTransform != outputTransform ) {
+		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_INVALID_PLAN;
+	}
+	if ( outputTransform &&
+		!GLX_PostShader_FinalOutputDomainSupported( plan, output,
+			outputTransform ) ) {
+		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_NOT_SCENE_LINEAR;
+	}
+	if ( outputTransform && ( plan.key.transfer != output.transfer ||
+		!GLX_PostShader_FinalTransferSupported( output.transfer ) ||
+		( !plan.key.sceneLinear &&
+		!GLX_PostShader_LegacyGammaTransferSupported( output.transfer ) ) ) ) {
+		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_TRANSFER;
+	}
+	if ( outputTransform ) {
+		if ( plan.key.outputPrimaries != output.outputPrimaries ||
+			plan.key.gamutMap != output.gamutMap ) {
+			rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_OUTPUT_COLORIMETRY;
+		}
+		switch ( output.outputPrimaries ) {
+		case OutputPrimaries::SrgbBt709:
+		case OutputPrimaries::DisplayP3:
+		case OutputPrimaries::Bt2020:
+		case OutputPrimaries::Native:
+		case OutputPrimaries::Unknown:
+			break;
+		default:
+			rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_OUTPUT_COLORIMETRY;
+			break;
+		}
+	}
+
+	return rejectMask;
 }
 
 static ID_INLINE unsigned int GLX_PostShader_FeaturesForKey( const PostShaderKey &key )

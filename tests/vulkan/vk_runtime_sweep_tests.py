@@ -268,6 +268,7 @@ class VkRuntimeSweepParseTests(unittest.TestCase):
                 "display HDR: requested unavailable, metadata: disabled, paper white 203 nits, max 1000 nits",
                 "output backend: request hdr10-pq, selected sdr-srgb, native windows-scrgb, display HDR enabled, headroom 4.00, SDR white 203 nits, display max 812 nits, ICC yes/2048, driver windows, display HDR Panel, reason: test",
                 "tone map: ACES, exposure 1.00",
+                "post gamma: domain display-referred-sdr, shader enabled, r_gamma 1.20, exponent 0.833, overbright scale 2.00",
                 "bloom: threshold 0.75, soft knee 0.50, intensity 0.50",
                 "modern Vulkan: sync2 enabled, dynamic rendering feature enabled, render-pass backend active",
                 "barriers: 12 sync2 / 0 legacy",
@@ -289,6 +290,10 @@ class VkRuntimeSweepParseTests(unittest.TestCase):
         self.assertEqual(info["outputBackend"]["native"], "windows-scrgb")
         self.assertEqual(info["outputBackend"]["displayMax"], 812.0)
         self.assertEqual(info["toneMap"]["mode"], "ACES")
+        self.assertEqual(info["gamma"]["domain"], "display-referred-sdr")
+        self.assertEqual(info["gamma"]["shader"], "enabled")
+        self.assertAlmostEqual(info["gamma"]["exponent"], 0.833, places=3)
+        self.assertEqual(info["gamma"]["overbright"], 2.0)
         self.assertEqual(info["bloom"]["softKnee"], 0.5)
         self.assertEqual(len(info["gpuTimings"]), 1)
 
@@ -302,6 +307,7 @@ class VkRuntimeSweepParseTests(unittest.TestCase):
                         "display HDR: disabled, metadata: disabled, paper white 203 nits, max 1000 nits",
                         "output backend: request auto, selected sdr-srgb, native sdr-srgb, display HDR disabled, headroom 1.00, SDR white 203 nits, display max 203 nits, ICC no/0, driver windows, display SDR Panel, reason: test",
                         "tone map: legacy, exposure 1.00",
+                        "post gamma: domain display-referred-sdr, shader enabled, r_gamma 1.00, exponent 1.000, overbright scale 2.00",
                         "bloom: threshold 0.75, soft knee 0.00, intensity 0.50",
                         "modern Vulkan: sync2 enabled, dynamic rendering disabled",
                         "barriers: 0 sync2 / 4 legacy",
@@ -329,6 +335,7 @@ class VkRuntimeSweepParseTests(unittest.TestCase):
                         "display HDR: disabled, metadata: disabled, paper white 203 nits, max 1000 nits",
                         "output backend: request hdr10-pq, selected sdr-srgb, native sdr-srgb, display HDR disabled, headroom 1.00, SDR white 203 nits, display max 203 nits, ICC no/0, driver windows, display SDR Panel, reason: test",
                         "tone map: ACES, exposure 1.00",
+                        "post gamma: domain scene-linear, shader enabled, r_gamma 1.00, exponent 1.000, overbright scale 2.00",
                         "bloom: threshold 0.75, soft knee 0.50, intensity 0.50",
                         "modern Vulkan: sync2 disabled, dynamic rendering disabled",
                         "barriers: 0 sync2 / 4 legacy",
@@ -1463,6 +1470,27 @@ class VkRendererSourceTests(unittest.TestCase):
 
         self.assertIn("if ( shader->sort > SS_OPAQUE ) {", backend)
         self.assertNotIn("if ( shader->sort >= SS_BLEND0 ) {", backend)
+
+    def test_vulkan_post_gamma_contract_covers_modern_sdr_path(self) -> None:
+        gamma_frag = (ROOT / "code" / "renderervk" / "shaders" / "gamma.frag").read_text(encoding="utf-8")
+        vk_backend = (ROOT / "code" / "renderervk" / "vk.c").read_text(encoding="utf-8")
+        tr_cmds = (ROOT / "code" / "renderervk" / "tr_cmds.c").read_text(encoding="utf-8")
+        tr_init = (ROOT / "code" / "renderervk" / "tr_init.c").read_text(encoding="utf-8")
+        vk_gates = (ROOT / "docs" / "fnquake3" / "VK_RC_GATES.md").read_text(encoding="utf-8")
+
+        self.assertIn("layout(constant_id = 0) const float gamma = 1.0;", gamma_frag)
+        self.assertIn("layout(constant_id = 1) const float obScale = 2.0;", gamma_frag)
+        self.assertIn("if ( sceneLinearMode != 0 )", gamma_frag)
+        self.assertIn("color = max(base * obScale * max(toneMapExposure, 0.0), vec3(0.0));", gamma_frag)
+        self.assertIn("color = pow(max(base, vec3(0.0)), vec3(gamma)) * obScale;", gamma_frag)
+        self.assertIn("frag_spec_data.gamma = 1.0 / (r_gamma->value);", vk_backend)
+        self.assertIn("frag_spec_data.overbright = (float)(1 << tr.overbrightBits);", vk_backend)
+        self.assertIn("frag_spec_data.scene_linear_mode = ( r_hdr && r_hdr->integer > 0 ) ? 1 : 0;", vk_backend)
+        self.assertIn("frag_spec_data.output_color_space = ( program_index == 0 && vk.hdrDisplayActive )", vk_backend)
+        self.assertIn("if ( r_gamma->modified )", tr_cmds)
+        self.assertIn("vk_update_post_process_pipelines();", tr_cmds)
+        self.assertIn("post gamma: domain %s, shader %s, r_gamma", tr_init)
+        self.assertIn("post-gamma", vk_gates)
 
 
 if __name__ == "__main__":

@@ -784,64 +784,6 @@ static qboolean GLX_PostShader_CacheProgram( PostShaderState *state,
 	return qtrue;
 }
 
-static qboolean GLX_PostShader_FinalTransferSupported( OutputTransfer transfer )
-{
-	switch ( transfer ) {
-	case OutputTransfer::SdrSrgb:
-	case OutputTransfer::ScreenshotSrgb:
-	case OutputTransfer::LinearSrgb:
-	case OutputTransfer::ScRgb:
-	case OutputTransfer::Hdr10Pq:
-	case OutputTransfer::MacEdr:
-		return qtrue;
-	default:
-		return qfalse;
-	}
-}
-
-static unsigned int GLX_PostShader_FinalCompatibilityRejectMask(
-	const PostShaderPlan &plan, const OutputTransform &output,
-	qboolean bloomComposite, qboolean outputTransform )
-{
-	unsigned int rejectMask = GLX_POST_SHADER_DIRECT_REJECT_NONE;
-
-	if ( !plan.valid || !GLX_RenderIR_ValidateOutputTransform( output ) ) {
-		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_INVALID_PLAN;
-	}
-	if ( plan.key.bloomComposite != bloomComposite ||
-		plan.key.outputTransform != outputTransform ) {
-		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_INVALID_PLAN;
-	}
-	if ( outputTransform && !plan.key.crt && ( !plan.key.sceneLinear ||
-		output.sceneColorSpace != SceneColorSpace::SceneLinear ||
-		output.hdrMode <= 0 ) ) {
-		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_NOT_SCENE_LINEAR;
-	}
-	if ( outputTransform && ( plan.key.transfer != output.transfer ||
-		!GLX_PostShader_FinalTransferSupported( output.transfer ) ) ) {
-		rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_TRANSFER;
-	}
-	if ( outputTransform ) {
-		if ( plan.key.outputPrimaries != output.outputPrimaries ||
-			plan.key.gamutMap != output.gamutMap ) {
-			rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_OUTPUT_COLORIMETRY;
-		}
-		switch ( output.outputPrimaries ) {
-		case OutputPrimaries::SrgbBt709:
-		case OutputPrimaries::DisplayP3:
-		case OutputPrimaries::Bt2020:
-		case OutputPrimaries::Native:
-		case OutputPrimaries::Unknown:
-			break;
-		default:
-			rejectMask |= GLX_POST_SHADER_DIRECT_REJECT_OUTPUT_COLORIMETRY;
-			break;
-		}
-	}
-
-	return rejectMask;
-}
-
 static void GLX_PostShader_Identity3x3( float matrix[9] )
 {
 	if ( !matrix ) {
@@ -1150,7 +1092,7 @@ void GLX_PostShader_RegisterCvars( PostShaderState *state )
 	state->r_glxPostShaderExecute = RI().Cvar_Get( "r_glxPostShaderExecute", "0",
 		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxPostShaderExecute,
-		"Experimentally bind the generated GLx GLSL shader for eligible scene-linear post/output passes, including bloom composite, greyscale, blit/capture, and hardware HDR output. Falls back to the legacy ARB path when disabled or unsupported." );
+		"Experimentally bind the generated GLx GLSL shader for eligible display-referred SDR gamma and scene-linear post/output passes, including bloom composite, greyscale, blit/capture, and hardware HDR output. Falls back to the legacy ARB path when disabled or unsupported." );
 
 	state->r_glxPostShaderTarget = RI().Cvar_Get( "r_glxPostShaderTarget", "0",
 		CVAR_ARCHIVE_ND | CVAR_DEVELOPER );

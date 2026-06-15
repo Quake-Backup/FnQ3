@@ -8,18 +8,6 @@ namespace glx {
 
 static constexpr int GLX_POST_SHADER_PROGRAM_LIMIT = 32;
 
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_NONE = 0x00000000u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_DISABLED = 0x00000001u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_NOT_READY = 0x00000002u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_INVALID_PLAN = 0x00000004u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_NOT_SCENE_LINEAR = 0x00000008u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_GRADE = 0x00000010u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_TRANSFER = 0x00000020u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_OUTPUT_COLORIMETRY = 0x00000040u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_GREYSCALE = 0x00000080u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_PROGRAM = 0x00000100u;
-static constexpr unsigned int GLX_POST_SHADER_DIRECT_REJECT_UNIFORM = 0x00000200u;
-
 typedef GLuint ( APIENTRY *PFNGLXPOSTCREATESHADERPROC )( GLenum type );
 typedef void ( APIENTRY *PFNGLXPOSTSHADERSOURCEPROC )( GLuint shader, GLsizei count, const GLchar *const *string, const GLint *length );
 typedef void ( APIENTRY *PFNGLXPOSTCOMPILESHADERPROC )( GLuint shader );

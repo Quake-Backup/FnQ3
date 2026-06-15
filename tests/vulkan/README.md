@@ -4,10 +4,11 @@
 
 The harness currently checks:
 
-- `vkinfo` parsing for pipeline-cache, HDR, tone-map, bloom, sync2/dynamic-rendering, barrier, descriptor, command-pool, memory, and GPU-timing lines.
+- `vkinfo` parsing for pipeline-cache, HDR, tone-map, post-gamma, bloom, sync2/dynamic-rendering, barrier, descriptor, command-pool, memory, and GPU-timing lines.
 - Gate failure behavior for missing sync2 barrier evidence, missing timedemo metrics, missing GPU timing samples, and invisible HDR requests.
 - Dry-run behavior so hosted CI can publish gate plans without retail data.
 - Generated map-sweep configs for `vkinfo`, `r_speeds 7`, and stable screenshot keys.
+- Vulkan post-gamma source coverage for display-referred SDR gamma/overbright, scene-linear output, HDR output selection, and cvar-driven pipeline rebuilds.
 
 Run the script tests directly:
 

@@ -1926,7 +1926,7 @@ bool RenderIRProjectedDlightRecordsValidate()
 		shaderInput, 3, qtrue, qtrue, &resourceRange, 32u, 64 );
 	CHECK( executionPlan.valid == qtrue );
 	CHECK( executionPlan.execute == qfalse );
-	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::None );
+	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::NoBackend );
 	CHECK( executionPlan.resourcePromoted == qfalse );
 	CHECK( executionPlan.limitSuppressed == qtrue );
 	CHECK( executionPlan.projectedResourceBound == qtrue );
@@ -1942,7 +1942,7 @@ bool RenderIRProjectedDlightRecordsValidate()
 		shaderInput, 3, qtrue, qtrue, &resourceRange, 32u, 64 );
 	CHECK( executionPlan.valid == qtrue );
 	CHECK( executionPlan.execute == qfalse );
-	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::None );
+	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::NoBackend );
 	CHECK( executionPlan.resourcePromoted == qfalse );
 	CHECK( executionPlan.limitSuppressed == qtrue );
 	CHECK( executionPlan.projectedResourceBound == qfalse );
@@ -1957,7 +1957,7 @@ bool RenderIRProjectedDlightRecordsValidate()
 		shaderInput, 3, qtrue, qfalse, &resourceRange, 32u, 64 );
 	CHECK( executionPlan.valid == qtrue );
 	CHECK( executionPlan.execute == qfalse );
-	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::None );
+	CHECK( executionPlan.backend == glx::ProjectedDlightShaderBackend::NoBackend );
 	CHECK( executionPlan.resourcePromoted == qfalse );
 	CHECK( executionPlan.limitSuppressed == qtrue );
 	CHECK( executionPlan.projectedResourceBound == qtrue );
@@ -3294,6 +3294,61 @@ bool PostShaderPlansClassifyOutputTransformProgramShape()
 	return true;
 }
 
+bool PostShaderFinalEligibilityCoversLegacyGamma()
+{
+	glx::OutputTransform output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.legacyGamma = 0.75f;
+	output.legacyOverbright = 2.0f;
+	glx::PostShaderPlan plan = glx::GLX_PostShader_BuildPlan( output );
+
+	CHECK( plan.valid == qtrue );
+	CHECK( plan.key.sceneLinear == qfalse );
+	CHECK( plan.key.outputTransform == qtrue );
+	CHECK( plan.key.transfer == glx::OutputTransfer::SdrSrgb );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_LEGACY_GAMMA ) != 0u );
+	CHECK( glx::GLX_PostShader_FinalOutputDomainSupported( plan, output, qtrue ) == qtrue );
+	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( plan, output,
+		qfalse, qtrue ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
+
+	glx::PostShaderPlan bloomPlan =
+		glx::GLX_PostShader_BuildPlanForOutput( output, qtrue );
+	CHECK( bloomPlan.valid == qtrue );
+	CHECK( ( bloomPlan.featureMask & glx::GLX_POST_SHADER_FEATURE_BLOOM_COMBINE ) != 0u );
+	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( bloomPlan, output,
+		qtrue, qtrue ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
+
+	glx::PostShaderPlan bloomPrefinalPlan =
+		glx::GLX_PostShader_BuildPlanForPass( output, qtrue, qfalse );
+	CHECK( bloomPrefinalPlan.valid == qtrue );
+	CHECK( ( bloomPrefinalPlan.featureMask & glx::GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM ) == 0u );
+	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( bloomPrefinalPlan,
+		output, qtrue, qfalse ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
+
+	glx::OutputTransform hdrTransferInSdr = output;
+	hdrTransferInSdr.transfer = glx::OutputTransfer::Hdr10Pq;
+	plan = glx::GLX_PostShader_BuildPlan( hdrTransferInSdr );
+	CHECK( plan.valid == qtrue );
+	const unsigned int reject = glx::GLX_PostShader_FinalCompatibilityRejectMask(
+		plan, hdrTransferInSdr, qfalse, qtrue );
+	CHECK( ( reject & glx::GLX_POST_SHADER_DIRECT_REJECT_NOT_SCENE_LINEAR ) != 0u );
+	CHECK( ( reject & glx::GLX_POST_SHADER_DIRECT_REJECT_TRANSFER ) != 0u );
+
+	output = glx::GLX_RenderIR_DefaultOutputTransform();
+	output.sceneColorSpace = glx::SceneColorSpace::SceneLinear;
+	output.hdrMode = 1;
+	output.precisionMode = 16;
+	output.transfer = glx::OutputTransfer::SdrSrgb;
+	output.toneMap = glx::ToneMapOperator::AcesFitted;
+	plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( plan.valid == qtrue );
+	CHECK( plan.key.sceneLinear == qtrue );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_SCENE_LINEAR ) != 0u );
+	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( plan, output,
+		qfalse, qtrue ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
+
+	return true;
+}
+
 bool PostShaderSourcesEmitDeterministicProgramShape()
 {
 	char vertex[glx::GLX_POST_SHADER_VERTEX_SOURCE_BYTES];
@@ -3339,6 +3394,8 @@ bool PostShaderSourcesEmitDeterministicProgramShape()
 	CHECK( std::strstr( fragment, "glxApplyOutputPrimaries" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxApplyGamutMap" ) != nullptr );
 	CHECK( std::strstr( fragment, "glxEncodeTransfer" ) != nullptr );
+	CHECK( std::strstr( fragment,
+		"pow(glxNonNegativeVec3(color), vec3(glxLegacyGamma()))" ) != nullptr );
 	CHECK( std::strstr( fragment, "uniform sampler2D u_Bloom" ) != nullptr );
 	CHECK( std::strstr( fragment, "uniform sampler2D u_ColorGradeLut" ) != nullptr );
 
@@ -3711,6 +3768,7 @@ int main()
 		{ "CaptureExportPoliciesStayExplicitAndSdrDefault", CaptureExportPoliciesStayExplicitAndSdrDefault },
 		{ "HdrColorMathReferencesCoverPipelineContracts", HdrColorMathReferencesCoverPipelineContracts },
 		{ "PostShaderPlansClassifyOutputTransformProgramShape", PostShaderPlansClassifyOutputTransformProgramShape },
+		{ "PostShaderFinalEligibilityCoversLegacyGamma", PostShaderFinalEligibilityCoversLegacyGamma },
 		{ "PostShaderSourcesEmitDeterministicProgramShape", PostShaderSourcesEmitDeterministicProgramShape },
 		{ "GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures", GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures },
 		{ "GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures", GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures },

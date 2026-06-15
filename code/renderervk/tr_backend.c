@@ -1965,8 +1965,10 @@ static qboolean RB_DlightShadowEntityCasterAllowed( int entityNum )
 	}
 
 	ent = &backEnd.refdef.entities[entityNum];
+	// View weapons may receive shadowed dlights, but they must not cast into
+	// the shared dlight shadow atlas used by the surrounding world.
 	if ( ent->e.reType != RT_MODEL ||
-		(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK )) ) {
+		(ent->e.renderfx & ( RF_NOSHADOW | RF_FIRST_PERSON | RF_DEPTHHACK )) ) {
 		return qfalse;
 	}
 

@@ -1,7 +1,7 @@
 <div align="center">
 
 # FnQ3
-### Fappin' and Fraggin'
+### Fappin' and Fraggin' in *Quake III: Arena*
 
 <p>
   <a href="https://github.com/themuffinator/FnQ3/releases/latest"><img alt="Download Latest Release" src="https://img.shields.io/badge/Download-Latest-2563eb?style=for-the-badge&logo=github&logoColor=white"></a>
@@ -11,7 +11,9 @@
   <a href="LICENSE"><img alt="GPL-2.0 License" src="https://img.shields.io/badge/License-GPL--2.0-c2410c?style=for-the-badge"></a>
 </p>
 
-*Compatibility target: Retail Quake III Arena 1.32 · Base version: `0.1.0` · Current build: `0.1.0`*
+<a href="https://discord.gg/T32mFejwR4">
+  <img src="https://img.shields.io/badge/Join%20us%20on-Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join us on Discord">
+</a>
 
 </div>
 

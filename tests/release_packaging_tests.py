@@ -103,9 +103,67 @@ class ReleasePackagingTests(unittest.TestCase):
             release.validate_root_archive(archive_path)
 
             with zipfile.ZipFile(archive_path) as archive:
-                packaged = sorted(archive.namelist())
+                packaged = set(archive.namelist())
 
-        self.assertEqual(packaged, sorted(required_destinations))
+        expected_packaged = {
+            destination.as_posix()
+            for _source, destination in root_archive.iter_package_assets()
+        }
+        self.assertTrue(required_destinations.issubset(packaged))
+        self.assertEqual(packaged, expected_packaged)
+        self.assertIn("baseq3/fnq3-hud.json", packaged)
+
+    def test_meson_root_archive_inputs_include_non_map_pkg_assets(self) -> None:
+        meson_build = (ROOT / "meson.build").read_text(encoding="utf-8")
+
+        self.assertIn("'pkg/baseq3/fnq3-hud.json'", meson_build)
+        self.assertIn("'pkg/baseq3/sound/fnq3-weapon-sounds.sndshd'", meson_build)
+        self.assertIn("'pkg/missionpack/sound/fnq3-weapon-sounds.sndshd'", meson_build)
+
+    def test_root_archive_rejects_unsafe_custom_archive_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_root = root / "pkg"
+            package_root.mkdir()
+            source = package_root / "asset.txt"
+            source.write_text("asset", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "unsafe path component"):
+                root_archive.write_root_archive(
+                    root / release.ROOT_ARCHIVE_NAME,
+                    package_root=package_root,
+                    assets=[(source, Path("..") / "asset.txt")],
+                )
+
+        unsafe_names = (
+            "baseq3/maps/bad:name.azb",
+            "baseq3/maps/bad\nname.azb",
+        )
+        for name in unsafe_names:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "unsafe|stream"):
+                    root_archive.validate_archive_member_names([name], archive_name="pkg.fnz")
+
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            root_archive.validate_archive_member_names(
+                ["baseq3/maps/q3dm1.azb", "baseq3/maps/Q3DM1.azb"],
+                archive_name="pkg.fnz",
+            )
+
+    def test_root_archive_rejects_custom_sources_outside_package_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_root = root / "pkg"
+            package_root.mkdir()
+            outside = root / "outside.txt"
+            outside.write_text("do not package", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "escapes package root"):
+                root_archive.write_root_archive(
+                    root / release.ROOT_ARCHIVE_NAME,
+                    package_root=package_root,
+                    assets=[(outside, Path("baseq3") / "outside.txt")],
+                )
 
     def test_root_archive_packs_the_whole_pkg_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -140,12 +198,22 @@ class ReleasePackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
 
+            release.copy_docs(root)
             archive_path = release.build_root_archive(root)
 
             verify_release_layout.verify_release_layout(root)
 
             archive_path.unlink()
             with self.assertRaises(FileNotFoundError):
+                verify_release_layout.verify_release_layout(root)
+
+    def test_release_layout_verifier_requires_package_docs_for_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            release.build_root_archive(root)
+
+            with self.assertRaisesRegex(FileNotFoundError, "missing required release files"):
                 verify_release_layout.verify_release_layout(root)
 
     def test_release_archive_keeps_game_dirs_at_archive_root(self) -> None:
@@ -159,6 +227,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 "mod data",
                 encoding="utf-8",
             )
+            release.copy_docs(stage_root)
             release.build_root_archive(stage_root)
             archive_path = Path(
                 shutil.make_archive(str(root / "fnq3-root"), "zip", root_dir=stage_root)
@@ -179,6 +248,58 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("baseq3/sound/fnq3-weapon-sounds.sndshd", root_archive_names)
         self.assertIn("missionpack/sound/fnq3-weapon-sounds.sndshd", root_archive_names)
         self.assertNotIn("maps/q3dm1.azb", names)
+
+    def test_release_archive_validation_requires_package_docs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = root / "stage"
+            stage_root.mkdir()
+            (stage_root / "fnquake3.x64.exe").write_text("binary", encoding="utf-8")
+            release.build_root_archive(stage_root)
+            archive_path = Path(
+                shutil.make_archive(str(root / "fnq3-missing-docs"), "zip", root_dir=stage_root)
+            )
+
+            with self.assertRaisesRegex(ValueError, "missing required release files"):
+                release.validate_release_archive_contents(archive_path)
+
+    def test_copy_release_artifact_contents_rejects_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "artifact"
+            target = root / "stage"
+            source.mkdir()
+            outside = root / "outside.txt"
+            outside.write_text("outside", encoding="utf-8")
+            link = source / "outside-link.txt"
+            try:
+                link.symlink_to(outside)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                release.copy_release_artifact_contents(source, target)
+
+    def test_copy_release_artifact_contents_rejects_target_inside_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "artifact"
+            source.mkdir()
+            (source / "fnquake3.x64.exe").write_text("binary", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "inside artifact source"):
+                release.copy_release_artifact_contents(source, source / "stage")
+
+    def test_release_artifact_dirs_rejects_empty_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            with self.assertRaisesRegex(ValueError, "does not contain any artifact directories"):
+                release.release_artifact_dirs(root)
+
+    def test_release_cli_parser_rejects_negative_build_numbers(self) -> None:
+        with self.assertRaisesRegex(Exception, "non-negative"):
+            release.non_negative_int("-1")
 
 
 if __name__ == "__main__":

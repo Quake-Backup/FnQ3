@@ -39,6 +39,11 @@ typedef struct _TargaHeader {
 	unsigned char	pixel_size, attributes;
 } TargaHeader;
 
+static unsigned short R_TGAReadLittleShort( const byte *data )
+{
+	return (unsigned short)( data[0] | ( data[1] << 8 ) );
+}
+
 void R_LoadTGA ( const char *name, byte **pic, int *width, int *height)
 {
 	unsigned	columns, rows, numPixels;
@@ -80,23 +85,15 @@ void R_LoadTGA ( const char *name, byte **pic, int *width, int *height)
 	targa_header.id_length = buf_p[0];
 	targa_header.colormap_type = buf_p[1];
 	targa_header.image_type = buf_p[2];
-
-	memcpy(&targa_header.colormap_index, &buf_p[3], 2);
-	memcpy(&targa_header.colormap_length, &buf_p[5], 2);
+	targa_header.colormap_index = R_TGAReadLittleShort( &buf_p[3] );
+	targa_header.colormap_length = R_TGAReadLittleShort( &buf_p[5] );
 	targa_header.colormap_size = buf_p[7];
-	memcpy(&targa_header.x_origin, &buf_p[8], 2);
-	memcpy(&targa_header.y_origin, &buf_p[10], 2);
-	memcpy(&targa_header.width, &buf_p[12], 2);
-	memcpy(&targa_header.height, &buf_p[14], 2);
+	targa_header.x_origin = R_TGAReadLittleShort( &buf_p[8] );
+	targa_header.y_origin = R_TGAReadLittleShort( &buf_p[10] );
+	targa_header.width = R_TGAReadLittleShort( &buf_p[12] );
+	targa_header.height = R_TGAReadLittleShort( &buf_p[14] );
 	targa_header.pixel_size = buf_p[16];
 	targa_header.attributes = buf_p[17];
-
-	targa_header.colormap_index = LittleShort(targa_header.colormap_index);
-	targa_header.colormap_length = LittleShort(targa_header.colormap_length);
-	targa_header.x_origin = LittleShort(targa_header.x_origin);
-	targa_header.y_origin = LittleShort(targa_header.y_origin);
-	targa_header.width = LittleShort(targa_header.width);
-	targa_header.height = LittleShort(targa_header.height);
 
 	buf_p += 18;
 

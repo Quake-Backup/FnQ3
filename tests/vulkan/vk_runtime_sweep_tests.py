@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import tempfile
 import unittest
@@ -412,6 +413,47 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
         self.assertIn("vkinfo", cfg)
         self.assertIn('set r_speeds "7"', cfg)
         self.assertEqual(screenshots[0]["baselineKey"], "vk-modern-map1-q3dm1-vulkan")
+
+    def test_extra_set_rejects_cfg_injection(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not safe"):
+            vk_runtime_sweep.parse_extra_sets(["r_safe;quit=1"])
+        with self.assertRaisesRegex(ValueError, "unsafe control"):
+            vk_runtime_sweep.parse_extra_sets(["r_safe=1\nquit"])
+
+    def test_runtime_options_reject_invalid_waits_and_timeouts(self) -> None:
+        args = argparse.Namespace(
+            width=640,
+            height=480,
+            timeout=240.0,
+            startup_wait=30,
+            map_wait=180,
+            screenshot_wait=8,
+            perf_sample_wait=4,
+        )
+        vk_runtime_sweep.validate_runtime_options(args)
+
+        args.timeout = 0
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            vk_runtime_sweep.validate_runtime_options(args)
+
+        args.timeout = float("nan")
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            vk_runtime_sweep.validate_runtime_options(args)
+
+        args.timeout = 240.0
+        args.screenshot_wait = -1
+        with self.assertRaisesRegex(ValueError, "screenshot-wait"):
+            vk_runtime_sweep.validate_runtime_options(args)
+
+    def test_q3_command_tokens_reject_cfg_and_path_injection(self) -> None:
+        self.assertEqual(
+            vk_runtime_sweep.validate_q3_command_tokens(["q3dm1", "demos/demo1.dm_68"], "--maps"),
+            ["q3dm1", "demos/demo1.dm_68"],
+        )
+        with self.assertRaisesRegex(ValueError, "safe Quake 3"):
+            vk_runtime_sweep.validate_q3_command_tokens(["q3dm1;quit"], "--maps")
+        with self.assertRaisesRegex(ValueError, "single safe mod"):
+            vk_runtime_sweep.validate_fs_game("../baseq3")
 
     def test_modern_gate_requires_dlight_shadow_scene(self) -> None:
         manifest = {
@@ -1127,6 +1169,69 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
         failures = vk_runtime_sweep.evaluate_gate(manifest)
 
         self.assertTrue(any("shadow manager" in failure for failure in failures))
+
+    def test_modern_gate_rejects_boolean_shadow_counters(self) -> None:
+        screenshots = [
+            {
+                "name": f"shot-{category}",
+                "found": True,
+                "shadowScene": True,
+                "scene": category,
+                "evidenceCategories": [category],
+            }
+            for category in vk_runtime_sweep.DLIGHT_SHADOW_EVIDENCE_CATEGORIES
+        ]
+        surface_scene_ids = list(vk_runtime_sweep.SURFACELIGHT_SPOT_EVIDENCE_CATEGORIES)
+        csm_scene_ids = list(vk_runtime_sweep.CSM_SHADOW_EVIDENCE_CATEGORIES)
+        manifest = {
+            "gate": "vk-modern",
+            "dryRun": False,
+            "demos": ["demo1"],
+            "runs": [
+                {
+                    "type": "map-screenshots",
+                    "status": "passed",
+                    "screenshots": [{"name": "shot", "found": True}],
+                    "vkinfo": {
+                        "failures": [],
+                        "gpuTimings": [{"from": "a", "to": "b", "msec": 0.1}],
+                    },
+                },
+                {
+                    "type": "dlight-shadow-scenes",
+                    "status": "passed",
+                    "screenshots": screenshots,
+                    "dlightShadow": {
+                        "found": True,
+                        "max": {"planned": True, "renderLights": True},
+                        "scenes": {
+                            str(shot["scene"]): {
+                                "max": {"planned": 2, "renderLights": 2}
+                            }
+                            for shot in screenshots
+                        },
+                        "shadowManager": shadow_manager_summary(
+                            [str(shot["scene"]) for shot in screenshots]
+                        ),
+                        "surfaceLightSpot": surface_light_spot_summary(surface_scene_ids),
+                        "surfaceLightSpotLod": surface_light_spot_lod_summary(surface_scene_ids),
+                        "csmShadows": csm_shadow_summary(csm_scene_ids),
+                    },
+                },
+                {
+                    "type": "timedemo",
+                    "status": "passed",
+                    "demo": "demo1",
+                    "timedemoMetrics": {"fps": 100.0},
+                },
+            ],
+        }
+
+        failures = vk_runtime_sweep.evaluate_gate(manifest)
+
+        self.assertTrue(
+            any("planning/render log samples" in failure for failure in failures)
+        )
 
     def test_modern_gate_requires_surface_light_spot_runtime_evidence(self) -> None:
         screenshots = [

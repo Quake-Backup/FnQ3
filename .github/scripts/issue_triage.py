@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -23,6 +24,11 @@ DEFAULT_TRIAGE_MODEL_FALLBACK = "openai/gpt-4.1"
 MAX_REPO_CONTEXT_CHARS = 18000
 MAX_ISSUE_BODY_CHARS = 6000
 MAX_OPEN_ISSUE_BODY_CHARS = 1800
+MIN_DUPLICATE_CLOSE_CONFIDENCE = 0.90
+DEFAULT_DUPLICATE_CLOSE_CONFIDENCE = 0.93
+DEFAULT_DUPLICATE_REVIEW_CONFIDENCE = 0.78
+REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+LABEL_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 STOP_WORDS = {
     "a",
@@ -124,9 +130,17 @@ class GitHubClient:
         if data is not None:
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
-        with urllib.request.urlopen(request, timeout=60) as response:
-            charset = response.headers.get_content_charset("utf-8")
-            return json.loads(response.read().decode(charset))
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                charset = response.headers.get_content_charset("utf-8")
+                return json.loads(response.read().decode(charset))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"GitHub API request {method} {path} failed with HTTP {exc.code}: {detail}"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+            raise RuntimeError(f"GitHub API request {method} {path} failed: {exc}") from exc
 
     def get_issue(self, issue_number: int) -> dict[str, Any]:
         issue = self.request("GET", f"/issues/{issue_number}")
@@ -181,7 +195,11 @@ class GitHubClient:
         self.request("POST", f"/issues/{issue_number}/comments", payload={"body": body})
 
     def close_issue(self, issue_number: int) -> None:
-        self.request("PATCH", f"/issues/{issue_number}", payload={"state": "closed", "state_reason": "completed"})
+        self.request(
+            "PATCH",
+            f"/issues/{issue_number}",
+            payload={"state": "closed", "state_reason": "not_planned"},
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -189,12 +207,38 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     triage = subparsers.add_parser("triage")
-    triage.add_argument("--repo", required=True, help="owner/repo")
-    triage.add_argument("--issue-number", required=True, type=int)
+    triage.add_argument("--repo", required=True, type=repo_full_name_arg, help="owner/repo")
+    triage.add_argument("--issue-number", required=True, type=positive_int)
     triage.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     triage.add_argument("--dry-run", action="store_true", default=env_flag("FNQ3_ISSUE_TRIAGE_DRY_RUN"))
 
     return parser.parse_args()
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def parse_repo_full_name(value: str) -> tuple[str, str]:
+    repo_full_name = value.strip()
+    if not REPO_FULL_NAME_RE.fullmatch(repo_full_name):
+        raise ValueError("Repository must use the owner/repo form.")
+    owner, repo = repo_full_name.split("/", 1)
+    return owner, repo
+
+
+def repo_full_name_arg(value: str) -> str:
+    try:
+        parse_repo_full_name(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return value.strip()
 
 
 def env_flag(name: str) -> bool:
@@ -203,18 +247,43 @@ def env_flag(name: str) -> bool:
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object.")
+    return value
+
+
+def bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(minimum, min(maximum, parsed))
 
 
 def managed_labels_from_config(config: dict[str, Any]) -> dict[str, ManagedLabel]:
-    return {
-        item["name"]: ManagedLabel(
-            name=item["name"],
-            color=item["color"],
-            description=item["description"],
-        )
-        for item in config.get("managed_labels", [])
-    }
+    labels: dict[str, ManagedLabel] = {}
+    records = config.get("managed_labels", [])
+    if not isinstance(records, list):
+        raise ValueError("managed_labels must be a list.")
+    for index, item in enumerate(records):
+        if not isinstance(item, dict):
+            raise ValueError(f"managed_labels[{index}] must be an object.")
+        name = str(item.get("name", "")).strip()
+        color = str(item.get("color", "")).strip()
+        description = str(item.get("description", "")).strip()
+        if not name:
+            raise ValueError(f"managed_labels[{index}] is missing name.")
+        if name in labels:
+            raise ValueError(f"managed_labels contains duplicate label: {name}")
+        if not LABEL_COLOR_RE.fullmatch(color):
+            raise ValueError(f"managed_labels[{index}] has invalid GitHub label color: {color or '-'}")
+        if not description:
+            raise ValueError(f"managed_labels[{index}] is missing description.")
+        labels[name] = ManagedLabel(name=name, color=color.lower(), description=description)
+    return labels
 
 
 def normalize_issue_type(value: str) -> str:
@@ -474,6 +543,8 @@ def github_models_triage(
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub Models request failed with HTTP {exc.code}: {trim_text(detail, limit=400)}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError(f"GitHub Models request failed: {exc}") from exc
 
     choices = data.get("choices") or []
     if not choices:
@@ -499,6 +570,8 @@ def validate_model_result(
     valid_candidate_numbers = {int(item["number"]) for item in duplicate_candidates}
     related_issues = []
     for item in result.get("relatedIssues", []) or []:
+        if not isinstance(item, dict):
+            continue
         try:
             issue_number = int(item.get("issueNumber"))
         except (TypeError, ValueError):
@@ -519,18 +592,21 @@ def validate_model_result(
     suggested_labels = []
     seen_labels: set[str] = set()
     for item in result.get("suggestedLabels", []) or []:
+        if not isinstance(item, dict):
+            continue
         name = str(item.get("name", "")).strip()
         if name and name in allowed_labels and name not in seen_labels:
             suggested_labels.append({"name": name, "reason": trim_text(str(item.get("reason", "")), limit=120)})
             seen_labels.add(name)
 
-    close_threshold = threshold_from_env(
-        "FNQ3_ISSUE_TRIAGE_DUPLICATE_CLOSE_THRESHOLD",
-        float(config.get("duplicate_close_confidence", 0.93)),
-    )
+    close_threshold = duplicate_close_threshold(config)
     review_threshold = threshold_from_env(
         "FNQ3_ISSUE_TRIAGE_DUPLICATE_REVIEW_THRESHOLD",
-        float(config.get("duplicate_review_confidence", 0.78)),
+        configured_probability(
+            config,
+            "duplicate_review_confidence",
+            DEFAULT_DUPLICATE_REVIEW_CONFIDENCE,
+        ),
     )
     duplicate_confidence = clamp_float(result.get("duplicateConfidence", 0.0))
     full_duplicate = bool(result.get("fullDuplicate", False))
@@ -540,6 +616,8 @@ def validate_model_result(
     needs_human_review = bool(result.get("needsHumanReview", False)) or moderate_duplicate
     if should_close_duplicate:
         needs_human_review = False
+    elif full_duplicate and bool(related_issues):
+        needs_human_review = True
 
     return {
         "summary": trim_text(str(result.get("summary", "")), limit=500),
@@ -563,22 +641,41 @@ def validate_model_result(
 
 
 def clamp_float(value: Any) -> float:
+    return probability_value(value, 0.0)
+
+
+def probability_value(value: Any, fallback: float) -> float:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
-        return 0.0
+        return fallback
+    if not math.isfinite(parsed):
+        return fallback
     return max(0.0, min(1.0, parsed))
+
+
+def configured_probability(config: dict[str, Any], key: str, fallback: float) -> float:
+    return probability_value(config.get(key, fallback), fallback)
 
 
 def threshold_from_env(name: str, fallback: float) -> float:
     raw = os.environ.get(name, "").strip()
+    fallback = probability_value(fallback, 0.0)
     if not raw:
         return fallback
-    try:
-        parsed = float(raw)
-    except ValueError:
-        return fallback
-    return max(0.0, min(1.0, parsed))
+    return probability_value(raw, fallback)
+
+
+def duplicate_close_threshold(config: dict[str, Any]) -> float:
+    configured = threshold_from_env(
+        "FNQ3_ISSUE_TRIAGE_DUPLICATE_CLOSE_THRESHOLD",
+        configured_probability(
+            config,
+            "duplicate_close_confidence",
+            DEFAULT_DUPLICATE_CLOSE_CONFIDENCE,
+        ),
+    )
+    return max(MIN_DUPLICATE_CLOSE_CONFIDENCE, configured)
 
 
 def sanitize_string_list(value: Any, *, limit: int, item_limit: int) -> list[str]:
@@ -840,11 +937,14 @@ def resolve_model_name() -> str:
 def max_open_issues(config: dict[str, Any]) -> int:
     raw = os.environ.get("FNQ3_ISSUE_TRIAGE_MAX_OPEN_ISSUES", "").strip()
     if raw:
-        try:
-            return max(1, min(200, int(raw)))
-        except ValueError:
-            pass
-    return max(1, min(200, int(config.get("max_open_issues", 50))))
+        parsed = bounded_int(raw, -1, 1, 200)
+        if parsed != -1:
+            return parsed
+    return bounded_int(config.get("max_open_issues", 50), 50, 1, 200)
+
+
+def max_duplicate_candidates(config: dict[str, Any]) -> int:
+    return bounded_int(config.get("max_duplicate_candidates", 8), 8, 0, 20)
 
 
 def maintainer_style_hint() -> str:
@@ -852,7 +952,7 @@ def maintainer_style_hint() -> str:
 
 
 def run_triage(args: argparse.Namespace) -> int:
-    owner, repo = args.repo.split("/", 1)
+    owner, repo = parse_repo_full_name(args.repo)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("FNQ3_GITHUB_TOKEN") or ""
     if not token:
         raise RuntimeError("GITHUB_TOKEN or FNQ3_GITHUB_TOKEN is required.")
@@ -870,7 +970,7 @@ def run_triage(args: argparse.Namespace) -> int:
     duplicate_candidates = pick_duplicate_candidates(
         issue,
         open_issues,
-        max_candidates=int(config.get("max_duplicate_candidates", 8)),
+        max_candidates=max_duplicate_candidates(config),
     )
     repo_context = build_repo_context(issue)
     model_name = resolve_model_name()

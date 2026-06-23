@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import struct
 import subprocess
@@ -13,6 +14,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SWEEP_ROOT = ROOT / ".tmp" / "vk-runtime-sweeps"
+CVAR_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+Q3_COMMAND_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
+FS_GAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 TIMEDEMO_FPS_RE = re.compile(
     r"(?P<frames>\d+)\s+frames[, ]+\s*"
     r"(?P<seconds>\d+(?:\.\d+)?)\s+seconds:?\s*"
@@ -631,6 +635,34 @@ def sanitize(value: str) -> str:
     return cleaned.strip("-") or "item"
 
 
+def validate_q3_command_token(value: str, option: str) -> str:
+    token = value.strip()
+    parts = token.split("/")
+    if (
+        not Q3_COMMAND_TOKEN_RE.fullmatch(token)
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise ValueError(f"{option} must contain safe Quake 3 qpath tokens")
+    return token
+
+
+def validate_q3_command_tokens(values: list[str], option: str) -> list[str]:
+    return [validate_q3_command_token(value, option) for value in values]
+
+
+def validate_fs_game(value: str) -> str:
+    name = value.strip()
+    if not name:
+        return ""
+    if (
+        not FS_GAME_RE.fullmatch(name)
+        or name in {".", ".."}
+        or name.startswith(".")
+    ):
+        raise ValueError("--fs-game must be a single safe mod directory name")
+    return name
+
+
 def q3_quote(value: object) -> str:
     text = str(value).replace("\\", "/").replace('"', '\\"')
     return f'"{text}"'
@@ -663,6 +695,10 @@ def parse_extra_sets(values: list[str]) -> dict[str, str]:
         name = name.strip()
         if not name:
             raise ValueError("--extra-set cvar name must not be empty")
+        if not CVAR_NAME_RE.fullmatch(name):
+            raise ValueError(f"--extra-set cvar name is not safe: {name!r}")
+        if any(char in value for char in ("\r", "\n", "\x00", ";")):
+            raise ValueError(f"--extra-set value for {name!r} contains an unsafe control character")
         result[name] = value.strip()
     return result
 
@@ -733,6 +769,25 @@ def apply_gate_defaults(args: argparse.Namespace) -> None:
         attr = name
         if getattr(args, attr, None) is None:
             setattr(args, attr, value)
+
+
+def validate_runtime_options(args: argparse.Namespace) -> None:
+    if args.width <= 0 or args.height <= 0:
+        raise ValueError("--width and --height must be positive")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        raise ValueError("--timeout must be finite and positive")
+    for attr in ("startup_wait", "map_wait", "screenshot_wait", "perf_sample_wait"):
+        if getattr(args, attr) < 0:
+            raise ValueError(f"--{attr.replace('_', '-')} must be non-negative")
+
+
+def int_metric(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def print_gate_list() -> None:
@@ -858,10 +913,7 @@ def shadow_manager_summary_active(summary: object) -> bool:
         return False
 
     def field(name: str) -> int:
-        try:
-            return int(maximum.get(name, 0))
-        except (TypeError, ValueError):
-            return 0
+        return int_metric(maximum.get(name, 0))
 
     return (
         field("scheduledPasses") > 0
@@ -884,10 +936,7 @@ def surface_light_spot_summary_active(summary: object) -> bool:
         return False
 
     def field(name: str) -> int:
-        try:
-            return int(maximum.get(name, 0))
-        except (TypeError, ValueError):
-            return 0
+        return int_metric(maximum.get(name, 0))
 
     return (
         field("surfaceSpotCandidates") > 0
@@ -965,10 +1014,7 @@ def combined_shadow_atlas_summary(dlight_shadow: object) -> dict[str, object]:
         maximum = {}
 
     def field(name: str) -> int:
-        try:
-            return int(maximum.get(name, 0))
-        except (TypeError, ValueError):
-            return 0
+        return int_metric(maximum.get(name, 0))
 
     checks = (
         ("scheduledPasses", 4, "scheduled all point, spot, CSM atlas, and CSM receiver passes"),
@@ -1022,10 +1068,7 @@ def combined_shadow_atlas_summary(dlight_shadow: object) -> dict[str, object]:
 
 
 def int_sample_field(sample: dict[str, int], name: str) -> int:
-    try:
-        return int(sample.get(name, 0))
-    except (TypeError, ValueError):
-        return 0
+    return int_metric(sample.get(name, 0))
 
 
 def surface_light_spot_range_includes(
@@ -1139,10 +1182,10 @@ def csm_shadow_runtime_summary(
     failures: list[str] = []
 
     def manager_field(name: str) -> int:
-        return int(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
+        return int_metric(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
 
     def csm_field(name: str) -> int:
-        return int(csm_max.get(name, 0)) if isinstance(csm_max, dict) else 0
+        return int_metric(csm_max.get(name, 0)) if isinstance(csm_max, dict) else 0
 
     if not manager_samples and not csm_samples:
         return {
@@ -1251,10 +1294,10 @@ def csm_stability_summary(
     failures: list[str] = []
 
     def manager_field(name: str) -> int:
-        return int(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
+        return int_metric(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
 
     def csm_field(name: str) -> int:
-        return int(csm_max.get(name, 0)) if isinstance(csm_max, dict) else 0
+        return int_metric(csm_max.get(name, 0)) if isinstance(csm_max, dict) else 0
 
     if not manager_samples and not csm_samples:
         return {
@@ -2344,15 +2387,15 @@ def csm_cascade_contract_summary(samples: list[dict[str, int]]) -> dict[str, obj
             "failures": [],
         }
 
-    if int(maximum.get("csmCascadeAtlasSize", 0)) <= 0:
+    if int_metric(maximum.get("csmCascadeAtlasSize", 0)) <= 0:
         failures.append("CSM cascade contract reported no atlas tile size.")
-    if int(maximum.get("csmCascadeViewWidth", 0)) <= 0 or int(maximum.get("csmCascadeViewHeight", 0)) <= 0:
+    if int_metric(maximum.get("csmCascadeViewWidth", 0)) <= 0 or int_metric(maximum.get("csmCascadeViewHeight", 0)) <= 0:
         failures.append("CSM cascade contract reported no renderer viewport dimensions.")
-    if int(maximum.get("csmCascadeApiWidth", 0)) <= 0 or int(maximum.get("csmCascadeApiHeight", 0)) <= 0:
+    if int_metric(maximum.get("csmCascadeApiWidth", 0)) <= 0 or int_metric(maximum.get("csmCascadeApiHeight", 0)) <= 0:
         failures.append("CSM cascade contract reported no API viewport dimensions.")
-    if int(maximum.get("csmCascadeDepthForward", 0)) <= 0 or int(maximum.get("csmCascadeCompareLequal", 0)) <= 0:
+    if int_metric(maximum.get("csmCascadeDepthForward", 0)) <= 0 or int_metric(maximum.get("csmCascadeCompareLequal", 0)) <= 0:
         failures.append("CSM cascade contract did not report forward lequal depth.")
-    if int(maximum.get("csmCascadeTexelMilli", 0)) <= 0:
+    if int_metric(maximum.get("csmCascadeTexelMilli", 0)) <= 0:
         failures.append("CSM cascade contract reported no texel size.")
 
     return {
@@ -2613,10 +2656,10 @@ def csm_fallback_summary(
     failures: list[str] = []
 
     def manager_field(name: str) -> int:
-        return int(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
+        return int_metric(manager_max.get(name, 0)) if isinstance(manager_max, dict) else 0
 
     def fallback_field(name: str) -> int:
-        return int(fallback_max.get(name, 0)) if isinstance(fallback_max, dict) else 0
+        return int_metric(fallback_max.get(name, 0)) if isinstance(fallback_max, dict) else 0
 
     reason_fields = {
         "no-world": "csmFallbackNoWorld",
@@ -3124,7 +3167,7 @@ def analyze_vk_log(log_path: Path, profile: str) -> dict[str, object]:
     modern = info.get("modernVulkan")
     barriers = info.get("barriers")
     if isinstance(modern, dict) and isinstance(barriers, dict):
-        if modern.get("sync2") == "enabled" and int(barriers.get("sync2", 0)) == 0:
+        if modern.get("sync2") == "enabled" and int_metric(barriers.get("sync2", 0)) == 0:
             failures.append("sync2 is enabled but no sync2 barriers were observed.")
 
     if profile == "vk-hdr":
@@ -3267,8 +3310,8 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                 if isinstance(summary, dict)
                 and summary.get("found")
                 and isinstance(summary.get("max"), dict)
-                and int(summary["max"].get("planned", 0)) > 0  # type: ignore[index]
-                and int(summary["max"].get("renderLights", 0)) > 0  # type: ignore[index]
+                and int_metric(summary["max"].get("planned", 0)) > 0  # type: ignore[index]
+                and int_metric(summary["max"].get("renderLights", 0)) > 0  # type: ignore[index]
             ]
             if not active_logs:
                 failures.append("No Vulkan dlight shadow planning/render log samples were found.")
@@ -3300,8 +3343,8 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
                     for scene_id, scene_summary in summary["scenes"].items()  # type: ignore[union-attr]
                     if isinstance(scene_summary, dict)
                     and isinstance(scene_summary.get("max"), dict)
-                    and int(scene_summary["max"].get("planned", 0)) > 0  # type: ignore[index]
-                    and int(scene_summary["max"].get("renderLights", 0)) > 0  # type: ignore[index]
+                    and int_metric(scene_summary["max"].get("planned", 0)) > 0  # type: ignore[index]
+                    and int_metric(scene_summary["max"].get("renderLights", 0)) > 0  # type: ignore[index]
                 }
                 logged_categories = {
                     category
@@ -3660,15 +3703,13 @@ def main() -> int:
 
     apply_gate_defaults(args)
 
-    if args.width <= 0 or args.height <= 0:
-        raise ValueError("--width and --height must be positive")
-    if args.perf_sample_wait < 0:
-        raise ValueError("--perf-sample-wait must be non-negative")
+    validate_runtime_options(args)
+    args.fs_game = validate_fs_game(args.fs_game)
 
     exe = resolve_exe(args.exe, allow_missing=args.dry_run)
     basepath = args.basepath.resolve() if args.basepath else exe.parent.resolve()
-    maps = split_csv(args.maps)
-    demos = split_csv(args.demos)
+    maps = validate_q3_command_tokens(split_csv(args.maps), "--maps")
+    demos = validate_q3_command_tokens(split_csv(args.demos), "--demos")
     cvars = make_cvars(args)
     startup_cvars = launch_cvars(cvars)
     dlight_shadow_cvars = dlight_shadow_scene_cvars(cvars)

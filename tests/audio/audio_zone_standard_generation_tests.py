@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -71,6 +73,71 @@ class StandardAudioZoneGenerationTests(unittest.TestCase):
             self.assertEqual((source_root / "maps" / "q3dm2.bsp").read_bytes(), b"q3dm2")
             self.assertEqual((source_root / "maps" / "q3tourney6_ctf.bsp").read_bytes(), b"ctf")
             self.assertFalse((source_root / "maps" / "not-standard.bsp").exists())
+
+    def test_rejects_unsafe_arena_map_names_before_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pak_root = root / "baseq3"
+            pak_root.mkdir()
+            write_pk3(
+                pak_root / "pak0.pk3",
+                {
+                    "scripts/arenas.txt": 'map "../outside"\n',
+                    "maps/../outside.bsp": b"outside",
+                },
+            )
+
+            paks = generate_standard_audio_zones.discover_official_paks(pak_root)
+            with self.assertRaisesRegex(ValueError, "unsafe arena map name"):
+                generate_standard_audio_zones.discover_standard_map_names(paks)
+
+            source_root = root / "scratch" / "baseq3"
+            with self.assertRaisesRegex(ValueError, "unsafe arena map name"):
+                generate_standard_audio_zones.extract_standard_bsp_files(
+                    paks,
+                    ("../outside",),
+                    source_root,
+                )
+
+    def test_rejects_case_ambiguous_pk3_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pak_root = root / "baseq3"
+            pak_root.mkdir()
+            write_pk3(
+                pak_root / "pak0.pk3",
+                {
+                    "scripts/arenas.txt": 'map "q3dm1"\n',
+                    "maps/q3dm1.bsp": b"lower",
+                    "MAPS/Q3DM1.BSP": b"upper",
+                },
+            )
+
+            paks = generate_standard_audio_zones.discover_official_paks(pak_root)
+            with self.assertRaisesRegex(ValueError, "case-ambiguous"):
+                generate_standard_audio_zones.discover_standard_map_names(paks)
+            with self.assertRaisesRegex(ValueError, "case-ambiguous"):
+                generate_standard_audio_zones.extract_standard_bsp_files(
+                    paks,
+                    ("q3dm1",),
+                    root / "scratch" / "baseq3",
+                )
+
+    def test_parse_args_caps_audit_samples_to_compiler_limit(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                generate_standard_audio_zones.parse_args(
+                    [
+                        "baseq3",
+                        "--samples",
+                        str(generate_standard_audio_zones.MAX_AUDIT_SAMPLES + 1),
+                    ]
+                )
+
+        args = generate_standard_audio_zones.parse_args(
+            ["baseq3", "--samples", str(generate_standard_audio_zones.MAX_AUDIT_SAMPLES)]
+        )
+        self.assertEqual(args.samples, generate_standard_audio_zones.MAX_AUDIT_SAMPLES)
 
 
 if __name__ == "__main__":

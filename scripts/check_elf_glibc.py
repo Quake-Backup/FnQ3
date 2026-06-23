@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 GLIBC_VERSION_RE = re.compile(r"\bGLIBC_(\d+(?:\.\d+)*)\b")
+GLIBC_VALUE_RE = re.compile(r"^\d+(?:\.\d+)*$")
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def parse_version(value: str) -> tuple[int, ...]:
+    if not GLIBC_VALUE_RE.fullmatch(value):
+        raise ValueError("invalid GLIBC version")
     return tuple(int(part) for part in value.split("."))
 
 
@@ -65,12 +68,29 @@ def is_elf(path: Path) -> bool:
 
 def candidate_files(paths: list[Path]) -> list[Path]:
     candidates: list[Path] = []
-    for path in paths:
+    seen: set[Path] = set()
+
+    def add_if_elf(raw_candidate: Path) -> None:
+        candidate = raw_candidate.expanduser().resolve()
+        if candidate in seen:
+            return
+        if is_elf(candidate):
+            seen.add(candidate)
+            candidates.append(candidate)
+
+    for raw_path in paths:
+        path = raw_path.expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"scan path does not exist: {path}")
         if path.is_dir():
-            candidates.extend(item for item in path.rglob("*") if item.is_file())
+            for item in path.rglob("*"):
+                if item.is_file():
+                    add_if_elf(item)
         elif path.is_file():
-            candidates.append(path)
-    return sorted(path for path in candidates if is_elf(path))
+            add_if_elf(path)
+        else:
+            raise FileNotFoundError(f"scan path is not a file or directory: {path}")
+    return sorted(candidates)
 
 
 def read_glibc_versions(path: Path) -> tuple[str, ...]:

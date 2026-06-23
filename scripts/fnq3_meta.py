@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION_HEADER = ROOT / "version" / "fnq3_version.h"
 
 _DEFINE_RE = re.compile(r"^\s*#define\s+([A-Z0-9_]+)\s+(.+?)\s*$")
+_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_SAFE_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def _strip_comments(raw_value: str) -> str:
@@ -26,6 +28,8 @@ def _parse_define_value(raw_value: str):
 
 
 def compose_version_string(major: int, minor: int, patch: int, tweak: int = 0) -> str:
+    if min(major, minor, patch, tweak) < 0:
+        raise ValueError("Version components must be non-negative")
     version = f"{major}.{minor}.{patch}"
     if tweak:
         version = f"{version}.{tweak}"
@@ -33,6 +37,8 @@ def compose_version_string(major: int, minor: int, patch: int, tweak: int = 0) -
 
 
 def compose_windows_version(major: int, minor: int, patch: int, tweak: int = 0) -> str:
+    if min(major, minor, patch, tweak) < 0:
+        raise ValueError("Windows version components must be non-negative")
     return f"{major},{minor},{patch},{tweak}"
 
 
@@ -79,7 +85,22 @@ def normalize_date(value: str | None = None) -> tuple[str, str]:
 
 def normalize_commit(value: str | None = None) -> str:
     cleaned = (value or "local").strip()
-    return cleaned[:8] if cleaned else "local"
+    if not cleaned or cleaned == "local":
+        return "local"
+    if not _COMMIT_RE.fullmatch(cleaned):
+        raise ValueError("Commit must be a 7-40 character hexadecimal id")
+    return cleaned[:8].lower()
+
+
+def safe_artifact_name(value: str) -> str:
+    name = value.strip()
+    if (
+        not _SAFE_ARTIFACT_RE.fullmatch(name)
+        or name in {".", ".."}
+        or any(ord(char) < 32 or ord(char) == 127 for char in name)
+    ):
+        raise ValueError("Artifact directory name must be a single safe path component")
+    return name
 
 
 def channel_metadata(
@@ -99,7 +120,10 @@ def channel_metadata(
 
     version_value = str(meta["version"])
     if channel == "release":
-        release_tag = ref_name or f"{meta['tag_prefix']}{version_value}"
+        expected_tag = f"{meta['tag_prefix']}{version_value}"
+        release_tag = (ref_name or expected_tag).strip()
+        if release_tag != expected_tag:
+            raise ValueError(f"Release ref name must match {expected_tag}")
         archive_prefix = f"{meta['artifact_prefix']}-{version_value}"
         version_label = version_value
         release_title = f"{meta['project_name']} {version_value}"
@@ -107,6 +131,8 @@ def channel_metadata(
         tweak = int(meta["version_tweak"])
         if build_number is not None:
             tweak = int(build_number)
+            if tweak < 0:
+                raise ValueError("Manual release build number must be non-negative")
         version_value = compose_version_string(
             int(meta["version_major"]),
             int(meta["version_minor"]),
@@ -136,7 +162,7 @@ def channel_metadata(
 
 
 def package_archive_name(meta: dict[str, object], artifact_dir_name: str) -> str:
-    return f"{meta['archive_prefix']}-{artifact_dir_name}.zip"
+    return f"{meta['archive_prefix']}-{safe_artifact_name(artifact_dir_name)}.zip"
 
 
 def to_json(data: dict[str, object]) -> str:

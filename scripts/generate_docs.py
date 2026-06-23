@@ -20,7 +20,15 @@ INSTALL_OUTPUT = ROOT / ".install" / "README.html"
 
 def render(template_path: Path, context: dict[str, object]) -> str:
     template = Template(template_path.read_text(encoding="utf-8"))
-    return template.substitute({key: str(value) for key, value in context.items()}).strip() + "\n"
+    rendered_context = {key: str(value) for key, value in context.items()}
+    try:
+        rendered = template.substitute(rendered_context)
+    except KeyError as exc:
+        missing = str(exc.args[0])
+        raise ValueError(f"{template_path} references undefined template key: {missing}") from exc
+    except ValueError as exc:
+        raise ValueError(f"{template_path} contains an invalid template placeholder: {exc}") from exc
+    return rendered.strip() + "\n"
 
 
 def write_if_changed(path: Path, content: str) -> bool:

@@ -26,6 +26,8 @@ from root_archive import (
     DEFAULT_AUDIO_ZONE_ASSETS,
     ROOT_ARCHIVE_NAME,
     STANDARD_Q3A_AUDIO_ZONE_MAPS,
+    path_is_relative_to,
+    validate_archive_member_names,
     validate_root_archive,
     validate_root_archive_names,
     write_root_archive,
@@ -40,6 +42,11 @@ DEFAULT_DOCS = [
         Path("docs") / "GLX.md",
     ),
     (ROOT / ".install" / "README.html", Path("README.html")),
+]
+
+REQUIRED_RELEASE_ARCHIVE_ENTRIES = [
+    ROOT_ARCHIVE_NAME,
+    *(destination.as_posix() for _source, destination in DEFAULT_DOCS),
 ]
 
 GLX_RELEASE_EVIDENCE_DOCS = {
@@ -104,6 +111,16 @@ SKIP_ARTIFACT_FILE_NAMES_LOWER = {name.lower() for name in SKIP_ARTIFACT_FILE_NA
 SKIP_ARTIFACT_SUFFIXES_LOWER = {suffix.lower() for suffix in SKIP_ARTIFACT_SUFFIXES}
 
 
+def non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Package FnQuake3 manual or tagged release artifacts")
     parser.add_argument("--channel", choices=("manual", "release"), required=True)
@@ -111,7 +128,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=ROOT / ".install")
     parser.add_argument("--temp-dir", type=Path, default=ROOT / ".tmp" / "release")
     parser.add_argument("--build-date")
-    parser.add_argument("--build-number", type=int)
+    parser.add_argument("--build-number", type=non_negative_int)
     parser.add_argument("--commit")
     parser.add_argument("--ref-name")
     parser.add_argument(
@@ -164,10 +181,21 @@ def should_skip_artifact_path(relative_path: Path, *, is_dir: bool) -> bool:
 
 
 def copy_release_artifact_contents(source: Path, target: Path) -> list[str]:
+    source = source.expanduser()
+    if not source.is_dir():
+        raise NotADirectoryError(f"Release artifact source is not a directory: {source}")
+    resolved_source = source.resolve()
+    resolved_target = target.expanduser().resolve()
+    if path_is_relative_to(resolved_target, resolved_source):
+        raise ValueError(f"Release staging target must not be inside artifact source: {target}")
     target.mkdir(parents=True, exist_ok=True)
     skipped: list[str] = []
 
     for item in sorted(source.rglob("*")):
+        if item.is_symlink():
+            raise ValueError(f"Release artifact contains unsupported symbolic link: {item}")
+        if not path_is_relative_to(item.resolve(), resolved_source):
+            raise ValueError(f"Release artifact entry escapes source root: {item}")
         relative = item.relative_to(source)
         if should_skip_artifact_path(relative, is_dir=item.is_dir()):
             skipped.append(relative.as_posix())
@@ -207,18 +235,34 @@ def build_root_archive(stage_root: Path) -> Path:
 
 def validate_release_archive_contents(archive_path: Path) -> None:
     with zipfile.ZipFile(archive_path) as archive:
-        archived_names = set(archive.namelist())
-        if ROOT_ARCHIVE_NAME not in archived_names:
+        archived_names = [
+            info.filename
+            for info in archive.infolist()
+            if not info.is_dir()
+        ]
+        validate_archive_member_names(archived_names, archive_name=archive_path.name)
+        archived_name_set = set(archived_names)
+        missing_release_entries = [
+            name
+            for name in REQUIRED_RELEASE_ARCHIVE_ENTRIES
+            if name not in archived_name_set
+        ]
+        if missing_release_entries:
+            raise ValueError(
+                f"{archive_path.name} is missing required release files: "
+                + ", ".join(missing_release_entries)
+            )
+        if ROOT_ARCHIVE_NAME not in archived_name_set:
             raise ValueError(f"{archive_path.name} is missing {ROOT_ARCHIVE_NAME}")
 
         root_archive_bytes = archive.read(ROOT_ARCHIVE_NAME)
 
     with zipfile.ZipFile(io.BytesIO(root_archive_bytes)) as root_archive:
-        root_archive_names = {
+        root_archive_names = [
             info.filename
             for info in root_archive.infolist()
             if not info.is_dir()
-        }
+        ]
     validate_root_archive_names(root_archive_names)
 
 
@@ -233,6 +277,18 @@ def validate_stage_tree(stage_root: Path) -> None:
             "release package contains filtered build byproducts: "
             + ", ".join(offenders[:12])
         )
+
+
+def release_artifact_dirs(artifact_root: Path) -> list[Path]:
+    if not artifact_root.exists():
+        raise FileNotFoundError(f"Artifact root does not exist: {artifact_root}")
+    if not artifact_root.is_dir():
+        raise NotADirectoryError(f"Artifact root is not a directory: {artifact_root}")
+
+    artifact_dirs = sorted(path for path in artifact_root.iterdir() if path.is_dir())
+    if not artifact_dirs:
+        raise ValueError(f"Artifact root does not contain any artifact directories: {artifact_root}")
+    return artifact_dirs
 
 
 def resolve_glx_runtime_proof(args: argparse.Namespace) -> dict[str, object]:
@@ -369,8 +425,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         )
 
     artifact_root = args.artifact_root.resolve()
-    if not artifact_root.exists():
-        raise FileNotFoundError(f"Artifact root does not exist: {artifact_root}")
+    artifact_dirs = release_artifact_dirs(artifact_root)
 
     output_dir = args.output_dir.resolve()
     packages_dir = output_dir / "packages"
@@ -381,7 +436,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
 
     archives: list[dict[str, object]] = []
 
-    for artifact_dir in sorted(path for path in artifact_root.iterdir() if path.is_dir()):
+    for artifact_dir in artifact_dirs:
         archive_name = package_archive_name(meta, artifact_dir.name)
         archive_base = packages_dir / archive_name[:-4]
         stage_root = temp_dir / archive_name[:-4]

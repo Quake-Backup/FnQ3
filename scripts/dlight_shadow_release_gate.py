@@ -102,6 +102,17 @@ def resolve_path(value: object, base_dir: Path) -> Path:
     return local_path
 
 
+def resolve_manifest_path(value: object, base_dir: Path) -> Path:
+    raw = str(value)
+    path = Path(raw)
+    if not path.is_absolute():
+        if any(part == ".." for part in path.parts):
+            raise ValueError(f"Manifest path must not contain '..': {raw}")
+        if any(any(ord(char) < 32 or ord(char) == 127 for char in part) for part in path.parts):
+            raise ValueError(f"Manifest path contains an unsafe control character: {raw!r}")
+    return resolve_path(value, base_dir)
+
+
 def status_text(record: object) -> str:
     if isinstance(record, bool):
         return "passed" if record else "blocked"
@@ -196,7 +207,7 @@ def shader_failures(renderer: str, record: object) -> list[str]:
 
 def load_manifest_value(value: object, base_dir: Path) -> tuple[dict[str, Any] | None, str]:
     if isinstance(value, str):
-        path = resolve_path(value, base_dir)
+        path = resolve_manifest_path(value, base_dir)
         return load_json_file(path), report_path(path)
     if isinstance(value, dict):
         manifest_path = (
@@ -206,16 +217,18 @@ def load_manifest_value(value: object, base_dir: Path) -> tuple[dict[str, Any] |
             or value.get("file")
         )
         if manifest_path:
-            path = resolve_path(manifest_path, base_dir)
+            path = resolve_manifest_path(manifest_path, base_dir)
             return load_json_file(path), report_path(path)
         return value, ""
     return None, ""
 
 
 def int_value(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
     try:
         return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 

@@ -137,7 +137,7 @@ class ShadowCorrectnessSourceTests(unittest.TestCase):
         self.assertIn("- [x] Round 5:", plan)
         self.assertIn("- [x] Round 6:", plan)
         self.assertIn("- [x] Round 7:", plan)
-        self.assertIn("- [ ] Round 8:", plan)
+        self.assertIn("- [x] Round 8:", plan)
 
     def test_filter_mode_offsets_are_shared_and_debugged(self):
         for renderer in self.RENDERERS:

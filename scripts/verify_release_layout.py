@@ -8,7 +8,7 @@ from typing import Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from release import validate_release_archive_contents
+from release import REQUIRED_RELEASE_ARCHIVE_ENTRIES, validate_release_archive_contents
 from root_archive import (
     DEFAULT_AUDIO_ZONE_ASSETS,
     DEFAULT_WEAPON_SOUND_SHADER_ASSETS,
@@ -25,6 +25,17 @@ def verify_release_layout(root: Path) -> None:
     if root.is_file() and root.suffix.lower() == ".zip":
         validate_release_archive_contents(root)
         return
+
+    missing_release_entries = [
+        entry
+        for entry in REQUIRED_RELEASE_ARCHIVE_ENTRIES
+        if not (root / entry).is_file()
+    ]
+    if missing_release_entries:
+        raise FileNotFoundError(
+            f"{root} is missing required release files: "
+            + ", ".join(missing_release_entries)
+        )
 
     root_archive = root / ROOT_ARCHIVE_NAME
     if not root_archive.is_file():

@@ -4452,6 +4452,44 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertEqual(evidence["postShaderDirectFinal"]["reject"], 0)
         self.assertEqual(evidence["failures"], [])
 
+    def test_promotion_ownership_metrics_reject_boolean_numeric_counters(self) -> None:
+        manifest = {
+            "ownershipProofEvidence": {
+                "version": glx_runtime_sweep.GLX_OWNERSHIP_PROOF_VERSION,
+                "status": "passed",
+                "failures": [],
+                "delegation": {"found": True, "calls": False, "items": False},
+                "productTiers": ["GL3X"],
+                "postOutputOwnership": {
+                    "found": True,
+                    "modes": ["glx-owned"],
+                    "postNodes": True,
+                    "outputs": True,
+                    "executableCountsFound": True,
+                    "executableNodes": True,
+                    "executableOutputs": True,
+                    "legacyFallback": False,
+                },
+                "postShaderDirectFinal": {
+                    "found": True,
+                    "bound": True,
+                    "binds": True,
+                    "reject": False,
+                },
+                "modernTierDiagnosticsFound": True,
+                "modernTierDiagnosticsOk": True,
+                "modernPostOutputTier": True,
+                "modernPostOutput": True,
+            }
+        }
+
+        metrics = glx_promotion.manifest_ownership_metrics(manifest)
+
+        self.assertEqual(metrics["postOutputPostNodes"], 0)
+        self.assertEqual(metrics["postOutputExecutableNodes"], 0)
+        self.assertEqual(metrics["postShaderDirectFinalBound"], 0)
+        self.assertFalse(metrics["modernPostOutput"])
+
     def test_ownership_proof_evidence_fails_on_delegation_and_missing_fingerprint(self) -> None:
         manifest = ownership_proof_manifest(
             "windows-x64",
@@ -6037,6 +6075,70 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         cvars = glx_runtime_sweep.make_cvars(args)
         self.assertEqual(cvars["r_glxColorPipelineDebug"], "0")
 
+    def test_extra_set_rejects_cfg_injection(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not safe"):
+            glx_runtime_sweep.parse_extra_sets(["r_safe;quit=1"])
+        with self.assertRaisesRegex(ValueError, "unsafe control"):
+            glx_runtime_sweep.parse_extra_sets(["r_safe=1\nquit"])
+
+    def test_runtime_options_reject_invalid_dimensions_waits_and_timeouts(self) -> None:
+        args = argparse.Namespace(
+            width=640,
+            height=480,
+            timeout=180.0,
+            switch_rounds=1,
+            startup_wait=30,
+            map_wait=180,
+            switch_wait=12,
+            screenshot_wait=8,
+            perf_sample_wait=4,
+        )
+        glx_runtime_sweep.validate_runtime_options(args)
+
+        args.width = 0
+        with self.assertRaisesRegex(ValueError, "width"):
+            glx_runtime_sweep.validate_runtime_options(args)
+
+        args.width = 640
+        args.switch_rounds = 0
+        with self.assertRaisesRegex(ValueError, "switch-rounds"):
+            glx_runtime_sweep.validate_runtime_options(args)
+
+        args.switch_rounds = 1
+        args.timeout = 0
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            glx_runtime_sweep.validate_runtime_options(args)
+
+        args.timeout = float("nan")
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            glx_runtime_sweep.validate_runtime_options(args)
+
+    def test_runtime_thresholds_reject_non_finite_values(self) -> None:
+        self.assertEqual(
+            glx_runtime_sweep.validate_screenshot_thresholds(2.0, 0.005),
+            (2.0, 0.005),
+        )
+        with self.assertRaisesRegex(ValueError, "screenshot-max-rms"):
+            glx_runtime_sweep.validate_screenshot_thresholds(float("nan"), 0.005)
+        with self.assertRaisesRegex(ValueError, "screenshot-max-pixel-ratio"):
+            glx_runtime_sweep.validate_screenshot_thresholds(2.0, float("inf"))
+        with self.assertRaisesRegex(ValueError, "performance-max-growth-ratio"):
+            glx_runtime_sweep.validate_performance_growth_ratio(float("nan"))
+        self.assertEqual(
+            glx_runtime_sweep.validate_performance_growth_ratio(None),
+            glx_runtime_sweep.DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO,
+        )
+
+    def test_q3_command_tokens_reject_cfg_and_path_injection(self) -> None:
+        self.assertEqual(
+            glx_runtime_sweep.validate_q3_command_tokens(["q3dm1", "demos/demo1.dm_68"], "--maps"),
+            ["q3dm1", "demos/demo1.dm_68"],
+        )
+        with self.assertRaisesRegex(ValueError, "safe Quake 3"):
+            glx_runtime_sweep.validate_q3_command_tokens(["q3dm1\nquit"], "--maps")
+        with self.assertRaisesRegex(ValueError, "single safe mod"):
+            glx_runtime_sweep.validate_fs_game("../baseq3")
+
     def test_rc_parity_gate_enables_dlight_shadow_scenes(self) -> None:
         defaults = glx_runtime_sweep.RC_GATE_PRESETS["rc-parity"]["defaults"]
         requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-parity"]["requirements"]
@@ -6978,6 +7080,51 @@ class GlxPromotionTests(unittest.TestCase):
         self.assertEqual(checks["rollback-package-metadata"]["status"], "blocked")
         self.assertEqual(checks["migration-and-rollback-doc"]["status"], "passed")
 
+    def test_feature_matrix_parser_skips_spaced_separator_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            matrix = Path(tmp) / "matrix.md"
+            matrix.write_text(
+                "\n".join(
+                    [
+                        "| ID | Category | Feature | Status | Evidence | Closure gate |",
+                        "| --- | --- | --- | --- | --- | --- |",
+                        "| CORE-TEST | Core | Test feature | covered | Unit test | Keep green. |",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                glx_promotion.parse_feature_matrix(matrix),
+                [
+                    {
+                        "id": "CORE-TEST",
+                        "category": "Core",
+                        "feature": "Test feature",
+                        "status": "covered",
+                        "evidence": "Unit test",
+                        "closure": "Keep green.",
+                    }
+                ],
+            )
+
+    def test_feature_matrix_parser_rejects_invalid_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            matrix = Path(tmp) / "matrix.md"
+            matrix.write_text(
+                "\n".join(
+                    [
+                        "| ID | Category | Feature | Status | Evidence | Closure gate |",
+                        "|---|---|---|---|---|---|",
+                        "| CORE-TEST | Core | Test feature | maybe | Unit test | Keep green. |",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "invalid status"):
+                glx_promotion.parse_feature_matrix(matrix)
+
     def test_complete_runtime_and_ownership_proof_still_waits_for_green_matrix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -7070,6 +7217,23 @@ class GlxPromotionTests(unittest.TestCase):
             self.assertIn("screenshot regressions", failures)
             self.assertIn("performance regressions", failures)
             self.assertIn("linux-x86_64", failures)
+
+    def test_rollback_package_metadata_rejects_unsafe_artifact_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = rollback_package_metadata(artifact_dir="../legacy")
+            packages = metadata["rollbackPackages"]
+            assert isinstance(packages, list)
+            package = packages[0]
+            assert isinstance(package, dict)
+            package["archive"] = "legacy/opengl.zip"
+            metadata_path = self.write_rollback_metadata(Path(tmp), metadata)
+
+            check = glx_promotion.check_rollback_package_metadata(metadata_path)
+            failures = "\n".join(str(failure) for failure in check["blockers"])
+
+            self.assertEqual(check["status"], "blocked")
+            self.assertIn("unsafe artifactDir", failures)
+            self.assertIn("unsafe archive", failures)
 
     def test_release_rollback_package_policy_is_not_required_until_source_promotion(self) -> None:
         args = argparse.Namespace(channel="release", glx_rollback_metadata=None)
@@ -8222,6 +8386,19 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
 
         failures = glx_runtime_sweep.evaluate_gate(manifest)
         self.assertTrue(any("performance budget failures" in failure for failure in failures))
+
+    def test_performance_numeric_metrics_reject_bool_and_non_finite_values(self) -> None:
+        aggregate = {
+            "max": {
+                "streamDrawFallbacks": True,
+                "gpuFrameMsec": float("inf"),
+            }
+        }
+
+        self.assertIsNone(glx_runtime_sweep.numeric_metric(aggregate, "streamDrawFallbacks"))
+        self.assertIsNone(glx_runtime_sweep.numeric_metric(aggregate, "gpuFrameMsec"))
+        self.assertEqual(glx_runtime_sweep.int_metric(True, default=7), 7)
+        self.assertEqual(glx_runtime_sweep.float_metric(float("nan"), default=1.5), 1.5)
 
 
 if __name__ == "__main__":

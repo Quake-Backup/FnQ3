@@ -32,6 +32,26 @@ FIELD_SEPARATOR = "\x1f"
 RECORD_SEPARATOR = "\x1e"
 
 
+def non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def write_text_lf(path: Path, content: str) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(content)
@@ -47,11 +67,11 @@ def parse_args() -> argparse.Namespace:
         subparser.add_argument("--head-commit")
 
     stamp = subparsers.add_parser("stamp-version")
-    stamp.add_argument("--build-number", required=True, type=int)
+    stamp.add_argument("--build-number", required=True, type=non_negative_int)
     stamp.add_argument("--header", type=Path, default=VERSION_HEADER)
 
     notes = subparsers.add_parser("release-notes")
-    notes.add_argument("--build-number", required=True, type=int)
+    notes.add_argument("--build-number", required=True, type=non_negative_int)
     notes.add_argument("--build-date")
     notes.add_argument("--from-commit")
     notes.add_argument("--to-commit")
@@ -73,7 +93,7 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("FNQ3_RELEASE_NOTES_MODEL", DEFAULT_RELEASE_NOTES_MODEL),
         help="GitHub Models model id used for generated release-note highlights",
     )
-    notes.add_argument("--ai-timeout", type=int, default=45)
+    notes.add_argument("--ai-timeout", type=positive_int, default=45)
 
     return parser.parse_args()
 
@@ -391,6 +411,22 @@ def sanitize_generated_notes(text: str) -> str:
     return "\n".join(sanitized).strip()
 
 
+def github_models_choice_content(data: object) -> str:
+    if not isinstance(data, dict):
+        return ""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    return content if isinstance(content, str) else ""
+
+
 def github_models_highlights(context: str, *, model: str, timeout: int) -> str:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("FNQ3_GITHUB_TOKEN")
     if not token:
@@ -436,12 +472,10 @@ def github_models_highlights(context: str, *, model: str, timeout: int) -> str:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub Models request failed with HTTP {exc.code}: {detail}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError(f"GitHub Models request failed: {exc}") from exc
 
-    choices = data.get("choices") or []
-    if not choices:
-        return ""
-    content = choices[0].get("message", {}).get("content", "")
-    return sanitize_generated_notes(str(content))
+    return sanitize_generated_notes(github_models_choice_content(data))
 
 
 def normalized_subject_key(subject: str) -> str:
@@ -524,10 +558,13 @@ def generated_highlights(
     ai_timeout: int,
     highlights_file: Path | None = None,
 ) -> str:
-    if highlights_file is not None and highlights_file.exists():
+    if highlights_file is not None:
+        if not highlights_file.exists():
+            raise FileNotFoundError(f"release highlights file does not exist: {highlights_file}")
         highlights = sanitize_generated_notes(highlights_file.read_text(encoding="utf-8"))
-        if highlights:
-            return highlights
+        if not highlights:
+            raise ValueError(f"release highlights file is empty after sanitization: {highlights_file}")
+        return highlights
 
     commits = commit_entries(from_commit, target_commit)
     if not no_ai:

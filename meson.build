@@ -880,6 +880,7 @@ foreach map_name : standard_audio_zone_maps
   standard_audio_zone_sidecars += files('pkg/baseq3/maps/' + map_name + '.azb')
 endforeach
 root_package_assets = standard_audio_zone_sidecars + files(
+  'pkg/baseq3/fnq3-hud.json',
   'pkg/baseq3/sound/fnq3-weapon-sounds.sndshd',
   'pkg/missionpack/sound/fnq3-weapon-sounds.sndshd',
 )

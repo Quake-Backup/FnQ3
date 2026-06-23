@@ -97,6 +97,108 @@ class AudioZoneSweepPlanningTests(unittest.TestCase):
             self.assertEqual(manifest["summary"]["planned"], 1)
             self.assertIn("arena.bsp", report_csv.read_text(encoding="utf-8"))
 
+    def test_relative_root_must_contain_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            relative_root = root / "baseq3"
+            relative_root.mkdir()
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "q3dm1.bsp").write_bytes(b"IBSP")
+
+            options = audio_zone_sweep.SweepOptions(
+                tool=Path("fnq3-audiozonesc"),
+                inputs=(outside,),
+                output_root=root / "generated",
+                relative_root=relative_root,
+                override_root=None,
+                material_map=None,
+                report_json=None,
+                report_csv=None,
+                dry_run=True,
+                audit=False,
+                strict=False,
+                samples=512,
+                max_zones=None,
+            )
+
+            with self.assertRaisesRegex(ValueError, "not under --relative-root"):
+                audio_zone_sweep.run_sweep(options)
+
+    def test_rejects_duplicate_output_paths_without_relative_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first"
+            second = root / "second"
+            first.mkdir()
+            second.mkdir()
+            (first / "arena.bsp").write_bytes(b"IBSP")
+            (second / "arena.bsp").write_bytes(b"IBSP")
+
+            options = audio_zone_sweep.SweepOptions(
+                tool=Path("fnq3-audiozonesc"),
+                inputs=(first, second),
+                output_root=root / "generated",
+                relative_root=None,
+                override_root=None,
+                material_map=None,
+                report_json=None,
+                report_csv=None,
+                dry_run=True,
+                audit=False,
+                strict=False,
+                samples=512,
+                max_zones=None,
+            )
+
+            with self.assertRaisesRegex(ValueError, "same output"):
+                audio_zone_sweep.run_sweep(options)
+
+    def test_missing_auxiliary_roots_are_reported_before_planning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            maps = root / "maps"
+            maps.mkdir()
+            (maps / "arena.bsp").write_bytes(b"IBSP")
+
+            options = audio_zone_sweep.SweepOptions(
+                tool=Path("fnq3-audiozonesc"),
+                inputs=(maps,),
+                output_root=root / "generated",
+                relative_root=None,
+                override_root=root / "missing-overrides",
+                material_map=root / "missing-materials.txt",
+                report_json=None,
+                report_csv=None,
+                dry_run=True,
+                audit=False,
+                strict=False,
+                samples=512,
+                max_zones=None,
+            )
+
+            with self.assertRaisesRegex(FileNotFoundError, "--override-root is not a directory"):
+                audio_zone_sweep.run_sweep(options)
+
+            options = audio_zone_sweep.SweepOptions(
+                tool=Path("fnq3-audiozonesc"),
+                inputs=(maps,),
+                output_root=root / "generated",
+                relative_root=None,
+                override_root=None,
+                material_map=root / "missing-materials.txt",
+                report_json=None,
+                report_csv=None,
+                dry_run=True,
+                audit=False,
+                strict=False,
+                samples=512,
+                max_zones=None,
+            )
+
+            with self.assertRaisesRegex(FileNotFoundError, "--material-map is not a file"):
+                audio_zone_sweep.run_sweep(options)
+
 
 class AudioZoneSweepAuditParseTests(unittest.TestCase):
     def test_parse_audit_output_extracts_counts_profile_and_warnings(self) -> None:
@@ -148,6 +250,55 @@ class AudioZoneSweepAuditParseTests(unittest.TestCase):
         )
 
         self.assertEqual(audit["warnings"], [])
+
+    def test_parse_audit_output_keeps_non_finite_values_out_of_json_numbers(self) -> None:
+        audit = audio_zone_sweep.parse_audit_output(
+            "\n".join(
+                [
+                    "lookup profile samples=512 hits=1 nsPerSample=1.0e309",
+                    "confidence overall=nan anomaly=1.0e309 grade=unstable",
+                ]
+            )
+        )
+
+        self.assertEqual(audit["lookup"]["nsPerSample"], "1.0e309")
+        self.assertEqual(audit["confidence"]["overall"], "nan")
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            audio_zone_sweep.write_manifest_json(report, {"runs": [{"audit": audit}]})
+            text = report.read_text(encoding="utf-8")
+
+        self.assertNotIn("Infinity", text)
+        self.assertNotIn("NaN", text)
+
+    def test_csv_writer_escapes_spreadsheet_formula_cells(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.csv"
+            audio_zone_sweep.write_manifest_csv(
+                report,
+                {
+                    "runs": [
+                        {
+                            "map": " =cmd",
+                            "output": "+out",
+                            "override": "@override",
+                            "status": "-planned",
+                            "audit": {
+                                "warnings": ["=warning"],
+                                "confidence": {"grade": "@risk"},
+                            },
+                        }
+                    ]
+                },
+            )
+            text = report.read_text(encoding="utf-8")
+
+        self.assertIn("' =cmd", text)
+        self.assertIn("'+out", text)
+        self.assertIn("'@override", text)
+        self.assertIn("'-planned", text)
+        self.assertIn("'=warning", text)
+        self.assertIn("'@risk", text)
 
 
 if __name__ == "__main__":

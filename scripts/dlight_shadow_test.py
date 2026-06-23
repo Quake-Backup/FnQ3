@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -13,6 +14,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = ROOT / ".tmp" / "dlight-shadow-tests"
 CLIENT_NAME_RE = re.compile(r"^fnquake3(?:\.[A-Za-z0-9_]+)?(?:\.exe)?$", re.IGNORECASE)
+CVAR_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+Q3_COMMAND_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
+FS_GAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def command_to_string(command: list[str]) -> str:
@@ -35,6 +39,41 @@ def q3_quote(value: object) -> str:
 def sanitize(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip())
     return cleaned.strip("-") or "item"
+
+
+def validate_q3_command_token(value: str, option: str) -> str:
+    token = value.strip()
+    parts = token.split("/")
+    if (
+        not Q3_COMMAND_TOKEN_RE.fullmatch(token)
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise ValueError(f"{option} must be a safe Quake 3 qpath token")
+    return token
+
+
+def validate_fs_game(value: str) -> str:
+    name = value.strip()
+    if not name:
+        return ""
+    if (
+        not FS_GAME_RE.fullmatch(name)
+        or name in {".", ".."}
+        or name.startswith(".")
+    ):
+        raise ValueError("--fs-game must be a single safe mod directory name")
+    return name
+
+
+def validate_cvar_assignment(name: str, value: str) -> tuple[str, str]:
+    cvar = name.strip()
+    if not cvar:
+        raise ValueError("--extra-set cvar name must not be empty")
+    if not CVAR_NAME_RE.fullmatch(cvar):
+        raise ValueError(f"--extra-set cvar name is not safe: {name!r}")
+    if any(char in value for char in ("\r", "\n", "\x00", ";")):
+        raise ValueError(f"--extra-set value for {cvar!r} contains an unsafe control character")
+    return cvar, value.strip()
 
 
 def resolve_path(value: str | None) -> Path | None:
@@ -80,11 +119,26 @@ def parse_extra_sets(values: list[str]) -> dict[str, str]:
         if "=" not in item:
             raise ValueError(f"--extra-set expects NAME=VALUE, got {item!r}")
         name, value = item.split("=", 1)
-        name = name.strip()
-        if not name:
-            raise ValueError("--extra-set cvar name must not be empty")
-        result[name] = value.strip()
+        name, value = validate_cvar_assignment(name, value)
+        result[name] = value
     return result
+
+
+def require_finite(value: float, option: str) -> None:
+    if not math.isfinite(value):
+        raise ValueError(f"{option} must be finite")
+
+
+def require_positive(value: float, option: str) -> None:
+    require_finite(value, option)
+    if value <= 0:
+        raise ValueError(f"{option} must be positive")
+
+
+def require_non_negative(value: float, option: str) -> None:
+    require_finite(value, option)
+    if value < 0:
+        raise ValueError(f"{option} must be non-negative")
 
 
 def write_config(
@@ -243,6 +297,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--max-lights must be at least 1")
     if args.resolution < 64:
         parser.error("--resolution must be at least 64")
+    try:
+        args.fs_game = validate_fs_game(args.fs_game)
+        args.map = validate_q3_command_token(args.map, "--map")
+        require_positive(args.intensity, "--intensity")
+        require_positive(args.distance, "--distance")
+        require_finite(args.height, "--height")
+        require_non_negative(args.seconds, "--seconds")
+        require_positive(args.timeout, "--timeout")
+    except ValueError as exc:
+        parser.error(str(exc))
     return args
 
 

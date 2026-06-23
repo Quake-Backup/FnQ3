@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -36,6 +37,14 @@ class SweepOptions:
 
 def normalize_path(path: Path) -> Path:
     return path.expanduser().resolve()
+
+
+def path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def path_with_exe_suffix(path: Path) -> Path:
@@ -103,6 +112,40 @@ def output_path_for_bsp(bsp: Path, output_root: Path, relative_root: Path | None
     return output_root / relative
 
 
+def validate_sweep_paths(
+    maps: Sequence[Path],
+    output_root: Path,
+    relative_root: Path | None,
+    override_root: Path | None,
+    material_map: Path | None,
+) -> None:
+    if relative_root is not None:
+        if not relative_root.is_dir():
+            raise FileNotFoundError(f"--relative-root is not a directory: {relative_root}")
+        outside = [bsp for bsp in maps if not path_is_relative_to(bsp, relative_root)]
+        if outside:
+            raise ValueError(
+                "BSP input is not under --relative-root: "
+                + ", ".join(str(path) for path in outside[:4])
+            )
+
+    if override_root is not None and not override_root.is_dir():
+        raise FileNotFoundError(f"--override-root is not a directory: {override_root}")
+    if material_map is not None and not material_map.is_file():
+        raise FileNotFoundError(f"--material-map is not a file: {material_map}")
+
+    outputs: dict[Path, Path] = {}
+    for bsp in maps:
+        output = output_path_for_bsp(bsp, output_root, relative_root)
+        previous = outputs.get(output)
+        if previous is not None:
+            raise ValueError(
+                f"multiple BSP inputs would write the same output {output}: "
+                f"{previous} and {bsp}; pass --relative-root to preserve subdirectories"
+            )
+        outputs[output] = bsp
+
+
 def matching_override_path(
     bsp: Path,
     override_root: Path | None,
@@ -164,14 +207,26 @@ def parse_key_values(text: str) -> dict[str, int | float | str]:
     for match in re.finditer(r"(?:^|\s)([A-Za-z][A-Za-z0-9]*)=([^,\s]+)", text):
         key = match.group(1)
         raw = match.group(2)
-        try:
-            if "." in raw:
-                values[key] = float(raw)
-            else:
-                values[key] = int(raw)
-        except ValueError:
-            values[key] = raw
+        values[key] = parse_audit_scalar(raw)
     return values
+
+
+def parse_audit_scalar(raw: str) -> int | float | str:
+    try:
+        if any(marker in raw.lower() for marker in (".", "e")):
+            parsed_float = float(raw)
+            return parsed_float if math.isfinite(parsed_float) else raw
+        return int(raw)
+    except ValueError:
+        return raw
+
+
+def finite_float(raw: str) -> float | None:
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def parse_audit_output(stdout: str) -> dict[str, object]:
@@ -199,7 +254,9 @@ def parse_audit_output(stdout: str) -> dict[str, object]:
         elif line.startswith("bounds "):
             match = re.search(r"summed volume\s+([0-9.+\-eE]+)", line)
             if match:
-                summary["summedVolume"] = float(match.group(1))
+                value = finite_float(match.group(1))
+                if value is not None:
+                    summary["summedVolume"] = value
         elif line.startswith("presets:"):
             summary["presets"] = parse_count_line(line)
         elif line.startswith("materials:"):
@@ -210,22 +267,28 @@ def parse_audit_output(stdout: str) -> dict[str, object]:
             portal_values = parse_key_values(line)
             openness = re.search(r"openness min/avg/max=([0-9.+\-eE]+)/([0-9.+\-eE]+)/([0-9.+\-eE]+)", line)
             if openness:
-                portal_values["opennessMin"] = float(openness.group(1))
-                portal_values["opennessAvg"] = float(openness.group(2))
-                portal_values["opennessMax"] = float(openness.group(3))
+                openness_values = [finite_float(openness.group(index)) for index in range(1, 4)]
+                if all(value is not None for value in openness_values):
+                    portal_values["opennessMin"] = openness_values[0]
+                    portal_values["opennessAvg"] = openness_values[1]
+                    portal_values["opennessMax"] = openness_values[2]
             summary["portals"] = portal_values
         elif line.startswith("portal tuning "):
             tuning_values = parse_key_values(line)
             distance = re.search(r"distance min/avg/max=([0-9.+\-eE]+)/([0-9.+\-eE]+)/([0-9.+\-eE]+)", line)
             max_blend = re.search(r"maxBlend min/avg/max=([0-9.+\-eE]+)/([0-9.+\-eE]+)/([0-9.+\-eE]+)", line)
             if distance:
-                tuning_values["distanceMin"] = float(distance.group(1))
-                tuning_values["distanceAvg"] = float(distance.group(2))
-                tuning_values["distanceMax"] = float(distance.group(3))
+                distance_values = [finite_float(distance.group(index)) for index in range(1, 4)]
+                if all(value is not None for value in distance_values):
+                    tuning_values["distanceMin"] = distance_values[0]
+                    tuning_values["distanceAvg"] = distance_values[1]
+                    tuning_values["distanceMax"] = distance_values[2]
             if max_blend:
-                tuning_values["maxBlendMin"] = float(max_blend.group(1))
-                tuning_values["maxBlendAvg"] = float(max_blend.group(2))
-                tuning_values["maxBlendMax"] = float(max_blend.group(3))
+                max_blend_values = [finite_float(max_blend.group(index)) for index in range(1, 4)]
+                if all(value is not None for value in max_blend_values):
+                    tuning_values["maxBlendMin"] = max_blend_values[0]
+                    tuning_values["maxBlendAvg"] = max_blend_values[1]
+                    tuning_values["maxBlendMax"] = max_blend_values[2]
             summary["portalTuning"] = tuning_values
         elif line.startswith("portal curves:"):
             summary["portalCurves"] = parse_count_line(line)
@@ -267,6 +330,7 @@ def run_sweep(options: SweepOptions) -> dict[str, object]:
     override_root = normalize_path(options.override_root) if options.override_root else None
     material_map = normalize_path(options.material_map) if options.material_map else None
     maps = discover_bsp_files(inputs)
+    validate_sweep_paths(maps, output_root, relative_root, override_root, material_map)
 
     runs: list[dict[str, object]] = []
     for bsp in maps:
@@ -374,7 +438,15 @@ def compact_counts(counts: object) -> str:
 
 def write_manifest_json(path: Path, manifest: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+
+
+def csv_cell(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    if value.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
 
 
 def write_manifest_csv(path: Path, manifest: dict[str, object]) -> None:
@@ -409,24 +481,23 @@ def write_manifest_csv(path: Path, manifest: dict[str, object]) -> None:
             lookup = audit.get("lookup") if isinstance(audit.get("lookup"), dict) else {}
             portals = audit.get("portals") if isinstance(audit.get("portals"), dict) else {}
             confidence = audit.get("confidence") if isinstance(audit.get("confidence"), dict) else {}
-            writer.writerow(
-                {
-                    "map": run.get("map", ""),
-                    "output": run.get("output", ""),
-                    "override": run.get("override", ""),
-                    "status": run.get("status", ""),
-                    "zones": audit.get("zones", ""),
-                    "warnings": " | ".join(str(item) for item in warnings),
-                    "materials": compact_counts(audit.get("materials")),
-                    "presets": compact_counts(audit.get("presets")),
-                    "portals": portals.get("total", ""),
-                    "lookupHits": lookup.get("hits", ""),
-                    "nsPerSample": lookup.get("nsPerSample", ""),
-                    "confidenceOverall": confidence.get("overall", ""),
-                    "anomaly": confidence.get("anomaly", ""),
-                    "confidenceGrade": confidence.get("grade", ""),
-                }
-            )
+            row = {
+                "map": run.get("map", ""),
+                "output": run.get("output", ""),
+                "override": run.get("override", ""),
+                "status": run.get("status", ""),
+                "zones": audit.get("zones", ""),
+                "warnings": " | ".join(str(item) for item in warnings),
+                "materials": compact_counts(audit.get("materials")),
+                "presets": compact_counts(audit.get("presets")),
+                "portals": portals.get("total", ""),
+                "lookupHits": lookup.get("hits", ""),
+                "nsPerSample": lookup.get("nsPerSample", ""),
+                "confidenceOverall": confidence.get("overall", ""),
+                "anomaly": confidence.get("anomaly", ""),
+                "confidenceGrade": confidence.get("grade", ""),
+            }
+            writer.writerow({key: csv_cell(value) for key, value in row.items()})
 
 
 def default_report_json(output_root: Path) -> Path:

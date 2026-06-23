@@ -39,6 +39,9 @@ PROMOTION_MODERN_TIER_DIAGNOSTICS = {
     "GL46": ("gl46Executor", "gl46Support", False),
 }
 PROMOTION_REQUIRED_FEATURE_STATUS = "covered"
+PROMOTION_VALID_FEATURE_STATUSES = frozenset(
+    {"covered", "partially covered", "missing"}
+)
 PROMOTION_OWNERSHIP_PROFILE = "glx-ownership"
 PROMOTION_DOC_REQUIRED_TEXT = (
     "Migration Alias Plan",
@@ -61,16 +64,23 @@ PROMOTION_ROLLBACK_REQUIRED_TRIGGER_TERMS = (
     "driver",
     "performance",
 )
+ROLLBACK_PACKAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def parse_feature_matrix(path: Path = FEATURE_MATRIX_PATH) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.startswith("| ") or line.startswith("|---"):
+        if not line.startswith("| "):
             continue
         columns = [column.strip() for column in line.strip().strip("|").split("|")]
         if len(columns) != 6 or columns[0] == "ID":
             continue
+        if all(set(column) <= {"-", ":"} for column in columns):
+            continue
+        if columns[3] not in PROMOTION_VALID_FEATURE_STATUSES:
+            raise ValueError(
+                f"GLx feature matrix row {columns[0]!r} has invalid status {columns[3]!r}"
+            )
         rows.append(
             {
                 "id": columns[0],
@@ -305,6 +315,14 @@ def _string_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _safe_rollback_package_name(value: str, label: str, package_id: str) -> str | None:
+    if not value:
+        return None
+    if not ROLLBACK_PACKAGE_ID_RE.fullmatch(value):
+        return f"{package_id} has unsafe {label}: {value!r}."
+    return None
+
+
 def _report_relative_path(path: Path) -> str:
     try:
         if path.is_relative_to(ROOT):
@@ -435,6 +453,10 @@ def check_rollback_package_metadata(
             blockers.append(f"{package_id} must have type rollback.")
         if not artifact_dir and not archive:
             blockers.append(f"{package_id} must name artifactDir or archive.")
+        for label, value in (("artifactDir", artifact_dir), ("archive", archive)):
+            unsafe = _safe_rollback_package_name(value, label, package_id)
+            if unsafe:
+                blockers.append(unsafe)
         if "opengl" not in legacy_renderers:
             blockers.append(f"{package_id} must list the legacy opengl renderer.")
         if not instructions:
@@ -552,9 +574,11 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
     modern_tier_diagnostics_ok = False
 
     def int_metric(value: object, default: int = 0) -> int:
+        if isinstance(value, bool):
+            return default
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return default
 
     if isinstance(evidence, dict):
@@ -591,14 +615,27 @@ def manifest_ownership_metrics(manifest: dict[str, object]) -> dict[str, object]
         modern_tier_diagnostics_found = bool(evidence.get("modernTierDiagnosticsFound"))
         modern_tier_diagnostics_ok = bool(evidence.get("modernTierDiagnosticsOk"))
 
-        modern_post_output_tier = bool(evidence.get("modernPostOutputTier"))
-        modern_post_output = bool(evidence.get("modernPostOutput"))
+        modern_post_output_tier = bool(product_tiers.intersection(PROMOTION_MODERN_POST_OUTPUT_TIERS))
+        modern_post_output = (
+            post_output_found
+            and post_output_modes == {"glx-owned"}
+            and post_output_post_nodes > 0
+            and post_output_outputs > 0
+            and post_output_executable_counts_found
+            and post_output_executable_nodes > 0
+            and post_output_executable_outputs > 0
+            and post_output_legacy_fallback == 0
+            and modern_post_output_tier
+        )
+        zero_delegation = (
+            found and max_calls == 0 and max_items == 0 and diagnostic_failures == 0
+        )
         return {
             "found": found,
             "calls": max_calls,
             "items": max_items,
             "diagnosticFailures": diagnostic_failures,
-            "zeroDelegation": bool(evidence.get("zeroDelegation")),
+            "zeroDelegation": zero_delegation,
             "postOutputFound": post_output_found,
             "postOutputMode": ",".join(sorted(post_output_modes)),
             "postOutputPostNodes": post_output_post_nodes,

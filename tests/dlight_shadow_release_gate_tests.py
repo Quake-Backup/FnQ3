@@ -423,6 +423,41 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
             any("shadow manager" in failure for failure in report["failures"])
         )
 
+    def test_runtime_sweep_rejects_boolean_shadow_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_source_defaults(root)
+            evidence = complete_evidence()
+            (root / "glx-manifest.json").write_text(
+                json.dumps(runtime_manifest("glx")),
+                encoding="utf-8",
+            )
+            manifest = runtime_manifest("vulkan")
+            shadow_run = manifest["runs"][1]  # type: ignore[index]
+            assert isinstance(shadow_run, dict)
+            dlight_shadow = shadow_run["dlightShadow"]
+            assert isinstance(dlight_shadow, dict)
+            dlight_shadow["max"] = {"planned": True, "renderLights": True}
+            (root / "vulkan-manifest.json").write_text(
+                json.dumps(manifest),
+                encoding="utf-8",
+            )
+            evidence_path = root / "evidence.json"
+            evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+
+            report = dlight_shadow_release_gate.release_gate_report(
+                evidence_path,
+                source_root=root,
+            )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertTrue(
+            any(
+                "active dlight shadow log samples" in failure
+                for failure in report["failures"]
+            )
+        )
+
     def test_runtime_sweep_requires_surface_light_spot_log_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -645,6 +680,22 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(summary["status"], "ready")
+
+    def test_manifest_paths_must_not_escape_evidence_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            with self.assertRaisesRegex(ValueError, "must not contain"):
+                dlight_shadow_release_gate.load_manifest_value(
+                    "../outside.json",
+                    root,
+                )
+
+            with self.assertRaisesRegex(ValueError, "must not contain"):
+                dlight_shadow_release_gate.load_manifest_value(
+                    {"manifestPath": "../outside.json"},
+                    root,
+                )
 
 
 if __name__ == "__main__":

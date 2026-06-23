@@ -13,6 +13,7 @@ DEFAULT_CHANGELOG = ROOT / "docs" / "fnquake3" / "CHANGELOG.md"
 SECTION_RE = re.compile(r"^##\s+\[(?P<label>[^\]]+)\](?:\s+-\s+(?P<date>\d{4}-\d{2}-\d{2}))?\s*$")
 CATEGORY_RE = re.compile(r"^###\s+(?P<label>.+?)\s*$")
 BULLET_RE = re.compile(r"^\s*[-*]\s+(?P<text>.+?)\s*$")
+RELEASE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 
 CHANGELOG_CATEGORIES = [
     "Highlights",
@@ -157,11 +158,45 @@ def parse_args() -> argparse.Namespace:
     clear.add_argument("--changelog", type=Path, default=DEFAULT_CHANGELOG)
 
     release = subparsers.add_parser("prepare-release")
-    release.add_argument("--version", required=True, help="Release version to stamp")
-    release.add_argument("--date", default=_dt.date.today().isoformat())
+    release.add_argument("--version", required=True, type=release_label_arg, help="Release version to stamp")
+    release.add_argument("--date", default=_dt.date.today().isoformat(), type=release_date_arg)
     release.add_argument("--changelog", type=Path, default=DEFAULT_CHANGELOG)
 
     return parser.parse_args()
+
+
+def validate_release_label(value: str) -> str:
+    label = value.strip()
+    if not RELEASE_LABEL_RE.fullmatch(label):
+        raise ValueError(
+            "Release version must be a single safe label using letters, digits, '.', '_', '+', or '-'."
+        )
+    return label
+
+
+def validate_release_date(value: str) -> str:
+    date_value = value.strip()
+    try:
+        parsed = _dt.date.fromisoformat(date_value)
+    except ValueError as exc:
+        raise ValueError("Release date must use YYYY-MM-DD format.") from exc
+    if parsed.isoformat() != date_value:
+        raise ValueError("Release date must use YYYY-MM-DD format.")
+    return date_value
+
+
+def release_label_arg(value: str) -> str:
+    try:
+        return validate_release_label(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def release_date_arg(value: str) -> str:
+    try:
+        return validate_release_date(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def read_sections(path: Path) -> list[tuple[str, str | None, list[str]]]:
@@ -350,11 +385,14 @@ def clear_unreleased(path: Path) -> None:
 
 
 def prepare_release(path: Path, version: str, date_value: str) -> str:
+    version = validate_release_label(version)
+    date_value = validate_release_date(date_value)
     lines = path.read_text(encoding="utf-8").splitlines()
     unreleased_header = "## [Unreleased]"
     release_header = f"## [{version}] - {date_value}"
-    if any(line.strip() == release_header for line in lines):
-        raise ValueError(f"Release section already exists: {release_header}")
+    for label, _date, _lines in read_sections(path):
+        if label.lower() == version.lower():
+            raise ValueError(f"Release section already exists for version: {version}")
 
     try:
         unreleased_index = lines.index(unreleased_header)

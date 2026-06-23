@@ -22,6 +22,9 @@ DEFAULT_OUTPUT = ROOT / "meson" / "build"
 DEFAULT_SWEEP_ROOT = ROOT / ".tmp" / "runtime-sweeps"
 TEXTURE_CLASSIFICATION_MANIFEST_PATH = ROOT / "docs" / "fnquake3" / "GLX_TEXTURE_CLASSIFICATION_MANIFEST.json"
 RENDERER_NAME_RE = re.compile(r"^[A-Za-z1-9]+$")
+CVAR_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+Q3_COMMAND_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
+FS_GAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO = 0.20
 GLX_EXPECTED_PASS_SCHEDULE = (
     "frame-setup>sky-opaque-world>opaque-entities>dynamic-lights>dynamic-scene>transparent-layers>"
@@ -4010,6 +4013,52 @@ def validate_renderers(renderers: list[str]) -> None:
             )
 
 
+def validate_q3_command_token(value: str, option: str) -> str:
+    token = value.strip()
+    parts = token.split("/")
+    if (
+        not Q3_COMMAND_TOKEN_RE.fullmatch(token)
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise ValueError(f"{option} must contain safe Quake 3 qpath tokens")
+    return token
+
+
+def validate_q3_command_tokens(values: list[str], option: str) -> list[str]:
+    return [validate_q3_command_token(value, option) for value in values]
+
+
+def validate_fs_game(value: str) -> str:
+    name = value.strip()
+    if not name:
+        return ""
+    if (
+        not FS_GAME_RE.fullmatch(name)
+        or name in {".", ".."}
+        or name.startswith(".")
+    ):
+        raise ValueError("--fs-game must be a single safe mod directory name")
+    return name
+
+
+def validate_runtime_options(args: argparse.Namespace) -> None:
+    if args.width <= 0 or args.height <= 0:
+        raise ValueError("--width and --height must be positive")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        raise ValueError("--timeout must be finite and positive")
+    if args.switch_rounds < 1:
+        raise ValueError("--switch-rounds must be at least 1")
+    for attr in (
+        "startup_wait",
+        "map_wait",
+        "switch_wait",
+        "screenshot_wait",
+        "perf_sample_wait",
+    ):
+        if getattr(args, attr) < 0:
+            raise ValueError(f"--{attr.replace('_', '-')} must be non-negative")
+
+
 def parse_extra_sets(items: list[str]) -> dict[str, str]:
     cvars: dict[str, str] = {}
     for item in items:
@@ -4019,8 +4068,33 @@ def parse_extra_sets(items: list[str]) -> dict[str, str]:
         name = name.strip()
         if not name:
             raise ValueError(f"--extra-set has an empty cvar name: {item!r}")
+        if not CVAR_NAME_RE.fullmatch(name):
+            raise ValueError(f"--extra-set cvar name is not safe: {name!r}")
+        if any(char in value for char in ("\r", "\n", "\x00", ";")):
+            raise ValueError(f"--extra-set value for {name!r} contains an unsafe control character")
         cvars[name] = value
     return cvars
+
+
+def validate_screenshot_thresholds(max_rms: object, max_pixel_ratio: object) -> tuple[float, float]:
+    screenshot_max_rms = float(max_rms)
+    screenshot_max_pixel_ratio = float(max_pixel_ratio)
+    if not math.isfinite(screenshot_max_rms) or screenshot_max_rms < 0.0:
+        raise ValueError("--screenshot-max-rms must be finite and non-negative.")
+    if (
+        not math.isfinite(screenshot_max_pixel_ratio)
+        or not 0.0 <= screenshot_max_pixel_ratio <= 1.0
+    ):
+        raise ValueError("--screenshot-max-pixel-ratio must be a finite value between 0 and 1.")
+    return screenshot_max_rms, screenshot_max_pixel_ratio
+
+
+def validate_performance_growth_ratio(value: float | None) -> float:
+    if value is None:
+        return DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError("--performance-max-growth-ratio must be finite and non-negative.")
+    return value
 
 
 def apply_proof_defaults(args: argparse.Namespace, output_root: Path) -> None:
@@ -10807,8 +10881,11 @@ def performance_metric(aggregate: dict[str, object], key: str) -> object | None:
 
 def numeric_metric(aggregate: dict[str, object], key: str) -> float | None:
     value = performance_metric(aggregate, key)
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     return None
 
 
@@ -11520,17 +11597,22 @@ def evaluate_renderer_switch_lifecycle(manifest: dict[str, object], requirements
 
 
 def int_metric(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
 def float_metric(value: object, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
         return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return parsed if math.isfinite(parsed) else default
 
 
 def manifest_requires_world_proof(
@@ -17302,6 +17384,7 @@ def main() -> int:
 
     exe = resolve_exe(args.exe, allow_missing=args.dry_run)
     basepath = args.basepath.resolve() if args.basepath else exe.parent.resolve()
+    args.fs_game = validate_fs_game(args.fs_game)
     renderers = split_csv(args.renderers)
     switch_sequence = split_csv(args.switch_sequence) if args.switch_sequence else list(renderers)
     default_corpus_scene_ids = corpus_scene_ids_for_gate(args.gate, args.profile)
@@ -17317,16 +17400,17 @@ def main() -> int:
     )
     if maps_value is None:
         maps_value = PROFILE_MAPS.get(args.profile, "q3dm1")
-    maps = split_csv(maps_value)
+    maps = validate_q3_command_tokens(split_csv(maps_value), "--maps")
     demos_value = (
         args.demos
         if explicit_demos or not corpus_scene_ids
         else corpus_targets_csv(corpus_scene_ids, "demo")
     )
-    demos = split_csv(demos_value or "")
+    demos = validate_q3_command_tokens(split_csv(demos_value or ""), "--demos")
 
     validate_renderers(renderers)
     validate_renderers(switch_sequence)
+    validate_runtime_options(args)
 
     run_id = (
         datetime.now(timezone.utc).strftime("glx-sweep-%Y%m%d-%H%M%S-%f") +
@@ -17360,26 +17444,20 @@ def main() -> int:
         if args.proof_platform
         else runtime_platform_id()
     )
-    screenshot_max_rms = float(args.screenshot_max_rms)
-    screenshot_max_pixel_ratio = float(args.screenshot_max_pixel_ratio)
+    screenshot_max_rms, screenshot_max_pixel_ratio = validate_screenshot_thresholds(
+        args.screenshot_max_rms,
+        args.screenshot_max_pixel_ratio,
+    )
     if args.approve_screenshot_baselines and screenshot_baseline_dir is None:
         raise ValueError("--approve-screenshot-baselines requires --screenshot-baseline-dir.")
     if screenshot_diff_dir is not None and screenshot_baseline_dir is None:
         raise ValueError("--screenshot-diff-dir requires --screenshot-baseline-dir.")
-    if screenshot_max_rms < 0.0:
-        raise ValueError("--screenshot-max-rms must be non-negative.")
-    if not 0.0 <= screenshot_max_pixel_ratio <= 1.0:
-        raise ValueError("--screenshot-max-pixel-ratio must be between 0 and 1.")
     if args.perf_sample_wait < 0:
         raise ValueError("--perf-sample-wait must be non-negative.")
     if args.approve_performance_baseline and args.performance_baseline is None:
         raise ValueError("--approve-performance-baseline requires --performance-baseline.")
-    if args.performance_max_growth_ratio is not None and args.performance_max_growth_ratio < 0.0:
-        raise ValueError("--performance-max-growth-ratio must be non-negative.")
-    performance_growth_ratio = (
-        DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO
-        if args.performance_max_growth_ratio is None
-        else args.performance_max_growth_ratio
+    performance_growth_ratio = validate_performance_growth_ratio(
+        args.performance_max_growth_ratio
     )
     performance_budget = load_performance_budget(
         args.performance_budget,

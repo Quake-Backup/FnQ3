@@ -11,6 +11,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fnq3_meta import channel_metadata, to_json
 
 
+def non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FnQuake3 version metadata helper")
     parser.add_argument(
@@ -20,7 +30,7 @@ def parse_args() -> argparse.Namespace:
         default="summary",
     )
     parser.add_argument("--channel", choices=("release", "manual"), default="release")
-    parser.add_argument("--build-number", type=int)
+    parser.add_argument("--build-number", type=non_negative_int)
     parser.add_argument("--build-date", default=os.environ.get("FNQ3_BUILD_DATE"))
     parser.add_argument("--commit", default=os.environ.get("GITHUB_SHA"))
     parser.add_argument("--ref-name", default=os.environ.get("GITHUB_REF_NAME"))
@@ -32,14 +42,22 @@ def main() -> int:
     if args.build_number is None:
         env_build_number = os.environ.get("FNQ3_BUILD_NUMBER")
         if env_build_number:
-            args.build_number = int(env_build_number)
-    meta = channel_metadata(
-        args.channel,
-        build_number=args.build_number,
-        build_date=args.build_date,
-        commit=args.commit,
-        ref_name=args.ref_name,
-    )
+            try:
+                args.build_number = non_negative_int(env_build_number)
+            except argparse.ArgumentTypeError as exc:
+                print(f"Invalid FNQ3_BUILD_NUMBER: {exc}", file=sys.stderr)
+                return 2
+    try:
+        meta = channel_metadata(
+            args.channel,
+            build_number=args.build_number,
+            build_date=args.build_date,
+            commit=args.commit,
+            ref_name=args.ref_name,
+        )
+    except ValueError as exc:
+        print(f"version.py: {exc}", file=sys.stderr)
+        return 2
 
     if args.command == "json":
         print(to_json(meta))

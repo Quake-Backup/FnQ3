@@ -588,22 +588,36 @@ void SV_SpawnDemoServer( const char *demoName )
 		return;
 	}
 
-	// First message byte should be svc_gamestate.
+	// Skip the ack long, then drain any svc_serverCommand entries that can
+	// precede svc_gamestate (mirrors SV_SendClientGameState's layout).
+	// Leave the cursor sitting just after the svc_gamestate byte so that
+	// SV_DemoParseGamestate can read reliableSequence as its first long.
+	//
+	// IMPORTANT: do NOT MSG_Init the message here — MSG_Init zeroes cursize
+	// which causes every subsequent read to return -1 immediately.
+	MSG_ReadLong( &msg ); // lastClientCommand ack
 	{
-		int header = MSG_ReadLong( &msg ); (void)header; // lastClientCommand ack
-		int cmd    = MSG_ReadByte( &msg );
-		if ( cmd != svc_gamestate ) {
-			Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: expected svc_gamestate (%d), got %d — "
-				"corrupt or incompatible demo\n", svc_gamestate, cmd );
+		for ( ;; ) {
+			int cmd = MSG_ReadByte( &msg );
+			if ( msg.readcount > msg.cursize ) {
+				Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: svc_gamestate not found — "
+					"corrupt or incompatible demo\n" );
+				SV_Shutdown( "demo cinema init failed" );
+				return;
+			}
+			if ( cmd == svc_gamestate ) {
+				break;
+			}
+			if ( cmd == svc_serverCommand ) {
+				MSG_ReadLong( &msg );      // server command sequence
+				MSG_ReadBigString( &msg ); // command string — drain and discard
+				continue;
+			}
+			Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: unexpected byte %d before svc_gamestate\n", cmd );
 			SV_Shutdown( "demo cinema init failed" );
 			return;
 		}
 	}
-	// Re-init the message at the current cursor position and re-advance past
-	// the ack long and svc_gamestate byte we already consumed above.
-	MSG_Init( &msg, buf.data(), msg.cursize );
-	MSG_ReadLong( &msg ); // lastClientCommand ack
-	MSG_ReadByte( &msg ); // svc_gamestate
 
 	if ( !SV_DemoParseGamestate( &msg ) ) {
 		Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: failed to parse demo gamestate\n" );

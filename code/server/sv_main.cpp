@@ -1407,13 +1407,29 @@ void SV_Frame( int msec, int realMsec ) {
 
 	if (com_dedicated->integer) SV_BotFrame (sv.time);
 
-	// run the game simulation in chunks
+	// run the game simulation in chunks (or advance demo playback)
 	while ( frameMsec > 0 && sv.timeResidual >= frameMsec ) {
 		sv.timeResidual -= frameMsec;
-		sv.time += frameMsec;
 
-		// let everything in the world think and move
-		VM_Call( gvm, 1, GAME_RUN_FRAME, sv.time );
+		if ( sv.demoPlayback ) {
+			// Advance demo by one snapshot per frame tick.
+			// SV_DemoAdvance updates sv.time from the demo's serverTime.
+			// If the demo has ended we still advance sv.time to keep
+			// client connections alive (hold on last frame).
+			if ( sv.demoEnded ) {
+				sv.time += frameMsec;
+			} else {
+				SV_DemoAdvance();
+				// Reset svs.currFrame each frame so SV_BuildDemoSnapshot
+				// stages a fresh copy of demoEnts into snapshot storage.
+				svs.currFrame = nullptr;
+			}
+		} else {
+			sv.time += frameMsec;
+
+			// let everything in the world think and move
+			VM_Call( gvm, 1, GAME_RUN_FRAME, sv.time );
+		}
 	}
 
 	if ( com_speeds->integer ) {

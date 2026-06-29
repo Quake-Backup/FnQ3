@@ -94,6 +94,20 @@ typedef struct {
 	int				time;
 
 	byte			baselineUsed[ MAX_GENTITIES ];
+
+	// demo cinema playback state (sv_demo_play.cpp)
+	qboolean		demoPlayback;				// server is replaying a demo file
+	fileHandle_t	demoFile;					// open demo file handle
+	int				demoClientNum;				// recorded player's clientNum from demo header
+	int				demoChecksumFeed;			// checksumFeed from demo header
+	qboolean		demoEnded;					// EOF reached, holding on last frame
+	int				demoMessageSequence;		// sequence counter from the demo stream
+	playerState_t	demoPS;						// current decoded playerState
+	entityState_t	demoPrevPS_base;			// previous playerState for delta decoding
+	entityState_t	demoEnts[MAX_GENTITIES];	// current decoded entity states
+	int				demoNumEnts;				// number of valid entries in demoEnts[]
+	entityState_t	demoPrevEnts[MAX_GENTITIES];// previous entity states for delta decoding
+	playerState_t	demoPrevPS;					// previous playerState for delta decoding
 } server_t;
 
 typedef struct {
@@ -362,7 +376,18 @@ void SV_UpdateConfigstrings( client_t *client );
 void SV_SetUserinfo( int index, const char *val );
 void SV_GetUserinfo( int index, char *buffer, int bufferSize );
 
+void SV_Startup( void );
+void SV_ChangeMaxClients( void );
+void SV_ClearServer( void );
 void SV_SpawnServer( const char *mapname, qboolean killBots );
+
+//
+// sv_demo_play.cpp
+//
+void SV_SpawnDemoServer( const char *demoName );
+void SV_DemoAdvance( void );
+void SV_BuildDemoSnapshot( clientSnapshot_t *frame );
+void SV_PlayDemo_f( void );
 
 
 

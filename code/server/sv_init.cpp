@@ -291,7 +291,7 @@ NOT cause this to be called, unless the game is exited to
 the menu system first.
 ===============
 */
-static void SV_Startup( void ) {
+void SV_Startup( void ) {
 	if ( svs.initialized ) {
 		Com_Error( ERR_FATAL, "SV_Startup: svs.initialized" );
 	}
@@ -321,7 +321,7 @@ static void SV_Startup( void ) {
 SV_ChangeMaxClients
 ==================
 */
-static void SV_ChangeMaxClients( void ) {
+void SV_ChangeMaxClients( void ) {
 	client_t *oldClients;
 	int		maxclients;
 	int		count;
@@ -383,7 +383,7 @@ static void SV_ChangeMaxClients( void ) {
 SV_ClearServer
 ================
 */
-static void SV_ClearServer( void ) {
+void SV_ClearServer( void ) {
 	for ( int index : SV_Indices( MAX_CONFIGSTRINGS ) ) {
 		SV_ZFree( sv.configstrings[index] );
 	}

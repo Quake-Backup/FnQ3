@@ -1142,14 +1142,17 @@ gotnewcl:
 	}
 
 	// get the game a chance to reject this connection or modify the userinfo
-	denied = VM_Call( gvm, 3, GAME_CLIENT_CONNECT, clientNum, qtrue, qfalse ); // firstTime = qtrue
-	if ( denied ) {
-		// we can't just use VM_ArgPtr, because that is only valid inside a VM_Call
-		const char *str = static_cast<const char *>( GVM_ArgPtr( denied ) );
+	// (skipped in demo cinema mode: no game VM is running)
+	if ( !sv.demoPlayback ) {
+		denied = VM_Call( gvm, 3, GAME_CLIENT_CONNECT, clientNum, qtrue, qfalse ); // firstTime = qtrue
+		if ( denied ) {
+			// we can't just use VM_ArgPtr, because that is only valid inside a VM_Call
+			const char *str = static_cast<const char *>( GVM_ArgPtr( denied ) );
 
-		NET_OutOfBandPrint( NS_SERVER, from, "print\n%s\n", str );
-		Com_DPrintf( "Game rejected a connection: %s.\n", str );
-		return;
+			NET_OutOfBandPrint( NS_SERVER, from, "print\n%s\n", str );
+			Com_DPrintf( "Game rejected a connection: %s.\n", str );
+			return;
+		}
 	}
 
 	if ( sv_clientTLD->integer ) {
@@ -1383,7 +1386,10 @@ static void SV_SendClientGameState( client_t *client ) {
 	client->gotCP = qfalse;
 
 	// to start generating delta for packet entities
-	client->gentity = SV_GentityNum( SV_ClientIndex( client ) );
+	// (demo cinema: no gentities exist, SV_BuildDemoSnapshot bypasses this check)
+	if ( !sv.demoPlayback ) {
+		client->gentity = SV_GentityNum( SV_ClientIndex( client ) );
+	}
 
 	// when we receive the first packet from the client, we will
 	// notice that it is from a different serverid and that the
@@ -1444,7 +1450,13 @@ static void SV_SendClientGameState( client_t *client ) {
 
 	MSG_WriteByte( &msg, svc_EOF );
 
-	MSG_WriteLong( &msg, SV_ClientIndex( client ) );
+	// In demo cinema mode every spectator "becomes" the recorded player so
+	// cgame initializes identically to local demo playback.
+	if ( sv.demoPlayback ) {
+		MSG_WriteLong( &msg, sv.demoClientNum );
+	} else {
+		MSG_WriteLong( &msg, SV_ClientIndex( client ) );
+	}
 
 	// write the checksum feed
 	MSG_WriteLong( &msg, sv.checksumFeed );
@@ -1463,12 +1475,15 @@ static void SV_SendClientGameState( client_t *client ) {
 	}
 
 	// deliver this to the client
-	if ( client->demoRecordServerId != sv.serverId ) {
-		SV_StopDemoRecord( client, qfalse );
-	}
-	if ( sv_autoRecordDemos && sv_autoRecordDemos->integer ) {
-		if ( ( sv_autoRecordDemos->integer != 2 && sv_autoRecordDemos->integer != 4 ) || !sv_cheats->integer ) {
-			SV_StartDemoRecord( client );
+	if ( !sv.demoPlayback ) {
+		// Do not auto-record during demo cinema (would re-record the replay).
+		if ( client->demoRecordServerId != sv.serverId ) {
+			SV_StopDemoRecord( client, qfalse );
+		}
+		if ( sv_autoRecordDemos && sv_autoRecordDemos->integer ) {
+			if ( ( sv_autoRecordDemos->integer != 2 && sv_autoRecordDemos->integer != 4 ) || !sv_cheats->integer ) {
+				SV_StartDemoRecord( client );
+			}
 		}
 	}
 	SV_SendMessageToClient( &msg, client );
@@ -1504,17 +1519,23 @@ void SV_ClientEnterWorld( client_t *client ) {
 		SV_UpdateConfigstrings( client );
 	}
 
-	// set up the entity for the client
-	clientNum = SV_ClientIndex( client );
-	ent = SV_GentityNum( clientNum );
-	ent->s.number = clientNum;
-	client->gentity = ent;
-
 	client->deltaMessage = client->netchan.outgoingSequence - (PACKET_BACKUP + 1); // force delta reset
 	client->lastSnapshotTime = svs.time - 9999; // generate a snapshot immediately
 
-	// call the game begin function
-	VM_Call( gvm, 1, GAME_CLIENT_BEGIN, clientNum );
+	if ( sv.demoPlayback ) {
+		// Demo cinema: no game VM, no gentity needed.
+		// gentity stays nullptr; SV_BuildDemoSnapshot bypasses the gentity check.
+		client->gentity = nullptr;
+	} else {
+		// set up the entity for the client
+		clientNum = SV_ClientIndex( client );
+		ent = SV_GentityNum( clientNum );
+		ent->s.number = clientNum;
+		client->gentity = ent;
+
+		// call the game begin function
+		VM_Call( gvm, 1, GAME_CLIENT_BEGIN, clientNum );
+	}
 }
 
 

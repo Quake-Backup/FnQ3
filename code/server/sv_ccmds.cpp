@@ -1557,6 +1557,9 @@ void SV_AddOperatorCommands( void ) {
 	static constexpr std::array<operatorCommand_t, 1> mapCommands = {{
 		{ "map", SV_Map_f },
 	}};
+	static constexpr std::array<operatorCommand_t, 1> demoCommands = {{
+		{ "sv_playdemo", SV_PlayDemo_f },
+	}};
 #ifndef PRE_RELEASE_DEMO
 	static constexpr std::array<operatorCommand_t, 3> extraMapCommands = {{
 		{ "devmap", SV_Map_f },
@@ -1593,6 +1596,7 @@ void SV_AddOperatorCommands( void ) {
 #endif
 	SV_AddCommandSet( mapCommands );
 	SV_SetMapCompletionForCommands( mapCommands );
+	SV_AddCommandSet( demoCommands );
 #ifndef PRE_RELEASE_DEMO
 	SV_AddCommandSet( extraMapCommands );
 	SV_SetMapCompletionForCommands( extraMapCommands );

@@ -760,6 +760,13 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 	if ( client->state == CS_ZOMBIE )
 		return;
 
+	if ( sv.demoPlayback ) {
+		// Demo cinema path: populate frame from the decoded demo state and
+		// return early — no PVS culling, no game VM client lookup needed.
+		SV_BuildDemoSnapshot( frame );
+		return;
+	}
+
 	// grab the current playerState_t
 	ps = SV_GameClientNum( cl );
 	frame->ps = *ps;

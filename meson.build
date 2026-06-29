@@ -212,6 +212,7 @@ server_src = [
   'code/server/sv_bot.cpp',
   'code/server/sv_ccmds.cpp',
   'code/server/sv_client.cpp',
+  'code/server/sv_demo_play.cpp',
   'code/server/sv_filter.cpp',
   'code/server/sv_game.cpp',
   'code/server/sv_init.cpp',

@@ -134,7 +134,9 @@ void SV_SetConfigstring (int index, const char *val) {
 				continue;
 			}
 			// do not always send server info to all clients
-			if ( index == CS_SERVERINFO && ( SV_GentityNum( SV_ClientIndex( &client ) )->r.svFlags & SVF_NOSERVERINFO ) ) {
+			// sv.gentities is null in demo cinema mode (no game VM), so skip this check.
+			if ( index == CS_SERVERINFO && sv.gentities != nullptr &&
+				 ( SV_GentityNum( SV_ClientIndex( &client ) )->r.svFlags & SVF_NOSERVERINFO ) ) {
 				continue;
 			}
 

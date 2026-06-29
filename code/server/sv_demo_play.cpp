@@ -276,13 +276,18 @@ static qboolean SV_DemoParseSnapshot( msg_t *msg )
 	entityState_t	*oldEnt;
 	int				i;
 
-	// Drain leading server commands.
+	// Each demo message starts with the 4-byte lastClientCommand ack,
+	// then optional svc_serverCommand entries, then svc_snapshot.
+	// Skip the ack first or we read its bytes as command bytes.
+	MSG_ReadLong( msg ); // lastClientCommand ack
+
+	// Drain any leading server commands.
 	while ( 1 ) {
 		cmd = MSG_ReadByte( msg );
 
 		if ( cmd == svc_serverCommand ) {
 			int seq = MSG_ReadLong( msg );
-			(void)seq; // server-side we don't need the sequence for reliable tracking
+			(void)seq;
 			const char *s = MSG_ReadString( msg );
 			SV_DemoHandleServerCommand( s );
 			continue;
@@ -446,6 +451,7 @@ void SV_BuildDemoSnapshot( clientSnapshot_t *frame )
 			sf->ents[i] = &svs.snapshotEntities[index];
 			index = ( index + 1 ) % svs.numSnapshotEntities;
 		}
+		svs.currentStoragePosition = index;
 
 		svs.currFrame = sf;
 	}

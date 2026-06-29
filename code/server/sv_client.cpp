@@ -1029,7 +1029,9 @@ void SV_DirectConnect( const netadr_t *from ) {
 			if ( newcl->state >= CS_CONNECTED ) {
 				// call QVM disconnect function before calling connect again
 				// fixes issues such as disappearing CTF flags in unpatched mods
-				VM_Call( gvm, 1, GAME_CLIENT_DISCONNECT, SV_ClientIndex( newcl ) );
+				if ( !sv.demoPlayback ) {
+					VM_Call( gvm, 1, GAME_CLIENT_DISCONNECT, SV_ClientIndex( newcl ) );
+				}
 
 				// don't leak memory or file handles due to e.g. downloads in progress
 				SV_FreeClient( newcl );
@@ -1242,7 +1244,9 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 
 	// call the prog function for removing a client
 	// this will remove the body, among other things
-	VM_Call( gvm, 1, GAME_CLIENT_DISCONNECT, SV_ClientIndex( drop ) );
+	if ( !sv.demoPlayback ) {
+		VM_Call( gvm, 1, GAME_CLIENT_DISCONNECT, SV_ClientIndex( drop ) );
+	}
 
 	// add the disconnect command
 	if ( reason ) {
@@ -2257,7 +2261,9 @@ static void SV_UpdateUserinfo_f( client_t *cl ) {
 
 	SV_UserinfoChanged( cl, qtrue, qtrue ); // update userinfo, run filter
 	// call prog code to allow overrides
-	VM_Call( gvm, 1, GAME_CLIENT_USERINFO_CHANGED, SV_ClientIndex( cl ) );
+	if ( !sv.demoPlayback ) {
+		VM_Call( gvm, 1, GAME_CLIENT_USERINFO_CHANGED, SV_ClientIndex( cl ) );
+	}
 }
 
 extern int SV_Strlen( const char *str );
@@ -2440,7 +2446,7 @@ qboolean SV_ExecuteClientCommand( client_t *cl, const char *s ) {
 		Com_DPrintf( "client text ignored for %s: %s\n", cl->name, Cmd_Argv(0) );
 	} else {
 		// pass unknown strings to the game
-		if ( ucmd == nullptr && sv.state == SS_GAME && cl->state >= CS_PRIMED ) {
+		if ( !sv.demoPlayback && ucmd == nullptr && sv.state == SS_GAME && cl->state >= CS_PRIMED ) {
 			if ( gvm->forceDataMask )
 				Cmd_Args_Sanitize( "\n\r;" ); // handle ';' for OSP
 			else
@@ -2505,6 +2511,10 @@ void SV_ClientThink (client_t *cl, usercmd_t *cmd) {
 
 	if ( cl->state != CS_ACTIVE ) {
 		return;		// may have been kicked during the last usercmd
+	}
+
+	if ( sv.demoPlayback ) {
+		return; // no game VM in demo cinema mode; spectator usercmds are dropped
 	}
 
 	VM_Call( gvm, 1, GAME_CLIENT_THINK, SV_ClientIndex( cl ) );

@@ -38,28 +38,50 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 /*
 SV_DemoResolveFile
 
-Try to open <name> as a demo file, appending .dm_<proto> extensions in order
-of preference (same strategy as the client's CL_WalkDemoExt).  Returns
-FS_INVALID_HANDLE on failure and fills outPath with the resolved name.
+Try to open <name> as a demo file.  Search order:
+  1. demos/<name>.dm_<proto>        (client-recorded demos)
+  2. demos/server/<name>.dm_<proto> (server auto-recorded demos)
+  3. <name> verbatim                (absolute or already-extended path)
+
+On failure prints each path that was tried and returns FS_INVALID_HANDLE.
+On success fills outPath with the resolved path and returns the handle.
 */
 static fileHandle_t SV_DemoResolveFile( const char *name, char *outPath, int outSize )
 {
 	fileHandle_t f;
 	const int protocols[] = { NEW_PROTOCOL_VERSION, OLD_PROTOCOL_VERSION, 0 };
+	std::array<char, MAX_OSPATH> tried{};
+	bool anyTried = false;
 
-	// Try with each demo extension.
-	for ( int i = 0; protocols[i]; i++ ) {
-		Com_sprintf( outPath, outSize, "demos/%s." DEMOEXT "%d", name, protocols[i] );
-		FS_FOpenFileRead( outPath, &f, qtrue );
-		if ( f != FS_INVALID_HANDLE ) {
-			return f;
+	auto tryPath = [&]( const char *path ) -> fileHandle_t {
+		FS_FOpenFileRead( path, &f, qtrue );
+		if ( !anyTried ) {
+			Com_Printf( "  trying: %s ... %s\n", path, f != FS_INVALID_HANDLE ? "found" : "not found" );
+			anyTried = true;
+		} else {
+			Com_Printf( "  trying: %s ... %s\n", path, f != FS_INVALID_HANDLE ? "found" : "not found" );
 		}
+		if ( f != FS_INVALID_HANDLE ) {
+			Q_strncpyz( outPath, path, outSize );
+		}
+		return f;
+	};
+
+	for ( int i = 0; protocols[i]; i++ ) {
+		Com_sprintf( tried.data(), static_cast<int>( tried.size() ),
+			"demos/%s." DEMOEXT "%d", name, protocols[i] );
+		if ( tryPath( tried.data() ) != FS_INVALID_HANDLE ) return f;
 	}
 
-	// Try verbatim (caller may have supplied full filename).
-	Q_strncpyz( outPath, name, outSize );
-	FS_FOpenFileRead( outPath, &f, qtrue );
-	return f;
+	for ( int i = 0; protocols[i]; i++ ) {
+		Com_sprintf( tried.data(), static_cast<int>( tried.size() ),
+			"demos/server/%s." DEMOEXT "%d", name, protocols[i] );
+		if ( tryPath( tried.data() ) != FS_INVALID_HANDLE ) return f;
+	}
+
+	// Verbatim last — handles a fully-qualified path or already-extended name.
+	Q_strncpyz( tried.data(), name, static_cast<int>( tried.size() ) );
+	return tryPath( tried.data() );
 }
 
 
@@ -476,12 +498,28 @@ void SV_SpawnDemoServer( const char *demoName )
 	std::array<char, MAX_OSPATH> resolvedPath{};
 	std::array<byte, MAX_MSGLEN_BUF> buf{};
 	msg_t msg;
+	fileHandle_t demoFile;
 
 	Com_Printf( "------ Demo Cinema Initialization ------\n" );
 	Com_Printf( "Demo: %s\n", demoName );
 
-	// Close any currently open demo file.
+	// Resolve and open the demo file BEFORE touching the running game.
+	// If the file is not found we abort without disturbing the current server
+	// state, which prevents gvm from being left null while sv_running is 1.
+	demoFile = SV_DemoResolveFile( demoName, resolvedPath.data(), static_cast<int>( resolvedPath.size() ) );
+	if ( demoFile == FS_INVALID_HANDLE ) {
+		Com_Printf( S_COLOR_RED "sv_playdemo: could not find demo '%s'\n"
+			S_COLOR_WHITE "  Place demos in <gamedir>/demos/ or <gamedir>/demos/server/\n"
+			"  and omit the .dm_N extension.\n", demoName );
+		return;
+	}
+
+	Com_Printf( "Opened demo: %s\n", resolvedPath.data() );
+
+	// File is confirmed open — safe to tear down the existing game now.
+	// Close any previously open cinema demo file first.
 	SV_CloseFileHandle( sv.demoFile );
+	sv.demoFile = demoFile; // take ownership before any further early returns
 
 	// Shut down the existing game if it is running (frees gvm, etc.).
 	SV_ShutdownGameProgs();
@@ -520,8 +558,12 @@ void SV_SpawnDemoServer( const char *demoName )
 	}
 
 	const int preservedMaxClients = sv.maxclients;
+
+	// SV_ClearServer zeros sv including sv.demoFile, so grab the handle
+	// from our local copy before the clear and restore it afterwards.
 	SV_ClearServer();
 	sv.maxclients = preservedMaxClients;
+	sv.demoFile   = demoFile;
 
 	// Reset all configstrings.
 	for ( int index : SV_Indices( MAX_CONFIGSTRINGS ) ) {
@@ -538,19 +580,11 @@ void SV_SpawnDemoServer( const char *demoName )
 	Cvar_Set( "sv_pure", "0" );
 	sv.pure = 0;
 
-	// Open the demo file.
-	sv.demoFile = SV_DemoResolveFile( demoName, resolvedPath.data(), static_cast<int>( resolvedPath.size() ) );
-	if ( sv.demoFile == FS_INVALID_HANDLE ) {
-		Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: could not open demo '%s'\n", demoName );
-		return;
-	}
-
-	Com_Printf( "Opened demo: %s\n", resolvedPath.data() );
-
 	// Read and parse the gamestate from the demo header.
 	if ( !SV_DemoReadRawMessage( &msg, buf.data(), static_cast<int>( buf.size() ) ) ) {
-		Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: failed to read demo gamestate\n" );
-		SV_CloseFileHandle( sv.demoFile );
+		Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: failed to read demo gamestate — "
+			"file may be empty or truncated\n" );
+		SV_Shutdown( "demo cinema init failed" );
 		return;
 	}
 
@@ -559,22 +593,21 @@ void SV_SpawnDemoServer( const char *demoName )
 		int header = MSG_ReadLong( &msg ); (void)header; // lastClientCommand ack
 		int cmd    = MSG_ReadByte( &msg );
 		if ( cmd != svc_gamestate ) {
-			Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: expected svc_gamestate (%d), got %d\n",
-				svc_gamestate, cmd );
-			SV_CloseFileHandle( sv.demoFile );
+			Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: expected svc_gamestate (%d), got %d — "
+				"corrupt or incompatible demo\n", svc_gamestate, cmd );
+			SV_Shutdown( "demo cinema init failed" );
 			return;
 		}
 	}
-	// Re-init the message at the current position to parse the gamestate body.
-	// Actually we need to re-read: the message cursor is already past the header byte.
-	// Back up: re-open the message from scratch and re-advance past ack+cmd.
+	// Re-init the message at the current cursor position and re-advance past
+	// the ack long and svc_gamestate byte we already consumed above.
 	MSG_Init( &msg, buf.data(), msg.cursize );
 	MSG_ReadLong( &msg ); // lastClientCommand ack
 	MSG_ReadByte( &msg ); // svc_gamestate
 
 	if ( !SV_DemoParseGamestate( &msg ) ) {
 		Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: failed to parse demo gamestate\n" );
-		SV_CloseFileHandle( sv.demoFile );
+		SV_Shutdown( "demo cinema init failed" );
 		return;
 	}
 

@@ -87,7 +87,9 @@ void SV_UpdateConfigstrings(client_t *client)
 			continue;
 
 		// do not always send server info to all clients
-		if ( index == CS_SERVERINFO && ( SV_GentityNum( SV_ClientIndex( client ) )->r.svFlags & SVF_NOSERVERINFO ) ) {
+		// sv.gentities is null in demo cinema mode (no game VM), skip this check.
+		if ( index == CS_SERVERINFO && sv.gentities != nullptr &&
+			 ( SV_GentityNum( SV_ClientIndex( client ) )->r.svFlags & SVF_NOSERVERINFO ) ) {
 			continue;
 		}
 

@@ -724,10 +724,13 @@ static void SVC_Status( const netadr_t *from ) {
 
 	for ( SV_ClientSlot slot : SV_ClientSlots() ) {
 		if ( slot.client.state >= CS_CONNECTED ) {
-
-			ps = SV_GameClientNum( slot.index );
-			playerLength = Com_sprintf( player.data(), SV_ArraySize(player), "%i %i \"%s\"\n", 
-				ps->persistant[ PERS_SCORE ], slot.client.ping, slot.client.name );
+			int score = 0;
+			if ( sv.gameClients != nullptr ) {
+				ps = SV_GameClientNum( slot.index );
+				score = ps->persistant[ PERS_SCORE ];
+			}
+			playerLength = Com_sprintf( player.data(), SV_ArraySize(player), "%i %i \"%s\"\n",
+				score, slot.client.ping, slot.client.name );
 			
 			if ( statusLength + playerLength >= MAX_PACKETLEN-4 )
 				break; // can't hold any more

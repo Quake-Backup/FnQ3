@@ -456,8 +456,12 @@ void SV_BuildDemoSnapshot( clientSnapshot_t *frame )
 		svs.currFrame = sf;
 	}
 
-	frame->num_entities = sv.demoNumEnts;
-	for ( i = 0; i < sv.demoNumEnts; i++ ) {
+	int entsToSend = sv.demoNumEnts;
+	if ( entsToSend > MAX_SNAPSHOT_ENTITIES ) {
+		entsToSend = MAX_SNAPSHOT_ENTITIES;
+	}
+	frame->num_entities = entsToSend;
+	for ( i = 0; i < entsToSend; i++ ) {
 		frame->ents[i] = svs.currFrame->ents[i];
 	}
 }

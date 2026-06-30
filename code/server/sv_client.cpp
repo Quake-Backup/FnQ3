@@ -2203,7 +2203,7 @@ void SV_UserinfoChanged( client_t *cl, qboolean updateUserinfo, qboolean runFilt
 	// name for C code
 	val = Info_ValueForKey( cl->userinfo, "name" );
 	// truncate if it is too long as it may cause memory corruption in OSP mod
-	if ( gvm->forceDataMask && strlen( val ) >= buf.size() ) {
+	if ( gvm != nullptr && gvm->forceDataMask && strlen( val ) >= buf.size() ) {
 		Q_strncpyz( buf.data(), val, SV_ArraySize(buf) );
 		Info_SetValueForKey( cl->userinfo, "name", buf.data() );
 		val = buf.data();

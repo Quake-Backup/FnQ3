@@ -252,6 +252,11 @@ static void SV_MapRestart_f( void ) {
 		return;
 	}
 
+	if ( sv.demoPlayback ) {
+		Com_Printf( "Cannot map_restart during demo cinema. Use 'map <mapname>' to start a normal game.\n" );
+		return;
+	}
+
 	if ( sv.restartTime != 0 ) {
 		return;
 	}

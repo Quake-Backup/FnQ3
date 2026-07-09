@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import struct
+import os
 import subprocess
 import sys
 import tempfile
@@ -112,9 +113,15 @@ def build_minimal_bsp(shader_name: str) -> bytes:
 
 
 def resolve_tool() -> Path:
-    if len(sys.argv) < 2:
-        raise AssertionError("missing fnq3-audiozonesc path")
-    tool = Path(sys.argv[1])
+    raw_tool = os.environ.get("FNQ3_AUDIOZONESC")
+    if raw_tool is None and len(sys.argv) >= 2:
+        candidate = Path(sys.argv[1])
+        if "audiozonesc" in candidate.name.lower():
+            raw_tool = sys.argv[1]
+    if raw_tool is None:
+        raise unittest.SkipTest("fnq3-audiozonesc path was not provided")
+
+    tool = Path(raw_tool)
     if tool.parent == Path("."):
         local_tool = Path.cwd() / tool.name
         if local_tool.exists():
@@ -125,6 +132,12 @@ def resolve_tool() -> Path:
     return tool
 
 
+def tool_command(tool: Path) -> list[str]:
+    if tool.suffix.lower() == ".py":
+        return [sys.executable, str(tool)]
+    return [str(tool)]
+
+
 class AudioZoneMaterialMapTests(unittest.TestCase):
     def generate_and_dump(self, bsp_bytes: bytes, material_map: str | None = None) -> str:
         tool = resolve_tool()
@@ -133,7 +146,7 @@ class AudioZoneMaterialMapTests(unittest.TestCase):
             bsp = root / "generated.bsp"
             bsp.write_bytes(bsp_bytes)
             output = root / "generated.azb"
-            command = [str(tool), "--from-bsp", "-o", str(output)]
+            command = [*tool_command(tool), "--from-bsp", "-o", str(output)]
             if material_map is not None:
                 material_map_path = root / "audio-materials.txt"
                 material_map_path.write_text(material_map, encoding="utf-8")
@@ -150,7 +163,7 @@ class AudioZoneMaterialMapTests(unittest.TestCase):
             self.assertEqual(generated.returncode, 0, generated.stderr)
 
             dumped = subprocess.run(
-                [str(tool), "--dump", str(output)],
+                [*tool_command(tool), "--dump", str(output)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -175,7 +188,7 @@ class AudioZoneMaterialMapTests(unittest.TestCase):
 
             generated = subprocess.run(
                 [
-                    str(tool),
+                    *tool_command(tool),
                     "--from-bsp",
                     "--material-map",
                     str(material_map),
@@ -192,7 +205,7 @@ class AudioZoneMaterialMapTests(unittest.TestCase):
             self.assertIn("using 1 material rule", generated.stdout)
 
             dumped = subprocess.run(
-                [str(tool), "--dump", str(output)],
+                [*tool_command(tool), "--dump", str(output)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

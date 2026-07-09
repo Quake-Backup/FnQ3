@@ -1379,6 +1379,7 @@ void VK_SetFogParams( vkUniform_t *uniform, int *fogStage )
 		} else {
 			uniform->fogEyeT[1] = 1.0; // fog eye in
 		}
+		uniform->fogEyeT[2] = r_fogMode && r_fogMode->integer ? 1.0f : 0.0f;
 		// fragment data
 		Vector4Copy( fp->fogColor, uniform->fogColor );
 		*fogStage = 1;

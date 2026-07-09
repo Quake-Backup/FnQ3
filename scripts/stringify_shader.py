@@ -14,6 +14,26 @@ def shader_symbol_name(input_path: Path) -> str:
     return f"fallbackShader_{stem}"
 
 
+def c_string_escape(text: str) -> str:
+    escaped: list[str] = []
+    for char in text:
+        if char == "\\":
+            escaped.append("\\\\")
+        elif char == '"':
+            escaped.append('\\"')
+        elif char == "\t":
+            escaped.append("\\t")
+        elif char == "\b":
+            escaped.append("\\b")
+        elif char == "\f":
+            escaped.append("\\f")
+        elif ord(char) < 32 or ord(char) == 127:
+            escaped.append(f"\\{ord(char):03o}")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
+
+
 def stringify_shader(input_path: Path, output_path: Path) -> None:
     if input_path.expanduser().resolve() == output_path.expanduser().resolve():
         raise ValueError("shader input and output paths must be different")
@@ -23,7 +43,7 @@ def stringify_shader(input_path: Path, output_path: Path) -> None:
     ) as dst:
         dst.write(f"const char *{symbol} =\n")
         for line in src:
-            escaped = line.rstrip("\r\n").replace("\\", "\\\\").replace('"', '\\"')
+            escaped = c_string_escape(line.rstrip("\r\n"))
             dst.write(f'"{escaped}\\n"\n')
         dst.write(";\n")
 

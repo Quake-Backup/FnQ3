@@ -25,25 +25,20 @@ layout(location = 4) in vec2 fog_tex_coord;
 
 layout(location = 0) out vec4 out_color;
 
-//layout(constant_id = 0) const int alpha_test_func = 0;
+float FogFactor(vec2 fogCoord)
+{
+	if (fogEyeT.z < 0.5)
+		return texture(fog_texture, fogCoord).a;
+
+	float fogDistance = fogCoord.x - 0.001953125;
+	if (fogDistance <= 0.0 || fogCoord.y < 0.03125)
+		return 0.0;
+	if (fogCoord.y < 0.96875)
+		fogDistance *= (fogCoord.y - 0.03125) / 0.9375;
+	return sqrt(clamp(fogDistance * 8.0, 0.0, 1.0));
+}
 
 void main() {
-    //vec4 base = frag_color * texture(texture0, frag_tex_coord0);
-	//vec4 fog = texture(fog_texture, fog_tex_coord);
-
-    //if (alpha_test_func == 1) {
-    //    if (base.a == 0.0f) discard;
-    //} else if (alpha_test_func == 2) {
-    //    if (base.a >= 0.5f) discard;
-    //} else if (alpha_test_func == 3) {
-    //    if (base.a < 0.5f) discard;
-    //}
-
-	//fog = fog * fogColor;
-
-	//out_color = mix( base, fog, fog.a );
-
-	vec4 fog = texture(fog_texture, fog_tex_coord);
-//	fog.a = 1.0;
-	out_color = fog * fogColor;
+	float fogFactor = FogFactor(fog_tex_coord);
+	out_color = vec4(fogColor.rgb, fogColor.a * fogFactor);
 }

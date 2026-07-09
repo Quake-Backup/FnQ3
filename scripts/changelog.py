@@ -353,12 +353,7 @@ def clean_section_text(path: Path, target: str) -> str:
 
 def rewrite_section(path: Path, target: str, body_lines: list[str]) -> None:
     lines = path.read_text(encoding="utf-8").splitlines()
-    section_index = -1
-    for index, line in enumerate(lines):
-        match = SECTION_RE.match(line)
-        if match and match.group("label").lower() == target.lower():
-            section_index = index
-            break
+    section_index = section_header_index(lines, target)
     if section_index < 0:
         raise ValueError(f"Missing section header: ## [{target}]")
 
@@ -370,6 +365,14 @@ def rewrite_section(path: Path, target: str, body_lines: list[str]) -> None:
 
     updated_lines = lines[: section_index + 1] + body_lines + lines[next_section_index:]
     path.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8", newline="\n")
+
+
+def section_header_index(lines: list[str], target: str) -> int:
+    for index, line in enumerate(lines):
+        match = SECTION_RE.match(line)
+        if match and match.group("label").lower() == target.lower():
+            return index
+    return -1
 
 
 def cleanup_section(path: Path, target: str) -> None:
@@ -394,9 +397,8 @@ def prepare_release(path: Path, version: str, date_value: str) -> str:
         if label.lower() == version.lower():
             raise ValueError(f"Release section already exists for version: {version}")
 
-    try:
-        unreleased_index = lines.index(unreleased_header)
-    except ValueError as exc:
+    unreleased_index = section_header_index(lines, "Unreleased")
+    if unreleased_index < 0:
         raise ValueError(f"Missing section header: {unreleased_header}")
 
     next_section_index = len(lines)

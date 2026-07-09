@@ -3,6 +3,7 @@
 
 #include "glx_caps.h"
 #include "glx_render_ir.h"
+#include "glx_stream_logic.h"
 
 namespace glx {
 
@@ -45,12 +46,14 @@ struct StreamState {
 	char reason[96];
 	int ringMegabytes;
 	size_t ringBytes;
+	size_t allocationBytes;
 	size_t writeOffset;
 	void *mappedPtr;
-	void *frameSync;
+	void *frameSync[GLX_STREAM_PERSISTENT_FRAME_SLOTS];
 	GLuint buffer;
 	GLuint arrayBufferBinding;
 	GLuint elementArrayBufferBinding;
+	unsigned int activeFrameSlot;
 	qboolean ready;
 	qboolean persistentMapped;
 	qboolean syncReady;
@@ -74,6 +77,8 @@ struct StreamState {
 	unsigned int syncTimeouts;
 	unsigned int syncFailures;
 	unsigned int syncFenceSkips;
+	unsigned int persistentFrameAdvances;
+	unsigned int persistentFrameReuses;
 	unsigned int selfTests;
 	unsigned int arrayBufferBindingQueries;
 	unsigned int arrayBufferBindingCacheHits;

@@ -25,7 +25,8 @@ The harness currently checks:
 - Generated post-shader feature keys and final-pass eligibility covering both scene-linear output and display-referred SDR legacy gamma.
 - The broad `r_glxStreamDrawKeyMode 2` developer escape hatch staying behind hard multitexture and depth-fragment gates.
 - Capability version/extension parsing and tier selection.
-- Dynamic-stream strategy selection across persistent, map-range, and orphan/subdata fallbacks.
+- Dynamic-stream strategy selection across persistent, map-range, and orphan/subdata fallbacks, including overflow-safe alignment and three rotating persistent frame regions.
+- Stable full material-stage-key hashing for the bounded open-addressed GLSL program index.
 - Static-world packet run classification and draw-policy gating.
 
 `fnq3_glx_header_boundary` scans the pure GLx headers, the renderer-common GLx API/forwarding bridge, and the renderer facade. It fails if pure logic picks up legacy renderer includes, GL object typedefs, `qgl` references, renderer ABI types, or module/local implementation headers. It also keeps the bridge headers from growing a `tr_public.h`, `qgl`, GL typedef, or shutdown-enum dependency, and keeps `tr_glx_compat.h` from including back into `code/rendererglx`.

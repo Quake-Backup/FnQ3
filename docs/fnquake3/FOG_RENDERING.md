@@ -1,0 +1,104 @@
+# Fog Rendering
+
+## Compatibility Contract
+
+Map fog remains the Quake III brush-volume effect authored through shader
+`fogParms`. The renderer may improve how that effect is evaluated, but it must
+not change BSP fog assignment, fog-volume clipping, `depthForOpaque`, surface
+sorts, blend/depth state, demo data, protocol data, or VM behavior.
+
+The canonical density function is the original curve:
+
+1. subtract the historical `1 / 512` distance-coordinate bias;
+2. reject fragments outside the fog depth interval;
+3. shorten the distance when the eye-to-fragment segment crosses a fog plane;
+4. scale the authored distance coordinate by eight and clamp it to `[0, 1]`;
+5. take the square root.
+
+`code/renderercommon/tr_fog_math.h` owns the CPU reference implementation.
+The GLx and Vulkan GLSL helpers intentionally use the same constants.
+
+## Runtime Mode
+
+`r_fogMode` is archived, range-checked, and applies immediately:
+
+| Value | Behavior |
+| --- | --- |
+| `0` | Exact legacy path: 256 by 32 RGBA8 lookup, table-quantized CPU translucent fog, GLx client-array overlay, and legacy GLx fogged dynamic-light execution. |
+| `1` | Analytic path (default): continuous CPU and shader density, GLx position-only streamed overlay, and analytic GLx/Vulkan dynamic-light attenuation. |
+
+Changing the value does not reload the map or require `vid_restart`. The fog
+texture is always generated from the legacy table rather than the active mode,
+so switching back to `0` restores the original lookup instead of a quantized
+copy of the analytic curve.
+
+## Analytic Programmable Path
+
+The original renderer rasterized the density function into a 256 by 32 RGBA8
+texture. Every fogged fragment then performed a dependent lookup. The alpha
+channel limited density to 256 stored values, with additional approximation
+from the distance/depth grid and bilinear filtering.
+
+With `r_fogMode 1`, GLx and Vulkan evaluate the same curve in floating point.
+This has two
+practical benefits:
+
+- continuous fog density removes lookup-grid banding, especially on shallow
+  gradients and large `depthForOpaque` values;
+- fog-only, collapsed-material, and dynamic-light fragments no longer perform
+  a fog texture fetch. Vulkan retains the legacy descriptor in its dual-mode
+  shader layout so the cvar can switch live, but the analytic uniform branch
+  does not sample it.
+
+The GLx streamed fog overlay goes further. Its vertex shader derives fog
+coordinates from object position and uniform fog vectors, and its fragment
+shader supplies the fog color. The stream therefore uploads position and
+indices only. Relative to the old position/color/fog-UV payload, that removes
+12 bytes per vertex (4 color bytes and 8 UV bytes), a 43 percent reduction in
+per-vertex attribute upload, and skips the two CPU loops that prepared those
+attributes. If `r_fogMode 0` is selected, GLSL material execution is
+unavailable, or fog streaming fails, GLx returns to the existing
+client-array fog texture path.
+
+CPU fog adjustment for translucent stages follows the selected mode. The
+compatibility fog image and 256-entry density table remain available for
+`r_fogMode 0`, GL12, fixed-function, and other legacy fallback paths.
+
+## Why This Is Not Froxel Volumetric Fog
+
+A screen-space froxel volume can add light shafts and heterogeneous density,
+but it is not a drop-in replacement for Quake III fog brushes. A production
+implementation would need deterministic handling for overlapping fog brushes,
+portals and mirrors, transparent surfaces, view weapons, sky, MSAA/depth
+resolve, HDR composition, and renderer switching. It would also require a
+separate authored density/light model because retail BSP fog contains only a
+color and opaque distance.
+
+That remains a possible opt-in effect, but it should be built as a later
+lighting layer after depth/portal parity is proven. The analytic change is the
+high-value baseline: it improves every existing fog volume without inventing
+map data or weakening the fixed-function fallback.
+
+## Verification
+
+The renderer-independent logic test checks zero-density clipping, partial
+depth clipping, authored-curve midpoints, opaque saturation, and the preserved
+legacy lookup quantization. Vulkan shader sources are compiled for fog-only,
+single/triple-texture collapsed fog, and dynamic-light fog permutations before
+the checked-in SPIR-V is refreshed.
+
+Recommended local checks:
+
+```powershell
+meson compile -C meson/build
+meson test -C meson/build fnq3_glx_logic fnq3_glx_header_boundary --print-errorlogs
+python tests/glx/glx_runtime_sweep_tests.py
+python tests/vulkan/vk_runtime_sweep_tests.py
+```
+
+Runtime screenshot review should include `q3dm15` plus a fog-plane crossing
+view, a translucent particle/model inside fog, and a fogged dynamic light.
+Capture each camera with `r_fogMode 0` and `r_fogMode 1` in both GLx and
+Vulkan. Mode `0` is the pixel-parity reference; mode `1` is expected to differ
+at lookup quantization boundaries while preserving fog-plane clipping and
+opaque distance.

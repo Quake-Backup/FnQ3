@@ -6709,7 +6709,7 @@ void vk_initialize( void )
 		// standard pipelines
 		set_layouts[0] = vk.set_layout_uniform; // fog/dlight parameters
 		set_layouts[1] = vk.set_layout_sampler; // diffuse
-		set_layouts[2] = vk.set_layout_sampler; // lightmap / fog-only
+		set_layouts[2] = vk.set_layout_sampler; // lightmap / fog-only / depth fade
 		set_layouts[3] = vk.set_layout_sampler; // blend
 		set_layouts[4] = vk.set_layout_sampler; // collapsed fog texture
 		desc.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

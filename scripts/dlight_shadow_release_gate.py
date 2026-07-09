@@ -89,6 +89,14 @@ def report_path(path: Path, root: Path = ROOT) -> str:
         return str(path)
 
 
+def path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 def resolve_path(value: object, base_dir: Path) -> Path:
     path = Path(str(value))
     if path.is_absolute():
@@ -105,12 +113,18 @@ def resolve_path(value: object, base_dir: Path) -> Path:
 def resolve_manifest_path(value: object, base_dir: Path) -> Path:
     raw = str(value)
     path = Path(raw)
+    base = base_dir.resolve()
     if not path.is_absolute():
         if any(part == ".." for part in path.parts):
             raise ValueError(f"Manifest path must not contain '..': {raw}")
         if any(any(ord(char) < 32 or ord(char) == 127 for char in part) for part in path.parts):
             raise ValueError(f"Manifest path contains an unsafe control character: {raw!r}")
-    return resolve_path(value, base_dir)
+        resolved = (base / path).resolve()
+    else:
+        resolved = path.resolve()
+    if not path_is_relative_to(resolved, base):
+        raise ValueError(f"Manifest path must stay within evidence bundle: {raw}")
+    return resolved
 
 
 def status_text(record: object) -> str:

@@ -8,7 +8,7 @@ from typing import Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from release import REQUIRED_RELEASE_ARCHIVE_ENTRIES, validate_release_archive_contents
+from release import REQUIRED_RELEASE_ARCHIVE_ENTRIES, validate_release_archive_contents, validate_stage_tree
 from root_archive import (
     DEFAULT_AUDIO_ZONE_ASSETS,
     DEFAULT_WEAPON_SOUND_SHADER_ASSETS,
@@ -25,6 +25,8 @@ def verify_release_layout(root: Path) -> None:
     if root.is_file() and root.suffix.lower() == ".zip":
         validate_release_archive_contents(root)
         return
+
+    validate_stage_tree(root)
 
     missing_release_entries = [
         entry

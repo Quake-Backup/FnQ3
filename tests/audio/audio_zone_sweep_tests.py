@@ -97,6 +97,29 @@ class AudioZoneSweepPlanningTests(unittest.TestCase):
             self.assertEqual(manifest["summary"]["planned"], 1)
             self.assertIn("arena.bsp", report_csv.read_text(encoding="utf-8"))
 
+    def test_report_json_and_csv_paths_must_be_distinct(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            maps = root / "maps"
+            maps.mkdir()
+            (maps / "arena.bsp").write_bytes(b"IBSP")
+            report = root / "same-report"
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    audio_zone_sweep.parse_args(
+                        [
+                            "--dry-run",
+                            "--tool",
+                            "fnq3-audiozonesc",
+                            "--report-json",
+                            str(report),
+                            "--report-csv",
+                            str(report),
+                            str(maps),
+                        ]
+                    )
+
     def test_relative_root_must_contain_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -197,6 +220,67 @@ class AudioZoneSweepPlanningTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(FileNotFoundError, "--material-map is not a file"):
+                audio_zone_sweep.run_sweep(options)
+
+    def test_rejects_symlinked_bsp_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            maps = root / "maps"
+            maps.mkdir()
+            target = root / "outside.bsp"
+            target.write_bytes(b"IBSP")
+            link = maps / "linked.bsp"
+            try:
+                link.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+
+            options = audio_zone_sweep.SweepOptions(
+                tool=Path("fnq3-audiozonesc"),
+                inputs=(maps,),
+                output_root=root / "generated",
+                relative_root=None,
+                override_root=None,
+                material_map=None,
+                report_json=None,
+                report_csv=None,
+                dry_run=True,
+                audit=False,
+                strict=False,
+                samples=512,
+                max_zones=None,
+            )
+
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                audio_zone_sweep.run_sweep(options)
+
+    def test_matching_override_must_be_a_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseq3 = root / "baseq3"
+            maps = baseq3 / "maps"
+            maps.mkdir(parents=True)
+            bsp = maps / "q3dm1.bsp"
+            bsp.write_bytes(b"IBSP")
+            (maps / "q3dm1.audiozones").mkdir()
+
+            options = audio_zone_sweep.SweepOptions(
+                tool=Path("fnq3-audiozonesc"),
+                inputs=(maps,),
+                output_root=root / "generated",
+                relative_root=baseq3,
+                override_root=baseq3,
+                material_map=None,
+                report_json=None,
+                report_csv=None,
+                dry_run=True,
+                audit=False,
+                strict=False,
+                samples=512,
+                max_zones=None,
+            )
+
+            with self.assertRaisesRegex(ValueError, "override is not a file"):
                 audio_zone_sweep.run_sweep(options)
 
 

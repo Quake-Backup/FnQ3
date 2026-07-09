@@ -425,6 +425,9 @@ static qboolean GLX_Material_VertexSource( const MaterialStageKey &stageKey,
 	written = std::snprintf( out, outSize,
 		"#version 120\n"
 		"%s"
+		"uniform vec4 u_FogDistanceVector;\n"
+		"uniform vec4 u_FogDepthVector;\n"
+		"uniform float u_FogEyeT;\n"
 		"varying vec4 v_Color;\n"
 		"varying vec2 v_TexCoord0;\n"
 		"varying vec2 v_TexCoord1;\n"
@@ -506,7 +509,18 @@ static qboolean GLX_Material_VertexSource( const MaterialStageKey &stageKey,
 		"{\n"
 		"    gl_Position = ftransform();\n"
 		"    v_Color = GLX_PreparedColor();\n"
+		"#if GLX_MATERIAL_FOG_PASS\n"
+		"    float fogS = dot(gl_Vertex.xyz, u_FogDistanceVector.xyz) + u_FogDistanceVector.w;\n"
+		"    float fogT = dot(gl_Vertex.xyz, u_FogDepthVector.xyz) + u_FogDepthVector.w;\n"
+		"    if (u_FogEyeT < 0.0) {\n"
+		"        fogT = fogT < 1.0 ? 0.03125 : 0.03125 + 0.9375 * fogT / (fogT - u_FogEyeT);\n"
+		"    } else {\n"
+		"        fogT = fogT < 0.0 ? 0.03125 : 0.96875;\n"
+		"    }\n"
+		"    v_TexCoord0 = vec2(fogS, fogT);\n"
+		"#else\n"
 		"    v_TexCoord0 = GLX_PreparedTexCoord0();\n"
+		"#endif\n"
 		"    v_TexCoord1 = GLX_PreparedTexCoord1();\n"
 		"}\n",
 		languageDefines );
@@ -558,6 +572,8 @@ static void GLX_Material_LoadFunctions( MaterialState *state )
 	state->fns.UseProgram = reinterpret_cast<PFNGLXUSEPROGRAMPROC>( GLX_Material_GetProc( "glUseProgram" ) );
 	state->fns.GetUniformLocation = reinterpret_cast<PFNGLXGETUNIFORMLOCATIONPROC>( GLX_Material_GetProc( "glGetUniformLocation" ) );
 	state->fns.Uniform1i = reinterpret_cast<PFNGLXUNIFORM1IPROC>( GLX_Material_GetProc( "glUniform1i" ) );
+	state->fns.Uniform1f = reinterpret_cast<PFNGLXMATERIALUNIFORM1FPROC>( GLX_Material_GetProc( "glUniform1f" ) );
+	state->fns.Uniform4fv = reinterpret_cast<PFNGLXMATERIALUNIFORM4FVPROC>( GLX_Material_GetProc( "glUniform4fv" ) );
 	state->fns.DeleteProgram = reinterpret_cast<PFNGLXDELETEPROGRAMPROC>( GLX_Material_GetProc( "glDeleteProgram" ) );
 	state->fns.DeleteShader = reinterpret_cast<PFNGLXDELETESHADERPROC>( GLX_Material_GetProc( "glDeleteShader" ) );
 	state->fns.ObjectLabel = reinterpret_cast<PFNGLXMATERIALOBJECTLABELPROC>( GLX_Material_GetProc( "glObjectLabel" ) );
@@ -578,6 +594,8 @@ static qboolean GLX_Material_FunctionsReady( const MaterialState &state )
 		state.fns.UseProgram &&
 		state.fns.GetUniformLocation &&
 		state.fns.Uniform1i &&
+		state.fns.Uniform1f &&
+		state.fns.Uniform4fv &&
 		state.fns.DeleteProgram &&
 		state.fns.DeleteShader ? qtrue : qfalse;
 }
@@ -595,6 +613,9 @@ static void GLX_Material_ResetCounters( MaterialState *state )
 	state->unbinds = 0;
 	state->cacheHits = 0;
 	state->cacheMisses = 0;
+	state->hashProbes = 0;
+	state->hashCollisions = 0;
+	state->hashFallbackScans = 0;
 	state->compileAttempts = 0;
 	state->compileFailures = 0;
 	state->linkFailures = 0;
@@ -694,10 +715,14 @@ static qboolean GLX_Material_FragmentSource( const MaterialStageKey &stageKey,
 
 	switch ( key.mode ) {
 	case MaterialProgramMode::SingleTexture:
-	case MaterialProgramMode::Fog:
 		body =
 			"    vec4 base = texture2D(u_Texture0, v_TexCoord0);\n"
 			"    gl_FragColor = GLX_ApplyPreparedStageLanguage(base * v_Color);\n";
+		break;
+	case MaterialProgramMode::Fog:
+		body =
+			"    float fogFactor = GLX_AnalyticFogFactor(v_TexCoord0);\n"
+			"    gl_FragColor = vec4(u_FogColor.rgb, u_FogColor.a * fogFactor);\n";
 		break;
 	case MaterialProgramMode::MultiModulate:
 		body =
@@ -733,9 +758,17 @@ static qboolean GLX_Material_FragmentSource( const MaterialStageKey &stageKey,
 		"%s"
 		"uniform sampler2D u_Texture0;\n"
 		"uniform sampler2D u_Texture1;\n"
+		"uniform vec4 u_FogColor;\n"
 		"varying vec4 v_Color;\n"
 		"varying vec2 v_TexCoord0;\n"
 		"varying vec2 v_TexCoord1;\n"
+		"float GLX_AnalyticFogFactor(vec2 fogCoord)\n"
+		"{\n"
+		"    float fogDistance = fogCoord.x - 0.001953125;\n"
+		"    if (fogDistance <= 0.0 || fogCoord.y < 0.03125) return 0.0;\n"
+		"    if (fogCoord.y < 0.96875) fogDistance *= (fogCoord.y - 0.03125) / 0.9375;\n"
+		"    return sqrt(clamp(fogDistance * 8.0, 0.0, 1.0));\n"
+		"}\n"
 		"vec4 GLX_ApplyPreparedStageLanguage(vec4 color)\n"
 		"{\n"
 		"    vec4 prepared = color;\n"
@@ -1075,6 +1108,7 @@ static void GLX_Material_ResetRuntime( MaterialState *state, qboolean deleteProg
 	for ( int i = state->programCount; i < GLX_MATERIAL_PROGRAM_LIMIT; i++ ) {
 		state->programs[i] = {};
 	}
+	std::memset( state->programHashTable, 0, sizeof( state->programHashTable ) );
 
 	state->fns = {};
 	state->programCount = 0;
@@ -1084,33 +1118,91 @@ static void GLX_Material_ResetRuntime( MaterialState *state, qboolean deleteProg
 	GLX_Material_SetReason( state, "not initialized" );
 }
 
+static qboolean GLX_Material_IndexProgram( MaterialState *state, int programIndex )
+{
+	static_assert( ( GLX_MATERIAL_PROGRAM_HASH_SIZE &
+		( GLX_MATERIAL_PROGRAM_HASH_SIZE - 1 ) ) == 0,
+		"material hash table size must be a power of two" );
+
+	if ( !state || programIndex < 0 || programIndex >= state->programCount ) {
+		return qfalse;
+	}
+
+	const unsigned int mask = GLX_MATERIAL_PROGRAM_HASH_SIZE - 1u;
+	unsigned int slot = state->programs[programIndex].stageHash & mask;
+	for ( int probe = 0; probe < GLX_MATERIAL_PROGRAM_HASH_SIZE; probe++ ) {
+		if ( state->programHashTable[slot] == 0 ) {
+			state->programHashTable[slot] =
+				static_cast<unsigned short>( programIndex + 1 );
+			return qtrue;
+		}
+		slot = ( slot + 1u ) & mask;
+	}
+
+	return qfalse;
+}
+
 static MaterialProgram *GLX_Material_FindProgram( MaterialState *state,
 	const MaterialStageKey &stageKey )
 {
+	unsigned int hash;
+	unsigned int slot;
+	const unsigned int mask = GLX_MATERIAL_PROGRAM_HASH_SIZE - 1u;
+
 	if ( !state ) {
 		return nullptr;
 	}
+	hash = GLX_Material_StageKeyHash( stageKey );
 
 	/* Draws arrive sorted by shader, so consecutive binds usually repeat the
 	   same stage key; try the most recently found program before scanning. */
 	if ( state->lastFoundProgram >= 0 && state->lastFoundProgram < state->programCount ) {
 		MaterialProgram *last = &state->programs[state->lastFoundProgram];
 
-		if ( last->valid && GLX_Material_StageKeyEquals( last->stageKey, stageKey ) ) {
+		if ( last->valid && last->stageHash == hash &&
+			GLX_Material_StageKeyEquals( last->stageKey, stageKey ) ) {
 			state->cacheHits++;
 			return last;
 		}
 	}
 
-	for ( int i = 0; i < state->programCount; i++ ) {
-		if ( state->programs[i].valid &&
-			GLX_Material_StageKeyEquals( state->programs[i].stageKey, stageKey ) ) {
-			state->cacheHits++;
-			state->lastFoundProgram = i;
-			return &state->programs[i];
+	slot = hash & mask;
+	for ( int probe = 0; probe < GLX_MATERIAL_PROGRAM_HASH_SIZE; probe++ ) {
+		const unsigned int entry = state->programHashTable[slot];
+		state->hashProbes++;
+		if ( entry == 0 ) {
+			state->cacheMisses++;
+			return nullptr;
 		}
+
+		const int programIndex = static_cast<int>( entry ) - 1;
+		if ( programIndex < 0 || programIndex >= state->programCount ) {
+			break;
+		}
+
+		MaterialProgram *program = &state->programs[programIndex];
+		if ( program->valid && program->stageHash == hash &&
+			GLX_Material_StageKeyEquals( program->stageKey, stageKey ) ) {
+			state->cacheHits++;
+			state->lastFoundProgram = programIndex;
+			return program;
+		}
+		state->hashCollisions++;
+		slot = ( slot + 1u ) & mask;
 	}
 
+	/* A full/corrupt table must degrade to the old bounded scan, never make a
+	   valid compiled program unreachable. */
+	state->hashFallbackScans++;
+	for ( int i = 0; i < state->programCount; i++ ) {
+		MaterialProgram *program = &state->programs[i];
+		if ( program->valid && program->stageHash == hash &&
+			GLX_Material_StageKeyEquals( program->stageKey, stageKey ) ) {
+			state->cacheHits++;
+			state->lastFoundProgram = i;
+			return program;
+		}
+	}
 	state->cacheMisses++;
 	return nullptr;
 }
@@ -1155,6 +1247,7 @@ static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state,
 	*program = {};
 	program->stageKey = stageKey;
 	program->key = stageKey.program;
+	program->stageHash = GLX_Material_StageKeyHash( stageKey );
 	GLX_Material_StageKeyName( stageKey, keyName, sizeof( keyName ) );
 
 	if ( !GLX_Material_VertexSource( stageKey, vertexSource, sizeof( vertexSource ) ) ||
@@ -1193,6 +1286,10 @@ static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state,
 
 	program->texture0Uniform = state->fns.GetUniformLocation( program->program, "u_Texture0" );
 	program->texture1Uniform = state->fns.GetUniformLocation( program->program, "u_Texture1" );
+	program->fogDistanceVectorUniform = state->fns.GetUniformLocation( program->program, "u_FogDistanceVector" );
+	program->fogDepthVectorUniform = state->fns.GetUniformLocation( program->program, "u_FogDepthVector" );
+	program->fogEyeTUniform = state->fns.GetUniformLocation( program->program, "u_FogEyeT" );
+	program->fogColorUniform = state->fns.GetUniformLocation( program->program, "u_FogColor" );
 	state->fns.UseProgram( program->program );
 	if ( program->texture0Uniform >= 0 ) {
 		state->fns.Uniform1i( program->texture0Uniform, 0 );
@@ -1206,6 +1303,10 @@ static MaterialProgram *GLX_Material_CreateProgram( MaterialState *state,
 	program->valid = qtrue;
 	GLX_Material_LabelProgram( state, program );
 	state->programCount++;
+	state->lastFoundProgram = state->programCount - 1;
+	if ( !GLX_Material_IndexProgram( state, state->lastFoundProgram ) ) {
+		state->hashFallbackScans++;
+	}
 	GLX_Material_SetLastError( state, "" );
 
 	if ( state->r_glxMaterialDebug && state->r_glxMaterialDebug->integer ) {
@@ -1861,16 +1962,44 @@ qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &re
 	return GLX_Material_BindIR( state, GLX_Material_IRForRequest( request ) );
 }
 
-qboolean GLX_Material_BindFog( MaterialState *state )
+qboolean GLX_Material_BindFog( MaterialState *state,
+	const float *fogDistanceVector, const float *fogDepthVector, float fogEyeT,
+	const float *fogColor )
 {
 	MaterialRequest request {};
+	MaterialProgram *program;
+
+	if ( !state || !fogDistanceVector || !fogDepthVector || !fogColor ) {
+		return qfalse;
+	}
 
 	request.rgbGen = GLX_MATERIAL_RGBGEN_FOG;
 	request.alphaGen = GLX_MATERIAL_ALPHAGEN_IDENTITY;
 	request.tcGen0 = GLX_MATERIAL_TCGEN_FOG;
 	request.tcGen1 = GLX_MATERIAL_TCGEN_BAD;
 	request.fogPass = qtrue;
-	return GLX_Material_BindStage( state, request );
+	if ( !GLX_Material_BindStage( state, request ) || state->lastFoundProgram < 0 ||
+		state->lastFoundProgram >= state->programCount ) {
+		return qfalse;
+	}
+
+	program = &state->programs[state->lastFoundProgram];
+	if ( !program->valid || program->program != state->currentProgram ) {
+		return qfalse;
+	}
+	if ( program->fogDistanceVectorUniform >= 0 ) {
+		state->fns.Uniform4fv( program->fogDistanceVectorUniform, 1, fogDistanceVector );
+	}
+	if ( program->fogDepthVectorUniform >= 0 ) {
+		state->fns.Uniform4fv( program->fogDepthVectorUniform, 1, fogDepthVector );
+	}
+	if ( program->fogEyeTUniform >= 0 ) {
+		state->fns.Uniform1f( program->fogEyeTUniform, fogEyeT );
+	}
+	if ( program->fogColorUniform >= 0 ) {
+		state->fns.Uniform4fv( program->fogColorUniform, 1, fogColor );
+	}
+	return qtrue;
 }
 
 void GLX_Material_Unbind( MaterialState *state )
@@ -1917,6 +2046,8 @@ void GLX_Material_PrintInfo( const MaterialState &state )
 	RI().Printf( PRINT_ALL, "  material programs: %i/%i, attempts %u, binds %u, switches %u, unbinds %u, cache %u hits/%u misses\n",
 		state.programCount, GLX_MATERIAL_PROGRAM_LIMIT, state.bindAttempts, state.binds,
 		state.programSwitches, state.unbinds, state.cacheHits, state.cacheMisses );
+	RI().Printf( PRINT_ALL, "  material hash index: %u probes, %u collisions, %u fallback scans\n",
+		state.hashProbes, state.hashCollisions, state.hashFallbackScans );
 	RI().Printf( PRINT_ALL, "  material compiles: %u attempts, %u compile failures, %u link failures, precache %u/%u, bind failures %u, labels %u\n",
 		state.compileAttempts, state.compileFailures, state.linkFailures,
 		state.precacheFailures, state.precacheAttempts, state.bindFailures, state.debugLabels );

@@ -12,10 +12,33 @@ VERSION_HEADER = ROOT / "version" / "fnq3_version.h"
 _DEFINE_RE = re.compile(r"^\s*#define\s+([A-Z0-9_]+)\s+(.+?)\s*$")
 _COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _SAFE_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_SAFE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_WINDOWS_RESERVED_BASENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 def _strip_comments(raw_value: str) -> str:
-    return raw_value.split("//", 1)[0].strip()
+    in_quote = False
+    escaped = False
+    for index, char in enumerate(raw_value):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and in_quote:
+            escaped = True
+            continue
+        if char == '"':
+            in_quote = not in_quote
+            continue
+        if not in_quote and raw_value[index : index + 2] == "//":
+            return raw_value[:index].strip()
+    return raw_value.strip()
 
 
 def _parse_define_value(raw_value: str):
@@ -77,7 +100,11 @@ def base_metadata(path: Path = VERSION_HEADER) -> dict[str, object]:
 
 def normalize_date(value: str | None = None) -> tuple[str, str]:
     if value:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError("Build date must use YYYY-MM-DD format")
         day = _dt.date.fromisoformat(value)
+        if day.isoformat() != value:
+            raise ValueError("Build date must use YYYY-MM-DD format")
     else:
         day = _dt.datetime.now(_dt.timezone.utc).date()
     return day.isoformat(), day.strftime("%Y%m%d")
@@ -97,6 +124,8 @@ def safe_artifact_name(value: str) -> str:
     if (
         not _SAFE_ARTIFACT_RE.fullmatch(name)
         or name in {".", ".."}
+        or name.endswith((".", " "))
+        or name.split(".", 1)[0].upper() in _WINDOWS_RESERVED_BASENAMES
         or any(ord(char) < 32 or ord(char) == 127 for char in name)
     ):
         raise ValueError("Artifact directory name must be a single safe path component")
@@ -163,6 +192,15 @@ def channel_metadata(
 
 def package_archive_name(meta: dict[str, object], artifact_dir_name: str) -> str:
     return f"{meta['archive_prefix']}-{safe_artifact_name(artifact_dir_name)}.zip"
+
+
+def safe_key_value_line(key: str, value: object) -> str:
+    if not _SAFE_KEY_RE.fullmatch(key):
+        raise ValueError(f"{key!r} is not a safe key")
+    rendered = str(value).lower() if isinstance(value, bool) else str(value)
+    if any(char in rendered for char in ("\r", "\n")) or any(ord(char) < 32 or ord(char) == 127 for char in rendered):
+        raise ValueError(f"{key} contains unsafe control characters")
+    return f"{key}={rendered}"
 
 
 def to_json(data: dict[str, object]) -> str:

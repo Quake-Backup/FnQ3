@@ -80,7 +80,7 @@ endif
 
 ifeq ($(COMPILE_PLATFORM),darwin)
   USE_SDL=1
-  USE_LOCAL_HEADERS=1
+  USE_LOCAL_HEADERS=0
   USE_RENDERER_DLOPEN = 0
 endif
 
@@ -239,15 +239,11 @@ R2DIR=$(MOUNT_DIR)/renderer2
 RXDIR=$(MOUNT_DIR)/rendererglx
 RVDIR=$(MOUNT_DIR)/renderervk
 SDLDIR=$(MOUNT_DIR)/sdl
-SDLHDIR=$(MOUNT_DIR)/libsdl/include
 
 CMDIR=$(MOUNT_DIR)/qcommon
 UDIR=$(MOUNT_DIR)/unix
 W32DIR=$(MOUNT_DIR)/win32
 BLIBDIR=$(MOUNT_DIR)/botlib
-JPDIR=$(MOUNT_DIR)/libjpeg
-OGGDIR=$(MOUNT_DIR)/libogg
-VORBISDIR=$(MOUNT_DIR)/libvorbis
 CLIENTAUDIODIR=$(CDIR)/audio
 CLIENTAUDIOCODECSDIR=$(CLIENTAUDIODIR)/codecs
 CLIENTAUDIOLEGACYDIR=$(CLIENTAUDIODIR)/legacy
@@ -311,10 +307,6 @@ ifeq ($(USE_SYSTEM_OGG),1)
   ifeq ($(OGG_LIBS),)
     OGG_LIBS = -logg
   endif
-else
-  ifeq ($(OGG_FLAGS),)
-    OGG_FLAGS = -I$(OGGDIR)/include
-  endif
 endif
 ifeq ($(USE_SYSTEM_VORBIS),1)
   ifeq ($(VORBIS_FLAGS),)
@@ -322,10 +314,6 @@ ifeq ($(USE_SYSTEM_VORBIS),1)
   endif
   ifeq ($(VORBIS_LIBS),)
     VORBIS_LIBS = -lvorbisfile
-  endif
-else
-  ifeq ($(VORBIS_FLAGS),)
-    VORBIS_FLAGS = -I$(VORBISDIR)/include -I$(VORBISDIR)/lib
   endif
 endif
 
@@ -380,9 +368,6 @@ ifeq ($(USE_LOCAL_HEADERS),1)
   BASE_CFLAGS += -DUSE_LOCAL_HEADERS=1
 endif
 
-ifneq ($(wildcard $(MOUNT_DIR)/openal/include/AL/al.h),)
-  BASE_CFLAGS += -I$(MOUNT_DIR)/openal/include
-endif
 BASE_CFLAGS += $(OPENAL_CFLAGS)
 
 ifeq ($(USE_SDL),1)
@@ -427,6 +412,12 @@ endif
 ARCHEXT=
 
 CLIENT_EXTRA_FILES=
+ifneq ($(strip $(SDL_RUNTIME)),)
+  CLIENT_EXTRA_FILES += $(SDL_RUNTIME)
+endif
+ifneq ($(strip $(OPENAL_RUNTIME)),)
+  CLIENT_EXTRA_FILES += $(OPENAL_RUNTIME)
+endif
 
 
 #############################################################################
@@ -532,27 +523,8 @@ ifdef MINGW
   CLIENT_LDFLAGS=$(LDFLAGS)
 
   ifeq ($(USE_SDL),1)
-    BASE_CFLAGS += -DUSE_LOCAL_HEADERS=1 -I$(SDLHDIR)
-    #CLIENT_CFLAGS += -DUSE_LOCAL_HEADERS=1
-    ifeq ($(ARCH),x86)
-      CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libsdl/windows/mingw/lib32
-      CLIENT_LDFLAGS += -lSDL3
-      CLIENT_EXTRA_FILES += $(MOUNT_DIR)/libsdl/windows/mingw/lib32/SDL3.dll
-    else
-      CLIENT_LDFLAGS += -L$(MOUNT_DIR)/libsdl/windows/mingw/lib64
-      CLIENT_LDFLAGS += -lSDL3
-      CLIENT_EXTRA_FILES += $(MOUNT_DIR)/libsdl/windows/mingw/lib64/SDL3.dll
-    endif
-  endif
-
-  ifeq ($(ARCH),x86)
-    ifneq ($(wildcard $(MOUNT_DIR)/openal/windows/x86/OpenAL32.dll),)
-      CLIENT_EXTRA_FILES += $(MOUNT_DIR)/openal/windows/x86/OpenAL32.dll
-    endif
-  else
-    ifneq ($(wildcard $(MOUNT_DIR)/openal/windows/x64/OpenAL32.dll),)
-      CLIENT_EXTRA_FILES += $(MOUNT_DIR)/openal/windows/x64/OpenAL32.dll
-    endif
+    BASE_CFLAGS += $(SDL_INCLUDE)
+    CLIENT_LDFLAGS += $(SDL_LIBS)
   endif
 
   ifeq ($(USE_CURL),1)
@@ -600,19 +572,12 @@ ifeq ($(COMPILE_PLATFORM),darwin)
     LDFLAGS += -arch arm64
   endif
 
-  ifeq ($(USE_LOCAL_HEADERS),1)
-    MACLIBSDIR=$(MOUNT_DIR)/libsdl/macosx
-    BASE_CFLAGS += -I$(SDLHDIR)
-    CLIENT_LDFLAGS += $(MACLIBSDIR)/libSDL3.0.dylib
-    CLIENT_EXTRA_FILES += $(MACLIBSDIR)/libSDL3.0.dylib
-  else
   ifneq ($(SDL_INCLUDE),)
     BASE_CFLAGS += $(SDL_INCLUDE)
     CLIENT_LDFLAGS = $(SDL_LIBS)
   else
     BASE_CFLAGS += -F/Library/Frameworks
     CLIENT_LDFLAGS += -F/Library/Frameworks -framework SDL3
-  endif
   endif
 
   ifeq ($(USE_SYSTEM_JPEG),1)
@@ -1698,15 +1663,6 @@ $(B)/client/%.o: $(BLIBDIR)/%.c
 
 $(B)/client/%.o: $(BLIBDIR)/%.cpp
 	$(DO_BOT_CXX)
-
-$(B)/client/jpeg/%.o: $(JPDIR)/%.c
-	$(DO_CC)
-
-$(B)/client/ogg/%.o: $(OGGDIR)/src/%.c
-	$(DO_CC)
-
-$(B)/client/vorbis/%.o: $(VORBISDIR)/lib/%.c
-	$(DO_CC)
 
 $(B)/client/%.o: $(SDLDIR)/%.c
 	$(DO_CC)

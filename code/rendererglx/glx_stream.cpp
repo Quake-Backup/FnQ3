@@ -114,20 +114,6 @@ static void *GLX_Stream_GetProc( const char *name, const char *fallbackName = nu
 	return proc;
 }
 
-static size_t GLX_Stream_AlignOffset( size_t offset, size_t alignment )
-{
-	if ( alignment <= 1 ) {
-		return offset;
-	}
-
-	const size_t remainder = offset % alignment;
-	if ( remainder == 0 ) {
-		return offset;
-	}
-
-	return offset + alignment - remainder;
-}
-
 static int GLX_Stream_DrawKeyMode( const StreamState &state )
 {
 	int mode = state.r_glxStreamDrawKeyMode ? state.r_glxStreamDrawKeyMode->integer : 0;
@@ -168,12 +154,16 @@ static void GLX_Stream_ResetRuntime( StreamState *state )
 	}
 
 	state->ringBytes = 0;
+	state->allocationBytes = 0;
 	state->writeOffset = 0;
 	state->mappedPtr = nullptr;
-	state->frameSync = nullptr;
+	for ( unsigned int i = 0; i < GLX_STREAM_PERSISTENT_FRAME_SLOTS; i++ ) {
+		state->frameSync[i] = nullptr;
+	}
 	state->buffer = 0;
 	state->arrayBufferBinding = 0;
 	state->elementArrayBufferBinding = 0;
+	state->activeFrameSlot = 0;
 	state->ready = qfalse;
 	state->persistentMapped = qfalse;
 	state->syncReady = qfalse;
@@ -205,6 +195,8 @@ static void GLX_Stream_ResetCounters( StreamState *state )
 	state->syncTimeouts = 0;
 	state->syncFailures = 0;
 	state->syncFenceSkips = 0;
+	state->persistentFrameAdvances = 0;
+	state->persistentFrameReuses = 0;
 	state->selfTests = 0;
 	state->arrayBufferBindingQueries = 0;
 	state->arrayBufferBindingCacheHits = 0;
@@ -465,23 +457,35 @@ static void GLX_Stream_BindElementArrayBufferTracked( StreamState *state, GLuint
 	}
 }
 
-static void GLX_Stream_DeleteFrameFence( StreamState *state )
+static void GLX_Stream_DeleteFrameFence( StreamState *state, unsigned int frameSlot )
 {
-	if ( !state || !state->frameSync ) {
+	if ( !state || frameSlot >= GLX_STREAM_PERSISTENT_FRAME_SLOTS ||
+		!state->frameSync[frameSlot] ) {
 		return;
 	}
 
 	if ( s_fns.DeleteSync ) {
-		s_fns.DeleteSync( state->frameSync );
+		s_fns.DeleteSync( state->frameSync[frameSlot] );
 	}
-	state->frameSync = nullptr;
+	state->frameSync[frameSlot] = nullptr;
 }
 
-static qboolean GLX_Stream_WaitFrameFence( StreamState *state )
+static void GLX_Stream_DeleteFrameFences( StreamState *state )
+{
+	for ( unsigned int i = 0; state && i < GLX_STREAM_PERSISTENT_FRAME_SLOTS; i++ ) {
+		GLX_Stream_DeleteFrameFence( state, i );
+	}
+}
+
+static qboolean GLX_Stream_WaitFrameFence( StreamState *state,
+	unsigned int frameSlot )
 {
 	GLenum result;
 
-	if ( !state || !state->frameSync ) {
+	if ( !state || frameSlot >= GLX_STREAM_PERSISTENT_FRAME_SLOTS ) {
+		return qfalse;
+	}
+	if ( !state->frameSync[frameSlot] ) {
 		return qtrue;
 	}
 
@@ -490,10 +494,11 @@ static qboolean GLX_Stream_WaitFrameFence( StreamState *state )
 		return qfalse;
 	}
 
-	result = s_fns.ClientWaitSync( state->frameSync, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ULL );
+	result = s_fns.ClientWaitSync( state->frameSync[frameSlot],
+		GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ULL );
 	if ( result == GL_ALREADY_SIGNALED || result == GL_CONDITION_SATISFIED ) {
 		state->syncWaits++;
-		GLX_Stream_DeleteFrameFence( state );
+		GLX_Stream_DeleteFrameFence( state, frameSlot );
 		return qtrue;
 	}
 
@@ -506,13 +511,27 @@ static qboolean GLX_Stream_WaitFrameFence( StreamState *state )
 	return qfalse;
 }
 
+static qboolean GLX_Stream_WaitFrameFences( StreamState *state )
+{
+	if ( !state ) {
+		return qfalse;
+	}
+
+	for ( unsigned int i = 0; i < GLX_STREAM_PERSISTENT_FRAME_SLOTS; i++ ) {
+		if ( state->frameSync[i] && !GLX_Stream_WaitFrameFence( state, i ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
 static void GLX_Stream_DeleteBuffer( StreamState *state )
 {
 	if ( !state ) {
 		return;
 	}
 
-	GLX_Stream_DeleteFrameFence( state );
+	GLX_Stream_DeleteFrameFences( state );
 
 	if ( !state->buffer || !s_fns.DeleteBuffers ) {
 		return;
@@ -588,9 +607,29 @@ static qboolean GLX_Stream_StrategyNeedsFrameFence( const StreamState *state )
 	return state && state->strategy == StreamStrategy::PersistentMapped ? qtrue : qfalse;
 }
 
+static qboolean GLX_Stream_UpdateAllocationBytes( StreamState *state )
+{
+	if ( !state || state->ringBytes == 0 ) {
+		return qfalse;
+	}
+
+	if ( state->strategy == StreamStrategy::PersistentMapped ) {
+		return GLX_Stream_PersistentAllocationBytes( state->ringBytes,
+			&state->allocationBytes );
+	}
+
+	state->allocationBytes = state->ringBytes;
+	return qtrue;
+}
+
 static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 {
 	GLuint oldArrayBuffer = 0;
+
+	if ( !GLX_Stream_UpdateAllocationBytes( state ) ) {
+		state->allocationFailures++;
+		return qfalse;
+	}
 
 	s_fns.GenBuffers( 1, &state->buffer );
 	if ( !state->buffer ) {
@@ -611,14 +650,17 @@ static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 				state->strategy = StreamStrategy::OrphanSubData;
 				GLX_Stream_SetReason( state, "persistent functions unavailable, using orphan/subdata" );
 			}
+			GLX_Stream_UpdateAllocationBytes( state );
 		} else {
 			const GLbitfield storageFlags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT | GL_DYNAMIC_STORAGE_BIT;
 			const GLbitfield mapFlags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
-			s_fns.BufferStorage( GL_ARRAY_BUFFER, static_cast<ptrdiff_t>( state->ringBytes ), nullptr, storageFlags );
+			s_fns.BufferStorage( GL_ARRAY_BUFFER,
+				static_cast<ptrdiff_t>( state->allocationBytes ), nullptr, storageFlags );
 
 			const GLenum storageError = GLX_Stream_GetGLError();
 			if ( storageError == GL_NO_ERROR ) {
-				state->mappedPtr = s_fns.MapBufferRange( GL_ARRAY_BUFFER, 0, static_cast<ptrdiff_t>( state->ringBytes ), mapFlags );
+				state->mappedPtr = s_fns.MapBufferRange( GL_ARRAY_BUFFER, 0,
+					static_cast<ptrdiff_t>( state->allocationBytes ), mapFlags );
 				if ( state->mappedPtr ) {
 					state->ready = qtrue;
 					state->persistentMapped = qtrue;
@@ -648,6 +690,7 @@ static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 					state->strategy = StreamStrategy::OrphanSubData;
 					GLX_Stream_SetReason( state, "persistent allocation unavailable, using orphan/subdata" );
 				}
+				GLX_Stream_UpdateAllocationBytes( state );
 				s_fns.GenBuffers( 1, &state->buffer );
 				if ( state->buffer ) {
 					GLX_Stream_BindArrayBufferTracked( state, state->buffer );
@@ -658,7 +701,8 @@ static qboolean GLX_Stream_CreateBufferObject( StreamState *state )
 	}
 
 	if ( !state->ready && state->buffer ) {
-		s_fns.BufferData( GL_ARRAY_BUFFER, static_cast<ptrdiff_t>( state->ringBytes ), nullptr, GL_STREAM_DRAW );
+		s_fns.BufferData( GL_ARRAY_BUFFER,
+			static_cast<ptrdiff_t>( state->allocationBytes ), nullptr, GL_STREAM_DRAW );
 		if ( GLX_Stream_GetGLError() == GL_NO_ERROR ) {
 			state->ready = qtrue;
 		} else {
@@ -757,7 +801,8 @@ static qboolean GLX_Stream_ConfigureRuntime( StreamState *state, const Capabilit
 
 static qboolean GLX_Stream_PrepareRange( StreamState *state, size_t bytes, size_t alignment, size_t *offset )
 {
-	size_t alignedOffset;
+	StreamFrameRegion region {};
+	size_t alignedOffset = 0;
 
 	if ( !state || !offset || !state->ready || !state->buffer || bytes == 0 || bytes > state->ringBytes ) {
 		if ( state ) {
@@ -766,15 +811,28 @@ static qboolean GLX_Stream_PrepareRange( StreamState *state, size_t bytes, size_
 		return qfalse;
 	}
 
-	alignedOffset = GLX_Stream_AlignOffset( state->writeOffset, alignment );
-	if ( alignedOffset + bytes > state->ringBytes ) {
+	region = GLX_Stream_FrameRegion( state->strategy, state->ringBytes,
+		state->activeFrameSlot );
+	if ( !region.valid || state->writeOffset < region.first ||
+		state->writeOffset > region.limit ||
+		!GLX_Stream_AlignOffsetChecked( state->writeOffset, alignment,
+			&alignedOffset ) ) {
+		state->reserveFailures++;
+		return qfalse;
+	}
+	if ( alignedOffset > region.limit || bytes > region.limit - alignedOffset ) {
 		state->wraps++;
 		if ( state->frameTouched ) {
 			state->sameFrameWrapRejects++;
 			state->reserveFailures++;
 			return qfalse;
 		}
-		alignedOffset = 0;
+		if ( !GLX_Stream_AlignOffsetChecked( region.first, alignment,
+				&alignedOffset ) || alignedOffset > region.limit ||
+			bytes > region.limit - alignedOffset ) {
+			state->reserveFailures++;
+			return qfalse;
+		}
 	}
 
 	*offset = alignedOffset;
@@ -796,7 +854,8 @@ void GLX_Stream_RegisterCvars( StreamState *state )
 	state->r_glxStreamMegabytes = RI().Cvar_Get( "r_glxStreamMegabytes", "8", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	MakeCvarInstant( state->r_glxStreamMegabytes );
 	RI().Cvar_CheckRange( state->r_glxStreamMegabytes, "1", "128", CV_INTEGER );
-	RI().Cvar_SetDescription( state->r_glxStreamMegabytes, "Target GLx dynamic stream ring size in megabytes. Applies at the next safe frame boundary." );
+	RI().Cvar_SetDescription( state->r_glxStreamMegabytes,
+		"GLx dynamic stream budget in megabytes per frame region. Persistent mapping allocates three rotating regions; applies at the next safe frame boundary." );
 
 	state->r_glxStreamTess = RI().Cvar_Get( "r_glxStreamTess", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	RI().Cvar_SetDescription( state->r_glxStreamTess,
@@ -876,7 +935,7 @@ void GLX_Stream_UpdateCvars( StreamState *state, const Capabilities &caps )
 		return;
 	}
 
-	if ( state->frameSync && !GLX_Stream_WaitFrameFence( state ) ) {
+	if ( !GLX_Stream_WaitFrameFences( state ) ) {
 		GLX_Stream_SetReason( state, "stream cvar change pending GPU fence" );
 		return;
 	}
@@ -903,16 +962,21 @@ void GLX_Stream_Shutdown( StreamState *state )
 
 void GLX_Stream_FrameComplete( StreamState *state )
 {
+	StreamFrameRegion nextRegion {};
+
 	if ( !state ) {
 		return;
 	}
 
 	if ( state->syncReady && state->frameTouched && GLX_Stream_StrategyNeedsFrameFence( state ) ) {
-		if ( state->frameSync ) {
+		const unsigned int frameSlot = state->activeFrameSlot;
+
+		if ( state->frameSync[frameSlot] ) {
 			state->syncFenceSkips++;
 		} else if ( s_fns.FenceSync ) {
-			state->frameSync = s_fns.FenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
-			if ( state->frameSync ) {
+			state->frameSync[frameSlot] =
+				s_fns.FenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
+			if ( state->frameSync[frameSlot] ) {
 				state->syncInsertions++;
 			} else {
 				state->syncFailures++;
@@ -921,9 +985,22 @@ void GLX_Stream_FrameComplete( StreamState *state )
 	}
 
 	state->frames++;
-	state->writeOffset = 0;
+	if ( state->strategy == StreamStrategy::PersistentMapped ) {
+		state->activeFrameSlot = ( state->activeFrameSlot + 1u ) %
+			GLX_STREAM_PERSISTENT_FRAME_SLOTS;
+		state->persistentFrameAdvances++;
+		nextRegion = GLX_Stream_FrameRegion( state->strategy, state->ringBytes,
+			state->activeFrameSlot );
+		state->writeOffset = nextRegion.valid ? nextRegion.first : 0;
+	} else {
+		state->activeFrameSlot = 0;
+		state->writeOffset = 0;
+	}
 	state->frameTouched = qfalse;
-	GLX_Stream_InvalidateArrayBufferCache( state );
+	/* Array/element binds made by the legacy VBO bridge are reported through
+	   GLX_Stream_RecordExternalBufferBind, while GLx-owned temporary binds are
+	   restored.  Keep the authoritative cache across swaps and avoid two
+	   glGetIntegerv round trips at the start of every streamed frame. */
 }
 
 qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment, StreamReservation *reservation )
@@ -953,9 +1030,14 @@ qboolean GLX_Stream_Reserve( StreamState *state, size_t bytes, size_t alignment,
 		syncFailuresBefore = state->syncFailures;
 	}
 
-	if ( state && state->writeOffset == 0 && state->frameSync && !GLX_Stream_WaitFrameFence( state ) ) {
-		state->reserveFailures++;
-		return qfalse;
+	if ( state && state->strategy == StreamStrategy::PersistentMapped &&
+		!state->frameTouched && state->activeFrameSlot < GLX_STREAM_PERSISTENT_FRAME_SLOTS &&
+		state->frameSync[state->activeFrameSlot] ) {
+		state->persistentFrameReuses++;
+		if ( !GLX_Stream_WaitFrameFence( state, state->activeFrameSlot ) ) {
+			state->reserveFailures++;
+			return qfalse;
+		}
 	}
 
 	if ( !GLX_Stream_PrepareRange( state, bytes, alignment, &offset ) ) {
@@ -1553,6 +1635,13 @@ void GLX_Stream_PrintInfo( const StreamState &state )
 	RI().Printf( PRINT_ALL, "  dynamic stream target ring: %i MB\n", state.ringMegabytes );
 	RI().Printf( PRINT_ALL, "  dynamic stream buffer: %s%s\n", BoolName( state.ready ),
 		state.persistentMapped ? " (persistent mapped)" : "" );
+	RI().Printf( PRINT_ALL, "  dynamic stream frame regions: %u, active %u, allocation %.2f MB, advances %u, fenced reuses %u\n",
+		state.strategy == StreamStrategy::PersistentMapped ?
+			GLX_STREAM_PERSISTENT_FRAME_SLOTS : 1u,
+		state.activeFrameSlot,
+		static_cast<double>( state.allocationBytes ) / ( 1024.0 * 1024.0 ),
+		state.persistentFrameAdvances,
+		state.persistentFrameReuses );
 	RI().Printf( PRINT_ALL, "  dynamic stream forced fallbacks: %u\n", state.fallbackCount );
 	RI().Printf( PRINT_ALL, "  dynamic stream allocation failures: %u\n", state.allocationFailures );
 	RI().Printf( PRINT_ALL, "  dynamic stream map failures: %u\n", state.mapFailures );

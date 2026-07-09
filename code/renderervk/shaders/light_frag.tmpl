@@ -42,6 +42,21 @@ layout (constant_id = 3) const int alpha_to_coverage = 0;
 layout (constant_id = 5) const int abs_light = 0;
 layout (constant_id = 11) const int dlight_shadow = 0;
 
+#ifdef USE_FOG
+float FogFactor(vec2 fogCoord)
+{
+	if (fogEyeT.z < 0.5)
+		return texture(fogtexture, fogCoord).a;
+
+	float fogDistance = fogCoord.x - 0.001953125;
+	if (fogDistance <= 0.0 || fogCoord.y < 0.03125)
+		return 0.0;
+	if (fogCoord.y < 0.96875)
+		fogDistance *= (fogCoord.y - 0.03125) / 0.9375;
+	return sqrt(clamp(fogDistance * 8.0, 0.0, 1.0));
+}
+#endif
+
 float CorrectAlpha(float threshold, float alpha, vec2 tc)
 {
 	ivec2 ts = textureSize(texture0, 0);
@@ -194,7 +209,7 @@ float DlightShadowFactor()
 
 void main() {
 #ifdef USE_FOG
-	vec4 fog = texture(fogtexture, fog_tex_coord);
+	float fogFactor = FogFactor(fog_tex_coord);
 #endif
 	vec4 base = texture(texture0, frag_tex_coord);
 	base.rgb *= texFactors.x;
@@ -246,7 +261,7 @@ void main() {
 
 #ifdef USE_FOG
 	// modulate base by inverted fog alpha
-	base.xyz = base.xyz * ( 1.0 - fog.a );
+	base.xyz = base.xyz * ( 1.0 - fogFactor );
 #endif
 
 	vec3 nN = normalize(N);

@@ -4,7 +4,9 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
 import zipfile
@@ -26,11 +28,13 @@ from root_archive import (
     DEFAULT_AUDIO_ZONE_ASSETS,
     ROOT_ARCHIVE_NAME,
     STANDARD_Q3A_AUDIO_ZONE_MAPS,
+    archive_member_name,
     path_is_relative_to,
     validate_archive_member_names,
     validate_root_archive,
     validate_root_archive_names,
     write_root_archive,
+    zip_info_is_symlink,
 )
 
 
@@ -109,6 +113,9 @@ SKIP_ARTIFACT_SUFFIXES = {
 SKIP_ARTIFACT_DIR_NAMES_LOWER = {name.lower() for name in SKIP_ARTIFACT_DIR_NAMES}
 SKIP_ARTIFACT_FILE_NAMES_LOWER = {name.lower() for name in SKIP_ARTIFACT_FILE_NAMES}
 SKIP_ARTIFACT_SUFFIXES_LOWER = {suffix.lower() for suffix in SKIP_ARTIFACT_SUFFIXES}
+DETERMINISTIC_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+ZIP_COPY_BUFFER_SIZE = 1024 * 1024
+MAX_EMBEDDED_ROOT_ARCHIVE_SIZE = 64 * 1024 * 1024
 
 
 def non_negative_int(value: str) -> int:
@@ -158,6 +165,39 @@ def sha256sum(path: Path) -> str:
     return digest.hexdigest()
 
 
+def paths_overlap(first: Path, second: Path) -> bool:
+    resolved_first = first.resolve()
+    resolved_second = second.resolve()
+    return path_is_relative_to(resolved_first, resolved_second) or path_is_relative_to(
+        resolved_second,
+        resolved_first,
+    )
+
+
+def write_text_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp")
+    if temp_path.exists() or temp_path.is_symlink():
+        if temp_path.is_dir() and not temp_path.is_symlink():
+            raise IsADirectoryError(f"Temporary output path is a directory: {temp_path}")
+        temp_path.unlink()
+    try:
+        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+        os.replace(temp_path, path)
+    finally:
+        if temp_path.exists() or temp_path.is_symlink():
+            temp_path.unlink()
+
+
+def display_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(ROOT).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
 def should_skip_artifact_path(relative_path: Path, *, is_dir: bool) -> bool:
     parts = relative_path.parts
     if any(
@@ -188,6 +228,8 @@ def copy_release_artifact_contents(source: Path, target: Path) -> list[str]:
     resolved_target = target.expanduser().resolve()
     if path_is_relative_to(resolved_target, resolved_source):
         raise ValueError(f"Release staging target must not be inside artifact source: {target}")
+    if path_is_relative_to(resolved_source, resolved_target):
+        raise ValueError(f"Release staging target must not contain artifact source: {target}")
     target.mkdir(parents=True, exist_ok=True)
     skipped: list[str] = []
 
@@ -202,6 +244,7 @@ def copy_release_artifact_contents(source: Path, target: Path) -> list[str]:
             if item.is_dir():
                 continue
             continue
+        archive_member_name(relative)
         destination = target / relative
         if item.is_dir():
             destination.mkdir(parents=True, exist_ok=True)
@@ -235,12 +278,26 @@ def build_root_archive(stage_root: Path) -> Path:
 
 def validate_release_archive_contents(archive_path: Path) -> None:
     with zipfile.ZipFile(archive_path) as archive:
-        archived_names = [
-            info.filename
-            for info in archive.infolist()
-            if not info.is_dir()
-        ]
+        archived_names = []
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            if zip_info_is_symlink(info):
+                raise ValueError(
+                    f"{archive_path.name} contains unsupported symbolic link entry: {info.filename}"
+                )
+            archived_names.append(info.filename)
         validate_archive_member_names(archived_names, archive_name=archive_path.name)
+        filtered_release_entries = [
+            name
+            for name in archived_names
+            if should_skip_artifact_path(Path(name), is_dir=False)
+        ]
+        if filtered_release_entries:
+            raise ValueError(
+                f"{archive_path.name} contains filtered build byproducts: "
+                + ", ".join(filtered_release_entries[:12])
+            )
         archived_name_set = set(archived_names)
         missing_release_entries = [
             name
@@ -255,28 +312,112 @@ def validate_release_archive_contents(archive_path: Path) -> None:
         if ROOT_ARCHIVE_NAME not in archived_name_set:
             raise ValueError(f"{archive_path.name} is missing {ROOT_ARCHIVE_NAME}")
 
-        root_archive_bytes = archive.read(ROOT_ARCHIVE_NAME)
+        root_archive_info = archive.getinfo(ROOT_ARCHIVE_NAME)
+        if root_archive_info.file_size > MAX_EMBEDDED_ROOT_ARCHIVE_SIZE:
+            raise ValueError(
+                f"{ROOT_ARCHIVE_NAME} exceeds the {MAX_EMBEDDED_ROOT_ARCHIVE_SIZE}-byte validation limit"
+            )
+        with archive.open(root_archive_info) as root_archive_handle:
+            root_archive_bytes = root_archive_handle.read(MAX_EMBEDDED_ROOT_ARCHIVE_SIZE + 1)
+        if len(root_archive_bytes) > MAX_EMBEDDED_ROOT_ARCHIVE_SIZE:
+            raise ValueError(
+                f"{ROOT_ARCHIVE_NAME} exceeds the {MAX_EMBEDDED_ROOT_ARCHIVE_SIZE}-byte validation limit"
+            )
 
     with zipfile.ZipFile(io.BytesIO(root_archive_bytes)) as root_archive:
-        root_archive_names = [
-            info.filename
-            for info in root_archive.infolist()
-            if not info.is_dir()
-        ]
+        root_archive_names = []
+        for info in root_archive.infolist():
+            if info.is_dir():
+                continue
+            if zip_info_is_symlink(info):
+                raise ValueError(
+                    f"{ROOT_ARCHIVE_NAME} contains unsupported symbolic link entry: {info.filename}"
+                )
+            root_archive_names.append(info.filename)
     validate_root_archive_names(root_archive_names)
 
 
 def validate_stage_tree(stage_root: Path) -> None:
+    if stage_root.is_symlink():
+        raise ValueError(f"release package root must not be a symbolic link: {stage_root}")
+    if not stage_root.is_dir():
+        raise NotADirectoryError(f"Release package root is not a directory: {stage_root}")
+
     offenders: list[str] = []
+    archived_names: list[str] = []
     for item in sorted(stage_root.rglob("*")):
+        if item.is_symlink():
+            raise ValueError(f"release package contains unsupported symbolic link: {item}")
         relative = item.relative_to(stage_root)
         if should_skip_artifact_path(relative, is_dir=item.is_dir()):
             offenders.append(relative.as_posix())
+        archive_member_name(relative)
+        if item.is_file():
+            archived_names.append(relative.as_posix())
     if offenders:
         raise ValueError(
             "release package contains filtered build byproducts: "
             + ", ".join(offenders[:12])
         )
+    validate_archive_member_names(archived_names, archive_name=stage_root.name)
+
+
+def write_deterministic_zip(archive_path: Path, source_root: Path) -> None:
+    source_root = source_root.expanduser()
+    archive_path = archive_path.expanduser()
+    if source_root.is_symlink():
+        raise ValueError(f"Archive source root must not be a symbolic link: {source_root}")
+    if not source_root.is_dir():
+        raise NotADirectoryError(f"Archive source root is not a directory: {source_root}")
+    if path_is_relative_to(archive_path.resolve(), source_root.resolve()):
+        raise ValueError(f"Archive output must not be inside source tree: {archive_path}")
+
+    files: list[tuple[str, Path]] = []
+    for source in source_root.rglob("*"):
+        if source.is_symlink():
+            raise ValueError(f"Archive source contains unsupported symbolic link: {source}")
+        if not source.is_file():
+            continue
+        relative = source.relative_to(source_root)
+        files.append((archive_member_name(relative), source))
+    files.sort(key=lambda item: (item[0].lower(), item[0]))
+    validate_archive_member_names(
+        (archive_name for archive_name, _source in files),
+        archive_name=archive_path.name,
+    )
+
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = archive_path.with_name(f"{archive_path.name}.tmp")
+    if temp_path.exists() or temp_path.is_symlink():
+        if temp_path.is_dir() and not temp_path.is_symlink():
+            raise IsADirectoryError(f"Temporary archive path is a directory: {temp_path}")
+        temp_path.unlink()
+
+    try:
+        with zipfile.ZipFile(
+            temp_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as archive:
+            for archive_name, source in files:
+                source_mode = source.stat().st_mode
+                permissions = 0o755 if source_mode & 0o111 else 0o644
+                info = zipfile.ZipInfo(archive_name, DETERMINISTIC_ZIP_DATE)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = (stat.S_IFREG | permissions) << 16
+                with source.open("rb") as source_handle:
+                    with archive.open(info, "w", force_zip64=True) as archive_handle:
+                        shutil.copyfileobj(
+                            source_handle,
+                            archive_handle,
+                            length=ZIP_COPY_BUFFER_SIZE,
+                        )
+        os.replace(temp_path, archive_path)
+    finally:
+        if temp_path.exists() or temp_path.is_symlink():
+            temp_path.unlink()
 
 
 def release_artifact_dirs(artifact_root: Path) -> list[Path]:
@@ -285,10 +426,38 @@ def release_artifact_dirs(artifact_root: Path) -> list[Path]:
     if not artifact_root.is_dir():
         raise NotADirectoryError(f"Artifact root is not a directory: {artifact_root}")
 
-    artifact_dirs = sorted(path for path in artifact_root.iterdir() if path.is_dir())
+    artifact_dirs: list[Path] = []
+    for path in sorted(artifact_root.iterdir()):
+        if path.is_symlink():
+            raise ValueError(f"Artifact root contains unsupported symbolic link: {path}")
+        if path.is_dir():
+            artifact_dirs.append(path)
     if not artifact_dirs:
         raise ValueError(f"Artifact root does not contain any artifact directories: {artifact_root}")
     return artifact_dirs
+
+
+def prepare_stage_root(stage_root: Path, artifact_dir: Path) -> None:
+    resolved_stage = stage_root.resolve()
+    resolved_artifact = artifact_dir.resolve()
+    if path_is_relative_to(resolved_stage, resolved_artifact):
+        raise ValueError(f"Release staging target must not be inside artifact source: {stage_root}")
+    if path_is_relative_to(resolved_artifact, resolved_stage):
+        raise ValueError(f"Release staging target must not contain artifact source: {stage_root}")
+    if stage_root.is_symlink():
+        raise ValueError(f"Release staging target must not be a symbolic link: {stage_root}")
+    if stage_root.exists():
+        shutil.rmtree(stage_root)
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+
+def clean_package_archives(packages_dir: Path) -> None:
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    for item in packages_dir.iterdir():
+        if item.is_symlink():
+            raise ValueError(f"Package output directory contains unsupported symbolic link: {item}")
+        if item.is_file() and item.suffix.lower() == ".zip":
+            item.unlink()
 
 
 def resolve_glx_runtime_proof(args: argparse.Namespace) -> dict[str, object]:
@@ -431,38 +600,43 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
     packages_dir = output_dir / "packages"
     temp_dir = args.temp_dir.resolve() / args.channel
 
-    packages_dir.mkdir(parents=True, exist_ok=True)
+    if paths_overlap(artifact_root, output_dir):
+        raise ValueError("Artifact input and release output directories must not overlap")
+    if paths_overlap(artifact_root, args.temp_dir.resolve()):
+        raise ValueError("Artifact input and release staging directories must not overlap")
+    if paths_overlap(output_dir, args.temp_dir.resolve()):
+        raise ValueError("Release output and staging directories must not overlap")
+
+    clean_package_archives(packages_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     archives: list[dict[str, object]] = []
 
     for artifact_dir in artifact_dirs:
         archive_name = package_archive_name(meta, artifact_dir.name)
-        archive_base = packages_dir / archive_name[:-4]
+        archive_path = packages_dir / archive_name
         stage_root = temp_dir / archive_name[:-4]
 
-        if stage_root.exists():
-            shutil.rmtree(stage_root)
-        stage_root.mkdir(parents=True, exist_ok=True)
+        prepare_stage_root(stage_root, artifact_dir)
         skipped_files = copy_release_artifact_contents(artifact_dir, stage_root)
         copy_docs(stage_root)
         build_root_archive(stage_root)
         validate_stage_tree(stage_root)
 
-        archive_path = Path(shutil.make_archive(str(archive_base), "zip", root_dir=stage_root))
+        write_deterministic_zip(archive_path, stage_root)
         validate_release_archive_contents(archive_path)
         checksum = sha256sum(archive_path)
         archives.append(
             {
                 "artifact_dir": artifact_dir.name,
                 "archive": archive_path.name,
-                "path": archive_path.relative_to(ROOT).as_posix(),
+                "path": display_path(archive_path),
                 "sha256": checksum,
                 "skipped_artifact_file_count": len(skipped_files),
                 "skipped_artifact_file_examples": skipped_files[:12],
             }
         )
-        print(archive_path.relative_to(ROOT).as_posix())
+        print(display_path(archive_path))
 
     glx_rollback_package = attach_glx_rollback_archives(glx_rollback_package, archives)
 
@@ -484,16 +658,14 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         "archives": archives,
     }
 
-    (output_dir / "release-manifest.json").write_text(
+    write_text_atomic(
+        output_dir / "release-manifest.json",
         json.dumps(manifest, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
     )
     checksum_lines = [f"{archive['sha256']}  {Path(archive['path']).name}" for archive in archives]
-    (output_dir / "SHA256SUMS.txt").write_text(
+    write_text_atomic(
+        output_dir / "SHA256SUMS.txt",
         "\n".join(checksum_lines) + ("\n" if checksum_lines else ""),
-        encoding="utf-8",
-        newline="\n",
     )
     return manifest
 

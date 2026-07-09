@@ -45,7 +45,8 @@ code/client/audio/
     codecs/
         snd_codec.h           codec interface used by both backends
         snd_codec.cpp         codec registry and stream helpers
-        snd_codec_wav.cpp     WAV loader
+        snd_codec_wav.cpp     WAV loader (PCM 8/16/24-bit, IEEE float32,
+                              WAVE_FORMAT_EXTENSIBLE; decodes to 16-bit)
         snd_codec_ogg.cpp     optional Ogg Vorbis loader
 
     openal/
@@ -177,6 +178,26 @@ orientation, source origin, source velocity, distance model, reference distance,
 max distance, and rolloff feed the OpenAL source model. This lets HRTF-capable
 output render source direction through head turns and movement.
 
+Doppler uses OpenAL's native two-body model. The backend sets
+`alDopplerFactor`/`alSpeedOfSound` from `s_doppler`, `s_alDopplerFactor`, and
+`s_alDopplerSpeed` (live, no restart), feeds looping-source velocities from the
+game, and derives listener velocity from respatialize deltas with teleport
+rejection, speed clamping, and short exponential smoothing so respawns and
+frame jitter cannot chirp the pitch.
+
+The backend also enforces Quake III's audibility horizon on top of the clamped
+OpenAL distance models, which never reach true silence on their own. Positional
+voices fade over the final stretch of the legacy maximum range; loops beyond it
+become virtual voices (logical state kept, OpenAL source and filters returned
+to the pool) and one-shots that would start inaudible are skipped. One-shot
+eviction prefers the least audible voice, estimated from applied gain and
+distance, before falling back to age.
+
+When EFX is present the listener is calibrated with `AL_METERS_PER_UNIT`
+(1 unit = 1 inch) and positional sources get `AL_AIR_ABSORPTION_FACTOR` from
+`s_alAirAbsorption`, giving distance-dependent high-frequency air absorption
+with physically meaningful scaling.
+
 Direct-path content stays direct by default:
 
 - local UI and announcer-style sounds
@@ -204,10 +225,16 @@ The OpenAL backend adds an environmental layer on top of the normal source
 selection path.
 
 - Reverb uses EFX when the device supports it. `s_alReverb` is latched because
-  the effect slot is created at backend init.
+  the effect slot is created at backend init. The backend prefers
+  `AL_EFFECT_EAXREVERB` (low-frequency decay control, echo hints, underwater
+  modulation) and falls back to `AL_EFFECT_REVERB` when the runtime rejects
+  it; presets carry both parameter sets and zone sidecar preset indices are
+  unchanged.
 - Occlusion uses conservative collision traces between listener and source,
   including a small source-side probe fan so edge cases can become partial
-  occlusion instead of a binary mute.
+  occlusion instead of a binary mute. A liquid boundary between source and
+  listener applies a partial-occlusion floor through the same smoothing and
+  tone pipeline.
 - Tone shaping uses low-pass, high-pass, and band-pass policies by source class,
   environment, and occlusion state.
 - Environment transitions are smoothed so moving through thresholds does not
@@ -224,6 +251,16 @@ outdoor/underwater flags, and bounded portal blend hints. Missing, disabled, or
 invalid sidecars are harmless.
 
 ## Device Handling
+
+On Windows the OpenAL library search prefers a real OpenAL Soft runtime:
+executable-directory `OpenAL32.dll`, executable-directory `soft_oal.dll`, the
+packaged runtime path, a system `soft_oal.dll`, and only then the system
+`OpenAL32.dll`, which is usually the legacy Creative router. When the loaded
+runtime exposes no OpenAL Soft extensions, init prints a warning naming the
+library and device so a degraded spatial layer is never silent. EFX filter
+types are probed at init; runtimes that reject high-pass or band-pass filters
+(the router's "Generic Software" driver) degrade those tones to low-pass so
+occlusion and underwater muffling keep working.
 
 The backend tries the requested OpenAL device first. If that device cannot open,
 it tries the system default before falling back to the legacy backend. Context

@@ -65,6 +65,14 @@ PROMOTION_ROLLBACK_REQUIRED_TRIGGER_TERMS = (
     "performance",
 )
 ROLLBACK_PACKAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+WINDOWS_RESERVED_PACKAGE_BASENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 def parse_feature_matrix(path: Path = FEATURE_MATRIX_PATH) -> list[dict[str, str]]:
@@ -318,7 +326,12 @@ def _string_list(value: object) -> list[str]:
 def _safe_rollback_package_name(value: str, label: str, package_id: str) -> str | None:
     if not value:
         return None
-    if not ROLLBACK_PACKAGE_ID_RE.fullmatch(value):
+    basename = value.split(".", 1)[0].upper()
+    if (
+        not ROLLBACK_PACKAGE_ID_RE.fullmatch(value)
+        or value.endswith(".")
+        or basename in WINDOWS_RESERVED_PACKAGE_BASENAMES
+    ):
         return f"{package_id} has unsafe {label}: {value!r}."
     return None
 
@@ -453,7 +466,7 @@ def check_rollback_package_metadata(
             blockers.append(f"{package_id} must have type rollback.")
         if not artifact_dir and not archive:
             blockers.append(f"{package_id} must name artifactDir or archive.")
-        for label, value in (("artifactDir", artifact_dir), ("archive", archive)):
+        for label, value in (("id", package_id), ("artifactDir", artifact_dir), ("archive", archive)):
             unsafe = _safe_rollback_package_name(value, label, package_id)
             if unsafe:
                 blockers.append(unsafe)

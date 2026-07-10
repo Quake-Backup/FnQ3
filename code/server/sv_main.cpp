@@ -724,10 +724,13 @@ static void SVC_Status( const netadr_t *from ) {
 
 	for ( SV_ClientSlot slot : SV_ClientSlots() ) {
 		if ( slot.client.state >= CS_CONNECTED ) {
-
-			ps = SV_GameClientNum( slot.index );
-			playerLength = Com_sprintf( player.data(), SV_ArraySize(player), "%i %i \"%s\"\n", 
-				ps->persistant[ PERS_SCORE ], slot.client.ping, slot.client.name );
+			int score = 0;
+			if ( sv.gameClients != nullptr ) {
+				ps = SV_GameClientNum( slot.index );
+				score = ps->persistant[ PERS_SCORE ];
+			}
+			playerLength = Com_sprintf( player.data(), SV_ArraySize(player), "%i %i \"%s\"\n",
+				score, slot.client.ping, slot.client.name );
 			
 			if ( statusLength + playerLength >= MAX_PACKETLEN-4 )
 				break; // can't hold any more
@@ -1407,13 +1410,29 @@ void SV_Frame( int msec, int realMsec ) {
 
 	if (com_dedicated->integer) SV_BotFrame (sv.time);
 
-	// run the game simulation in chunks
+	// run the game simulation in chunks (or advance demo playback)
 	while ( frameMsec > 0 && sv.timeResidual >= frameMsec ) {
 		sv.timeResidual -= frameMsec;
-		sv.time += frameMsec;
 
-		// let everything in the world think and move
-		VM_Call( gvm, 1, GAME_RUN_FRAME, sv.time );
+		if ( sv.demoPlayback ) {
+			// Advance demo by one snapshot per frame tick.
+			// SV_DemoAdvance updates sv.time from the demo's serverTime.
+			// If the demo has ended we still advance sv.time to keep
+			// client connections alive (hold on last frame).
+			if ( sv.demoEnded ) {
+				sv.time += frameMsec;
+			} else {
+				SV_DemoAdvance();
+				// Reset svs.currFrame each frame so SV_BuildDemoSnapshot
+				// stages a fresh copy of demoEnts into snapshot storage.
+				svs.currFrame = nullptr;
+			}
+		} else {
+			sv.time += frameMsec;
+
+			// let everything in the world think and move
+			VM_Call( gvm, 1, GAME_RUN_FRAME, sv.time );
+		}
 	}
 
 	if ( com_speeds->integer ) {

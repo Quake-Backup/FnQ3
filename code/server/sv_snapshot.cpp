@@ -760,6 +760,18 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 	if ( client->state == CS_ZOMBIE )
 		return;
 
+	if ( sv.demoPlayback ) {
+		// Demo cinema path: populate frame from the decoded demo state and
+		// return early — no PVS culling, no game VM client lookup needed.
+		SV_BuildDemoSnapshot( frame );
+		// Set PMF_FOLLOW so cgame calls CG_InterpolatePlayerState(grabAngles=false)
+		// instead of running prediction.  That path lerps position and viewangles
+		// directly between consecutive snapshots without applying the spectator's
+		// mouse input, giving a smooth locked view with no prediction jitter.
+		frame->ps.pm_flags |= PMF_FOLLOW;
+		return;
+	}
+
 	// grab the current playerState_t
 	ps = SV_GameClientNum( cl );
 	frame->ps = *ps;

@@ -1029,7 +1029,9 @@ void SV_DirectConnect( const netadr_t *from ) {
 			if ( newcl->state >= CS_CONNECTED ) {
 				// call QVM disconnect function before calling connect again
 				// fixes issues such as disappearing CTF flags in unpatched mods
-				VM_Call( gvm, 1, GAME_CLIENT_DISCONNECT, SV_ClientIndex( newcl ) );
+				if ( !sv.demoPlayback ) {
+					VM_Call( gvm, 1, GAME_CLIENT_DISCONNECT, SV_ClientIndex( newcl ) );
+				}
 
 				// don't leak memory or file handles due to e.g. downloads in progress
 				SV_FreeClient( newcl );
@@ -1142,14 +1144,17 @@ gotnewcl:
 	}
 
 	// get the game a chance to reject this connection or modify the userinfo
-	denied = VM_Call( gvm, 3, GAME_CLIENT_CONNECT, clientNum, qtrue, qfalse ); // firstTime = qtrue
-	if ( denied ) {
-		// we can't just use VM_ArgPtr, because that is only valid inside a VM_Call
-		const char *str = static_cast<const char *>( GVM_ArgPtr( denied ) );
+	// (skipped in demo cinema mode: no game VM is running)
+	if ( !sv.demoPlayback ) {
+		denied = VM_Call( gvm, 3, GAME_CLIENT_CONNECT, clientNum, qtrue, qfalse ); // firstTime = qtrue
+		if ( denied ) {
+			// we can't just use VM_ArgPtr, because that is only valid inside a VM_Call
+			const char *str = static_cast<const char *>( GVM_ArgPtr( denied ) );
 
-		NET_OutOfBandPrint( NS_SERVER, from, "print\n%s\n", str );
-		Com_DPrintf( "Game rejected a connection: %s.\n", str );
-		return;
+			NET_OutOfBandPrint( NS_SERVER, from, "print\n%s\n", str );
+			Com_DPrintf( "Game rejected a connection: %s.\n", str );
+			return;
+		}
 	}
 
 	if ( sv_clientTLD->integer ) {
@@ -1239,7 +1244,9 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 
 	// call the prog function for removing a client
 	// this will remove the body, among other things
-	VM_Call( gvm, 1, GAME_CLIENT_DISCONNECT, SV_ClientIndex( drop ) );
+	if ( !sv.demoPlayback ) {
+		VM_Call( gvm, 1, GAME_CLIENT_DISCONNECT, SV_ClientIndex( drop ) );
+	}
 
 	// add the disconnect command
 	if ( reason ) {
@@ -1383,7 +1390,10 @@ static void SV_SendClientGameState( client_t *client ) {
 	client->gotCP = qfalse;
 
 	// to start generating delta for packet entities
-	client->gentity = SV_GentityNum( SV_ClientIndex( client ) );
+	// (demo cinema: no gentities exist, SV_BuildDemoSnapshot bypasses this check)
+	if ( !sv.demoPlayback ) {
+		client->gentity = SV_GentityNum( SV_ClientIndex( client ) );
+	}
 
 	// when we receive the first packet from the client, we will
 	// notice that it is from a different serverid and that the
@@ -1444,7 +1454,13 @@ static void SV_SendClientGameState( client_t *client ) {
 
 	MSG_WriteByte( &msg, svc_EOF );
 
-	MSG_WriteLong( &msg, SV_ClientIndex( client ) );
+	// In demo cinema mode every spectator "becomes" the recorded player so
+	// cgame initializes identically to local demo playback.
+	if ( sv.demoPlayback ) {
+		MSG_WriteLong( &msg, sv.demoClientNum );
+	} else {
+		MSG_WriteLong( &msg, SV_ClientIndex( client ) );
+	}
 
 	// write the checksum feed
 	MSG_WriteLong( &msg, sv.checksumFeed );
@@ -1463,12 +1479,15 @@ static void SV_SendClientGameState( client_t *client ) {
 	}
 
 	// deliver this to the client
-	if ( client->demoRecordServerId != sv.serverId ) {
-		SV_StopDemoRecord( client, qfalse );
-	}
-	if ( sv_autoRecordDemos && sv_autoRecordDemos->integer ) {
-		if ( ( sv_autoRecordDemos->integer != 2 && sv_autoRecordDemos->integer != 4 ) || !sv_cheats->integer ) {
-			SV_StartDemoRecord( client );
+	if ( !sv.demoPlayback ) {
+		// Do not auto-record during demo cinema (would re-record the replay).
+		if ( client->demoRecordServerId != sv.serverId ) {
+			SV_StopDemoRecord( client, qfalse );
+		}
+		if ( sv_autoRecordDemos && sv_autoRecordDemos->integer ) {
+			if ( ( sv_autoRecordDemos->integer != 2 && sv_autoRecordDemos->integer != 4 ) || !sv_cheats->integer ) {
+				SV_StartDemoRecord( client );
+			}
 		}
 	}
 	SV_SendMessageToClient( &msg, client );
@@ -1504,17 +1523,23 @@ void SV_ClientEnterWorld( client_t *client ) {
 		SV_UpdateConfigstrings( client );
 	}
 
-	// set up the entity for the client
-	clientNum = SV_ClientIndex( client );
-	ent = SV_GentityNum( clientNum );
-	ent->s.number = clientNum;
-	client->gentity = ent;
-
 	client->deltaMessage = client->netchan.outgoingSequence - (PACKET_BACKUP + 1); // force delta reset
 	client->lastSnapshotTime = svs.time - 9999; // generate a snapshot immediately
 
-	// call the game begin function
-	VM_Call( gvm, 1, GAME_CLIENT_BEGIN, clientNum );
+	if ( sv.demoPlayback ) {
+		// Demo cinema: no game VM, no gentity needed.
+		// gentity stays nullptr; SV_BuildDemoSnapshot bypasses the gentity check.
+		client->gentity = nullptr;
+	} else {
+		// set up the entity for the client
+		clientNum = SV_ClientIndex( client );
+		ent = SV_GentityNum( clientNum );
+		ent->s.number = clientNum;
+		client->gentity = ent;
+
+		// call the game begin function
+		VM_Call( gvm, 1, GAME_CLIENT_BEGIN, clientNum );
+	}
 }
 
 
@@ -2178,7 +2203,7 @@ void SV_UserinfoChanged( client_t *cl, qboolean updateUserinfo, qboolean runFilt
 	// name for C code
 	val = Info_ValueForKey( cl->userinfo, "name" );
 	// truncate if it is too long as it may cause memory corruption in OSP mod
-	if ( gvm->forceDataMask && strlen( val ) >= buf.size() ) {
+	if ( gvm != nullptr && gvm->forceDataMask && strlen( val ) >= buf.size() ) {
 		Q_strncpyz( buf.data(), val, SV_ArraySize(buf) );
 		Info_SetValueForKey( cl->userinfo, "name", buf.data() );
 		val = buf.data();
@@ -2236,7 +2261,9 @@ static void SV_UpdateUserinfo_f( client_t *cl ) {
 
 	SV_UserinfoChanged( cl, qtrue, qtrue ); // update userinfo, run filter
 	// call prog code to allow overrides
-	VM_Call( gvm, 1, GAME_CLIENT_USERINFO_CHANGED, SV_ClientIndex( cl ) );
+	if ( !sv.demoPlayback ) {
+		VM_Call( gvm, 1, GAME_CLIENT_USERINFO_CHANGED, SV_ClientIndex( cl ) );
+	}
 }
 
 extern int SV_Strlen( const char *str );
@@ -2419,7 +2446,7 @@ qboolean SV_ExecuteClientCommand( client_t *cl, const char *s ) {
 		Com_DPrintf( "client text ignored for %s: %s\n", cl->name, Cmd_Argv(0) );
 	} else {
 		// pass unknown strings to the game
-		if ( ucmd == nullptr && sv.state == SS_GAME && cl->state >= CS_PRIMED ) {
+		if ( !sv.demoPlayback && ucmd == nullptr && sv.state == SS_GAME && cl->state >= CS_PRIMED ) {
 			if ( gvm->forceDataMask )
 				Cmd_Args_Sanitize( "\n\r;" ); // handle ';' for OSP
 			else
@@ -2484,6 +2511,10 @@ void SV_ClientThink (client_t *cl, usercmd_t *cmd) {
 
 	if ( cl->state != CS_ACTIVE ) {
 		return;		// may have been kicked during the last usercmd
+	}
+
+	if ( sv.demoPlayback ) {
+		return; // no game VM in demo cinema mode; spectator usercmds are dropped
 	}
 
 	VM_Call( gvm, 1, GAME_CLIENT_THINK, SV_ClientIndex( cl ) );

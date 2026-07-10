@@ -21,6 +21,7 @@ from fnq3_meta import (
     compose_windows_version,
     normalize_commit,
     normalize_date,
+    safe_key_value_line,
 )
 from changelog import DEFAULT_CHANGELOG, clean_section_text, clear_unreleased
 
@@ -30,6 +31,7 @@ DEFAULT_RELEASE_NOTES_MODEL = "openai/gpt-4.1"
 MAX_RELEASE_NOTES_CONTEXT_CHARS = 60000
 FIELD_SEPARATOR = "\x1f"
 RECORD_SEPARATOR = "\x1e"
+COMMIT_ID_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 
 def non_negative_int(value: str) -> int:
@@ -55,6 +57,19 @@ def positive_int(value: str) -> int:
 def write_text_lf(path: Path, content: str) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(content)
+
+
+def safe_commit_id(value: str, label: str) -> str:
+    commit = value.strip()
+    if not COMMIT_ID_RE.fullmatch(commit):
+        raise ValueError(f"{label} must be a 7-40 character hexadecimal commit id")
+    return commit.lower()
+
+
+def safe_optional_commit_id(value: str | None, label: str) -> str | None:
+    if value is None:
+        return None
+    return safe_commit_id(value, label)
 
 
 def parse_args() -> argparse.Namespace:
@@ -158,7 +173,7 @@ def manual_release_context(
     head_commit: str | None = None,
 ) -> dict[str, object]:
     meta = base_metadata()
-    head_sha = (head_commit or git("rev-parse", "HEAD")).strip()
+    head_sha = safe_commit_id(head_commit or git("rev-parse", "HEAD"), "--head-commit")
     iso_date, _ = normalize_date(build_date)
     latest_release = latest_tag(manual_release_tag_pattern(str(meta["base_version"])))
     previous_release_commit = resolve_tag_commit(latest_release) if latest_release else ""
@@ -187,11 +202,7 @@ def manual_release_context(
 
 def print_mapping(data: dict[str, object]) -> None:
     for key, value in data.items():
-        if isinstance(value, bool):
-            rendered = str(value).lower()
-        else:
-            rendered = str(value)
-        print(f"{key}={rendered}")
+        print(safe_key_value_line(key, value))
 
 
 def stamp_version(header: Path, build_number: int) -> dict[str, object]:
@@ -241,6 +252,8 @@ def stamp_version(header: Path, build_number: int) -> dict[str, object]:
 
 
 def release_range_spec(from_commit: str | None, to_commit: str) -> str:
+    from_commit = safe_optional_commit_id(from_commit, "--from-commit")
+    to_commit = safe_commit_id(to_commit, "--to-commit")
     if from_commit and from_commit != to_commit:
         return f"{from_commit}..{to_commit}"
     if from_commit == to_commit:
@@ -251,6 +264,8 @@ def release_range_spec(from_commit: str | None, to_commit: str) -> str:
 
 
 def release_diff_spec(from_commit: str | None, to_commit: str) -> str:
+    from_commit = safe_optional_commit_id(from_commit, "--from-commit")
+    to_commit = safe_commit_id(to_commit, "--to-commit")
     if from_commit and from_commit != to_commit:
         return f"{from_commit}..{to_commit}"
     if from_commit == to_commit:
@@ -599,7 +614,8 @@ def render_release_notes(
     highlights_file: Path | None = None,
 ) -> str:
     meta = base_metadata()
-    target_commit = (to_commit or git("rev-parse", "HEAD")).strip()
+    target_commit = safe_commit_id(to_commit or git("rev-parse", "HEAD"), "--to-commit")
+    from_commit = safe_optional_commit_id(from_commit, "--from-commit")
     iso_date, _ = normalize_date(build_date)
     version_string = compose_version_string(
         int(meta["version_major"]),

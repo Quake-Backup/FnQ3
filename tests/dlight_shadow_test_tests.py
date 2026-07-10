@@ -32,6 +32,8 @@ class DlightShadowTestTests(unittest.TestCase):
     def test_parse_args_rejects_unsafe_map_and_fs_game(self) -> None:
         self.assert_parse_args_exits(["--dry-run", "--map", "q3dm1\nquit"])
         self.assert_parse_args_exits(["--dry-run", "--fs-game", "../baseq3"])
+        self.assert_parse_args_exits(["--dry-run", "--fs-game", "CON"])
+        self.assert_parse_args_exits(["--dry-run", "--fs-game", "mod."])
 
     def test_parse_args_rejects_invalid_numeric_runtime_values(self) -> None:
         invalid_options = (

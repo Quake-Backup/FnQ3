@@ -309,16 +309,21 @@ static void GLX_Profiler_CollectResults( ProfilerState *state )
 		return;
 	}
 
-	for ( int i = 0; i < GLX_QUERY_COUNT; i++ ) {
+	/* Poll oldest-to-newest.  Elapsed queries are issued in order, so once the
+	   oldest pending result is unavailable, newer results cannot help free the
+	   next ring slot and need not incur more driver calls this frame. */
+	for ( int step = 0; step < GLX_QUERY_COUNT; step++ ) {
+		const int i = ( state->writeIndex + step ) % GLX_QUERY_COUNT;
 		if ( !state->pending[i] || !state->queries[i] ) {
 			continue;
 		}
 
 		GLint available = 0;
+		state->queryAvailabilityPolls++;
 		state->fns.GetQueryObjectiv( state->queries[i], GL_QUERY_RESULT_AVAILABLE, &available );
 		if ( !available ) {
 			sawUnavailable = qtrue;
-			continue;
+			break;
 		}
 
 		if ( state->fns.GetQueryObjectui64v ) {
@@ -335,20 +340,23 @@ static void GLX_Profiler_CollectResults( ProfilerState *state )
 		std::snprintf( state->lastGpuText, sizeof( state->lastGpuText ), "%.3fms", state->lastGpuMilliseconds );
 		GLX_Profiler_RecordPassMilliseconds( state, GLX_GPU_PASS_BACKEND, state->lastGpuMilliseconds );
 		state->pending[i] = qfalse;
+		state->queryResultsCollected++;
 	}
 
-	for ( int i = 0; i < GLX_PASS_QUERY_COUNT; i++ ) {
+	for ( int step = 0; step < GLX_PASS_QUERY_COUNT; step++ ) {
+		const int i = ( state->passWriteIndex + step ) % GLX_PASS_QUERY_COUNT;
 		GpuPassQuery &query = state->passQueries[i];
 
 		if ( !query.pending || !query.startQuery || !query.endQuery ) {
 			continue;
 		}
 
-		GLint startAvailable = 0;
 		GLint endAvailable = 0;
-		state->fns.GetQueryObjectiv( query.startQuery, GL_QUERY_RESULT_AVAILABLE, &startAvailable );
+		/* The end timestamp is submitted after the start timestamp.  Its
+		   availability therefore proves both query objects can be read. */
+		state->passQueryAvailabilityPolls++;
 		state->fns.GetQueryObjectiv( query.endQuery, GL_QUERY_RESULT_AVAILABLE, &endAvailable );
-		if ( !startAvailable || !endAvailable ) {
+		if ( !endAvailable ) {
 			sawPassUnavailable = qtrue;
 			continue;
 		}
@@ -374,6 +382,7 @@ static void GLX_Profiler_CollectResults( ProfilerState *state )
 		}
 
 		query.pending = qfalse;
+		state->passQueryResultsCollected++;
 	}
 
 	if ( sawUnavailable ) {
@@ -486,8 +495,12 @@ void GLX_Profiler_Shutdown( ProfilerState *state )
 	const unsigned int gpuPassQueries = state->gpuPassQueries;
 	const unsigned int unavailable = state->queryUnavailableFrames;
 	const unsigned int ringFullSkips = state->queryRingFullSkips;
+	const unsigned int availabilityPolls = state->queryAvailabilityPolls;
+	const unsigned int resultsCollected = state->queryResultsCollected;
 	const unsigned int passUnavailable = state->passQueryUnavailableFrames;
 	const unsigned int passRingFullSkips = state->passQueryRingFullSkips;
+	const unsigned int passAvailabilityPolls = state->passQueryAvailabilityPolls;
+	const unsigned int passResultsCollected = state->passQueryResultsCollected;
 	cvar_t *gpuTiming = state->r_glxGpuTiming;
 	cvar_t *gpuPassTiming = state->r_glxGpuPassTiming;
 
@@ -499,8 +512,12 @@ void GLX_Profiler_Shutdown( ProfilerState *state )
 	state->gpuPassQueries = gpuPassQueries;
 	state->queryUnavailableFrames = unavailable;
 	state->queryRingFullSkips = ringFullSkips;
+	state->queryAvailabilityPolls = availabilityPolls;
+	state->queryResultsCollected = resultsCollected;
 	state->passQueryUnavailableFrames = passUnavailable;
 	state->passQueryRingFullSkips = passRingFullSkips;
+	state->passQueryAvailabilityPolls = passAvailabilityPolls;
+	state->passQueryResultsCollected = passResultsCollected;
 	state->r_glxGpuTiming = gpuTiming;
 	state->r_glxGpuPassTiming = gpuPassTiming;
 }
@@ -838,6 +855,8 @@ void GLX_Profiler_PrintInfo( const ProfilerState &state )
 	RI().Printf( PRINT_ALL, "  last backend GPU time: %s\n", GLX_Profiler_LastGpuTimeText( state ) );
 	RI().Printf( PRINT_ALL, "  timer query unavailable frames: %u\n", state.queryUnavailableFrames );
 	RI().Printf( PRINT_ALL, "  timer query ring-full skips: %u\n", state.queryRingFullSkips );
+	RI().Printf( PRINT_ALL, "  timer query polling: %u availability checks, %u results collected\n",
+		state.queryAvailabilityPolls, state.queryResultsCollected );
 	RI().Printf( PRINT_ALL,
 		"  post pass counters: blits %u, binds %u, clears %u, fullscreen passes %u\n",
 		state.postBlits, state.postBinds, state.postClears, state.postFullscreenPasses );
@@ -845,6 +864,8 @@ void GLX_Profiler_PrintInfo( const ProfilerState &state )
 		"  pass timer queries: active %s, queries %u, unavailable frames %u, ring-full skips %u\n",
 		BoolName( state.passTimerReady ), state.gpuPassQueries,
 		state.passQueryUnavailableFrames, state.passQueryRingFullSkips );
+	RI().Printf( PRINT_ALL, "  pass timer query polling: %u availability checks, %u results collected\n",
+		state.passQueryAvailabilityPolls, state.passQueryResultsCollected );
 	RI().Printf( PRINT_ALL, "  pass GPU timings:" );
 	for ( int i = 0; i < GLX_GPU_PASS_COUNT; i++ ) {
 		const GpuPassStats &stats = state.gpuPassStats[i];

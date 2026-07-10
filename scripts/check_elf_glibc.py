@@ -66,11 +66,17 @@ def is_elf(path: Path) -> bool:
         return False
 
 
+def reject_symlink(path: Path) -> None:
+    if path.is_symlink():
+        raise ValueError(f"ELF scan path must not be a symbolic link: {path}")
+
+
 def candidate_files(paths: list[Path]) -> list[Path]:
     candidates: list[Path] = []
     seen: set[Path] = set()
 
     def add_if_elf(raw_candidate: Path) -> None:
+        reject_symlink(raw_candidate)
         candidate = raw_candidate.expanduser().resolve()
         if candidate in seen:
             return
@@ -79,11 +85,13 @@ def candidate_files(paths: list[Path]) -> list[Path]:
             candidates.append(candidate)
 
     for raw_path in paths:
+        reject_symlink(raw_path)
         path = raw_path.expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(f"scan path does not exist: {path}")
         if path.is_dir():
             for item in path.rglob("*"):
+                reject_symlink(item)
                 if item.is_file():
                     add_if_elf(item)
         elif path.is_file():
@@ -131,7 +139,7 @@ def main() -> int:
 
     try:
         reports = scan(args.paths)
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 1
 

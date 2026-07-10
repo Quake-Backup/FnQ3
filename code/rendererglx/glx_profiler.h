@@ -96,8 +96,12 @@ struct ProfilerState {
 	unsigned int gpuPassQueries;
 	unsigned int queryUnavailableFrames;
 	unsigned int queryRingFullSkips;
+	unsigned int queryAvailabilityPolls;
+	unsigned int queryResultsCollected;
 	unsigned int passQueryUnavailableFrames;
 	unsigned int passQueryRingFullSkips;
+	unsigned int passQueryAvailabilityPolls;
+	unsigned int passQueryResultsCollected;
 	unsigned int postBlits;
 	unsigned int postBinds;
 	unsigned int postClears;

@@ -23,6 +23,34 @@ class VersionMetadataTests(unittest.TestCase):
         self.assertEqual(fnq3_meta.normalize_commit("ABCDEF1234567890"), "abcdef12")
         self.assertEqual(fnq3_meta.normalize_commit("abc1234"), "abc1234")
 
+    def test_version_define_parser_preserves_double_slashes_inside_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            header = Path(tmp) / "fnq3_version.h"
+            header.write_text(
+                "\n".join(
+                    [
+                        '#define FNQ3_PROJECT_NAME "FnQuake3 // Nightly"',
+                        '#define FNQ3_PROJECT_NAME_SHORT "FnQ3"',
+                        '#define FNQ3_DISPLAY_NAME "FnQ3"',
+                        '#define FNQ3_COMPATIBILITY_TARGET "https://example.invalid/q3"',
+                        "#define FNQ3_VERSION_MAJOR 1",
+                        "#define FNQ3_VERSION_MINOR 2",
+                        "#define FNQ3_VERSION_PATCH 3",
+                        "#define FNQ3_VERSION_TWEAK 0 // comment",
+                        '#define FNQ3_TAG_PREFIX "v"',
+                        '#define FNQ3_ARTIFACT_PREFIX "fnquake3"',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            meta = fnq3_meta.base_metadata(header)
+
+        self.assertEqual(meta["project_name"], "FnQuake3 // Nightly")
+        self.assertEqual(meta["compatibility_target"], "https://example.invalid/q3")
+        self.assertEqual(meta["base_version"], "1.2.3")
+
     def test_normalize_commit_rejects_path_like_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "hexadecimal"):
             fnq3_meta.normalize_commit("../../escape")
@@ -56,10 +84,17 @@ class VersionMetadataTests(unittest.TestCase):
             fnq3_meta.package_archive_name(meta, "windows-x86_64"),
             "fnquake3-0.1.0.1-20260620-abcdef12-windows-x86_64.zip",
         )
-        for name in ("../windows", "linux/x64", "bad\nname"):
+        for name in ("../windows", "linux/x64", "bad\nname", "CON", "COM1.txt", "artifact."):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError, "safe path component"):
                     fnq3_meta.package_archive_name(meta, name)
+
+    def test_normalize_date_requires_canonical_yyyy_mm_dd(self) -> None:
+        self.assertEqual(fnq3_meta.normalize_date("2026-06-20"), ("2026-06-20", "20260620"))
+        for value in ("20260620", "2026-W25-6", "2026-6-20"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "YYYY-MM-DD"):
+                    fnq3_meta.normalize_date(value)
 
     def test_version_composers_reject_negative_components(self) -> None:
         with self.assertRaisesRegex(ValueError, "non-negative"):
@@ -73,11 +108,30 @@ class VersionMetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "non-negative"):
             manual_release.non_negative_int("-1")
 
+    def test_ci_key_value_lines_reject_control_characters(self) -> None:
+        self.assertEqual(fnq3_meta.safe_key_value_line("FNQ3_VERSION", "0.1.0"), "FNQ3_VERSION=0.1.0")
+        self.assertEqual(fnq3_meta.safe_key_value_line("FNQ3_ENABLED", True), "FNQ3_ENABLED=true")
+        for key in ("FNQ3_BAD\nKEY", "FNQ3-BAD", "1FNQ3_BAD"):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ValueError, "safe key"):
+                    fnq3_meta.safe_key_value_line(key, "value")
+        for value in ("ok\nFNQ3_OTHER=bad", "bad\rvalue", "bad\x1fvalue", "bad\x7fvalue"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "control characters"):
+                    fnq3_meta.safe_key_value_line("FNQ3_VALUE", value)
+
     def test_manual_release_rejects_non_positive_ai_timeouts(self) -> None:
         for value in ("0", "-1"):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(Exception, "positive integer"):
                     manual_release.positive_int(value)
+
+    def test_manual_release_commit_inputs_must_be_hex_ids(self) -> None:
+        self.assertEqual(manual_release.safe_commit_id("ABCDEF1", "--to-commit"), "abcdef1")
+        with self.assertRaisesRegex(ValueError, "hexadecimal commit id"):
+            manual_release.release_range_spec("--all", "abcdef1")
+        with self.assertRaisesRegex(ValueError, "hexadecimal commit id"):
+            manual_release.release_diff_spec("abcdef1", "HEAD")
 
     def test_github_models_choice_content_ignores_malformed_responses(self) -> None:
         self.assertEqual(manual_release.github_models_choice_content({}), "")

@@ -299,20 +299,22 @@ static ID_INLINE qboolean GLX_CompatDlightProgramAvailable( qboolean linear,
 }
 
 static ID_INLINE qboolean GLX_CompatBindDlightProgram( qboolean linear,
-	int fogMode, qboolean absLight, qboolean shadow, const float *eyePos, const float *lightPos,
+	int fogMode, qboolean analyticFog, qboolean absLight, qboolean shadow,
+	const float *eyePos, const float *lightPos,
 	const float *lightColor, const float *lightVector, const float *texFactors,
 	const float *dlightFactors, const float *fogDistanceVector,
 	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
 	const float *shadowAtlas, const float *shadowDepth, const float *shadowFilter )
 {
 #ifdef RENDERER_GLX
-	return GLX_Renderer_BindDlightProgram( linear, fogMode, absLight, shadow,
+	return GLX_Renderer_BindDlightProgram( linear, fogMode, analyticFog, absLight, shadow,
 		eyePos, lightPos, lightColor, lightVector, texFactors, dlightFactors,
 		fogDistanceVector, fogDepthVector, fogEyeT,
 		dlightShadow, shadowAtlas, shadowDepth, shadowFilter );
 #else
 	(void)linear;
 	(void)fogMode;
+	(void)analyticFog;
 	(void)absLight;
 	(void)shadow;
 	(void)eyePos;
@@ -700,11 +702,17 @@ static ID_INLINE void GLX_CompatRecordStreamDrawResult( int numVertexes, int num
 #endif
 }
 
-static ID_INLINE qboolean GLX_CompatBindFogMaterial( void )
+static ID_INLINE qboolean GLX_CompatBindFogMaterial( const float *fogDistanceVector,
+	const float *fogDepthVector, float fogEyeT, const float *fogColor )
 {
 #ifdef RENDERER_GLX
-	return GLX_Renderer_BindFogMaterial();
+	return GLX_Renderer_BindFogMaterial( fogDistanceVector, fogDepthVector,
+		fogEyeT, fogColor );
 #else
+	(void)fogDistanceVector;
+	(void)fogDepthVector;
+	(void)fogEyeT;
+	(void)fogColor;
 	return qfalse;
 #endif
 }

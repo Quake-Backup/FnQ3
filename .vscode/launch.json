@@ -1,6 +1,7 @@
 {
   "version": "0.2.0",
   "configurations": [
+
     {
       "name": "OpenGLx",
       "type": "cppvsdbg",
@@ -24,6 +25,20 @@
         "+set",
         "cl_renderer",
         "vulkan"
+      ],
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "RTX",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
+      "args": [
+        "+set",
+        "cl_renderer",
+        "rtx"
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,

@@ -2038,6 +2038,7 @@ extern cvar_t	*r_neatsky;				// nomip and nopicmip for skyboxes, cnq3 like look
 extern cvar_t	*r_drawSun;				// controls drawing of sun quad
 extern cvar_t	*r_dynamiclight;		// dynamic lights enabled/disabled
 extern cvar_t	*r_depthFade;			// soft-particle depth fade enabled/disabled
+extern cvar_t	*r_fogMode;			// 0 - legacy lookup, 1 - analytic
 extern cvar_t	*r_celShading;			// cel shading enabled/disabled on model entities
 extern cvar_t	*r_celShadingWorld;		// cel edge outlines enabled/disabled on BSP world geometry
 extern cvar_t	*r_celShadingWorldWidth;		// screen-space world cel outline radius in pixels

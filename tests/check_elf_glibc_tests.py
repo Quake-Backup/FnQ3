@@ -35,6 +35,27 @@ class CheckElfGlibcTests(unittest.TestCase):
 
         self.assertEqual(candidates, [elf.resolve()])
 
+    def test_candidate_files_rejects_symlink_scan_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "outside-elf"
+            target.write_bytes(b"\x7fELFsynthetic")
+            link = root / "linked-elf"
+            try:
+                link.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                check_elf_glibc.candidate_files([link])
+
+            scan_root = root / "scan"
+            scan_root.mkdir()
+            nested_link = scan_root / "nested-elf"
+            nested_link.symlink_to(target)
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                check_elf_glibc.candidate_files([scan_root])
+
     def test_parse_version_rejects_malformed_glibc_versions(self) -> None:
         self.assertEqual(check_elf_glibc.parse_version("2.31"), (2, 31))
         for value in ("", "2.", "2..31", "2.-1", "GLIBC_2.31"):

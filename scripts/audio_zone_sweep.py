@@ -82,6 +82,9 @@ def discover_bsp_files(inputs: Sequence[Path]) -> list[Path]:
     maps: list[Path] = []
     seen: set[Path] = set()
     for raw in inputs:
+        raw_path = raw.expanduser()
+        if raw_path.is_symlink():
+            raise ValueError(f"input must not be a symbolic link: {raw_path}")
         path = normalize_path(raw)
         if path.is_dir():
             candidates = sorted(path.rglob("*.bsp"))
@@ -91,6 +94,8 @@ def discover_bsp_files(inputs: Sequence[Path]) -> list[Path]:
             raise FileNotFoundError(f"input is not a BSP file or directory: {path}")
 
         for candidate in candidates:
+            if candidate.is_symlink():
+                raise ValueError(f"BSP input must not be a symbolic link: {candidate}")
             resolved = normalize_path(candidate)
             if resolved not in seen:
                 seen.add(resolved)
@@ -160,7 +165,9 @@ def matching_override_path(
         override_root / bsp.with_suffix(".audiozones").name,
     ]
     for candidate in candidates:
-        if candidate.exists():
+        if candidate.exists() and not candidate.is_file():
+            raise ValueError(f"matching override is not a file: {candidate}")
+        if candidate.is_file():
             return normalize_path(candidate)
     return None
 
@@ -553,6 +560,12 @@ def parse_args(argv: Sequence[str]) -> SweepOptions:
         parser.error("--samples must be between 1 and 1000000")
     if args.max_zones is not None and args.max_zones < 1:
         parser.error("--max-zones must be positive")
+    if (
+        args.report_json is not None
+        and args.report_csv is not None
+        and args.report_json.expanduser().resolve() == args.report_csv.expanduser().resolve()
+    ):
+        parser.error("--report-json and --report-csv must be different paths")
 
     return SweepOptions(
         tool=args.tool,

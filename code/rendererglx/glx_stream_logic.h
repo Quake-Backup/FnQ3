@@ -5,8 +5,75 @@
 #include "glx_types.h"
 
 #include <cctype>
+#include <cstddef>
+#include <limits>
 
 namespace glx {
+
+/*
+Persistent uploads rotate through independent frame regions.  Three regions
+allow the CPU to prepare frame N while the GPU may still consume N-1/N-2,
+without changing the orphan/map-range allocation contract.
+*/
+static constexpr unsigned int GLX_STREAM_PERSISTENT_FRAME_SLOTS = 3u;
+
+struct StreamFrameRegion {
+	size_t first;
+	size_t limit;
+	qboolean valid;
+};
+
+static ID_INLINE qboolean GLX_Stream_PersistentAllocationBytes( size_t frameBytes,
+	size_t *allocationBytes )
+{
+	if ( !allocationBytes || frameBytes == 0 ||
+		frameBytes > ( std::numeric_limits<size_t>::max )() /
+			GLX_STREAM_PERSISTENT_FRAME_SLOTS ) {
+		return qfalse;
+	}
+
+	*allocationBytes = frameBytes * GLX_STREAM_PERSISTENT_FRAME_SLOTS;
+	return qtrue;
+}
+
+static ID_INLINE StreamFrameRegion GLX_Stream_FrameRegion( StreamStrategy strategy,
+	size_t frameBytes, unsigned int frameSlot )
+{
+	StreamFrameRegion region { 0, frameBytes, frameBytes > 0 ? qtrue : qfalse };
+
+	if ( !region.valid || strategy != StreamStrategy::PersistentMapped ) {
+		return region;
+	}
+	if ( frameSlot >= GLX_STREAM_PERSISTENT_FRAME_SLOTS ||
+		frameBytes > ( std::numeric_limits<size_t>::max )() / ( frameSlot + 1u ) ) {
+		return { 0, 0, qfalse };
+	}
+
+	region.first = frameBytes * frameSlot;
+	region.limit = region.first + frameBytes;
+	return region;
+}
+
+static ID_INLINE qboolean GLX_Stream_AlignOffsetChecked( size_t offset,
+	size_t alignment, size_t *alignedOffset )
+{
+	if ( !alignedOffset ) {
+		return qfalse;
+	}
+	if ( alignment <= 1 ) {
+		*alignedOffset = offset;
+		return qtrue;
+	}
+
+	const size_t remainder = offset % alignment;
+	const size_t adjustment = remainder ? alignment - remainder : 0;
+	if ( adjustment > ( std::numeric_limits<size_t>::max )() - offset ) {
+		return qfalse;
+	}
+
+	*alignedOffset = offset + adjustment;
+	return qtrue;
+}
 
 struct StreamStrategySelection {
 	StreamStrategy strategy;

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import stat
 import zipfile
 from pathlib import Path
 from typing import Iterable
@@ -10,6 +12,17 @@ from fnq3_meta import ROOT
 
 ROOT_ARCHIVE_NAME = "FnQuake3-pkg.fnz"
 PKG_ROOT = ROOT / "pkg"
+ZIP_SYMLINK_MODE = 0o120000
+ZIP_FILE_TYPE_MASK = 0o170000
+ZIP_COPY_BUFFER_SIZE = 1024 * 1024
+WINDOWS_RESERVED_BASENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 STANDARD_Q3A_AUDIO_ZONE_MAPS = (
     "pro-q3dm13",
@@ -131,6 +144,12 @@ def archive_member_name(dest_relative: Path | str) -> str:
         raise ValueError(f"Root archive entry must not contain a drive prefix or stream name: {archive_name}")
     if any(any(ord(char) < 32 or ord(char) == 127 for char in part) for part in parts):
         raise ValueError(f"Root archive entry contains unsafe control character: {archive_name!r}")
+    for part in parts:
+        if part.endswith((" ", ".")):
+            raise ValueError(f"Root archive entry contains Windows-unsafe path component: {archive_name}")
+        basename = part.split(".", 1)[0].upper()
+        if basename in WINDOWS_RESERVED_BASENAMES:
+            raise ValueError(f"Root archive entry contains Windows-reserved path component: {archive_name}")
     return archive_name
 
 
@@ -145,6 +164,10 @@ def validate_archive_member_names(archived_names: Iterable[str], *, archive_name
         if key in seen:
             raise ValueError(f"{archive_name} contains duplicate package asset path: {safe_name}")
         seen.add(key)
+
+
+def zip_info_is_symlink(info: zipfile.ZipInfo) -> bool:
+    return ((info.external_attr >> 16) & ZIP_FILE_TYPE_MASK) == ZIP_SYMLINK_MODE
 
 
 def required_root_archive_names(
@@ -182,11 +205,15 @@ def validate_root_archive_names(
 
 def validate_root_archive(archive_path: Path) -> None:
     with zipfile.ZipFile(archive_path) as archive:
-        archived_names = [
-            info.filename
-            for info in archive.infolist()
-            if not info.is_dir()
-        ]
+        archived_names = []
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            if zip_info_is_symlink(info):
+                raise ValueError(
+                    f"{archive_path.name} contains unsupported symbolic link entry: {info.filename}"
+                )
+            archived_names.append(info.filename)
     validate_root_archive_names(archived_names, archive_name=archive_path.name)
 
 
@@ -230,8 +257,15 @@ def write_root_archive(
                 info = zipfile.ZipInfo(archive_name)
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.date_time = (1980, 1, 1, 0, 0, 0)
-                info.external_attr = 0o644 << 16
-                archive.writestr(info, source.read_bytes())
+                info.create_system = 3
+                info.external_attr = (stat.S_IFREG | 0o644) << 16
+                with source.open("rb") as source_handle:
+                    with archive.open(info, "w", force_zip64=True) as archive_handle:
+                        shutil.copyfileobj(
+                            source_handle,
+                            archive_handle,
+                            length=ZIP_COPY_BUFFER_SIZE,
+                        )
 
         os.replace(temp_path, archive_path)
     finally:

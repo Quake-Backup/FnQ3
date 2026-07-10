@@ -454,6 +454,10 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
             vk_runtime_sweep.validate_q3_command_tokens(["q3dm1;quit"], "--maps")
         with self.assertRaisesRegex(ValueError, "single safe mod"):
             vk_runtime_sweep.validate_fs_game("../baseq3")
+        with self.assertRaisesRegex(ValueError, "single safe mod"):
+            vk_runtime_sweep.validate_fs_game("CON")
+        with self.assertRaisesRegex(ValueError, "single safe mod"):
+            vk_runtime_sweep.validate_fs_game("mod.")
 
     def test_modern_gate_requires_dlight_shadow_scene(self) -> None:
         manifest = {

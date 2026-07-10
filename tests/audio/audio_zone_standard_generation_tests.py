@@ -6,6 +6,7 @@ import io
 import sys
 import tempfile
 import unittest
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -98,6 +99,10 @@ class StandardAudioZoneGenerationTests(unittest.TestCase):
                     ("../outside",),
                     source_root,
                 )
+            for name in ("CON", "COM1.txt", "q3dm1."):
+                with self.subTest(name=name):
+                    with self.assertRaisesRegex(ValueError, "unsafe arena map name"):
+                        generate_standard_audio_zones.validate_arena_map_name(name)
 
     def test_rejects_case_ambiguous_pk3_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,6 +127,50 @@ class StandardAudioZoneGenerationTests(unittest.TestCase):
                     ("q3dm1",),
                     root / "scratch" / "baseq3",
                 )
+
+    def test_rejects_duplicate_pk3_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pak = root / "pak0.pk3"
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with zipfile.ZipFile(pak, "w") as archive:
+                    archive.writestr("scripts/arenas.txt", 'map "q3dm1"\n')
+                    archive.writestr("scripts/arenas.txt", 'map "q3dm2"\n')
+
+            with zipfile.ZipFile(pak) as archive:
+                with self.assertRaisesRegex(ValueError, "duplicate entries"):
+                    generate_standard_audio_zones.archive_entry_map(archive)
+
+    def test_work_root_must_not_overlap_retail_pak_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pak_root = root / "baseq3"
+            pak_root.mkdir()
+
+            with self.assertRaisesRegex(ValueError, "must not overlap"):
+                generate_standard_audio_zones.validate_generation_roots(
+                    pak_root,
+                    root,
+                )
+
+            with self.assertRaisesRegex(ValueError, "must not overlap"):
+                generate_standard_audio_zones.validate_generation_roots(
+                    pak_root,
+                    pak_root / "scratch",
+                )
+            with self.assertRaisesRegex(ValueError, "output-root"):
+                generate_standard_audio_zones.validate_generation_roots(
+                    pak_root,
+                    root / "scratch",
+                    pak_root / "maps",
+                )
+
+            generate_standard_audio_zones.validate_generation_roots(
+                pak_root,
+                root / "scratch",
+                root / "pkg" / "baseq3",
+            )
 
     def test_parse_args_caps_audit_samples_to_compiler_limit(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):

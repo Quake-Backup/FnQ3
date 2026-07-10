@@ -298,6 +298,32 @@ class IssueTriageTests(unittest.TestCase):
                 }
             )
 
+        with self.assertRaisesRegex(ValueError, "invalid GitHub label name"):
+            issue_triage.managed_labels_from_config(
+                {
+                    "managed_labels": [
+                        {
+                            "name": "bad\nlabel",
+                            "color": "ffffff",
+                            "description": "Bad label.",
+                        }
+                    ]
+                }
+            )
+
+        with self.assertRaisesRegex(ValueError, "invalid GitHub label name"):
+            issue_triage.managed_labels_from_config(
+                {
+                    "managed_labels": [
+                        {
+                            "name": "x" * (issue_triage.MAX_LABEL_NAME_CHARS + 1),
+                            "color": "ffffff",
+                            "description": "Bad label.",
+                        }
+                    ]
+                }
+            )
+
         with self.assertRaisesRegex(ValueError, "duplicate label"):
             issue_triage.managed_labels_from_config(
                 {

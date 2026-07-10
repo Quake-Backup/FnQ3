@@ -25,6 +25,14 @@ RENDERER_NAME_RE = re.compile(r"^[A-Za-z1-9]+$")
 CVAR_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 Q3_COMMAND_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
 FS_GAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+WINDOWS_RESERVED_DIR_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 DEFAULT_PERFORMANCE_MAX_GROWTH_RATIO = 0.20
 GLX_EXPECTED_PASS_SCHEDULE = (
     "frame-setup>sky-opaque-world>opaque-entities>dynamic-lights>dynamic-scene>transparent-layers>"
@@ -4036,6 +4044,8 @@ def validate_fs_game(value: str) -> str:
         not FS_GAME_RE.fullmatch(name)
         or name in {".", ".."}
         or name.startswith(".")
+        or name.endswith(".")
+        or name.split(".", 1)[0].upper() in WINDOWS_RESERVED_DIR_NAMES
     ):
         raise ValueError("--fs-game must be a single safe mod directory name")
     return name

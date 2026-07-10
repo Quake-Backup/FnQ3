@@ -19,6 +19,14 @@ MAX_AUDIT_SAMPLES = 1_000_000
 OFFICIAL_PAK_RE = re.compile(r"pak[0-9]+\.pk3$", re.IGNORECASE)
 ARENA_MAP_RE = re.compile(r'(?:^|\s)map\s+"([^"]+)"')
 SAFE_ARENA_MAP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+WINDOWS_RESERVED_BASENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 def default_tool_path() -> Path:
@@ -54,9 +62,47 @@ def arena_map_names(text: str) -> tuple[str, ...]:
 
 
 def validate_arena_map_name(name: str) -> str:
-    if not SAFE_ARENA_MAP_RE.fullmatch(name):
+    basename = name.split(".", 1)[0].upper()
+    if (
+        not SAFE_ARENA_MAP_RE.fullmatch(name)
+        or name.endswith((".", " "))
+        or basename in WINDOWS_RESERVED_BASENAMES
+    ):
         raise ValueError(f"unsafe arena map name: {name!r}")
     return name
+
+
+def path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def validate_generation_roots(
+    pak_root: Path,
+    work_root: Path,
+    output_root: Path | None = None,
+) -> None:
+    resolved_pak_root = pak_root.expanduser().resolve()
+    source_root = (work_root.expanduser().resolve() / "baseq3").resolve()
+    if (
+        source_root == resolved_pak_root
+        or path_is_relative_to(source_root, resolved_pak_root)
+        or path_is_relative_to(resolved_pak_root, source_root)
+    ):
+        raise ValueError(
+            "--work-root stages extracted BSPs under baseq3 and must not overlap the retail pak root"
+        )
+    if output_root is not None:
+        resolved_output_root = output_root.expanduser().resolve()
+        if (
+            resolved_output_root == resolved_pak_root
+            or path_is_relative_to(resolved_output_root, resolved_pak_root)
+            or path_is_relative_to(resolved_pak_root, resolved_output_root)
+        ):
+            raise ValueError("--output-root must not overlap the retail pak root")
 
 
 def archive_entry_map(archive: zipfile.ZipFile) -> dict[str, str]:
@@ -64,7 +110,11 @@ def archive_entry_map(archive: zipfile.ZipFile) -> dict[str, str]:
     for entry in archive.namelist():
         key = entry.lower()
         previous = entries.get(key)
-        if previous is not None and previous != entry:
+        if previous is not None:
+            if previous == entry:
+                raise ValueError(
+                    f"{archive.filename} contains duplicate entries: {entry!r}"
+                )
             raise ValueError(
                 f"{archive.filename} contains case-ambiguous entries: {previous!r} and {entry!r}"
             )
@@ -212,6 +262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     source_root = work_root / "baseq3"
 
     try:
+        validate_generation_roots(pak_root, work_root, args.output_root)
         paks = discover_official_paks(pak_root)
         map_names = discover_standard_map_names(paks)
         extract_standard_bsp_files(paks, map_names, source_root)

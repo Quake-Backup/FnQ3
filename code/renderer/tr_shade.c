@@ -274,14 +274,11 @@ static qboolean GLX_TryStreamDrawStage( const shaderCommands_t *input, const sha
 static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 {
 	glxStreamReservation_t reservation;
+	const fogProgramParms_t *fogParms;
 	qboolean ok = qtrue;
 	qboolean glxMaterialBound = qfalse;
 	int xyzBytes;
-	int colorBytes;
-	int texBytes;
 	int indexBytes;
-	int colorOffset;
-	int texOffset;
 	int indexOffset;
 	int totalBytes;
 	unsigned int categoryMask;
@@ -307,15 +304,20 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_EMPTY_BATCH );
 		return qfalse;
 	}
+	fogParms = RB_CalcFogProgramParms();
+	if ( !fogParms || !fogParms->fogColor ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_BAD_INPUT );
+		return qfalse;
+	}
+	if ( !GLX_CompatMaterialRendererActive() ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_PROGRAM );
+		return qfalse;
+	}
 
 	categoryMask = GLX_CompatDynamicCategoryMaskForTess( input, 0 );
 	xyzBytes = input->numVertexes * (int)sizeof( input->xyz[0] );
-	colorBytes = input->numVertexes * (int)sizeof( input->svars.colors[0] );
-	texBytes = input->numVertexes * (int)sizeof( input->svars.texcoords[0][0] );
 	indexBytes = input->numIndexes * (int)sizeof( input->indexes[0] );
-	colorOffset = GLX_CompatAlignInt( xyzBytes, 16 );
-	texOffset = GLX_CompatAlignInt( colorOffset + colorBytes, 16 );
-	indexOffset = GLX_CompatAlignInt( texOffset + texBytes, 16 );
+	indexOffset = GLX_CompatAlignInt( xyzBytes, 16 );
 	totalBytes = GLX_CompatAlignInt( indexOffset + indexBytes, 64 );
 
 	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
@@ -325,12 +327,6 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 	}
 
 	if ( !GLX_CompatStreamUploadAt( &reservation, 0, input->xyz, xyzBytes ) ) {
-		ok = qfalse;
-	}
-	if ( ok && !GLX_CompatStreamUploadAt( &reservation, colorOffset, input->svars.colors, colorBytes ) ) {
-		ok = qfalse;
-	}
-	if ( ok && !GLX_CompatStreamUploadAt( &reservation, texOffset, input->svars.texcoords[0], texBytes ) ) {
 		ok = qfalse;
 	}
 	if ( ok && !GLX_CompatStreamUploadAt( &reservation, indexOffset, input->indexes, indexBytes ) ) {
@@ -344,25 +340,23 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 		return qfalse;
 	}
 
-	if ( GLX_CompatMaterialRendererActive() ) {
-		GL_ProgramDisable();
-		glxMaterialBound = GLX_CompatBindFogMaterial();
-		if ( !glxMaterialBound ) {
-			GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_PROGRAM );
-			GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
-				totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, categoryMask, qfalse );
-			return qfalse;
-		}
+	GL_ProgramDisable();
+	glxMaterialBound = GLX_CompatBindFogMaterial(
+		fogParms->fogDistanceVector, fogParms->fogDepthVector,
+		fogParms->eyeT, fogParms->fogColor );
+	if ( !glxMaterialBound ) {
+		GLX_CompatRecordStreamDrawSkip( GLX_STREAM_SKIP_MATERIAL_PROGRAM );
+		GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
+			totalBytes, indexBytes, 0, qfalse, qtrue, qfalse, 0, categoryMask, qfalse );
+		return qfalse;
 	}
 
 	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
 	oldElementArrayBuffer = GLX_CompatBindStreamElementArrayBuffer( reservation.buffer );
 
 	GL_ClientState( 1, CLS_NONE );
-	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), (const GLvoid *)(intptr_t)( reservation.offset ) );
-	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, (const GLvoid *)(intptr_t)( reservation.offset + colorOffset ) );
-	qglTexCoordPointer( 2, GL_FLOAT, 0, (const GLvoid *)(intptr_t)( reservation.offset + texOffset ) );
 
 	if ( !GLX_CompatDrawElementsClassified( GL_TRIANGLES, input->numIndexes, GL_INDEX_TYPE,
 		(const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
@@ -377,10 +371,8 @@ static qboolean GLX_TryStreamDrawFogPass( const shaderCommands_t *input )
 	GLX_CompatRestoreStreamElementArrayBuffer( oldElementArrayBuffer );
 	GLX_CompatRestoreStreamArrayBuffer( 0 );
 	GL_ClientState( 1, CLS_NONE );
-	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	GL_ClientState( 0, CLS_NONE );
 	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
-	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, input->svars.colors[0].rgba );
-	qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoords[0] );
 	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
 
 	GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
@@ -1288,22 +1280,6 @@ Blends a fog texture on top of everything else
 static void RB_FogPass( void ) {
 	const fog_t *fog = tr.world->fogs + tess.fogNum;
 	int i;
-	qboolean glxStreamedDraw = qfalse;
-
-	for ( i = 0; i < tess.numVertexes; i++ ) {
-		tess.svars.colors[i] = fog->colorInt;
-	}
-
-	RB_CalcFogTexCoords( ( float * ) tess.svars.texcoords[0] );
-
-	GL_ClientState( 1, CLS_NONE );
-	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
-
-	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, tess.svars.colors[0].rgba );
-	qglTexCoordPointer( 2, GL_FLOAT, 0, tess.svars.texcoords[0] );
-
-	GL_SelectTexture( 0 );
-	GL_Bind( tr.fogImage );
 
 	if ( tess.shader->fogPass == FP_EQUAL ) {
 		GL_State( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA | GLS_DEPTHFUNC_EQUAL );
@@ -1312,11 +1288,26 @@ static void RB_FogPass( void ) {
 	}
 
 #ifdef RENDERER_GLX
-	glxStreamedDraw = GLX_TryStreamDrawFogPass( &tess );
-#endif
-	if ( !glxStreamedDraw ) {
-		R_DrawElements( tess.numIndexes, tess.indexes );
+	/* The programmable GLx path derives continuous fog and color from position,
+	   avoiding CPU color/UV generation and two per-vertex stream attributes. */
+	if ( r_fogMode && r_fogMode->integer && GLX_TryStreamDrawFogPass( &tess ) ) {
+		return;
 	}
+#endif
+
+	for ( i = 0; i < tess.numVertexes; i++ ) {
+		tess.svars.colors[i] = fog->colorInt;
+	}
+	RB_CalcFogTexCoords( ( float * ) tess.svars.texcoords[0] );
+
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, tess.svars.colors[0].rgba );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, tess.svars.texcoords[0] );
+
+	GL_SelectTexture( 0 );
+	GL_Bind( tr.fogImage );
+	R_DrawElements( tess.numIndexes, tess.indexes );
 }
 
 

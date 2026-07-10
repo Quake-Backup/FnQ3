@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import shutil
+import argparse
 import io
+import os
+import shutil
+import stat
 import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -16,7 +20,48 @@ from scripts import root_archive
 from scripts import verify_release_layout
 
 
+def add_zip_symlink(archive: zipfile.ZipFile, name: str, target: str = "target") -> None:
+    info = zipfile.ZipInfo(name)
+    info.external_attr = (stat.S_IFLNK | 0o777) << 16
+    archive.writestr(info, target)
+
+
 class ReleasePackagingTests(unittest.TestCase):
+    def test_release_zip_is_deterministic_and_sorted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "stage"
+            source.mkdir()
+            (source / "z-last.txt").write_text("last", encoding="utf-8")
+            (source / "nested").mkdir()
+            (source / "nested" / "first.txt").write_text("first", encoding="utf-8")
+            first_archive = root / "first.zip"
+            second_archive = root / "second.zip"
+
+            release.write_deterministic_zip(first_archive, source)
+            os.utime(source / "z-last.txt", (2_000_000_000, 2_000_000_000))
+            os.utime(source / "nested" / "first.txt", (1_000_000_000, 1_000_000_000))
+            release.write_deterministic_zip(second_archive, source)
+
+            with zipfile.ZipFile(first_archive) as archive:
+                infos = archive.infolist()
+
+            self.assertEqual(first_archive.read_bytes(), second_archive.read_bytes())
+            self.assertEqual(
+                [info.filename for info in infos],
+                ["nested/first.txt", "z-last.txt"],
+            )
+            self.assertTrue(all(info.date_time == release.DETERMINISTIC_ZIP_DATE for info in infos))
+
+    def test_release_zip_rejects_output_inside_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "stage"
+            source.mkdir()
+            (source / "file.txt").write_text("content", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "inside source tree"):
+                release.write_deterministic_zip(source / "release.zip", source)
+
     def test_copy_release_artifact_contents_filters_build_garbage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -138,10 +183,12 @@ class ReleasePackagingTests(unittest.TestCase):
         unsafe_names = (
             "baseq3/maps/bad:name.azb",
             "baseq3/maps/bad\nname.azb",
+            "baseq3/maps/CON.azb",
+            "baseq3/maps/trailing-dot.",
         )
         for name in unsafe_names:
             with self.subTest(name=name):
-                with self.assertRaisesRegex(ValueError, "unsafe|stream"):
+                with self.assertRaisesRegex(ValueError, "unsafe|stream|reserved"):
                     root_archive.validate_archive_member_names([name], archive_name="pkg.fnz")
 
         with self.assertRaisesRegex(ValueError, "duplicate"):
@@ -149,6 +196,15 @@ class ReleasePackagingTests(unittest.TestCase):
                 ["baseq3/maps/q3dm1.azb", "baseq3/maps/Q3DM1.azb"],
                 archive_name="pkg.fnz",
             )
+
+    def test_root_archive_validation_rejects_zip_symlink_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / release.ROOT_ARCHIVE_NAME
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                add_zip_symlink(archive, "baseq3/maps/q3dm1.azb")
+
+            with self.assertRaisesRegex(ValueError, "symbolic link entry"):
+                root_archive.validate_root_archive(archive_path)
 
     def test_root_archive_rejects_custom_sources_outside_package_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -263,6 +319,71 @@ class ReleasePackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing required release files"):
                 release.validate_release_archive_contents(archive_path)
 
+    def test_release_archive_validation_rejects_filtered_build_byproducts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = root / "stage"
+            stage_root.mkdir()
+            (stage_root / "fnquake3.x64.exe").write_text("binary", encoding="utf-8")
+            (stage_root / "renderer.pdb").write_text("debug", encoding="utf-8")
+            release.copy_docs(stage_root)
+            release.build_root_archive(stage_root)
+            archive_path = Path(
+                shutil.make_archive(str(root / "fnq3-with-debug"), "zip", root_dir=stage_root)
+            )
+
+            with self.assertRaisesRegex(ValueError, "filtered build byproducts"):
+                release.validate_release_archive_contents(archive_path)
+
+    def test_release_archive_validation_rejects_zip_symlink_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive_path = root / "fnq3-symlink.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                add_zip_symlink(archive, "linked.txt")
+
+            with self.assertRaisesRegex(ValueError, "symbolic link entry"):
+                release.validate_release_archive_contents(archive_path)
+
+    def test_release_archive_validation_bounds_embedded_root_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive_path = root / "oversized-root.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                for required_name in release.REQUIRED_RELEASE_ARCHIVE_ENTRIES:
+                    archive.writestr(required_name, b"root payload" if required_name == release.ROOT_ARCHIVE_NAME else b"doc")
+
+            with mock.patch.object(release, "MAX_EMBEDDED_ROOT_ARCHIVE_SIZE", 4):
+                with self.assertRaisesRegex(ValueError, "validation limit"):
+                    release.validate_release_archive_contents(archive_path)
+
+    def test_release_layout_verifier_rejects_filtered_build_byproducts_in_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fnquake3.x64.exe").write_text("binary", encoding="utf-8")
+            (root / "renderer.pdb").write_text("debug", encoding="utf-8")
+            release.copy_docs(root)
+            release.build_root_archive(root)
+
+            with self.assertRaisesRegex(ValueError, "filtered build byproducts"):
+                verify_release_layout.verify_release_layout(root)
+
+    def test_release_layout_verifier_rejects_symlinks_in_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.txt"
+            target.write_text("target", encoding="utf-8")
+            link = root / "linked.txt"
+            try:
+                link.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+            release.copy_docs(root)
+            release.build_root_archive(root)
+
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                verify_release_layout.verify_release_layout(root)
+
     def test_copy_release_artifact_contents_rejects_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -280,6 +401,50 @@ class ReleasePackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "symbolic link"):
                 release.copy_release_artifact_contents(source, target)
 
+    def test_release_artifact_dirs_rejects_symlink_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact_root = root / "artifacts"
+            artifact_root.mkdir()
+            target = root / "outside-artifact"
+            target.mkdir()
+            link = artifact_root / "linked-artifact"
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                release.release_artifact_dirs(artifact_root)
+
+    def test_prepare_stage_root_rejects_artifact_source_descendants_before_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact"
+            artifact.mkdir()
+            stage = artifact / "manual" / "stage"
+            stage.mkdir(parents=True)
+            marker = stage / "keep.txt"
+            marker.write_text("do not delete", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "inside artifact source"):
+                release.prepare_stage_root(stage, artifact)
+
+            self.assertTrue(marker.exists())
+
+    def test_prepare_stage_root_rejects_artifact_source_ancestors_before_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = Path(tmp) / "stage"
+            artifact = stage / "artifact"
+            artifact.mkdir(parents=True)
+            marker = artifact / "keep.txt"
+            marker.write_text("do not delete", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "contain artifact source"):
+                release.prepare_stage_root(stage, artifact)
+
+            self.assertTrue(marker.exists())
+
     def test_copy_release_artifact_contents_rejects_target_inside_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -289,6 +454,16 @@ class ReleasePackagingTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "inside artifact source"):
                 release.copy_release_artifact_contents(source, source / "stage")
+
+    def test_copy_release_artifact_contents_rejects_target_containing_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "stage"
+            source = target / "artifact"
+            source.mkdir(parents=True)
+            (source / "fnquake3.x64.exe").write_text("binary", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "contain artifact source"):
+                release.copy_release_artifact_contents(source, target)
 
     def test_release_artifact_dirs_rejects_empty_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -300,6 +475,40 @@ class ReleasePackagingTests(unittest.TestCase):
     def test_release_cli_parser_rejects_negative_build_numbers(self) -> None:
         with self.assertRaisesRegex(Exception, "non-negative"):
             release.non_negative_int("-1")
+
+    def test_build_archives_supports_output_dir_outside_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact_root = root / "artifacts"
+            artifact_dir = artifact_root / "windows-x86_64"
+            artifact_dir.mkdir(parents=True)
+            (artifact_dir / "fnquake3.x64.exe").write_text("binary", encoding="utf-8")
+            output_dir = root / "external-output"
+            stale_archive = output_dir / "packages" / "stale-release.zip"
+            stale_archive.parent.mkdir(parents=True)
+            stale_archive.write_bytes(b"stale")
+
+            manifest = release.build_archives(
+                argparse.Namespace(
+                    channel="manual",
+                    artifact_root=artifact_root,
+                    output_dir=output_dir,
+                    temp_dir=root / "stage",
+                    build_date="2026-06-20",
+                    build_number=7,
+                    commit="abcdef1234567890",
+                    ref_name=None,
+                    glx_proof_root=None,
+                    glx_rollback_metadata=None,
+                )
+            )
+
+            archive_path = Path(str(manifest["archives"][0]["path"]))
+            self.assertTrue(archive_path.is_absolute())
+            self.assertTrue(archive_path.is_file())
+            self.assertFalse(stale_archive.exists())
+            self.assertTrue((output_dir / "release-manifest.json").is_file())
+            self.assertTrue((output_dir / "SHA256SUMS.txt").is_file())
 
 
 if __name__ == "__main__":

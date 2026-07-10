@@ -83,7 +83,7 @@ Use `MSYS2 MINGW32` or `MSYS2 MINGW64` depending on your target system, then eit
 
 ### windows/mingw
 
-All required build dependencies, including libraries and headers, are bundled in.
+Install MinGW development packages for SDL3, cURL, libjpeg, Ogg/Vorbis, and OpenAL. The legacy Makefile intentionally uses system packages; bundled dependency fallbacks belong to the Meson `subprojects/*.wrap` path.
 
 Build with either `make ARCH=x86` or `make ARCH=x86_64` depending on your target system, then either copy the resulting binaries from the `build` directory or run:
 
@@ -192,6 +192,8 @@ Release builds must not promote GLx as the default or alias `opengl` to GLx unti
 `USE_SYSTEM_OGG=1` and `USE_SYSTEM_VORBIS=1` - use the current system Ogg/Vorbis libraries for Makefile builds, enabled by default
 
 `USE_CURL=1` - use the current system cURL library for Makefile builds, enabled by default. Meson builds use the `subprojects/curl.wrap` fallback when a system libcurl is not available.
+
+`SDL_RUNTIME=<path>` and `OPENAL_RUNTIME=<path>` - optional runtime libraries to copy beside legacy Makefile build outputs. CMake provides the equivalent `-DFNQ3_OPENAL_RUNTIME=<path>` setting. Normal system installations do not need these overrides.
 
 Example:
 

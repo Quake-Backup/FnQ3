@@ -233,8 +233,15 @@ if [ ! -d "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}" ]; then
 	mkdir -p "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}" || exit 1;
 fi
 
-# copy and generate some application bundle resources
-cp code/libsdl/macosx/*.dylib "${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}"
+# Copy an explicitly supplied SDL runtime when producing a self-contained
+# legacy bundle. Meson remains the preferred dependency-aware build path.
+if [ -n "${FNQ3_SDL_RUNTIME:-}" ]; then
+	if [ ! -f "${FNQ3_SDL_RUNTIME}" ]; then
+		echo "FNQ3_SDL_RUNTIME does not exist: ${FNQ3_SDL_RUNTIME}"
+		exit 1
+	fi
+	cp "${FNQ3_SDL_RUNTIME}" "${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}" || exit 1
+fi
 cp ${ICNSDIR}/${ICNS} "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/$ICNS" || exit 1;
 echo -n ${PKGINFO} > "${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/PkgInfo" || exit 1;
 

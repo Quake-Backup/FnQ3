@@ -17,6 +17,14 @@ DEFAULT_SWEEP_ROOT = ROOT / ".tmp" / "vk-runtime-sweeps"
 CVAR_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 Q3_COMMAND_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
 FS_GAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+WINDOWS_RESERVED_DIR_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 TIMEDEMO_FPS_RE = re.compile(
     r"(?P<frames>\d+)\s+frames[, ]+\s*"
     r"(?P<seconds>\d+(?:\.\d+)?)\s+seconds:?\s*"
@@ -658,6 +666,8 @@ def validate_fs_game(value: str) -> str:
         not FS_GAME_RE.fullmatch(name)
         or name in {".", ".."}
         or name.startswith(".")
+        or name.endswith(".")
+        or name.split(".", 1)[0].upper() in WINDOWS_RESERVED_DIR_NAMES
     ):
         raise ValueError("--fs-game must be a single safe mod directory name")
     return name

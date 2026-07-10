@@ -134,6 +134,21 @@ vec4 ApplyDepthFade(vec4 color)
 }
 #endif
 
+#ifdef USE_FOG
+float FogFactor(vec2 fogCoord)
+{
+	if (fogEyeT.z < 0.5)
+		return texture(fog_texture, fogCoord).a;
+
+	float fogDistance = fogCoord.x - 0.001953125;
+	if (fogDistance <= 0.0 || fogCoord.y < 0.03125)
+		return 0.0;
+	if (fogCoord.y < 0.96875)
+		fogDistance *= (fogCoord.y - 0.03125) / 0.9375;
+	return sqrt(clamp(fogDistance * 8.0, 0.0, 1.0));
+}
+#endif
+
 #ifdef USE_ATEST
 float CorrectAlpha(float threshold, float alpha, vec2 tc)
 {
@@ -149,7 +164,7 @@ float CorrectAlpha(float threshold, float alpha, vec2 tc)
 
 void main() {
 #ifdef USE_FOG
-	vec4 fog = texture(fog_texture, fog_tex_coord);
+	vec4 fog = vec4(1.0, 1.0, 1.0, FogFactor(fog_tex_coord));
 #endif
 
 #if defined (USE_CLX_IDENT)

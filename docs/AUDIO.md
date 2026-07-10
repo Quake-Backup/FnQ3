@@ -30,7 +30,10 @@ If you want the short version first:
 - `s_alReverbGain`: Scale reverb send level from `0` to `2`.
 - `s_alOcclusionStrength`: Scale occlusion strength from `0` to `2`.
 - `s_alAudioZones 1`: Use optional `maps/<map>.azb` audio-zone sidecars when present.
-- `s_doppler 1`: Enable doppler shift on moving projectiles.
+- `s_doppler 1`: Enable doppler shift from projectile and listener motion.
+- `s_alDopplerFactor`: Scale doppler strength from `0` to `10`. Default `1.0`.
+- `s_alDopplerSpeed`: Speed of sound in world units per second for doppler. Default `6000`.
+- `s_alAirAbsorption`: Scale distance-based high-frequency air absorption from `0` to `10`. Default `2.0`.
 - `s_info`: Print the active backend, device, and runtime audio state.
 - `s_alListDevices`: List OpenAL playback devices, marking the default, requested, and active devices when known.
 - `s_alListHrtfs`: List OpenAL Soft HRTF specifiers for the active or requested device.
@@ -232,8 +235,15 @@ Important details:
 
 - Reverb requires an OpenAL device with EFX support.
 - `s_alReverb` is latched and requires `snd_restart` to apply cleanly.
+- FnQuake3 prefers the extended `EAXREVERB` effect when the runtime accepts it and falls back to the basic reverb effect otherwise. The extended model adds low-frequency decay control, environment echo hints, and underwater modulation (the classic underwater warble). `s_info` reports which effect is active.
 - `s_info` reports whether EFX support is available and whether the reverb send is active on the current device.
 - FnQuake3 smooths environment changes instead of hard-switching the active EFX preset. The debug overlay and `s_alDebugDump` show the active-to-target environment, transition blend, wet send, and direct/wet high-frequency values.
+
+### Air Absorption
+
+- `s_alAirAbsorption`: Scale distance-based high-frequency rolloff on positional sounds. Range `0` to `10`. Default `2.0`.
+
+On EFX-capable devices, distant sounds lose a little high-frequency energy the way they do outdoors in real air. FnQuake3 calibrates OpenAL's per-meter absorption to Quake III's inch-scale world units, so `1.0` is physically neutral, the default `2.0` is a subtle stylized darkening at long range, and `0` disables the effect entirely.
 
 ### Occlusion
 
@@ -243,6 +253,8 @@ Important details:
 
 Occlusion is useful when you want walls, doors, and arena structure to affect how remote sounds read. FnQuake3 smooths occlusion changes over time and applies separate direct-path attenuation and tone filtering, so moving behind a wall should sound like a transition rather than a hard step. The guaranteed dry-path gain change is intentionally audible even on devices without EFX filters; EFX-capable devices add the stronger low-pass/band-pass tone shift on top. If the result feels too dull, reducing `s_alOcclusionStrength` is usually a better first move than disabling the feature entirely.
 
+The same path also muffles sounds across a water surface: when the source is submerged and the listener is not (or the other way around), the sound picks up a partial-occlusion floor so it reads as coming through water even when nothing solid blocks the trace. This uses the occlusion smoothing and tone pipeline, so `s_alOcclusion 0` disables it as well.
+
 ### Audio Visibility And Culling
 
 The audio backend does not run its own PVS, PVS2, or PHS pass. It plays the transient and looping sounds that the client game asks it to play, then applies source budgets, distance attenuation, and optional trace-based occlusion.
@@ -251,6 +263,8 @@ The audio backend does not run its own PVS, PVS2, or PHS pass. It plays the tran
 - There is no engine-wide `CM_ClusterPHS` sound visibility path in this tree. The only PHS reference is in bot AAS helpers, not in client sound dispatch.
 - One-shot sounds are limited by duplicate suppression, per-entity concurrency caps, and voice-source eviction. Looping sounds must be refreshed by the client game each frame; unrefreshed transient loops are stopped.
 - Once a voice reaches OpenAL, audibility is mainly distance gain and source availability. Occlusion is a separate `CM_BoxTrace` test against solid/slime/lava contents between listener and source, with a small source-side probe fan so narrow or edge obstructions become partial occlusion instead of a binary on/off gate.
+- The backend enforces Quake III's audibility range on top of the OpenAL distance model. The clamped inverse models never reach true silence on their own, so world sounds fade out over the final stretch of the legacy maximum range instead of lingering as a faint cross-map noise floor.
+- Looping sounds beyond that audibility range are kept as virtual voices: their state stays live, but their OpenAL source and filters return to the pool so nearby sounds never starve for sources on busy servers. They resume seamlessly when the listener comes back into range, and one-shots that would start inaudible are skipped outright. When a one-shot voice does have to be stolen, eviction now prefers the least audible voice instead of merely the oldest one.
 
 Servers can opt into a compatibility-preserving audio visibility expansion without changing the protocol or relaxing visual PVS:
 
@@ -285,16 +299,20 @@ Sidecars are compiled with the repo tool target `fnq3-audiozonesc`. Maintainers 
 
 ### Weapon Sound Shaders
 
-The OpenAL backend also reads a small FnQ3 sound shader file, `sound/fnq3-weapon-sounds.sndshd`, from `FnQuake3-pkg.fnz`. The format intentionally follows the idTech4/Quake 4 declaration style: `sound <name> { minDistance ... maxDistance ... volumeDb ... shakes ... sample }`. The shipped `baseq3` shader covers the standard Quake III Arena weapon effects, while the shipped `missionpack` shader covers Team Arena weapon firing and impacts. Both give the original retail samples a little more attack, longer distance throw, and modest reverb send without replacing them.
+The OpenAL backend also reads a small FnQ3 sound shader file, `sound/fnq3-weapon-sounds.sndshd`, from `FnQuake3-pkg.fnz`. The format intentionally follows the idTech4/Quake 4 declaration style: `sound <name> { minDistance ... maxDistance ... volumeDb ... shakes ... sample }`. The shipped `baseq3` shader covers the standard Quake III Arena weapon effects, while the shipped `missionpack` shader covers Team Arena weapon firing and impacts. Both give the original retail samples a harder attack, a much longer distance throw, and a modest reverb send without replacing them: fire and explosion sounds sit several dB hotter with full-volume radii up to 160 units, heavy weapons carry to roughly 2600-3400 units, and a larger `maxDistance` also softens the rolloff curve so combat stays present through the mid field instead of gaining only a faint distant tail. The engine accepts `minDistance` up to 160 and `maxDistance` up to roughly 4000 before clamping.
 
 Like audio zones, the root package stores this with a game-dir prefix, for example `baseq3/sound/fnq3-weapon-sounds.sndshd` or `missionpack/sound/fnq3-weapon-sounds.sndshd`. Mods can ship their own game-dir entry in the root package source tree when they need different tuning.
 
 ### Doppler
 
-- `s_doppler 1`: Enable doppler shift on moving projectiles.
+- `s_doppler 1`: Enable doppler shift.
 - `s_doppler 0`: Disable doppler shift.
+- `s_alDopplerFactor`: Scale the effect strength. Range `0` to `10`. Default `1.0`.
+- `s_alDopplerSpeed`: Speed of sound in world units per second. Range `1000` to `20000`. Default `6000`.
 
-This setting affects both backends, but it matters most when the OpenAL path is doing the rest of the spatial work.
+On the OpenAL backend, doppler now uses OpenAL's native two-body model: both the emitter's velocity and your own movement contribute, so strafing past a hissing rocket bends its pitch even when the rocket's own path would not. The legacy backend keeps its original projectile-only approximation.
+
+The default speed of sound (`6000`) is deliberately a bit slower than physical reality at Quake III scale (about `13500`), which makes projectile shifts pleasantly audible without turning plasma into a siren. Raise `s_alDopplerSpeed` toward `13500` for realism, or lower it for a more exaggerated arcade effect. `s_doppler`, `s_alDopplerFactor`, and `s_alDopplerSpeed` all apply live without `snd_restart`.
 
 ### Recommended OpenAL Starting Point
 
@@ -315,6 +333,9 @@ seta s_alSpatializeStereo "0"
 seta s_volume "0.8"
 seta s_musicVolume "0.25"
 seta s_doppler "1"
+seta s_alDopplerFactor "1.0"
+seta s_alDopplerSpeed "6000"
+seta s_alAirAbsorption "2.0"
 seta s_alReverb "1"
 seta s_alReverbGain "1.0"
 seta s_alOcclusion "1"
@@ -390,6 +411,14 @@ If you are tuning the OpenAL path and want more than a yes-or-no answer, FnQuake
 These tools are only meaningful on the OpenAL backend.
 
 ## Troubleshooting
+
+### No reverb or occlusion muffling is audible
+
+On Windows, the system-wide `OpenAL32.dll` is usually the legacy Creative router, whose "Generic Software" driver has no HRTF, no OpenAL Soft extensions, and only part of EFX (its high-pass and band-pass filters are rejected). FnQuake3 warns about this at startup, degrades unsupported tone filters to low-pass so occlusion still muffles, and keeps reverb running through the subset the router accepts — but the full spatial feature set needs a real OpenAL Soft runtime.
+
+- FnQuake3 looks for `OpenAL32.dll` and `soft_oal.dll` next to the executable first, then a system `soft_oal.dll`, and only then falls back to the system `OpenAL32.dll` router.
+- To get the full feature set, download OpenAL Soft and place its DLL next to the FnQuake3 executable as either `soft_oal.dll` or `OpenAL32.dll`, then run `snd_restart`.
+- `s_info` shows what actually loaded: check the `OpenAL library`, `Active device`, `EFX` and `filter types` lines. `Generic Software` or `Generic Hardware` as the active device means the router is in use.
 
 ### I changed a setting and nothing happened
 

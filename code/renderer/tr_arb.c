@@ -1337,7 +1337,6 @@ qboolean GLX_LightingProgramEligible( const shader_t *shader, int fogNum )
 	if ( !fogPass ) {
 		return GLX_CompatDlightProgramAvailable( linear, 0, absLight, shadow );
 	}
-
 	return GLX_CompatDlightProgramAvailable( linear, 1, absLight, shadow ) &&
 		GLX_CompatDlightProgramAvailable( linear, 2, absLight, shadow );
 }
@@ -1391,9 +1390,11 @@ qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage )
 	if ( fogPass ) {
 		fp = RB_CalcFogProgramParms();
 		fogMode = fp && fp->eyeOutside ? 1 : 2;
-		GL_BindTexture( 1, tr.fogImage->texnum );
-		GLX_CompatRecordDlightState( GLX_DLIGHT_STATE_FOG_TEXTURE_BIND );
-		GL_SelectTexture( 0 );
+		if ( !r_fogMode || !r_fogMode->integer ) {
+			GL_BindTexture( 1, tr.fogImage->texnum );
+			GLX_CompatRecordDlightState( GLX_DLIGHT_STATE_FOG_TEXTURE_BIND );
+			GL_SelectTexture( 0 );
+		}
 	}
 	if ( dlightShadowEnabled ) {
 #ifdef USE_FBO
@@ -1444,7 +1445,9 @@ qboolean GLX_LightingSetupProgram( const shaderStage_t *pStage )
 	dlightFactors[3] = 0.0f;
 
 	GL_ProgramDisable();
-	if ( !GLX_CompatBindDlightProgram( linear, fogMode, absLight, dlightShadowEnabled,
+	if ( !GLX_CompatBindDlightProgram( linear, fogMode,
+		r_fogMode && r_fogMode->integer ? qtrue : qfalse,
+		absLight, dlightShadowEnabled,
 		eyePos, lightPos, lightColor, lightVector, texFactors, dlightFactors,
 		fp ? fp->fogDistanceVector : NULL,
 		fp ? fp->fogDepthVector : NULL,

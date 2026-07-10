@@ -66,12 +66,14 @@ qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stateBits,
 	int rgbWaveFunc, int alphaWaveFunc,
 	unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1, int fogAdjust,
 	int materialCombine, qboolean fogPass );
-qboolean GLX_Renderer_BindFogMaterial( void );
+qboolean GLX_Renderer_BindFogMaterial( const float *fogDistanceVector,
+	const float *fogDepthVector, float fogEyeT, const float *fogColor );
 void GLX_Renderer_UnbindMaterial( void );
 qboolean GLX_Renderer_DlightProgramAvailable( qboolean linear, int fogMode,
 	qboolean absLight, qboolean shadow );
 qboolean GLX_Renderer_BindDlightProgram( qboolean linear, int fogMode,
-	qboolean absLight, qboolean shadow, const float *eyePos, const float *lightPos,
+	qboolean analyticFog, qboolean absLight, qboolean shadow,
+	const float *eyePos, const float *lightPos,
 	const float *lightColor, const float *lightVector, const float *texFactors,
 	const float *dlightFactors, const float *fogDistanceVector,
 	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,

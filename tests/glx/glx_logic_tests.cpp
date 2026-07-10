@@ -25,12 +25,12 @@ the Free Software Foundation; either version 2 of the License, or
 #include "glx_render_ir.h"
 #include "glx_static_world_logic.h"
 #include "glx_stream_logic.h"
+#include "tr_fog_math.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
-#include <limits>
 #include <limits>
 
 namespace glx {
@@ -105,6 +105,32 @@ bool Check( bool condition, const char *test, int line, const char *expression )
 }
 
 #define CHECK( expression ) do { if ( !Check( ( expression ), __func__, __LINE__, #expression ) ) return false; } while ( 0 )
+
+bool AnalyticFogMatchesAuthoredCurveBoundaries()
+{
+	float legacyTable[256];
+	for ( int i = 0; i < 256; i++ ) {
+		legacyTable[i] = std::pow( static_cast<float>( i ) / 255.0f, 0.5f );
+	}
+
+	CHECK( R_AnalyticFogFactor( FOG_DISTANCE_BIAS, FOG_DEPTH_MAX ) == 0.0f );
+	CHECK( R_AnalyticFogFactor( FOG_DISTANCE_BIAS + 0.125f,
+		FOG_DEPTH_MIN - 0.001f ) == 0.0f );
+	CHECK( std::fabs( R_AnalyticFogFactor( FOG_DISTANCE_BIAS + 0.03125f,
+		FOG_DEPTH_MAX ) - 0.5f ) < 0.00001f );
+	CHECK( std::fabs( R_AnalyticFogFactor( FOG_DISTANCE_BIAS + 0.125f,
+		FOG_DEPTH_MIN + FOG_DEPTH_RANGE * 0.25f ) - 0.5f ) < 0.00001f );
+	CHECK( R_AnalyticFogFactor( FOG_DISTANCE_BIAS + 1.0f,
+		FOG_DEPTH_MAX ) == 1.0f );
+	CHECK( R_LegacyFogFactor( FOG_DISTANCE_BIAS, FOG_DEPTH_MAX,
+		legacyTable, 256 ) == 0.0f );
+	CHECK( R_LegacyFogFactor( FOG_DISTANCE_BIAS + 1.0f, FOG_DEPTH_MAX,
+		legacyTable, 256 ) == 1.0f );
+	CHECK( std::fabs( R_AnalyticFogFactor( FOG_DISTANCE_BIAS + 0.03125f,
+		FOG_DEPTH_MAX ) - R_LegacyFogFactor( FOG_DISTANCE_BIAS + 0.03125f,
+		FOG_DEPTH_MAX, legacyTable, 256 ) ) > 0.001f );
+	return true;
+}
 
 bool NearlyEqual( float lhs, float rhs, float epsilon )
 {
@@ -389,6 +415,8 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 	CHECK( key.program.features == ( glx::GLX_MATERIAL_FEATURE_TEXMOD |
 		glx::GLX_MATERIAL_FEATURE_ENVIRONMENT | glx::GLX_MATERIAL_FEATURE_DEPTH_FRAGMENT ) );
 	CHECK( glx::GLX_Material_StageKeyEquals( key, key ) == qtrue );
+	CHECK( glx::GLX_Material_StageKeyHash( key ) ==
+		glx::GLX_Material_StageKeyHash( key ) );
 
 	glx::MaterialStageKey entityColorKey {};
 	glx::MaterialStageKey vertexColorKey {};
@@ -402,6 +430,8 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 		0, 0, 0, 0, qfalse, &vertexColorKey ) == qtrue );
 	CHECK( glx::GLX_Material_KeyEquals( entityColorKey.program, vertexColorKey.program ) == qtrue );
 	CHECK( glx::GLX_Material_StageKeyEquals( entityColorKey, vertexColorKey ) == qfalse );
+	CHECK( glx::GLX_Material_StageKeyHash( entityColorKey ) !=
+		glx::GLX_Material_StageKeyHash( vertexColorKey ) );
 
 	glx::MaterialStageKey scrollKey {};
 	glx::MaterialStageKey rotateKey {};
@@ -415,6 +445,8 @@ bool MaterialStageKeysCoverPreparedIdTech3StageLanguage()
 		1, 0, GLX_MATERIAL_TMOD_ROTATE_BIT, 0, qfalse, &rotateKey ) == qtrue );
 	CHECK( glx::GLX_Material_KeyEquals( scrollKey.program, rotateKey.program ) == qtrue );
 	CHECK( glx::GLX_Material_StageKeyEquals( scrollKey, rotateKey ) == qfalse );
+	CHECK( glx::GLX_Material_StageKeyHash( scrollKey ) !=
+		glx::GLX_Material_StageKeyHash( rotateKey ) );
 
 	glx::MaterialStageKey scrollScaleKey {};
 	glx::MaterialStageKey scaleScrollKey {};
@@ -1221,6 +1253,44 @@ bool StreamStrategySelectionFollowsFallbackLadder()
 	} );
 	CHECK( runtime.strategy == glx::StreamStrategy::OrphanSubData );
 	CHECK( runtime.ready == qfalse );
+
+	return true;
+}
+
+bool StreamPersistentFrameRegionsPreserveGpuOverlap()
+{
+	size_t allocationBytes = 0;
+	size_t alignedOffset = 0;
+
+	CHECK( glx::GLX_STREAM_PERSISTENT_FRAME_SLOTS == 3u );
+	CHECK( glx::GLX_Stream_PersistentAllocationBytes( 1024, &allocationBytes ) == qtrue );
+	CHECK( allocationBytes == 3072 );
+	CHECK( glx::GLX_Stream_PersistentAllocationBytes(
+		std::numeric_limits<size_t>::max() / 3u + 1u, &allocationBytes ) == qfalse );
+
+	for ( unsigned int slot = 0;
+		slot < glx::GLX_STREAM_PERSISTENT_FRAME_SLOTS; slot++ ) {
+		const glx::StreamFrameRegion region = glx::GLX_Stream_FrameRegion(
+			glx::StreamStrategy::PersistentMapped, 1024, slot );
+		CHECK( region.valid == qtrue );
+		CHECK( region.first == static_cast<size_t>( slot ) * 1024u );
+		CHECK( region.limit == static_cast<size_t>( slot + 1u ) * 1024u );
+	}
+
+	const glx::StreamFrameRegion transientRegion = glx::GLX_Stream_FrameRegion(
+		glx::StreamStrategy::MapBufferRange, 1024, 2 );
+	CHECK( transientRegion.valid == qtrue );
+	CHECK( transientRegion.first == 0 );
+	CHECK( transientRegion.limit == 1024 );
+	CHECK( glx::GLX_Stream_FrameRegion( glx::StreamStrategy::PersistentMapped,
+		1024, glx::GLX_STREAM_PERSISTENT_FRAME_SLOTS ).valid == qfalse );
+
+	CHECK( glx::GLX_Stream_AlignOffsetChecked( 100, 64, &alignedOffset ) == qtrue );
+	CHECK( alignedOffset == 128 );
+	CHECK( glx::GLX_Stream_AlignOffsetChecked( 128, 64, &alignedOffset ) == qtrue );
+	CHECK( alignedOffset == 128 );
+	CHECK( glx::GLX_Stream_AlignOffsetChecked(
+		std::numeric_limits<size_t>::max() - 2u, 8, &alignedOffset ) == qfalse );
 
 	return true;
 }
@@ -3306,6 +3376,7 @@ bool PostShaderFinalEligibilityCoversLegacyGamma()
 	CHECK( plan.key.outputTransform == qtrue );
 	CHECK( plan.key.transfer == glx::OutputTransfer::SdrSrgb );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_LEGACY_GAMMA ) != 0u );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qfalse );
 	CHECK( glx::GLX_PostShader_FinalOutputDomainSupported( plan, output, qtrue ) == qtrue );
 	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( plan, output,
 		qfalse, qtrue ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
@@ -3323,6 +3394,19 @@ bool PostShaderFinalEligibilityCoversLegacyGamma()
 	CHECK( ( bloomPrefinalPlan.featureMask & glx::GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM ) == 0u );
 	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( bloomPrefinalPlan,
 		output, qtrue, qfalse ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( bloomPrefinalPlan ) == qfalse );
+
+	output.crtAmount = 1.0f;
+	plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( plan.key.crt == qtrue );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_CRT ) != 0u );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qfalse );
+
+	output.crtAmount = 0.0f;
+	output.greyscale = 1.0f;
+	plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qtrue );
+	output.greyscale = 0.0f;
 
 	glx::OutputTransform hdrTransferInSdr = output;
 	hdrTransferInSdr.transfer = glx::OutputTransfer::Hdr10Pq;
@@ -3343,8 +3427,14 @@ bool PostShaderFinalEligibilityCoversLegacyGamma()
 	CHECK( plan.valid == qtrue );
 	CHECK( plan.key.sceneLinear == qtrue );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_SCENE_LINEAR ) != 0u );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qtrue );
 	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( plan, output,
 		qfalse, qtrue ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
+
+	plan = glx::GLX_PostShader_BuildPlanForPass( output, qfalse, qfalse );
+	CHECK( plan.key.sceneLinear == qtrue );
+	CHECK( plan.key.outputTransform == qfalse );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qfalse );
 
 	return true;
 }
@@ -3737,6 +3827,7 @@ int main()
 	};
 
 	const Test tests[] = {
+		{ "AnalyticFogMatchesAuthoredCurveBoundaries", AnalyticFogMatchesAuthoredCurveBoundaries },
 		{ "MaterialKeysClassifyRcShapes", MaterialKeysClassifyRcShapes },
 		{ "MaterialKeysRejectUnsupportedCombines", MaterialKeysRejectUnsupportedCombines },
 		{ "MaterialKeysTreatSpecialSceneFlagsAsGates", MaterialKeysTreatSpecialSceneFlagsAsGates },
@@ -3753,6 +3844,7 @@ int main()
 		{ "StreamDynamicCategoriesNormalizeToSceneProducts", StreamDynamicCategoriesNormalizeToSceneProducts },
 		{ "CapabilityLogicClassifiesTiersAndExtensions", CapabilityLogicClassifiesTiersAndExtensions },
 		{ "StreamStrategySelectionFollowsFallbackLadder", StreamStrategySelectionFollowsFallbackLadder },
+		{ "StreamPersistentFrameRegionsPreserveGpuOverlap", StreamPersistentFrameRegionsPreserveGpuOverlap },
 		{ "StaticWorldPacketLogicClassifiesRunsAndPolicies", StaticWorldPacketLogicClassifiesRunsAndPolicies },
 		{ "RenderIRDefaultPassScheduleIsDeterministic", RenderIRDefaultPassScheduleIsDeterministic },
 		{ "RenderIRProductsValidate", RenderIRProductsValidate },

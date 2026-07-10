@@ -822,6 +822,55 @@ static ID_INLINE qboolean GLX_Material_KeyEquals( const MaterialProgramKey &lhs,
 	return lhs.mode == rhs.mode && lhs.features == rhs.features ? qtrue : qfalse;
 }
 
+static ID_INLINE unsigned int GLX_Material_StageKeyHashValue( unsigned int hash,
+	unsigned int value )
+{
+	/* FNV-1a over fixed-width key fields; stable across 32/64-bit targets. */
+	for ( int byteIndex = 0; byteIndex < 4; byteIndex++ ) {
+		hash ^= ( value >> ( byteIndex * 8 ) ) & 0xffu;
+		hash *= 16777619u;
+	}
+	return hash;
+}
+
+static ID_INLINE unsigned int GLX_Material_StageKeyHash(
+	const MaterialStageKey &key )
+{
+	unsigned int hash = 2166136261u;
+
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.program.mode ) );
+	hash = GLX_Material_StageKeyHashValue( hash, key.program.features );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.flags ) );
+	hash = GLX_Material_StageKeyHashValue( hash, key.stateBits );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.rgbGen ) );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.alphaGen ) );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.rgbWaveFunc ) );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.alphaWaveFunc ) );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.tcGen0 ) );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.tcGen1 ) );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.texMods0 ) );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.texMods1 ) );
+	hash = GLX_Material_StageKeyHashValue( hash, key.texModTypes0 );
+	hash = GLX_Material_StageKeyHashValue( hash, key.texModTypes1 );
+	hash = GLX_Material_StageKeyHashValue( hash, key.texModSequence0 );
+	hash = GLX_Material_StageKeyHashValue( hash, key.texModSequence1 );
+	hash = GLX_Material_StageKeyHashValue( hash, key.texModWaveFuncs0 );
+	hash = GLX_Material_StageKeyHashValue( hash, key.texModWaveFuncs1 );
+	hash = GLX_Material_StageKeyHashValue( hash,
+		static_cast<unsigned int>( key.fogAdjust ) );
+	return GLX_Material_StageKeyHashValue( hash, key.fogPass ? 1u : 0u );
+}
+
 static ID_INLINE qboolean GLX_Material_StageKeyEquals( const MaterialStageKey &lhs,
 	const MaterialStageKey &rhs )
 {

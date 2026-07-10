@@ -73,6 +73,7 @@ cvar_t	*r_neatsky;
 cvar_t	*r_drawSun;
 cvar_t	*r_dynamiclight;
 cvar_t	*r_depthFade;
+cvar_t	*r_fogMode;
 cvar_t	*r_celShading;
 cvar_t	*r_celShadingWorld;
 cvar_t	*r_celShadingWorldWidth;
@@ -2521,6 +2522,10 @@ static void R_Register( void )
 	r_depthFade = ri.Cvar_Get( "r_depthFade", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_depthFade, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_depthFade, "Softens intersections between translucent particles and world geometry." );
+	r_fogMode = ri.Cvar_Get( "r_fogMode", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_fogMode, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_fogMode, "Fog evaluation mode: 0 legacy 256x32 lookup, 1 full-precision analytic. Applies immediately." );
+	ri.Cvar_SetGroup( r_fogMode, CVG_RENDERER );
 	r_celShading = ri.Cvar_Get( "r_celShading", "0", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celShading, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_celShading, "Enable cel shading on model entities, including brush models, player models, and the first-person weapon." );

@@ -2586,7 +2586,17 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("glMultiDrawElementsIndirect", glx_module)
         self.assertIn("GL_DRAW_INDIRECT_BUFFER", glx_module)
         self.assertIn("GL_DRAW_INDIRECT_BUFFER_BINDING", glx_module)
-        self.assertIn("GLX_Dlight_BindDrawIndirectBuffer( oldDrawIndirectBuffer );", glx_module)
+        self.assertIn(
+            "GLX_Dlight_RestoreDrawIndirectBuffer( state, oldDrawIndirectBuffer );",
+            glx_module,
+        )
+        self.assertIn("projectedShaderMdiIndirectBufferBindingKnown", glx_module)
+        self.assertLessEqual(
+            glx_module.count(
+                "s_projectedDlightMdiFns.GetIntegerv( GL_DRAW_INDIRECT_BUFFER_BINDING"
+            ),
+            1,
+        )
         self.assertIn("projectedShaderArenaLightRecords", glx_module)
         self.assertIn("projectedShaderArenaListRecords", glx_module)
         self.assertIn("GLX_Dlight_FillProjectedArenaListRecords", glx_module)
@@ -6138,6 +6148,10 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             glx_runtime_sweep.validate_q3_command_tokens(["q3dm1\nquit"], "--maps")
         with self.assertRaisesRegex(ValueError, "single safe mod"):
             glx_runtime_sweep.validate_fs_game("../baseq3")
+        with self.assertRaisesRegex(ValueError, "single safe mod"):
+            glx_runtime_sweep.validate_fs_game("CON")
+        with self.assertRaisesRegex(ValueError, "single safe mod"):
+            glx_runtime_sweep.validate_fs_game("mod.")
 
     def test_rc_parity_gate_enables_dlight_shadow_scenes(self) -> None:
         defaults = glx_runtime_sweep.RC_GATE_PRESETS["rc-parity"]["defaults"]
@@ -7226,12 +7240,14 @@ class GlxPromotionTests(unittest.TestCase):
             package = packages[0]
             assert isinstance(package, dict)
             package["archive"] = "legacy/opengl.zip"
+            package["id"] = "CON"
             metadata_path = self.write_rollback_metadata(Path(tmp), metadata)
 
             check = glx_promotion.check_rollback_package_metadata(metadata_path)
             failures = "\n".join(str(failure) for failure in check["blockers"])
 
             self.assertEqual(check["status"], "blocked")
+            self.assertIn("unsafe id", failures)
             self.assertIn("unsafe artifactDir", failures)
             self.assertIn("unsafe archive", failures)
 

@@ -116,6 +116,21 @@ class ChangelogTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already exists"):
                 changelog.prepare_release(path, "0.1.0", "2026-06-21")
 
+    def test_prepare_release_uses_markdown_section_parser_for_unreleased_header(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "CHANGELOG.md"
+            path.write_text(
+                "# Changelog\n\n## [Unreleased]   \n\n- Ready.\n",
+                encoding="utf-8",
+            )
+
+            header = changelog.prepare_release(path, "0.1.0", "2026-06-21")
+            updated = path.read_text(encoding="utf-8")
+
+        self.assertEqual(header, "## [0.1.0] - 2026-06-21")
+        self.assertIn("## [Unreleased]", updated)
+        self.assertIn("## [0.1.0] - 2026-06-21", updated)
+
 
 if __name__ == "__main__":
     unittest.main()

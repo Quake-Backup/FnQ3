@@ -54,6 +54,18 @@ class StringifyShaderTests(unittest.TestCase):
 
         self.assertIn('"vec3 color;   \\n"', generated)
 
+    def test_escapes_control_characters_in_generated_c_string(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shader = root / "shader.glsl"
+            output = root / "shader.c"
+            shader.write_text("void\tmain()\x01\x7f {}\n", encoding="utf-8")
+
+            stringify_shader.stringify_shader(shader, output)
+            generated = output.read_text(encoding="utf-8")
+
+        self.assertIn('"void\\tmain()\\001\\177 {}\\n"', generated)
+
 
 if __name__ == "__main__":
     unittest.main()

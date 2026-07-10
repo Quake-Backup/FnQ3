@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 // tr_image.c
 #include "tr_local.h"
+#include "../renderercommon/tr_fog_math.h"
 
 static byte			 s_intensitytable[256];
 static unsigned char s_gammatable[256];
@@ -1443,16 +1444,10 @@ R_InitFogTable
 =================
 */
 void R_InitFogTable( void ) {
-	int		i;
-	float	d;
-	float	exp;
+	int i;
 
-	exp = 0.5;
-
-	for ( i = 0 ; i < FOG_TABLE_SIZE ; i++ ) {
-		d = powf( (float)i/(FOG_TABLE_SIZE-1), exp );
-
-		tr.fogTable[i] = d;
+	for ( i = 0; i < FOG_TABLE_SIZE; i++ ) {
+		tr.fogTable[i] = powf( (float)i / ( FOG_TABLE_SIZE - 1 ), 0.5f );
 	}
 }
 
@@ -1462,34 +1457,15 @@ void R_InitFogTable( void ) {
 R_FogFactor
 
 Returns a 0.0 to 1.0 fog density value
-This is called for each texel of the fog texture on startup
-and for each vertex of transparent shaders in fog dynamically
+This follows r_fogMode for transparent shader vertices. The compatibility
+fog texture is always generated from the legacy lookup below.
 ================
 */
 float R_FogFactor( float s, float t ) {
-	float	d;
-
-	s -= 1.0/512;
-	if ( s < 0 ) {
-		return 0;
+	if ( r_fogMode && r_fogMode->integer ) {
+		return R_AnalyticFogFactor( s, t );
 	}
-	if ( t < 1.0/32 ) {
-		return 0;
-	}
-	if ( t < 31.0/32 ) {
-		s *= (t - 1.0f/32.0f) / (30.0f/32.0f);
-	}
-
-	// we need to leave a lot of clamp range
-	s *= 8;
-
-	if ( s > 1.0 ) {
-		s = 1.0;
-	}
-
-	d = tr.fogTable[ (uint32_t)(s * (FOG_TABLE_SIZE-1)) ];
-
-	return d;
+	return R_LegacyFogFactor( s, t, tr.fogTable, FOG_TABLE_SIZE );
 }
 
 
@@ -1510,7 +1486,8 @@ static void R_CreateFogImage( void ) {
 	// S is distance, T is depth
 	for (x=0 ; x<FOG_S ; x++) {
 		for (y=0 ; y<FOG_T ; y++) {
-			d = R_FogFactor( ( x + 0.5f ) / FOG_S, ( y + 0.5f ) / FOG_T );
+			d = R_LegacyFogFactor( ( x + 0.5f ) / FOG_S,
+				( y + 0.5f ) / FOG_T, tr.fogTable, FOG_TABLE_SIZE );
 
 			data[(y*FOG_S+x)*4+0] = 
 			data[(y*FOG_S+x)*4+1] = 

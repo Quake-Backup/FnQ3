@@ -697,6 +697,14 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
                     root,
                 )
 
+            outside = root.parent / "outside.json"
+            outside.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "within evidence bundle"):
+                dlight_shadow_release_gate.load_manifest_value(
+                    str(outside),
+                    root,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

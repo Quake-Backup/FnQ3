@@ -229,6 +229,7 @@ struct DlightProgram {
 	GLuint program;
 	GLint texture0Uniform;
 	GLint fogTextureUniform;
+	GLint fogAnalyticUniform;
 	GLint shadowTextureUniform;
 	GLint eyePosUniform;
 	GLint lightPosUniform;
@@ -491,6 +492,12 @@ struct DlightState {
 	unsigned int projectedShaderMdiBatchLastBuffer;
 	unsigned int projectedShaderMdiBatchLastOffset;
 	unsigned int projectedShaderMdiBatchLastBytes;
+	GLuint projectedShaderMdiIndirectBufferBinding;
+	qboolean projectedShaderMdiIndirectBufferBindingKnown;
+	unsigned int projectedShaderMdiIndirectBufferQueries;
+	unsigned int projectedShaderMdiIndirectBufferCacheHits;
+	unsigned int projectedShaderMdiIndirectBufferBinds;
+	unsigned int projectedShaderMdiIndirectBufferRestores;
 };
 
 static int GLX_Dlight_ClampFogMode( int fogMode )
@@ -711,6 +718,12 @@ static void GLX_Dlight_ResetCounters( DlightState *state )
 	state->projectedShaderMdiBatchLastBuffer = 0;
 	state->projectedShaderMdiBatchLastOffset = 0;
 	state->projectedShaderMdiBatchLastBytes = 0;
+	state->projectedShaderMdiIndirectBufferBinding = 0;
+	state->projectedShaderMdiIndirectBufferBindingKnown = qfalse;
+	state->projectedShaderMdiIndirectBufferQueries = 0;
+	state->projectedShaderMdiIndirectBufferCacheHits = 0;
+	state->projectedShaderMdiIndirectBufferBinds = 0;
+	state->projectedShaderMdiIndirectBufferRestores = 0;
 	state->projectedSourceRecordCount = 0;
 	state->projectedListRecordCount = 0;
 	state->projectedPacketActivePackets = 0;
@@ -1323,15 +1336,25 @@ static qboolean GLX_Dlight_ResolveProjectedMdiFns()
 		s_projectedDlightMdiFns.MultiDrawElementsIndirect ? qtrue : qfalse;
 }
 
-static GLuint GLX_Dlight_CurrentDrawIndirectBuffer()
+static GLuint GLX_Dlight_CurrentDrawIndirectBuffer( DlightState *state )
 {
 	GLint current = 0;
 
+	if ( !state ) {
+		return 0;
+	}
+	if ( state->projectedShaderMdiIndirectBufferBindingKnown ) {
+		state->projectedShaderMdiIndirectBufferCacheHits++;
+		return state->projectedShaderMdiIndirectBufferBinding;
+	}
 	if ( s_projectedDlightMdiFns.GetIntegerv ) {
 		s_projectedDlightMdiFns.GetIntegerv( GL_DRAW_INDIRECT_BUFFER_BINDING,
 			&current );
+		state->projectedShaderMdiIndirectBufferQueries++;
 	}
-	return static_cast<GLuint>( current );
+	state->projectedShaderMdiIndirectBufferBinding = static_cast<GLuint>( current );
+	state->projectedShaderMdiIndirectBufferBindingKnown = qtrue;
+	return state->projectedShaderMdiIndirectBufferBinding;
 }
 
 static void GLX_Dlight_ClearMdiGLErrors()
@@ -1344,10 +1367,25 @@ static void GLX_Dlight_ClearMdiGLErrors()
 	}
 }
 
-static void GLX_Dlight_BindDrawIndirectBuffer( GLuint buffer )
+static void GLX_Dlight_BindDrawIndirectBuffer( DlightState *state, GLuint buffer )
 {
-	if ( s_projectedDlightMdiFns.BindBuffer ) {
+	if ( !state || !s_projectedDlightMdiFns.BindBuffer ) {
+		return;
+	}
+	if ( !state->projectedShaderMdiIndirectBufferBindingKnown ||
+		state->projectedShaderMdiIndirectBufferBinding != buffer ) {
 		s_projectedDlightMdiFns.BindBuffer( GL_DRAW_INDIRECT_BUFFER, buffer );
+		state->projectedShaderMdiIndirectBufferBinds++;
+	}
+	state->projectedShaderMdiIndirectBufferBinding = buffer;
+	state->projectedShaderMdiIndirectBufferBindingKnown = qtrue;
+}
+
+static void GLX_Dlight_RestoreDrawIndirectBuffer( DlightState *state, GLuint buffer )
+{
+	GLX_Dlight_BindDrawIndirectBuffer( state, buffer );
+	if ( state ) {
+		state->projectedShaderMdiIndirectBufferRestores++;
 	}
 }
 
@@ -1373,21 +1411,21 @@ static qboolean GLX_Dlight_SubmitProjectedMdiBatch( DlightState *state,
 
 	commandOffset = reinterpret_cast<const GLvoid *>(
 		static_cast<intptr_t>( batch.commandOffset ) );
-	oldDrawIndirectBuffer = GLX_Dlight_CurrentDrawIndirectBuffer();
+	oldDrawIndirectBuffer = GLX_Dlight_CurrentDrawIndirectBuffer( state );
 	/*
 	Drain every pending error category: one stale flag from earlier legacy
 	GL work would be misread as an MDI failure below and trigger a second,
 	additive fallback draw of the same geometry.
 	*/
 	GLX_Dlight_ClearMdiGLErrors();
-	GLX_Dlight_BindDrawIndirectBuffer( batch.commandBuffer );
+	GLX_Dlight_BindDrawIndirectBuffer( state, batch.commandBuffer );
 	s_projectedDlightMdiFns.MultiDrawElementsIndirect(
 		static_cast<GLenum>( batch.primitive ),
 		static_cast<GLenum>( batch.indexType ), commandOffset,
 		static_cast<GLsizei>( batch.drawCount ),
 		static_cast<GLsizei>( batch.commandStride ) );
 	err = s_projectedDlightMdiFns.GetError();
-	GLX_Dlight_BindDrawIndirectBuffer( oldDrawIndirectBuffer );
+	GLX_Dlight_RestoreDrawIndirectBuffer( state, oldDrawIndirectBuffer );
 
 	if ( err != GL_NO_ERROR ) {
 		state->projectedShaderMdiBatchGlErrors++;
@@ -1536,7 +1574,10 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"#define GLX_PROJECTED_DLIGHT_STREAM_BINDING %u\n"
 		"%s"
 		"uniform sampler2D u_Texture0;\n"
+		"#if GLX_DLIGHT_FOG\n"
 		"uniform sampler2D u_FogTexture;\n"
+		"uniform float u_FogAnalytic;\n"
+		"#endif\n"
 		"uniform sampler2D u_ShadowTexture;\n"
 		"uniform vec4 u_LightColor;\n"
 		"uniform vec4 u_LightVector;\n"
@@ -1558,6 +1599,12 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"%s vec2 v_FogTexCoord;\n"
 		"#endif\n"
 		"%s"
+		"float analyticFogFactor(vec2 fogCoord) {\n"
+		"    float fogDistance = fogCoord.x - 0.001953125;\n"
+		"    if (fogDistance <= 0.0 || fogCoord.y < 0.03125) return 0.0;\n"
+		"    if (fogCoord.y < 0.96875) fogDistance *= (fogCoord.y - 0.03125) / 0.9375;\n"
+		"    return sqrt(clamp(fogDistance * 8.0, 0.0, 1.0));\n"
+		"}\n"
 		"vec3 safeNormalize(vec3 value) {\n"
 		"    return value * inversesqrt(max(dot(value, value), 0.00000001));\n"
 		"}\n"
@@ -1722,8 +1769,13 @@ static qboolean GLX_Dlight_FragmentSource( const DlightProgramKey &key,
 		"#endif\n"
 		"    vec4 lit = base * diffuse + spec;\n"
 		"#if GLX_DLIGHT_FOG\n"
-		"    vec4 fog = GLX_TEX2D(u_FogTexture, v_FogTexCoord);\n"
-		"    lit *= 1.0 - fog.a;\n"
+		"    float fogFactor;\n"
+		"    if (u_FogAnalytic > 0.5) {\n"
+		"        fogFactor = analyticFogFactor(v_FogTexCoord);\n"
+		"    } else {\n"
+		"        fogFactor = GLX_TEX2D(u_FogTexture, v_FogTexCoord).a;\n"
+		"    }\n"
+		"    lit *= 1.0 - fogFactor;\n"
 		"#endif\n"
 		"    vec4 currentLight = lit * vec4(u_LightColor.rgb * intensity * shadowFactor, intensity * shadowFactor);\n"
 		"    vec3 projectedLight = evaluateProjectedDlights(v_LocalPos, nn);\n"
@@ -1866,6 +1918,7 @@ static DlightProgram *GLX_Dlight_CreateProgram( DlightState *state,
 
 	program->texture0Uniform = state->fns.GetUniformLocation( program->program, "u_Texture0" );
 	program->fogTextureUniform = state->fns.GetUniformLocation( program->program, "u_FogTexture" );
+	program->fogAnalyticUniform = state->fns.GetUniformLocation( program->program, "u_FogAnalytic" );
 	program->shadowTextureUniform = state->fns.GetUniformLocation( program->program, "u_ShadowTexture" );
 	program->eyePosUniform = state->fns.GetUniformLocation( program->program, "u_EyePos" );
 	program->lightPosUniform = state->fns.GetUniformLocation( program->program, "u_LightPos" );
@@ -2311,6 +2364,8 @@ static void GLX_Dlight_Shutdown( DlightState *state, qboolean deletePrograms )
 
 	GLX_Dlight_ClearProjectedStreamRange( state );
 	s_projectedDlightMdiFns = {};
+	state->projectedShaderMdiIndirectBufferBinding = 0;
+	state->projectedShaderMdiIndirectBufferBindingKnown = qfalse;
 	if ( state->currentProgram && state->fns.UseProgram ) {
 		state->fns.UseProgram( 0 );
 	}
@@ -2363,7 +2418,8 @@ static qboolean GLX_Dlight_ProgramAvailable( DlightState *state, qboolean linear
 }
 
 static qboolean GLX_Dlight_BindProgram( DlightState *state, qboolean linear,
-	int fogMode, qboolean absLight, qboolean shadow, qboolean projectedStream,
+	int fogMode, qboolean analyticFog, qboolean absLight, qboolean shadow,
+	qboolean projectedStream,
 	const float *eyePos, const float *lightPos,
 	const float *lightColor, const float *lightVector, const float *texFactors,
 	const float *dlightFactors, const float *fogDistanceVector,
@@ -2413,6 +2469,9 @@ static qboolean GLX_Dlight_BindProgram( DlightState *state, qboolean linear,
 	}
 	if ( program->fogTextureUniform >= 0 ) {
 		state->fns.Uniform1i( program->fogTextureUniform, 1 );
+	}
+	if ( program->fogAnalyticUniform >= 0 ) {
+		state->fns.Uniform1f( program->fogAnalyticUniform, analyticFog ? 1.0f : 0.0f );
 	}
 	if ( program->shadowTextureUniform >= 0 ) {
 		state->fns.Uniform1i( program->shadowTextureUniform, 2 );
@@ -2468,7 +2527,7 @@ static qboolean GLX_Dlight_BindProjectedOnlyProgram( DlightState *state,
 		return qfalse;
 	}
 
-	return GLX_Dlight_BindProgram( state, qfalse, 0, qfalse, qfalse,
+	return GLX_Dlight_BindProgram( state, qfalse, 0, qfalse, qfalse, qfalse,
 		GLX_Dlight_ProjectedStreamShaderEnabled( *state, tier ),
 		zeroVec, zeroVec, zeroVec, zeroVec, texFactors, zeroVec,
 		nullptr, nullptr, 0.0f, nullptr, nullptr, nullptr, nullptr );
@@ -2662,6 +2721,13 @@ static void GLX_Dlight_PrintInfo( const DlightState &state )
 		state.projectedShaderMdiBatchLastBuffer,
 		state.projectedShaderMdiBatchLastOffset,
 		state.projectedShaderMdiBatchLastBytes );
+	RI().Printf( PRINT_ALL, "  dlight projected shader MDI binding cache: queries %u, hits %u, binds %u, restores %u, known %s, buffer %u\n",
+		state.projectedShaderMdiIndirectBufferQueries,
+		state.projectedShaderMdiIndirectBufferCacheHits,
+		state.projectedShaderMdiIndirectBufferBinds,
+		state.projectedShaderMdiIndirectBufferRestores,
+		BoolName( state.projectedShaderMdiIndirectBufferBindingKnown ),
+		state.projectedShaderMdiIndirectBufferBinding );
 }
 
 static const char *GLX_Module_ProfileName( GlxProfile profile )
@@ -3078,11 +3144,13 @@ public:
 		int rgbWaveFunc, int alphaWaveFunc,
 		unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1, int fogAdjust,
 		int materialCombine, qboolean fogPass );
-	qboolean BindFogMaterial();
+	qboolean BindFogMaterial( const float *fogDistanceVector,
+		const float *fogDepthVector, float fogEyeT, const float *fogColor );
 	void UnbindMaterial();
 	qboolean DlightProgramAvailable( qboolean linear, int fogMode, qboolean absLight,
 		qboolean shadow );
-	qboolean BindDlightProgram( qboolean linear, int fogMode, qboolean absLight,
+	qboolean BindDlightProgram( qboolean linear, int fogMode, qboolean analyticFog,
+		qboolean absLight,
 		qboolean shadow,
 		const float *eyePos, const float *lightPos, const float *lightColor,
 		const float *lightVector, const float *texFactors, const float *dlightFactors,
@@ -4598,6 +4666,13 @@ void RendererModule::PrintFrameCounters() const
 		dlight_.projectedShaderMdiBatchLastBuffer,
 		dlight_.projectedShaderMdiBatchLastOffset,
 		dlight_.projectedShaderMdiBatchLastBytes );
+	RI().Printf( PRINT_ALL, "glx: dlight projected shader MDI binding queries %u hits %u binds %u restores %u known %s buffer %u\n",
+		dlight_.projectedShaderMdiIndirectBufferQueries,
+		dlight_.projectedShaderMdiIndirectBufferCacheHits,
+		dlight_.projectedShaderMdiIndirectBufferBinds,
+		dlight_.projectedShaderMdiIndirectBufferRestores,
+		BoolName( dlight_.projectedShaderMdiIndirectBufferBindingKnown ),
+		dlight_.projectedShaderMdiIndirectBufferBinding );
 	RI().Printf( PRINT_ALL, "glx: stream categories entity %u/%u, particle %u/%u, poly %u/%u, mark %u/%u, weapon %u/%u, ui %u/%u, beam %u/%u, dlight %u/%u, special %u/%u\n",
 		stream_.streamedDrawCategoryDraws[GLX_DYNAMIC_CATEGORY_ENTITY],
 		stream_.streamedDrawCategoryAttempts[GLX_DYNAMIC_CATEGORY_ENTITY],
@@ -5087,9 +5162,11 @@ qboolean RendererModule::BindMaterialStage( int flags, unsigned int stateBits, i
 	return GLX_Material_BindIR( &material_, material );
 }
 
-qboolean RendererModule::BindFogMaterial()
+qboolean RendererModule::BindFogMaterial( const float *fogDistanceVector,
+	const float *fogDepthVector, float fogEyeT, const float *fogColor )
 {
-	return GLX_Material_BindFog( &material_ );
+	return GLX_Material_BindFog( &material_, fogDistanceVector, fogDepthVector,
+		fogEyeT, fogColor );
 }
 
 void RendererModule::UnbindMaterial()
@@ -5105,14 +5182,16 @@ qboolean RendererModule::DlightProgramAvailable( qboolean linear, int fogMode,
 }
 
 qboolean RendererModule::BindDlightProgram( qboolean linear, int fogMode,
-	qboolean absLight, qboolean shadow, const float *eyePos, const float *lightPos,
+	qboolean analyticFog, qboolean absLight, qboolean shadow,
+	const float *eyePos, const float *lightPos,
 	const float *lightColor, const float *lightVector, const float *texFactors,
 	const float *dlightFactors, const float *fogDistanceVector,
 	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
 	const float *shadowAtlas, const float *shadowDepth, const float *shadowFilter )
 {
 	GLX_Material_Unbind( &material_ );
-	return GLX_Dlight_BindProgram( &dlight_, linear, fogMode, absLight, shadow,
+	return GLX_Dlight_BindProgram( &dlight_, linear, fogMode, analyticFog,
+		absLight, shadow,
 		GLX_Dlight_ProjectedStreamShaderEnabled( dlight_, caps_.tier ),
 		eyePos, lightPos, lightColor, lightVector, texFactors, dlightFactors,
 		fogDistanceVector, fogDepthVector, fogEyeT,
@@ -5566,6 +5645,10 @@ void RendererModule::ShadowUploadTess( int numVertexes, int numIndexes, const vo
 void RendererModule::RecordStaticWorldCache( int surfaces, int vertexes, int indexes, int vertexBytes, int indexBytes )
 {
 	GLX_StaticWorld_Record( &staticWorld_, surfaces, vertexes, indexes, vertexBytes, indexBytes );
+	if ( surfaces == 0 ) {
+		/* Static arena teardown may replace a deleted current binding with 0. */
+		GLX_Stream_InvalidateArrayBufferCache( &stream_ );
+	}
 }
 
 void RendererModule::RecordStaticWorldBatches( int batches, int largestBatchSurfaces, int faceSurfaces,
@@ -5593,6 +5676,7 @@ void RendererModule::UploadStaticWorldArena( const void *vertexData, int vertexB
 {
 	GLX_StaticWorld_UploadArena( &staticWorld_, vertexData, vertexBytes, indexData, indexBytes );
 	GLX_StaticWorld_UploadIndirectCommands( &staticWorld_, caps_.features.drawIndirect );
+	GLX_Stream_InvalidateArrayBufferCache( &stream_ );
 	GLX_Debug_LabelObject( debug_, GL_BUFFER, staticWorld_.arenaVertexBuffer, "GLx static world vertex arena" );
 	GLX_Debug_LabelObject( debug_, GL_BUFFER, staticWorld_.arenaIndexBuffer, "GLx static world index arena" );
 	GLX_Debug_LabelObject( debug_, GL_BUFFER, staticWorld_.indirectCommandBuffer, "GLx static world indirect commands" );
@@ -6260,9 +6344,11 @@ extern "C" qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stat
 		materialCombine, fogPass );
 }
 
-extern "C" qboolean GLX_Renderer_BindFogMaterial( void )
+extern "C" qboolean GLX_Renderer_BindFogMaterial( const float *fogDistanceVector,
+	const float *fogDepthVector, float fogEyeT, const float *fogColor )
 {
-	return glx::g_module.BindFogMaterial();
+	return glx::g_module.BindFogMaterial( fogDistanceVector, fogDepthVector,
+		fogEyeT, fogColor );
 }
 
 extern "C" void GLX_Renderer_UnbindMaterial( void )
@@ -6277,13 +6363,15 @@ extern "C" qboolean GLX_Renderer_DlightProgramAvailable( qboolean linear,
 }
 
 extern "C" qboolean GLX_Renderer_BindDlightProgram( qboolean linear,
-	int fogMode, qboolean absLight, qboolean shadow, const float *eyePos, const float *lightPos,
+	int fogMode, qboolean analyticFog, qboolean absLight, qboolean shadow,
+	const float *eyePos, const float *lightPos,
 	const float *lightColor, const float *lightVector, const float *texFactors,
 	const float *dlightFactors, const float *fogDistanceVector,
 	const float *fogDepthVector, float fogEyeT, const float *dlightShadow,
 	const float *shadowAtlas, const float *shadowDepth, const float *shadowFilter )
 {
-	return glx::g_module.BindDlightProgram( linear, fogMode, absLight, shadow,
+	return glx::g_module.BindDlightProgram( linear, fogMode, analyticFog,
+		absLight, shadow,
 		eyePos, lightPos, lightColor, lightVector, texFactors, dlightFactors,
 		fogDistanceVector, fogDepthVector, fogEyeT,
 		dlightShadow, shadowAtlas, shadowDepth, shadowFilter );

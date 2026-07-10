@@ -202,8 +202,9 @@ static qboolean GLX_StaticWorld_ResolveMultiDrawIndirectFn()
 	return s_fns.MultiDrawElementsIndirect ? qtrue : qfalse;
 }
 
-// GLx static-world code is the only in-repo owner of GL_DRAW_INDIRECT_BUFFER,
-// so shadow the binding locally instead of querying it around every indirect draw.
+// GLx indirect submitters restore GL_DRAW_INDIRECT_BUFFER before returning.
+// Shadow the static-world view locally instead of querying it around every draw;
+// the projected-dlight MDI path maintains the same preserve/restore contract.
 static GLuint GLX_StaticWorld_CurrentIndirectBufferBinding( StaticWorldStats *stats )
 {
 	GLint current = 0;

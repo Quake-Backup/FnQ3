@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fnq3_meta import channel_metadata, to_json
+from fnq3_meta import channel_metadata, safe_key_value_line, to_json
 
 
 def non_negative_int(value: str) -> int:
@@ -79,7 +79,7 @@ def main() -> int:
             "FNQ3_CHANNEL": meta["channel"],
         }
         for key, value in mapping.items():
-            print(f"{key}={value}")
+            print(safe_key_value_line(key, value))
         return 0
 
     print(f"{meta['project_name']} {meta['version_label']} [{meta['channel']}]")

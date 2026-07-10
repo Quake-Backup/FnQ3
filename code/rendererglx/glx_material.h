@@ -7,6 +7,7 @@
 namespace glx {
 
 static constexpr int GLX_MATERIAL_PROGRAM_LIMIT = 256;
+static constexpr int GLX_MATERIAL_PROGRAM_HASH_SIZE = 512;
 
 typedef GLuint ( APIENTRY *PFNGLXCREATESHADERPROC )( GLenum type );
 typedef void ( APIENTRY *PFNGLXSHADERSOURCEPROC )( GLuint shader, GLsizei count, const GLchar *const *string, const GLint *length );
@@ -21,6 +22,8 @@ typedef void ( APIENTRY *PFNGLXGETPROGRAMINFOLOGPROC )( GLuint program, GLsizei 
 typedef void ( APIENTRY *PFNGLXUSEPROGRAMPROC )( GLuint program );
 typedef GLint ( APIENTRY *PFNGLXGETUNIFORMLOCATIONPROC )( GLuint program, const GLchar *name );
 typedef void ( APIENTRY *PFNGLXUNIFORM1IPROC )( GLint location, GLint v0 );
+typedef void ( APIENTRY *PFNGLXMATERIALUNIFORM1FPROC )( GLint location, GLfloat v0 );
+typedef void ( APIENTRY *PFNGLXMATERIALUNIFORM4FVPROC )( GLint location, GLsizei count, const GLfloat *value );
 typedef void ( APIENTRY *PFNGLXDELETEPROGRAMPROC )( GLuint program );
 typedef void ( APIENTRY *PFNGLXDELETESHADERPROC )( GLuint shader );
 typedef void ( APIENTRY *PFNGLXMATERIALOBJECTLABELPROC )( GLenum identifier, GLuint name, GLsizei length, const GLchar *label );
@@ -39,6 +42,8 @@ struct MaterialFns {
 	PFNGLXUSEPROGRAMPROC UseProgram;
 	PFNGLXGETUNIFORMLOCATIONPROC GetUniformLocation;
 	PFNGLXUNIFORM1IPROC Uniform1i;
+	PFNGLXMATERIALUNIFORM1FPROC Uniform1f;
+	PFNGLXMATERIALUNIFORM4FVPROC Uniform4fv;
 	PFNGLXDELETEPROGRAMPROC DeleteProgram;
 	PFNGLXDELETESHADERPROC DeleteShader;
 	PFNGLXMATERIALOBJECTLABELPROC ObjectLabel;
@@ -47,11 +52,16 @@ struct MaterialFns {
 struct MaterialProgram {
 	MaterialStageKey stageKey;
 	MaterialProgramKey key;
+	unsigned int stageHash;
 	GLuint program;
 	GLuint vertexShader;
 	GLuint fragmentShader;
 	GLint texture0Uniform;
 	GLint texture1Uniform;
+	GLint fogDistanceVectorUniform;
+	GLint fogDepthVectorUniform;
+	GLint fogEyeTUniform;
+	GLint fogColorUniform;
 	unsigned int binds;
 	qboolean valid;
 };
@@ -84,6 +94,7 @@ struct MaterialState {
 	cvar_t *r_glxMaterialPrecache;
 	MaterialFns fns;
 	MaterialProgram programs[GLX_MATERIAL_PROGRAM_LIMIT];
+	unsigned short programHashTable[GLX_MATERIAL_PROGRAM_HASH_SIZE];
 	RenderProductTier tier;
 	int programCount;
 	int lastFoundProgram;
@@ -98,6 +109,9 @@ struct MaterialState {
 	unsigned int unbinds;
 	unsigned int cacheHits;
 	unsigned int cacheMisses;
+	unsigned int hashProbes;
+	unsigned int hashCollisions;
+	unsigned int hashFallbackScans;
 	unsigned int compileAttempts;
 	unsigned int compileFailures;
 	unsigned int linkFailures;
@@ -131,7 +145,9 @@ void GLX_Material_FrameComplete( MaterialState *state );
 qboolean GLX_Material_Active( const MaterialState &state );
 qboolean GLX_Material_BindIR( MaterialState *state, const MaterialIR &material );
 qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &request );
-qboolean GLX_Material_BindFog( MaterialState *state );
+qboolean GLX_Material_BindFog( MaterialState *state,
+	const float *fogDistanceVector, const float *fogDepthVector, float fogEyeT,
+	const float *fogColor );
 void GLX_Material_Unbind( MaterialState *state );
 void GLX_Material_PrintInfo( const MaterialState &state );
 const char *GLX_Material_ModeName( MaterialProgramMode mode );

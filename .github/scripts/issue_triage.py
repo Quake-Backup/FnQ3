@@ -29,6 +29,7 @@ DEFAULT_DUPLICATE_CLOSE_CONFIDENCE = 0.93
 DEFAULT_DUPLICATE_REVIEW_CONFIDENCE = 0.78
 REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 LABEL_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
+MAX_LABEL_NAME_CHARS = 50
 
 STOP_WORDS = {
     "a",
@@ -276,6 +277,8 @@ def managed_labels_from_config(config: dict[str, Any]) -> dict[str, ManagedLabel
         description = str(item.get("description", "")).strip()
         if not name:
             raise ValueError(f"managed_labels[{index}] is missing name.")
+        if len(name) > MAX_LABEL_NAME_CHARS or any(ord(char) < 32 or ord(char) == 127 for char in name):
+            raise ValueError(f"managed_labels[{index}] has invalid GitHub label name: {name!r}")
         if name in labels:
             raise ValueError(f"managed_labels contains duplicate label: {name}")
         if not LABEL_COLOR_RE.fullmatch(color):

@@ -262,6 +262,17 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 	s_alOcclusionStrength = Cvar_Get( "s_alOcclusionStrength", "1.0", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( s_alOcclusionStrength, "0", "2", CV_FLOAT );
 	Cvar_SetDescription( s_alOcclusionStrength, "Scales how strongly world occlusion attenuates and muffles OpenAL sounds before smoothing." );
+	s_alDopplerFactor = Cvar_Get( "s_alDopplerFactor", "1.0", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_alDopplerFactor, "0", "10", CV_FLOAT );
+	Cvar_SetDescription( s_alDopplerFactor, "Scales the OpenAL doppler effect from source and listener motion. Applies while s_doppler is enabled." );
+	s_alDopplerSpeed = Cvar_Get( "s_alDopplerSpeed", "6000", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_alDopplerSpeed, "1000", "20000", CV_FLOAT );
+	Cvar_SetDescription( s_alDopplerSpeed, "Speed of sound in world units per second for OpenAL doppler.\n"
+		"Lower values exaggerate pitch shifts; about 13500 matches real-world acoustics at Quake III scale." );
+	s_alAirAbsorption = Cvar_Get( "s_alAirAbsorption", "2.0", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_alAirAbsorption, "0", "10", CV_FLOAT );
+	Cvar_SetDescription( s_alAirAbsorption, "Scales distance-based high-frequency air absorption for positional sounds when EFX is available.\n"
+		"0 disables it, 1 is physically neutral, higher values darken distant sounds more strongly." );
 	s_alDebugOverlay = Cvar_Get( "s_alDebugOverlay", "0", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( s_alDebugOverlay, "0", "2", CV_INTEGER );
 	Cvar_SetDescription( s_alDebugOverlay, "Draws OpenAL spatial audio debug overlay.\n"
@@ -523,8 +534,12 @@ void AudioSystem::ServiceBackgroundTrack() {
 		return;
 	}
 
+	// Cap decode work per frame so starting a track does not burst several
+	// large codec reads into one frame; the queue still fills within a couple
+	// of frames, well inside the buffered playback margin.
 	int emptyRestarts = 0;
-	while ( musicPlayer_.QueuedBufferCount() < kQueuedStreamChunks ) {
+	int chunksQueuedThisCall = 0;
+	while ( musicPlayer_.QueuedBufferCount() < kQueuedStreamChunks && chunksQueuedThisCall < kMaxStreamChunksPerService ) {
 		std::array<byte, 32768> raw;
 		const int bytesRead = S_CodecReadStream( backgroundStream_, static_cast<int>( raw.size() ), raw.data() );
 		if ( bytesRead <= 0 ) {
@@ -572,6 +587,7 @@ void AudioSystem::ServiceBackgroundTrack() {
 			break;
 		}
 		emptyRestarts = 0;
+		++chunksQueuedThisCall;
 	}
 }
 
@@ -686,7 +702,7 @@ void AudioSystem::Update( int msec ) {
 
 	const qboolean softMuted = IsSoftMuted();
 	device_.SetMasterGain( ( s_volume != nullptr ) ? s_volume->value : 1.0f );
-	device_.AL().alDopplerFactor( 0.0f );
+	device_.ApplyDopplerState();
 	const bool deferredUpdates = device_.BeginDeferredUpdates();
 	world_.Update( softMuted );
 	if ( deferredUpdates ) {
@@ -734,8 +750,18 @@ void AudioSystem::SoundInfo() {
 	Com_Printf( "EFX support: %s\n", device_.HasEFX() ? "enabled" : "unavailable" );
 	if ( device_.HasEFX() ) {
 		Com_Printf( "Auxiliary sends: %d\n", device_.MaxAuxiliarySends() );
-		Com_Printf( "Reverb send: %s (%s)\n", device_.HasReverb() ? "enabled" : "disabled", device_.CurrentReverbName() );
+		Com_Printf( "Reverb send: %s (%s effect, %s)\n",
+			device_.HasReverb() ? "enabled" : "disabled",
+			device_.ReverbEffectName(),
+			device_.CurrentReverbName() );
+		Com_Printf( "Air absorption: %.2f (world units calibrated to %.4f m)\n",
+			ClampFloat( ( s_alAirAbsorption != nullptr ) ? s_alAirAbsorption->value : 0.0f, 0.0f, 10.0f ),
+			kMetersPerGameUnit );
 	}
+	Com_Printf( "Doppler: %s (factor %.2f, speed of sound %.0f u/s)\n",
+		( s_doppler != nullptr && s_doppler->integer ) ? "enabled" : "disabled",
+		ClampFloat( ( s_alDopplerFactor != nullptr ) ? s_alDopplerFactor->value : 1.0f, 0.0f, 10.0f ),
+		ClampFloat( ( s_alDopplerSpeed != nullptr ) ? s_alDopplerSpeed->value : 6000.0f, 1000.0f, 20000.0f ) );
 	const bool stereoSpatializeRequested = CvarIntegerOrDefault( s_alSpatializeStereo, 0 ) != 0;
 	Com_Printf( "OpenAL requested render: HRTF %s (id %s), output %s, distance %s, limiter %s, stereo spatialize %s%s\n",
 		CvarStringOrDefault( s_alHrtf, "auto" ),

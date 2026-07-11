@@ -87,7 +87,9 @@ void SV_UpdateConfigstrings(client_t *client)
 			continue;
 
 		// do not always send server info to all clients
-		if ( index == CS_SERVERINFO && ( SV_GentityNum( SV_ClientIndex( client ) )->r.svFlags & SVF_NOSERVERINFO ) ) {
+		// sv.gentities is null in demo cinema mode (no game VM), skip this check.
+		if ( index == CS_SERVERINFO && sv.gentities != nullptr &&
+			 ( SV_GentityNum( SV_ClientIndex( client ) )->r.svFlags & SVF_NOSERVERINFO ) ) {
 			continue;
 		}
 
@@ -134,7 +136,9 @@ void SV_SetConfigstring (int index, const char *val) {
 				continue;
 			}
 			// do not always send server info to all clients
-			if ( index == CS_SERVERINFO && ( SV_GentityNum( SV_ClientIndex( &client ) )->r.svFlags & SVF_NOSERVERINFO ) ) {
+			// sv.gentities is null in demo cinema mode (no game VM), so skip this check.
+			if ( index == CS_SERVERINFO && sv.gentities != nullptr &&
+				 ( SV_GentityNum( SV_ClientIndex( &client ) )->r.svFlags & SVF_NOSERVERINFO ) ) {
 				continue;
 			}
 
@@ -291,7 +295,7 @@ NOT cause this to be called, unless the game is exited to
 the menu system first.
 ===============
 */
-static void SV_Startup( void ) {
+void SV_Startup( void ) {
 	if ( svs.initialized ) {
 		Com_Error( ERR_FATAL, "SV_Startup: svs.initialized" );
 	}
@@ -321,7 +325,7 @@ static void SV_Startup( void ) {
 SV_ChangeMaxClients
 ==================
 */
-static void SV_ChangeMaxClients( void ) {
+void SV_ChangeMaxClients( void ) {
 	client_t *oldClients;
 	int		maxclients;
 	int		count;
@@ -383,7 +387,7 @@ static void SV_ChangeMaxClients( void ) {
 SV_ClearServer
 ================
 */
-static void SV_ClearServer( void ) {
+void SV_ClearServer( void ) {
 	for ( int index : SV_Indices( MAX_CONFIGSTRINGS ) ) {
 		SV_ZFree( sv.configstrings[index] );
 	}

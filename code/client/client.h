@@ -561,6 +561,7 @@ void Con_ClearNotify( void );
 void Con_RunConsole( void );
 void Con_DrawConsole( void );
 void Con_MouseEvent( int dx, int dy );
+void Con_SetMousePos( int x, int y );
 qboolean Con_KeyEvent( int key, qboolean down );
 qboolean Con_InputKey( int key );
 void Con_CharEvent( int key );

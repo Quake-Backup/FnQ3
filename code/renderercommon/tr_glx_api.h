@@ -69,7 +69,7 @@ qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stateBits,
 qboolean GLX_Renderer_BindFogMaterial( const float *fogDistanceVector,
 	const float *fogDepthVector, float fogEyeT, const float *fogColor );
 qboolean GLX_Renderer_BindLiquidMaterial( const float *params,
-	const float *eyeAndCount, const float *targetInverse,
+	const float *eyeAndCount, const float *targetInverse, const float *reflect,
 	const float *impulses, const float *amplitudes );
 void GLX_Renderer_UnbindMaterial( void );
 qboolean GLX_Renderer_DlightProgramAvailable( qboolean linear, int fogMode,

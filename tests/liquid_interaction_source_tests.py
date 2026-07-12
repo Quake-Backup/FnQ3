@@ -27,8 +27,8 @@ class LiquidInteractionSourceTests(unittest.TestCase):
         )
 
         self.assertIn("re.AddLiquidInteractionToScene", feed)
-        self.assertIn('Cvar_VariableIntegerValue( "r_liquidReflections" ) > 0', feed)
-        self.assertIn('Cvar_VariableIntegerValue( "r_liquidRipples" ) > 0', feed)
+        self.assertIn('Cvar_VariableIntegerValue( "r_liquid" ) > 0', feed)
+        self.assertIn('Cvar_VariableValue( "r_liquidRipples" ) > 0.0f', feed)
         self.assertIn("cl_liquidFeedCheckFrame != cls.framecount", feed)
         self.assertIn("CL_ResetLiquidMotionTracks", feed)
 

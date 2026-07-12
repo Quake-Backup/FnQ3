@@ -71,9 +71,11 @@ struct LiquidProgram {
 	GLuint vertexShader;
 	GLuint fragmentShader;
 	GLint textureUniform;
+	GLint depthTextureUniform;
 	GLint paramsUniform;
 	GLint eyeAndCountUniform;
 	GLint targetInverseUniform;
+	GLint reflectUniform;
 	GLint impulsesUniform;
 	GLint amplitudesUniform;
 	unsigned int binds;
@@ -165,7 +167,7 @@ qboolean GLX_Material_BindFog( MaterialState *state,
 	const float *fogDistanceVector, const float *fogDepthVector, float fogEyeT,
 	const float *fogColor );
 qboolean GLX_Material_BindLiquid( MaterialState *state, const float *params,
-	const float *eyeAndCount, const float *targetInverse,
+	const float *eyeAndCount, const float *targetInverse, const float *reflect,
 	const float *impulses, const float *amplitudes );
 void GLX_Material_Unbind( MaterialState *state );
 void GLX_Material_PrintInfo( const MaterialState &state );

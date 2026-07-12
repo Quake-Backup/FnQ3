@@ -165,8 +165,8 @@ static qboolean CL_LiquidInteractionFeedEnabled( void ) {
 	if ( cl_liquidFeedCheckFrame != cls.framecount ) {
 		cl_liquidFeedCheckFrame = cls.framecount;
 		cl_liquidFeedEnabled = ( re.AddLiquidInteractionToScene &&
-			Cvar_VariableIntegerValue( "r_liquidReflections" ) > 0 &&
-			Cvar_VariableIntegerValue( "r_liquidRipples" ) > 0 ) ? qtrue : qfalse;
+			Cvar_VariableIntegerValue( "r_liquid" ) > 0 &&
+			Cvar_VariableValue( "r_liquidRipples" ) > 0.0f ) ? qtrue : qfalse;
 	}
 	enabled = cl_liquidFeedEnabled;
 

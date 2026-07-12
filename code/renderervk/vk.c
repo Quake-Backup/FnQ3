@@ -1721,8 +1721,8 @@ static void vk_create_render_passes( void )
 	depth_format = vk.depth_format;
 	device = vk.device;
 	depthResolveActive = vk_depth_fade_uses_depth_resolve();
-	liquidCaptureActive = ( r_fbo->integer && r_liquidReflections &&
-		r_liquidReflections->integer ) ? qtrue : qfalse;
+	liquidCaptureActive = ( r_fbo->integer && r_liquid &&
+		r_liquid->integer ) ? qtrue : qfalse;
 
 	if ( r_fbo->integer == 0 )
 	{
@@ -4753,7 +4753,7 @@ static void vk_create_shader_modules( void )
 	SET_OBJECT_NAME( vk.modules.dot_vs, "dot vertex module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.dot_fs, "dot fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 
-	if ( r_liquidReflections && r_liquidReflections->integer ) {
+	if ( r_liquid && r_liquid->integer ) {
 		vk.modules.liquid_vs = SHADER_MODULE( liquid_vert_spv );
 		vk.modules.liquid_fs = SHADER_MODULE( liquid_frag_spv );
 		vk.modules.liquid_copy_fs = SHADER_MODULE( liquid_copy_frag_spv );
@@ -4923,7 +4923,7 @@ static void vk_alloc_persistent_pipelines( void )
 	}
 
 	// Enhanced liquids add a refraction underlay and bounded material sheen.
-	if ( r_liquidReflections && r_liquidReflections->integer ) {
+	if ( r_liquid && r_liquid->integer ) {
 		int i, j, k;
 
 		Com_Memset( &def, 0, sizeof( def ) );
@@ -5342,7 +5342,7 @@ void vk_update_post_process_pipelines( void )
 			vk_create_post_process_pipeline( 6, glConfig.vidWidth, glConfig.vidHeight );
 			vk_create_post_process_pipeline( 7, glConfig.vidWidth, glConfig.vidHeight );
 		}
-		if ( r_liquidReflections && r_liquidReflections->integer ) {
+		if ( r_liquid && r_liquid->integer ) {
 			vk_create_post_process_pipeline( 9,
 				vk.liquidSnapshotWidth, vk.liquidSnapshotHeight );
 		}
@@ -6020,7 +6020,7 @@ static void vk_create_attachments( void )
 				usage, &vk.motion_blur_image, &vk.motion_blur_image_view,
 				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, qfalse );
 		}
-		if ( r_liquidReflections && r_liquidReflections->integer &&
+		if ( r_liquid && r_liquid->integer &&
 			vk.liquidSnapshotWidth > 0 && vk.liquidSnapshotHeight > 0 ) {
 			create_color_attachment( vk.liquidSnapshotWidth, vk.liquidSnapshotHeight,
 				VK_SAMPLE_COUNT_1_BIT, vk.color_format, usage,
@@ -6045,7 +6045,7 @@ static void vk_create_attachments( void )
 			create_color_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples, vk.color_format,
 				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &vk.msaa_image, &vk.msaa_image_view, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 				!( r_bloom->integer || ( r_motionBlur && r_motionBlur->integer ) ||
-					( r_liquidReflections && r_liquidReflections->integer ) ) );
+					( r_liquid && r_liquid->integer ) ) );
 		}
 
 		// Dedicated post-output capture target keeps screenshots SDR and independent
@@ -6059,7 +6059,7 @@ static void vk_create_attachments( void )
 
 	create_depth_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples, &vk.depth_image, &vk.depth_image_view,
 		( vk.fboActive && ( r_bloom->integer || ( r_motionBlur && r_motionBlur->integer ) ||
-			( r_liquidReflections && r_liquidReflections->integer ) ) ) ? qfalse : qtrue );
+			( r_liquid && r_liquid->integer ) ) ) ? qfalse : qtrue );
 
 	if ( vk_depth_fade_supported() ) {
 		create_depth_fade_attachment( glConfig.vidWidth, glConfig.vidHeight, &vk.depth_fade_image, &vk.depth_fade_image_view );
@@ -6714,9 +6714,9 @@ void vk_initialize( void )
 	vk.screenMapHeight = MAX( 4, (uint32_t)( glConfig.vidHeight / 16.0f ) );
 
 	vk.liquidSnapshotWidth = vk.liquidSnapshotHeight = 0;
-	if ( r_liquidReflections && r_liquidReflections->integer ) {
-		const float scale = Com_Clamp( 0.125f, 1.0f,
-			r_liquidReflectionScale ? r_liquidReflectionScale->value : 0.5f );
+	if ( r_liquid && r_liquid->integer ) {
+		const float scale = Com_Clamp( 0.25f, 1.0f,
+			r_liquidResolution ? r_liquidResolution->value : 1.0f );
 
 		vk.liquidSnapshotWidth = MAX( 64, (uint32_t)( glConfig.vidWidth * scale + 0.5f ) );
 		vk.liquidSnapshotHeight = MAX( 64, (uint32_t)( glConfig.vidHeight * scale + 0.5f ) );
@@ -9932,6 +9932,16 @@ static void get_mvp_transform( float *mvp )
 }
 
 
+/* Model-space to clip-space transform for the active draw, in the same
+ * Vulkan clip-Y convention the liquid vertex shader receives through push
+ * constants. The liquid fragment shader re-projects reflected proxy points
+ * with it, so both must stay in lockstep. */
+void vk_get_liquid_mvp( float *mvp )
+{
+	get_mvp_transform( mvp );
+}
+
+
 void vk_clear_color( const vec4_t color ) {
 
 	VkClearAttachment attachment;
@@ -10360,8 +10370,11 @@ void vk_bind_descriptor_sets( void )
 
 	count = end - start + 1;
 
-	// fill NULL descriptor gaps
-	for ( i = start + 1; i < end; i++ ) {
+	/* Fill NULL descriptor gaps, including the range end: full-range rebinds
+	 * after mid-frame post-process passes can cover sets (texture2, fog
+	 * collapse) that no material has used yet this frame, and one NULL handle
+	 * would invalidate the entire bind. */
+	for ( i = start + 1; i <= end; i++ ) {
 		if ( vk.cmd->descriptor_set.current[i] == VK_NULL_HANDLE ) {
 			vk.cmd->descriptor_set.current[i] = tr.whiteImage->descriptor;
 		}
@@ -10755,12 +10768,11 @@ void vk_end_render_pass( void )
 qboolean vk_capture_liquid_scene( void )
 {
 	VkMemoryBarrier barrier;
-	int i;
 
 	if ( backEnd.liquidScreenMapDone ) {
 		return qtrue;
 	}
-	if ( !r_liquidReflections || !r_liquidReflections->integer ||
+	if ( !r_liquid || !r_liquid->integer ||
 		!vk.fboActive || vk.liquid_snapshot_pipeline == VK_NULL_HANDLE ||
 		vk.liquidSnapshot.source_descriptor == VK_NULL_HANDLE ||
 		vk.liquidSnapshot.color_descriptor == VK_NULL_HANDLE ||
@@ -10803,16 +10815,17 @@ qboolean vk_capture_liquid_scene( void )
 	vk_end_render_pass();
 	vk_begin_main_render_pass_load();
 
-	/* The fullscreen copy bypasses normal material bindings. Forget cached
-	 * bindings; the immediately following liquid stage will repopulate only
-	 * the sets its pipeline layout actually exposes. */
+	/* The fullscreen copy bound the post-process pipeline layout and a
+	 * static-viewport pipeline: cached descriptor-set state loses layout
+	 * compatibility and the dynamic viewport/scissor become undefined. Keep
+	 * the cached set handles, force a full rebind on the next draw, and
+	 * poison the scissor cache so vk_update_depth_range re-emits it instead
+	 * of trusting a stale match against undefined GPU state. */
 	vk.cmd->last_pipeline = VK_NULL_HANDLE;
 	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
-	for ( i = 0; i < VK_DESC_COUNT; i++ ) {
-		vk_reset_descriptor( i );
-	}
-	vk.cmd->descriptor_set.start = ~0U;
-	vk.cmd->descriptor_set.end = 0;
+	vk.cmd->descriptor_set.start = 0;
+	vk.cmd->descriptor_set.end = VK_DESC_COUNT - 1;
+	Com_Memset( &vk.cmd->scissor_rect, 0xff, sizeof( vk.cmd->scissor_rect ) );
 	backEnd.liquidScreenMapDone = qtrue;
 	return qtrue;
 }
@@ -11199,6 +11212,9 @@ void vk_draw_world_cel_outline( void )
 	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
 	vk.cmd->descriptor_set.start = 0;
 	vk.cmd->descriptor_set.end = VK_DESC_COUNT - 1;
+	/* The static-scissor overlay pipeline left the dynamic scissor undefined;
+	 * poison the cache so the next 3D draw re-emits it. */
+	Com_Memset( &vk.cmd->scissor_rect, 0xff, sizeof( vk.cmd->scissor_rect ) );
 }
 
 

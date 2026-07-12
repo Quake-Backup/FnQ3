@@ -2443,6 +2443,171 @@ static const char *depthFadeFP = {
 };
 
 #ifdef USE_FBO
+static qboolean liquidArbProgramsCompiled = qfalse;
+
+/* Forwards model-space position and normal to the fragment stage while
+ * keeping the fixed-function position transform, so liquid overlay depth
+ * matches the authored stages exactly. texcoord[0] carries the per-vertex
+ * ripple pixel offset supplied by the backend. */
+static const char *liquidVP = {
+	"!!ARBvp1.0 \n"
+	"OPTION ARB_position_invariant; \n"
+	"MOV result.texcoord[0], vertex.texcoord[0]; \n"
+	"MOV result.texcoord[1], vertex.position; \n"
+	"MOV result.texcoord[2], vertex.normal; \n"
+	"END \n"
+};
+
+/* Warped scene-color refraction underlay. The ambient wave gradient model and
+ * its constants are shared with the GLx GLSL and Vulkan implementations; see
+ * renderercommon/tr_liquid.h before changing any number here. */
+static const char *liquidRefractionFP = {
+	"!!ARBfp1.0 \n"
+	"OPTION ARB_precision_hint_fastest; \n"
+	"PARAM screen = program.local[0]; \n" /* 1/vpW, 1/vpH, vpX, vpY */
+	"PARAM waveK1 = program.local[1]; \n" /* wave vector xyz, w = speed * wrapped time */
+	"PARAM waveK2 = program.local[2]; \n"
+	"PARAM waveK3 = program.local[3]; \n"
+	"PARAM waveDir12 = program.local[4]; \n" /* octave 1 dir*amp in xy, octave 2 in zw */
+	"PARAM waveDir3 = program.local[5]; \n"
+	"PARAM tune = program.local[6]; \n" /* warp pixels, alpha, distance ref, min atten */
+	"PARAM eyePos = program.local[7]; \n" /* model-space eye xyz, w = depth reject toggle */
+	"PARAM edge = { 16.666667, 3.0, -2.0, 1.0 }; \n"
+	"PARAM bounds = { 0.002, 0.998, 4.0, 0.00003 }; \n"
+	"TEMP uv, baseUv, phase, wave, grad, atten, px, e, s, n, v, base, depth; \n"
+	"SUB uv.xy, fragment.position, screen.zwzw; \n"
+	"MUL uv.xy, uv, screen; \n"
+	"MOV baseUv, uv; \n"
+	"DPH phase.x, fragment.texcoord[1], waveK1; \n"
+	"DPH phase.y, fragment.texcoord[1], waveK2; \n"
+	"DPH phase.z, fragment.texcoord[1], waveK3; \n"
+	"COS wave.x, phase.x; \n"
+	"COS wave.y, phase.y; \n"
+	"COS wave.z, phase.z; \n"
+	"MUL grad.xy, waveDir12, wave.x; \n"
+	"MAD grad.xy, waveDir12.zwzw, wave.y, grad; \n"
+	"MAD grad.xy, waveDir3, wave.z, grad; \n"
+	/* distance attenuation, then the grazing-angle fade that keeps the
+	 * compressed wave field near the horizon from aliasing */
+	"MUL atten.x, fragment.position.w, tune.z; \n"
+	"MIN atten.x, atten.x, edge.w; \n"
+	"MAX atten.x, atten.x, tune.w; \n"
+	"DP3 n.w, fragment.texcoord[2], fragment.texcoord[2]; \n"
+	"RSQ n.w, n.w; \n"
+	"MUL n.xyz, fragment.texcoord[2], n.w; \n"
+	"SUB v.xyz, eyePos, fragment.texcoord[1]; \n"
+	"DP3 v.w, v, v; \n"
+	"RSQ v.w, v.w; \n"
+	"MUL v.xyz, v, v.w; \n"
+	"DP3 s.y, n, v; \n"
+	"ABS s.y, s.y; \n"
+	"MUL_SAT s.y, s.y, bounds.z; \n"
+	"MUL atten.x, atten.x, s.y; \n"
+	"MUL atten.x, atten.x, tune.x; \n"
+	"MUL px.xy, grad, atten.x; \n"
+	"ADD px.xy, px, fragment.texcoord[0]; \n"
+	"SUB e.xy, edge.w, uv; \n"
+	"MIN e.xy, e, uv; \n"
+	"MIN e.x, e.x, e.y; \n"
+	"MUL_SAT e.x, e.x, edge.x; \n"
+	"MAD s.x, e.x, edge.z, edge.y; \n"
+	"MUL e.y, e.x, e.x; \n"
+	"MUL e.x, e.y, s.x; \n"
+	"MUL px.xy, px, e.x; \n"
+	"MAD uv.xy, px, screen, uv; \n"
+	"MAX uv.xy, uv, bounds.x; \n"
+	"MIN uv.xy, uv, bounds.y; \n"
+	/* opaque scene depth at the warped coordinate: samples nearer than this
+	 * fragment are foreground, keep the unwarped coordinate there */
+	"TEX depth, uv, texture[1], 2D; \n"
+	"SUB depth.y, depth.x, fragment.position.z; \n"
+	"ADD depth.y, depth.y, bounds.w; \n"
+	"MUL depth.y, depth.y, eyePos.w; \n"
+	"CMP uv.xy, depth.y, baseUv, uv; \n"
+	"TEX base, uv, texture[0], 2D; \n"
+	"MOV base.w, tune.y; \n"
+	"MOV result.color, base; \n"
+	"END \n"
+};
+
+/* Post-authored Fresnel pass: bounded single-tap screen-space reflection of
+ * the immutable pre-transparency snapshot, falling back to the material sheen
+ * color wherever the mirrored sample is invalid or off screen. */
+static const char *liquidSheenFP = {
+	"!!ARBfp1.0 \n"
+	"OPTION ARB_precision_hint_fastest; \n"
+	"PARAM waveK1 = program.local[1]; \n"
+	"PARAM waveK2 = program.local[2]; \n"
+	"PARAM waveK3 = program.local[3]; \n"
+	"PARAM waveDir12 = program.local[4]; \n"
+	"PARAM waveDir3 = program.local[5]; \n"
+	"PARAM tune = program.local[6]; \n"     /* perturb scale, alpha scale, reflectivity */
+	"PARAM eyePos = program.local[7]; \n"   /* model-space eye xyz, w = proxy view scale */
+	"PARAM mvpRow0 = program.local[8]; \n"
+	"PARAM mvpRow1 = program.local[9]; \n"
+	"PARAM mvpRow3 = program.local[10]; \n"
+	"PARAM sheen = program.local[11]; \n"   /* material sheen rgb, w = proxy base distance */
+	"PARAM edge = { 12.5, 3.0, -2.0, 1.0 }; \n"
+	"PARAM bounds = { 0.002, 0.998, 16.0, 0.5 }; \n"
+	"PARAM alphaCurve = { 0.04, 0.56, 2.0, 0.0 }; \n"
+	"TEMP n, v, len, phase, wave, grad, r, p, clip, uvr, e, s, valid, refl; \n"
+	"DP3 n.w, fragment.texcoord[2], fragment.texcoord[2]; \n"
+	"RSQ n.w, n.w; \n"
+	"MUL n.xyz, fragment.texcoord[2], n.w; \n"
+	"SUB v.xyz, eyePos, fragment.texcoord[1]; \n"
+	"DP3 len.x, v, v; \n"
+	"RSQ len.y, len.x; \n"
+	"MUL v.xyz, v, len.y; \n"
+	"RCP len.z, len.y; \n"
+	"DPH phase.x, fragment.texcoord[1], waveK1; \n"
+	"DPH phase.y, fragment.texcoord[1], waveK2; \n"
+	"DPH phase.z, fragment.texcoord[1], waveK3; \n"
+	"COS wave.x, phase.x; \n"
+	"COS wave.y, phase.y; \n"
+	"COS wave.z, phase.z; \n"
+	"MUL grad.xy, waveDir12, wave.x; \n"
+	"MAD grad.xy, waveDir12.zwzw, wave.y, grad; \n"
+	"MAD grad.xy, waveDir3, wave.z, grad; \n"
+	"MOV grad.zw, alphaCurve.w; \n"
+	"MAD n.xyz, grad, tune.x, n; \n"
+	"DP3 n.w, n, n; \n"
+	"RSQ n.w, n.w; \n"
+	"MUL n.xyz, n, n.w; \n"
+	"DP3 len.w, n, v; \n"
+	"ABS s.x, len.w; \n"
+	"SUB_SAT s.y, edge.w, s.x; \n"
+	"MUL s.z, s.y, s.y; \n"
+	"MUL r.xyz, n, len.w; \n"
+	"MAD r.xyz, r, alphaCurve.z, -v; \n"
+	"MAD len.w, len.z, eyePos.w, sheen.w; \n"
+	"MAD p.xyz, r, len.w, fragment.texcoord[1]; \n"
+	"MOV p.w, edge.w; \n"
+	"DP4 clip.x, mvpRow0, p; \n"
+	"DP4 clip.y, mvpRow1, p; \n"
+	"DP4 clip.w, mvpRow3, p; \n"
+	"RCP len.y, clip.w; \n"
+	"MUL uvr.xy, clip, len.y; \n"
+	"MAD uvr.xy, uvr, bounds.w, bounds.w; \n"
+	"SGE valid.x, clip.w, bounds.z; \n"
+	"SUB e.xy, edge.w, uvr; \n"
+	"MIN e.xy, e, uvr; \n"
+	"MIN e.x, e.x, e.y; \n"
+	"MUL_SAT e.x, e.x, edge.x; \n"
+	"MAD s.w, e.x, edge.z, edge.y; \n"
+	"MUL e.y, e.x, e.x; \n"
+	"MUL e.x, e.y, s.w; \n"
+	"MUL valid.x, valid.x, e.x; \n"
+	"MUL valid.x, valid.x, tune.z; \n"
+	"MAX uvr.xy, uvr, bounds.x; \n"
+	"MIN uvr.xy, uvr, bounds.y; \n"
+	"TEX refl, uvr, texture[0], 2D; \n"
+	"LRP refl.xyz, valid.x, refl, sheen; \n"
+	"MAD_SAT s.x, s.z, alphaCurve.y, alphaCurve.x; \n"
+	"MUL refl.w, s.x, tune.y; \n"
+	"MOV result.color, refl; \n"
+	"END \n"
+};
+
 static const char *worldCelOutlineFP = {
 	"!!ARBfp1.0 \n"
 	"OPTION ARB_precision_hint_fastest; \n"
@@ -2511,6 +2676,69 @@ void GL_DepthFadeProgramEnable( const shader_t *shader )
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 3, bias[0], bias[1], bias[2], bias[3] );
 #endif
 }
+
+
+#ifdef USE_FBO
+qboolean GL_LiquidProgramAvailable( void )
+{
+	return ( fboEnabled && liquidArbProgramsCompiled && programCompiled ) ? qtrue : qfalse;
+}
+
+
+void GL_LiquidProgramEnable( const liquidArbParams_t *lp, qboolean refractionBase )
+{
+	vec4_t waveK;
+	vec3_t dirAmp[LIQUID_WAVE_OCTAVES];
+	int i;
+
+	if ( !GL_LiquidProgramAvailable() || !lp ) {
+		return;
+	}
+
+	ARB_ProgramEnable( LIQUID_VERTEX,
+		refractionBase ? LIQUID_REFRACTION_FRAGMENT : LIQUID_SHEEN_FRAGMENT );
+
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0,
+		backEnd.viewParms.viewportWidth > 0 ? 1.0f / (float)backEnd.viewParms.viewportWidth : 1.0f,
+		backEnd.viewParms.viewportHeight > 0 ? 1.0f / (float)backEnd.viewParms.viewportHeight : 1.0f,
+		(float)backEnd.viewParms.viewportX, (float)backEnd.viewParms.viewportY );
+	for ( i = 0; i < LIQUID_WAVE_OCTAVES; i++ ) {
+		R_LiquidWaveOctave( i, waveK, dirAmp[i] );
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1 + i,
+			waveK[0], waveK[1], waveK[2], waveK[3] * lp->wrappedTime );
+	}
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 4,
+		dirAmp[0][0] * dirAmp[0][2], dirAmp[0][1] * dirAmp[0][2],
+		dirAmp[1][0] * dirAmp[1][2], dirAmp[1][1] * dirAmp[1][2] );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 5,
+		dirAmp[2][0] * dirAmp[2][2], dirAmp[2][1] * dirAmp[2][2], 0.0f, 0.0f );
+
+	if ( refractionBase ) {
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 6,
+			lp->warpPixels, lp->alphaScale,
+			LIQUID_WARP_DISTANCE_REF, LIQUID_WARP_DISTANCE_MIN_ATTEN );
+		/* eyePos.w: 1 enables the foreground depth rejection, 0 forces the
+		 * comparison result to keep the warped coordinate. */
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 7,
+			lp->eyePos[0], lp->eyePos[1], lp->eyePos[2],
+			lp->depthAvailable ? 1.0f : 0.0f );
+	} else {
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 6,
+			LIQUID_NORMAL_PERTURB, lp->alphaScale, lp->reflectivity, 0.0f );
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 7,
+			lp->eyePos[0], lp->eyePos[1], lp->eyePos[2], LIQUID_REFLECT_PROXY_VIEW );
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 8,
+			lp->mvp[0], lp->mvp[4], lp->mvp[8], lp->mvp[12] );
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 9,
+			lp->mvp[1], lp->mvp[5], lp->mvp[9], lp->mvp[13] );
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 10,
+			lp->mvp[3], lp->mvp[7], lp->mvp[11], lp->mvp[15] );
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 11,
+			lp->fresnelColor[0], lp->fresnelColor[1], lp->fresnelColor[2],
+			LIQUID_REFLECT_PROXY_BASE );
+	}
+}
+#endif /* USE_FBO */
 
 
 #ifdef USE_FBO
@@ -3059,6 +3287,9 @@ static void ARB_DeletePrograms( void )
 	programCompiled = 0;
 	dlightShadowProgramsCompiled = qfalse;
 	csmShadowProgramsCompiled = qfalse;
+#ifdef USE_FBO
+	liquidArbProgramsCompiled = qfalse;
+#endif
 }
 
 
@@ -3188,6 +3419,16 @@ qboolean ARB_UpdatePrograms( void )
 		return qfalse;
 
 #ifdef USE_FBO
+	liquidArbProgramsCompiled = qfalse;
+	if ( ARB_CompileProgramInternal( Vertex, liquidVP, programs[ LIQUID_VERTEX ], qfalse ) &&
+		ARB_CompileProgramInternal( Fragment, liquidRefractionFP, programs[ LIQUID_REFRACTION_FRAGMENT ], qfalse ) &&
+		ARB_CompileProgramInternal( Fragment, liquidSheenFP, programs[ LIQUID_SHEEN_FRAGMENT ], qfalse ) ) {
+		liquidArbProgramsCompiled = qtrue;
+	} else {
+		ri.Printf( PRINT_WARNING,
+			"...per-fragment liquid programs unavailable; enhanced liquids use the projective fallback\n" );
+	}
+
 	if ( !ARB_CompileProgram( Fragment, worldCelOutlineFP, programs[ WORLD_CEL_FRAGMENT ] ) )
 		return qfalse;
 	if ( !ARB_CompileProgram( Fragment, ARB_BuildBlurProgram( buf, 7, qfalse, qtrue ), programs[ MOTION_BLUR_FRAGMENT ] ) )
@@ -4465,6 +4706,27 @@ void FBO_CopyDepthFade( void )
 	}
 
 	FBO_CopyDepthTexture();
+}
+
+
+/* Enhanced liquids reuse the depth-fade texture for waterline rejection and
+ * copy it at the liquid boundary regardless of the r_depthFade toggle. */
+void FBO_CopyLiquidDepth( void )
+{
+	if ( depthFadeCopied ) {
+		return;
+	}
+	FBO_CopyDepthTexture();
+}
+
+qboolean FBO_LiquidDepthReady( void )
+{
+	return ( FBO_DepthTextureAvailable() && depthFadeCopied ) ? qtrue : qfalse;
+}
+
+void FBO_BindLiquidDepthTexture( int texUnit )
+{
+	GL_BindTexture( texUnit, FBO_LiquidDepthReady() ? depthFadeTexture : 0 );
 }
 
 void FBO_BindDepthFadeTexture( int texUnit )
@@ -5810,8 +6072,8 @@ void QGL_InitFBO( void )
 
 	w = glConfig.vidWidth;
 	h = glConfig.vidHeight;
-	if ( r_liquidReflections && r_liquidReflections->integer > 0 && r_liquidReflectionScale ) {
-		const float scale = Com_Clamp( 0.125f, 1.0f, r_liquidReflectionScale->value );
+	if ( r_liquid && r_liquid->integer > 0 && r_liquidResolution ) {
+		const float scale = Com_Clamp( 0.25f, 1.0f, r_liquidResolution->value );
 		liquidScreenWidth = MAX( 64, (int)( (float)w * scale + 0.5f ) );
 		liquidScreenHeight = MAX( 64, (int)( (float)h * scale + 0.5f ) );
 	}

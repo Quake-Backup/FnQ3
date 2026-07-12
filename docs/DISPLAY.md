@@ -364,31 +364,28 @@ The enhanced effect reuses the retail flare image through a dedicated additive s
 
 ## Enhanced Liquids
 
-The OpenGL-lineage renderers, including GLx, and Vulkan can add warped same-frame scene-color refraction, a bounded material Fresnel sheen, and visual interaction ripples to existing liquid surfaces. Warped scene color is drawn behind each qualifying transparent water face before the map's authored stages; those stages still provide their original tint, scroll, animation, blend, and deformation. The later sheen does not resample the scene, avoiding the duplicated and smeared camera-image feedback produced by the earlier experimental path. Enhancements and ripples both default to off, so existing maps, configurations, and demos keep the classic presentation unless you opt in.
+The OpenGL-lineage renderers, including GLx, and Vulkan can add warped same-frame scene-color refraction, a Fresnel-weighted screen-space reflection, and visual interaction ripples to existing liquid surfaces. Warped scene color is drawn behind each qualifying transparent water face before the map's authored stages; those stages still provide their original tint, scroll, animation, blend, and deformation. After the authored stages, a grazing-angle reflection pass mirrors the same captured pre-transparency snapshot back onto the surface — it never resamples the live color buffer, so the duplicated and smeared camera-image feedback produced by the earlier experimental path cannot occur. Enhancements and ripples both default to off, so existing maps, configurations, and demos keep the classic presentation unless you opt in.
 
-- `r_liquidReflections` selects qualifying liquids from their shader contents. The default `0` disables the enhancement, `1` enhances shaders marked as water, and `2` also enhances shaders marked as slime or lava with more subdued material-specific strengths. This setting is latched.
-- `r_liquidReflectionScale` sets the snapshot resolution from `0.125` to `1.0`; the default is `0.5`. It scales both dimensions, so `0.5` uses roughly one quarter of the full-resolution pixels. Lower values cost less bandwidth and look softer; `1.0` is sharpest and most expensive. This setting is latched.
+- `r_liquid` selects qualifying liquids from their shader contents. The default `0` disables the enhancement, `1` enhances shaders marked as water, and `2` also enhances shaders marked as slime or lava with more subdued material-specific strengths. This setting is latched.
+- `r_liquidResolution` sets the snapshot resolution from `0.25` to `1.0`; the default is `1.0`, which samples the scene at full resolution and keeps warped edges crisp. Lower values reduce bandwidth but soften the refraction and can make displaced high-contrast edges crawl. This setting is latched.
 - `r_liquidRefraction` controls the opacity of warped scene color behind the authored transparent stages, from `0.0` to `1.0`. The default is `0.65`; lower values retain more of the original destination.
-- `r_liquidWarp` retains its `0.0` to `0.05` tuning range and `0.012` default, but the renderer converts it to a resolution-independent `0` to `8` pixel displacement (about `1.9` pixels by default). Existing archived values therefore keep working without producing larger distortion at higher resolutions.
-- `r_liquidFresnel` controls the bounded material-coloured sheen at shallow viewing angles, from `0.0` to `1.0`. The default is `0.65`; `0` completely skips the sheen draw.
-- `r_liquidRipples` enables visual disturbances from players and missiles entering, leaving, or moving through liquid. The default is `0`, and a nonzero `r_liquidReflections` mode is required.
-- `r_liquidRippleStrength` multiplies interaction amplitude from `0.0` to `2.0`. The default is `1.0`.
+- `r_liquidWarpScale` multiplies the ambient wave distortion, from `0.0` to `2.0` with a default of `1.0` (about `12` pixels at 1080 lines). The distortion is scaled to the view height so it keeps the same angular size at every resolution, and it fades with eye distance and grazing angle so distant or near-horizon liquid does not shimmer.
+- `r_liquidReflection` controls the strength of the grazing-angle reflection pass, from `0.0` to `1.0`. The default is `0.65`; `0` completely skips the pass. Where the mirrored sample would land off screen or behind the camera, the pass falls back to a flat material-coloured sheen.
+- `r_liquidRipples` sets the amplitude of visual disturbances from players and missiles entering, leaving, or moving through liquid, from `0.0` to `2.0`. The default is `1.0`; `0` disables the impulse feed entirely. A nonzero `r_liquid` mode is required.
 
-`r_liquidReflections` is retained as the compatibility name for the master/material selector; the corrected low-cost path does not claim a geometrically valid reflection source.
+When scene depth is available (it is by default; see `r_depthFade`), the refraction rejects warped samples that land on foreground geometry, which keeps the waterline crisp instead of smearing rims and ledges into the water. The reflection is a bounded single-tap screen-space approximation of the captured view, not a second mirrored world render.
 
-The effect requires `r_fbo 1`. Changing `r_liquidReflections` or `r_liquidReflectionScale` reallocates the snapshot resource, so issue `vid_restart` after changing either one. Refraction, warp, Fresnel, ripple toggle, and ripple strength can be tuned live. A balanced starting point is:
+These names replace the older `r_liquidReflections`, `r_liquidReflectionScale`, `r_liquidWarp`, `r_liquidFresnel`, and `r_liquidRippleStrength` cvars, which are no longer read.
+
+The effect requires `r_fbo 1`. Changing `r_liquid` or `r_liquidResolution` reallocates the snapshot resource, so issue `vid_restart` after changing either one. Refraction, warp, reflection, and ripples can be tuned live. A balanced starting point is:
 
 ```cfg
 seta r_fbo "1"
-seta r_liquidReflections "1"
-seta r_liquidReflectionScale "0.5"
-seta r_liquidRefraction "0.65"
-seta r_liquidWarp "0.012"
-seta r_liquidRipples "1"
+seta r_liquid "1"
 vid_restart
 ```
 
-This is an intentionally inexpensive refraction effect, not a second mirrored world render, depth-ray-marched true SSR, or a fluid simulation. It can only reuse the same-frame color already captured from the current view; the Fresnel component is a procedural sheen rather than a false screen-space reflection. Objects outside the screen, behind the camera, occluded, or drawn later in the transparent sort cannot appear in refraction. Warp fades near screen edges. Unusually early custom sorts, alpha-tested liquid stages, depth-fade or line-mode stages, and nonstandard depth-test modes retain their fully authored appearance because a geometry-only underlay cannot reproduce their coverage safely. Ripples are bounded visual responses to player and missile motion with amplitude independent of ambient warp; they distort the sampled image but do not deform the liquid mesh or change collision, buoyancy, player movement, projectile paths, networking, game logic, or demo state. If the framebuffer path or private liquid snapshot is unavailable, the original authored liquid remains visible.
+This is an intentionally inexpensive screen-space effect, not a second mirrored world render, a depth-ray-marched SSR, or a fluid simulation. Both the refraction and the reflection can only reuse the same-frame color already captured from the current view: objects outside the screen, behind the camera, occluded, or drawn later in the transparent sort cannot appear in either, and the reflection projects each mirrored ray to a single proxy distance rather than searching the depth buffer for a true hit. Warp and reflection fade near screen edges, and the reflection cleanly falls back to a material sheen where its sample is invalid. Unusually early custom sorts, alpha-tested liquid stages, depth-fade or line-mode stages, and nonstandard depth-test modes retain their fully authored appearance because a geometry-only underlay cannot reproduce their coverage safely. Ripples are bounded visual responses to player and missile motion with amplitude independent of ambient warp; they distort the sampled image but do not deform the liquid mesh or change collision, buoyancy, player movement, projectile paths, networking, game logic, or demo state. If the framebuffer path or private liquid snapshot is unavailable, the original authored liquid remains visible.
 
 For the pass ordering, backend tiers, dedicated snapshot, and compatibility invariants, see [Liquid Rendering](fnquake3/LIQUID_RENDERING.md).
 
@@ -581,7 +578,7 @@ Use `vid_restart` after changes to:
 - OpenGL or GLx `r_hdrBloomFormat`
 - Vulkan `r_bloom`
 - Vulkan `r_motionBlur`
-- `r_liquidReflections` or `r_liquidReflectionScale`
+- `r_liquid` or `r_liquidResolution`
 
 For pure window-state changes (`r_fullscreen`, `r_mode`, `r_noborder`, window size or position), prefer `vid_restart fast`: it applies the change on the existing window when possible and falls back to a full restart automatically. See [Fast Windowed/Fullscreen Toggle](#fast-windowedfullscreen-toggle).
 

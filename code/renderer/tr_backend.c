@@ -789,11 +789,14 @@ static qboolean RB_ShaderNeedsLiquidSnapshot( const shader_t *shader )
 		return qfalse;
 	}
 	state = shader->remappedShader ? shader->remappedShader : shader;
+	/* The refraction underlay and the sheen's screen-space reflection both
+	 * sample the snapshot, so either active pass justifies the capture. */
 	if ( !R_LiquidShaderSupported( state ) ||
-		!r_liquidReflections ||
-		!r_liquidRefraction || r_liquidRefraction->value <= 0.0f ||
+		!r_liquid ||
+		( ( !r_liquidRefraction || r_liquidRefraction->value <= 0.0f ) &&
+		  ( !r_liquidReflection || r_liquidReflection->value <= 0.0f ) ) ||
 		!R_LiquidContentsEnabled( shader->contentFlags | state->contentFlags,
-			r_liquidReflections->integer ) ) {
+			r_liquid->integer ) ) {
 		return qfalse;
 	}
 	if ( !fboEnabled || !FBO_LiquidScreenTexture() || backEnd.liquidScreenMapDone ||
@@ -810,10 +813,11 @@ static qboolean RB_DrawSurfListNeedsLiquidSnapshot( drawSurf_t *drawSurfs,
 {
 	int i;
 
-	if ( !drawSurfs || numDrawSurfs <= 0 || !r_liquidReflections ||
-		r_liquidReflections->integer <= 0 || !r_liquidRefraction ||
-		r_liquidRefraction->value <= 0.0f || !fboEnabled ||
-		!FBO_LiquidScreenTexture() ) {
+	if ( !drawSurfs || numDrawSurfs <= 0 || !r_liquid ||
+		r_liquid->integer <= 0 ||
+		( ( !r_liquidRefraction || r_liquidRefraction->value <= 0.0f ) &&
+		  ( !r_liquidReflection || r_liquidReflection->value <= 0.0f ) ) ||
+		!fboEnabled || !FBO_LiquidScreenTexture() ) {
 		return qfalse;
 	}
 	for ( i = 0; i < numDrawSurfs; i++ ) {
@@ -959,6 +963,9 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 			 * before fog/underwater/regular transparency. Capturing immediately
 			 * before the first liquid made the snapshot depend on that shader's sort. */
 			if ( liquidSnapshotPending && shader->sort >= SS_FOG ) {
+				/* Opaque depth for waterline rejection; idempotent when the
+				 * depth-fade snapshot already ran this list. */
+				FBO_CopyLiquidDepth();
 				if ( FBO_CopyLiquidScreen() ) {
 					backEnd.liquidScreenMapDone = qtrue;
 				}

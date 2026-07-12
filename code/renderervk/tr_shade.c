@@ -328,10 +328,10 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 #ifdef USE_TESS_NEEDS_NORMAL
 	liquidNeedsNormal = ( vk.fboActive &&
 		vk.liquidSnapshot.color_descriptor != VK_NULL_HANDLE &&
-		r_liquidReflections && r_liquidReflections->integer > 0 && shader->sort >= SS_FOG &&
+		r_liquid && r_liquid->integer > 0 && shader->sort >= SS_FOG &&
 		R_LiquidShaderSupported( state ) &&
 		R_LiquidContentsEnabled( shader->contentFlags | state->contentFlags,
-			r_liquidReflections->integer ) ) ? qtrue : qfalse;
+			r_liquid->integer ) ) ? qtrue : qfalse;
 #endif
 
 #ifdef USE_PMLIGHT
@@ -1811,12 +1811,12 @@ static qboolean VK_LiquidEffectActive( const shaderCommands_t *input )
 	return input && input->shader && input->numPasses > 0 &&
 		input->numIndexes > 0 && input->numVertexes > 0 &&
 		vk.fboActive && vk.liquidSnapshot.color_descriptor != VK_NULL_HANDLE &&
-		r_liquidReflections && r_liquidReflections->integer > 0 &&
-		R_LiquidContentsEnabled( input->liquidContentFlags, r_liquidReflections->integer ) &&
+		r_liquid && r_liquid->integer > 0 &&
+		R_LiquidContentsEnabled( input->liquidContentFlags, r_liquid->integer ) &&
 		input->liquidSort >= SS_FOG &&
 		R_LiquidShaderSupported( input->shader ) &&
 		( ( r_liquidRefraction && r_liquidRefraction->value > 0.0f ) ||
-			( r_liquidFresnel && r_liquidFresnel->value > 0.0f ) ) &&
+			( r_liquidReflection && r_liquidReflection->value > 0.0f ) ) &&
 		vk.renderPassIndex == RENDER_PASS_MAIN &&
 		!( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) &&
 		!backEnd.screenshotCubeActive && !backEnd.screenshotCubeFrontPending &&
@@ -1827,9 +1827,12 @@ static qboolean VK_LiquidEffectActive( const shaderCommands_t *input )
 static void VK_DrawLiquidPass( const shaderCommands_t *input, qboolean refractionBase )
 {
 	vkUniform_t liquid;
-	vec_t *slots[12];
+	vec_t *slots[18];
 	vk_material_t material;
-	const float rippleStrength = r_liquidRippleStrength ? r_liquidRippleStrength->value : 0.0f;
+	const float rippleStrength = r_liquidRipples ? r_liquidRipples->value : 0.0f;
+	const float heightScale = R_LiquidViewHeightScale( glConfig.vidHeight );
+	vec3_t fresnelColor;
+	float liquidMvp[16];
 	int rippleCount = 0;
 	int i;
 	uint32_t pipeline;
@@ -1837,15 +1840,18 @@ static void VK_DrawLiquidPass( const shaderCommands_t *input, qboolean refractio
 	if ( !VK_LiquidEffectActive( input ) ||
 		( refractionBase && ( !backEnd.liquidScreenMapDone ||
 			( r_liquidRefraction && r_liquidRefraction->value <= 0.0f ) ) ) ||
-		( !refractionBase && r_liquidFresnel && r_liquidFresnel->value <= 0.0f ) ) {
+		( !refractionBase && r_liquidReflection && r_liquidReflection->value <= 0.0f ) ) {
 		return;
 	}
 
 	Com_Memset( &liquid, 0, sizeof( liquid ) );
 	VectorCopy( backEnd.or.viewOrigin, liquid.eyePos );
 
-	/* The liquid shaders use the first twelve vec4 slots after eyePos. Keeping
-	 * this mapping explicit makes the shared vkUniform_t layout auditable. */
+	/* The liquid shaders use the first eighteen vec4 slots after eyePos.
+	 * Keeping this mapping explicit makes the shared vkUniform_t layout
+	 * auditable: params, info, eight impulses, two amplitude packs, the
+	 * reflection color/weight, the depth-reject controls, and the
+	 * model-to-clip matrix columns. */
 	slots[0] = liquid.light.pos;
 	slots[1] = liquid.light.color;
 	slots[2] = liquid.light.vector;
@@ -1858,20 +1864,27 @@ static void VK_DrawLiquidPass( const shaderCommands_t *input, qboolean refractio
 	slots[9] = liquid.depthFadeScale;
 	slots[10] = liquid.depthFadeBias;
 	slots[11] = liquid.dlightFactors;
+	slots[12] = liquid.csmModelX;
+	slots[13] = liquid.csmModelY;
+	slots[14] = liquid.csmModelZ;
+	slots[15] = liquid.csmAxisX;
+	slots[16] = liquid.csmAxisY;
+	slots[17] = liquid.csmAxisZ;
 
-	slots[0][0] = (float)backEnd.refdef.floatTime;
-	slots[0][1] = r_liquidWarp ?
-		MIN( LIQUID_MAX_WARP_PIXELS,
-			Com_Clamp( 0.0f, 0.05f, r_liquidWarp->value ) * LIQUID_WARP_TO_PIXELS ) : 0.0f;
+	/* R_LiquidWarpPixels maps the archived cvar through LIQUID_WARP_TO_PIXELS
+	 * and scales it to the active view height. */
+	slots[0][0] = R_LiquidWaveTime( backEnd.refdef.floatTime );
+	slots[0][1] = r_liquidWarpScale ?
+		R_LiquidWarpPixels( r_liquidWarpScale->value, glConfig.vidHeight ) : 0.0f;
 	slots[0][2] = refractionBase ?
 		( r_liquidRefraction ? Com_Clamp( 0.0f, 1.0f, r_liquidRefraction->value ) : 1.0f ) :
-		( r_liquidFresnel ? Com_Clamp( 0.0f, 1.0f, r_liquidFresnel->value ) : 0.0f );
+		( r_liquidReflection ? Com_Clamp( 0.0f, 1.0f, r_liquidReflection->value ) : 0.0f );
 	slots[0][3] = glConfig.vidWidth > 0 ? 1.0f / (float)glConfig.vidWidth : 1.0f;
 	slots[1][0] = R_LiquidContentsReflectionScale( input->liquidContentFlags );
 	slots[1][2] = glConfig.vidHeight > 0 ? 1.0f / (float)glConfig.vidHeight : 1.0f;
 	slots[1][3] = refractionBase ? 1.0f : 0.0f;
 
-	if ( r_liquidRipples && r_liquidRipples->integer && rippleStrength > 0.0f ) {
+	if ( refractionBase && rippleStrength > 0.0f ) {
 		for ( i = 0; i < backEnd.refdef.numLiquidInteractions &&
 			rippleCount < LIQUID_MAX_ACTIVE_IMPULSES; i++ ) {
 			const liquidInteraction_t *interaction = &backEnd.refdef.liquidInteractions[i];
@@ -1886,11 +1899,22 @@ static void VK_DrawLiquidPass( const shaderCommands_t *input, qboolean refractio
 				backEnd.or.axis, slots[2 + rippleCount] );
 			slots[2 + rippleCount][3] = interaction->radius + age * 150.0f;
 			slots[10 + rippleCount / 4][rippleCount & 3] =
-				interaction->strength * rippleStrength * life;
+				interaction->strength * rippleStrength * life *
+				LIQUID_RIPPLE_PIXEL_SCALE * heightScale;
 			rippleCount++;
 		}
 	}
 	slots[1][1] = (float)rippleCount;
+
+	R_LiquidContentsFresnelColor( input->liquidContentFlags, fresnelColor );
+	VectorCopy( fresnelColor, slots[12] );
+	slots[12][3] = backEnd.liquidScreenMapDone ? LIQUID_REFLECT_INTENSITY : 0.0f;
+	slots[13][0] = vk_depth_fade_ready() ? 1.0f : 0.0f;
+	vk_get_liquid_mvp( liquidMvp );
+	Com_Memcpy( slots[14], liquidMvp + 0, sizeof( vec4_t ) );
+	Com_Memcpy( slots[15], liquidMvp + 4, sizeof( vec4_t ) );
+	Com_Memcpy( slots[16], liquidMvp + 8, sizeof( vec4_t ) );
+	Com_Memcpy( slots[17], liquidMvp + 12, sizeof( vec4_t ) );
 
 	if ( VK_PushUniform( &liquid ) == ~0U ) {
 		return;
@@ -1898,6 +1922,12 @@ static void VK_DrawLiquidPass( const shaderCommands_t *input, qboolean refractio
 	vk_material_init( &material );
 	vk_material_set_descriptor( &material, VK_DESC_TEXTURE0,
 		vk.liquidSnapshot.color_descriptor );
+	/* The liquid pipelines statically use the depth set; bind the copied
+	 * scene depth when it exists and let the NULL fallback (white image)
+	 * satisfy the layout when it does not - the uniform toggle keeps the
+	 * shader from acting on it. */
+	vk_material_set_descriptor( &material, VK_DESC_DEPTH_FADE,
+		vk_depth_fade_ready() ? vk.depth_fade_descriptor : VK_NULL_HANDLE );
 	vk_bind_material( &material );
 
 	pipeline = vk.liquid_pipelines[input->shader->cullType]

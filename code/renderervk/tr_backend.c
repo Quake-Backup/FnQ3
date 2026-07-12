@@ -672,11 +672,14 @@ static qboolean RB_ShaderNeedsLiquidSnapshot( const shader_t *shader )
 		return qfalse;
 	}
 	state = shader->remappedShader ? shader->remappedShader : shader;
+	/* The refraction underlay and the sheen's screen-space reflection both
+	 * sample the snapshot, so either active pass justifies the capture. */
 	if ( !R_LiquidShaderSupported( state ) ||
-		!r_liquidReflections ||
-		!r_liquidRefraction || r_liquidRefraction->value <= 0.0f ||
+		!r_liquid ||
+		( ( !r_liquidRefraction || r_liquidRefraction->value <= 0.0f ) &&
+		  ( !r_liquidReflection || r_liquidReflection->value <= 0.0f ) ) ||
 		!R_LiquidContentsEnabled( shader->contentFlags | state->contentFlags,
-			r_liquidReflections->integer ) ) {
+			r_liquid->integer ) ) {
 		return qfalse;
 	}
 	if ( !vk.fboActive || backEnd.liquidScreenMapDone ||
@@ -694,9 +697,11 @@ static qboolean RB_DrawSurfListNeedsLiquidSnapshot( drawSurf_t *drawSurfs,
 {
 	int i;
 
-	if ( !drawSurfs || numDrawSurfs <= 0 || !r_liquidReflections ||
-		r_liquidReflections->integer <= 0 || !r_liquidRefraction ||
-		r_liquidRefraction->value <= 0.0f || !vk.fboActive ||
+	if ( !drawSurfs || numDrawSurfs <= 0 || !r_liquid ||
+		r_liquid->integer <= 0 ||
+		( ( !r_liquidRefraction || r_liquidRefraction->value <= 0.0f ) &&
+		  ( !r_liquidReflection || r_liquidReflection->value <= 0.0f ) ) ||
+		!vk.fboActive ||
 		vk.liquidSnapshot.color_descriptor == VK_NULL_HANDLE ) {
 		return qfalse;
 	}
@@ -844,6 +849,11 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 			/* Capture at one deterministic boundary, after deferred opaque work and
 			 * before fog/underwater/regular transparency. */
 			if ( liquidSnapshotPending && shader->sort >= SS_FOG ) {
+				/* Opaque depth for waterline rejection. Must precede the color
+				 * capture: the copy only runs inside the primary main pass. */
+				if ( !vk_depth_fade_ready() ) {
+					vk_copy_depth_fade();
+				}
 				if ( vk_capture_liquid_scene() ) {
 					oldSort = MAX_UINT;
 					oldEntityNum = -1;

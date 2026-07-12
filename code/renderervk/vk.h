@@ -388,6 +388,7 @@ void vk_release_cubemap_capture( void );
 qboolean vk_bloom( void );
 qboolean vk_motion_blur( void );
 qboolean vk_capture_liquid_scene( void );
+void vk_get_liquid_mvp( float *mvp );
 void vk_draw_world_cel_outline( void );
 
 qboolean vk_alloc_vbo( const byte *vbo_data, int vbo_size );

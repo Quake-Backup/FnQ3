@@ -69,7 +69,7 @@ void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction )
 {
 	int i;
 
-	if ( !interaction || !r_liquidRipples || !r_liquidRipples->integer ||
+	if ( !interaction || !r_liquidRipples || r_liquidRipples->value <= 0.0f ||
 		interaction->radius <= 0.0f || interaction->strength <= 0.0f ) {
 		return;
 	}
@@ -98,7 +98,7 @@ static void R_CopyLiquidInteractionsToRefdef( int sceneTime )
 	int count;
 
 	tr.refdef.numLiquidInteractions = 0;
-	if ( !r_liquidRipples || !r_liquidRipples->integer ) {
+	if ( !r_liquidRipples || r_liquidRipples->value <= 0.0f ) {
 		Com_Memset( r_liquidInteractions, 0, sizeof( r_liquidInteractions ) );
 		r_numLiquidInteractions = 0;
 		r_liquidInteractionTime = sceneTime;

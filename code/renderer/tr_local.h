@@ -2078,13 +2078,12 @@ extern cvar_t	*r_bloom_filter_size;
 extern cvar_t	*r_bloom_reflection;
 extern cvar_t	*r_motionBlur;
 extern cvar_t	*r_motionBlurStrength;
-extern cvar_t	*r_liquidReflections;
-extern cvar_t	*r_liquidReflectionScale;
+extern cvar_t	*r_liquid;
+extern cvar_t	*r_liquidResolution;
 extern cvar_t	*r_liquidRefraction;
-extern cvar_t	*r_liquidWarp;
-extern cvar_t	*r_liquidFresnel;
+extern cvar_t	*r_liquidWarpScale;
+extern cvar_t	*r_liquidReflection;
 extern cvar_t	*r_liquidRipples;
-extern cvar_t	*r_liquidRippleStrength;
 
 extern cvar_t	*r_ext_multisample;
 extern cvar_t	*r_ext_supersample;
@@ -2986,6 +2985,9 @@ typedef enum {
 	SPRITE_FRAGMENT,
 	DEPTH_FADE_FRAGMENT,
 #ifdef USE_FBO
+	LIQUID_VERTEX,
+	LIQUID_REFRACTION_FRAGMENT,
+	LIQUID_SHEEN_FRAGMENT,
 	WORLD_CEL_FRAGMENT,
 	MOTION_BLUR_FRAGMENT,
 	GAMMA_FRAGMENT,
@@ -3005,6 +3007,28 @@ extern const char *fogInVPCode;
 
 qboolean ARB_CompileProgram( programType ptype, const char *text, GLuint program );
 void ARB_ProgramEnableExt( GLuint vertexProgram, GLuint fragmentProgram );
+
+#ifdef USE_FBO
+/* Per-fragment enhanced-liquid pass on the OpenGL-lineage renderer. The FBO
+ * requirement guarantees ARB program support, so this is the normal quality
+ * tier; the projective per-vertex path remains as a compile-failure fallback. */
+typedef struct liquidArbParams_s {
+	float	mvp[16];		// model space -> clip space, matching the active draw matrices
+	vec3_t	eyePos;			// model-space view origin
+	float	wrappedTime;	// R_LiquidWaveTime( backEnd.refdef.floatTime )
+	float	warpPixels;		// resolution-scaled ambient displacement
+	float	alphaScale;		// material type scale * pass strength, pre-clamped
+	float	reflectivity;	// screen-space reflection weight, 0 when the snapshot is unavailable
+	qboolean	depthAvailable;	// scene depth copied for waterline rejection
+	vec3_t	fresnelColor;
+} liquidArbParams_t;
+
+qboolean GL_LiquidProgramAvailable( void );
+void GL_LiquidProgramEnable( const liquidArbParams_t *params, qboolean refractionBase );
+void FBO_CopyLiquidDepth( void );
+qboolean FBO_LiquidDepthReady( void );
+void FBO_BindLiquidDepthTexture( int texUnit );
+#endif
 
 void QGL_SetRenderScale( qboolean verbose );
 

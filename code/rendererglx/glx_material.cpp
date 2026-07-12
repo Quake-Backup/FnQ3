@@ -1037,14 +1037,26 @@ static const char kLiquidVertexSource[] =
 static const char kLiquidFragmentSource[] =
 	"#version 120\n"
 	"uniform sampler2D u_Texture0;\n"
-	"uniform vec4 u_Params;\n"
-	"uniform vec4 u_EyeAndCount;\n"
-	"uniform vec4 u_TargetInverse;\n"
-	"uniform vec4 u_Impulse[8];\n"
-	"uniform vec4 u_Amplitude[2];\n"
+	"uniform sampler2D u_Texture1;\n" /* opaque scene depth for waterline rejection */
+	"uniform vec4 u_Params;\n"        /* wrapped time, warp pixels, pass strength, +-type scale */
+	"uniform vec4 u_EyeAndCount;\n"   /* model-space eye, active impulse count */
+	"uniform vec4 u_TargetInverse;\n" /* inverse viewport size, depth reject toggle */
+	"uniform vec4 u_Reflect;\n"       /* material sheen color, reflection weight */
+	"uniform vec4 u_Impulse[8];\n"    /* model-space xyz, expanding ring radius */
+	"uniform vec4 u_Amplitude[2];\n"  /* eight packed ripple pixel amplitudes */
 	"varying vec4 v_ScreenPosition;\n"
 	"varying vec3 v_Position;\n"
 	"varying vec3 v_Normal;\n"
+	/* Shared ambient wave gradient; the octave constants must stay identical to
+	 * renderercommon/tr_liquid.h and the Vulkan/ARB implementations. */
+	"vec2 GLX_LiquidWaveGradient(vec3 position, float time)\n"
+	"{\n"
+	"    vec2 gradient = vec2(0.0);\n"
+	"    gradient += vec2(0.66, 0.75) * (0.42 * cos(dot(position, vec3(0.0096, 0.0109, 0.0051)) + time * 0.85));\n"
+	"    gradient += vec2(-0.81, 0.59) * (0.33 * cos(dot(position, vec3(-0.0269, 0.0196, 0.0116)) + time * 1.40));\n"
+	"    gradient += vec2(0.42, -0.91) * (0.25 * cos(dot(position, vec3(0.0320, -0.0693, 0.0266)) + time * 2.30));\n"
+	"    return gradient;\n"
+	"}\n"
 	"void GLX_ApplyLiquidImpulse(vec4 impulse, float amplitude, vec3 normal, inout vec2 ripplePixels)\n"
 	"{\n"
 	"    vec3 delta = v_Position - impulse.xyz;\n"
@@ -1052,12 +1064,13 @@ static const char kLiquidFragmentSource[] =
 	"    vec3 tangentDelta = delta - normal * height;\n"
 	"    float distanceToCenter = length(tangentDelta);\n"
 	"    float width = 20.0 + impulse.w * 0.12;\n"
-	"    float ring = 1.0 - clamp(abs(distanceToCenter - impulse.w) / width, 0.0, 1.0);\n"
+	"    float ringSigned = clamp((distanceToCenter - impulse.w) / width, -1.0, 1.0);\n"
+	"    float ring = (1.0 - abs(ringSigned)) * sin(ringSigned * 3.14159265);\n"
 	"    float heightFade = 1.0 - clamp(abs(height) / max(48.0, width * 3.0), 0.0, 1.0);\n"
 	"    vec2 screenGradient = vec2(dFdx(distanceToCenter), dFdy(distanceToCenter));\n"
 	"    float gradientLength = length(screenGradient);\n"
 	"    vec2 direction = gradientLength > 0.0001 ? screenGradient / gradientLength : vec2(0.0);\n"
-	"    ripplePixels += direction * ring * heightFade * amplitude * 3.0;\n"
+	"    ripplePixels += direction * ring * heightFade * amplitude;\n"
 	"}\n"
 	"void main(void)\n"
 	"{\n"
@@ -1066,17 +1079,16 @@ static const char kLiquidFragmentSource[] =
 	"    vec3 viewVector = u_EyeAndCount.xyz - v_Position;\n"
 	"    float viewLength = length(viewVector);\n"
 	"    vec3 viewDirection = viewLength > 0.000001 ? viewVector / viewLength : normal;\n"
-	"    float fresnel = 1.0 - abs(dot(normal, viewDirection));\n"
-	"    fresnel *= fresnel;\n"
 	"    float typeScale = abs(u_Params.w);\n"
+	"    vec2 waveGradient = GLX_LiquidWaveGradient(v_Position, u_Params.x);\n"
 	"    if (u_Params.w < 0.0)\n"
 	"    {\n"
 	"        vec2 uv = v_ScreenPosition.xy / v_ScreenPosition.w * 0.5 + 0.5;\n"
-	"        vec2 ambientPixels;\n"
+	"        float distanceAtten = clamp(320.0 / max(v_ScreenPosition.w, 1.0), 0.30, 1.0);\n"
+	/* grazing fade: the compressed wave field near the horizon would alias */
+	"        distanceAtten *= clamp(abs(dot(normal, viewDirection)) * 4.0, 0.0, 1.0);\n"
+	"        vec2 ambientPixels = waveGradient * (u_Params.y * distanceAtten);\n"
 	"        vec2 ripplePixels = vec2(0.0);\n"
-	"        ambientPixels.x = sin(dot(v_Position, vec3(0.031, 0.017, 0.0)) + u_Params.x * 1.13);\n"
-	"        ambientPixels.y = sin(dot(v_Position, vec3(-0.013, 0.027, 0.019)) - u_Params.x * 0.87);\n"
-	"        ambientPixels *= clamp(u_Params.y, 0.0, 8.0);\n"
 	"        if (u_EyeAndCount.w > 0.5) GLX_ApplyLiquidImpulse(u_Impulse[0], u_Amplitude[0].x, normal, ripplePixels);\n"
 	"        if (u_EyeAndCount.w > 1.5) GLX_ApplyLiquidImpulse(u_Impulse[1], u_Amplitude[0].y, normal, ripplePixels);\n"
 	"        if (u_EyeAndCount.w > 2.5) GLX_ApplyLiquidImpulse(u_Impulse[2], u_Amplitude[0].z, normal, ripplePixels);\n"
@@ -1089,16 +1101,36 @@ static const char kLiquidFragmentSource[] =
 	"            * smoothstep(vec2(0.0), vec2(0.06), vec2(1.0) - uv);\n"
 	"        float edgeFade = min(edge.x, edge.y);\n"
 	"        vec2 sampleUv = clamp(uv + (ambientPixels + ripplePixels) * u_TargetInverse.xy * edgeFade, vec2(0.002), vec2(0.998));\n"
+	/* samples nearer than this fragment are foreground: keep the waterline
+	 * crisp by falling back to the unwarped coordinate there */
+	"        if (u_TargetInverse.z > 0.5\n"
+	"            && texture2D(u_Texture1, sampleUv).r < gl_FragCoord.z - 0.00003)\n"
+	"            sampleUv = uv;\n"
 	"        vec3 sceneColor = texture2D(u_Texture0, sampleUv).rgb;\n"
 	"        float alpha = typeScale * clamp(u_Params.z, 0.0, 1.0);\n"
 	"        gl_FragColor = vec4(sceneColor, alpha);\n"
 	"    }\n"
 	"    else\n"
 	"    {\n"
-	"        vec3 sheenColor = typeScale > 0.8 ? vec3(0.42, 0.58, 0.70)\n"
-	"            : (typeScale > 0.4 ? vec3(0.30, 0.55, 0.18) : vec3(0.95, 0.38, 0.08));\n"
+	/* Bounded single-tap screen-space reflection of the immutable pre-
+	 * transparency snapshot; the material sheen color is the fallback
+	 * wherever the mirrored sample is invalid or leaves the screen. */
+	"        vec3 waveNormal = normalize(normal + vec3(waveGradient * 0.12, 0.0));\n"
+	"        float fresnel = 1.0 - abs(dot(waveNormal, viewDirection));\n"
+	"        fresnel *= fresnel;\n"
+	"        vec3 reflected = reflect(-viewDirection, waveNormal);\n"
+	"        vec4 reflectedClip = gl_ModelViewProjectionMatrix\n"
+	"            * vec4(v_Position + reflected * (384.0 + 0.75 * viewLength), 1.0);\n"
+	"        vec2 reflectedUv = reflectedClip.xy / max(reflectedClip.w, 0.001) * 0.5 + 0.5;\n"
+	"        vec2 reflectedEdge = smoothstep(vec2(0.0), vec2(0.08), reflectedUv)\n"
+	"            * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - reflectedUv);\n"
+	"        float reflectionWeight = step(16.0, reflectedClip.w)\n"
+	"            * min(reflectedEdge.x, reflectedEdge.y) * u_Reflect.w;\n"
+	"        vec3 reflectionColor = texture2D(u_Texture0,\n"
+	"            clamp(reflectedUv, vec2(0.002), vec2(0.998))).rgb;\n"
+	"        vec3 sheenColor = mix(u_Reflect.rgb, reflectionColor, reflectionWeight);\n"
 	"        float alpha = typeScale * clamp(u_Params.z, 0.0, 1.0)\n"
-	"            * clamp(0.03 + fresnel * 0.27, 0.0, 0.30);\n"
+	"            * clamp(0.04 + fresnel * 0.56, 0.0, 0.60);\n"
 	"        gl_FragColor = vec4(sheenColor, alpha);\n"
 	"    }\n"
 	"}\n";
@@ -1204,14 +1236,19 @@ static qboolean GLX_Material_CreateLiquidProgram( MaterialState *state )
 	}
 
 	liquid->textureUniform = state->fns.GetUniformLocation( liquid->program, "u_Texture0" );
+	liquid->depthTextureUniform = state->fns.GetUniformLocation( liquid->program, "u_Texture1" );
 	liquid->paramsUniform = state->fns.GetUniformLocation( liquid->program, "u_Params" );
 	liquid->eyeAndCountUniform = state->fns.GetUniformLocation( liquid->program, "u_EyeAndCount" );
 	liquid->targetInverseUniform = state->fns.GetUniformLocation( liquid->program, "u_TargetInverse" );
+	liquid->reflectUniform = state->fns.GetUniformLocation( liquid->program, "u_Reflect" );
 	liquid->impulsesUniform = state->fns.GetUniformLocation( liquid->program, "u_Impulse[0]" );
 	liquid->amplitudesUniform = state->fns.GetUniformLocation( liquid->program, "u_Amplitude[0]" );
 	state->fns.UseProgram( liquid->program );
 	if ( liquid->textureUniform >= 0 ) {
 		state->fns.Uniform1i( liquid->textureUniform, 0 );
+	}
+	if ( liquid->depthTextureUniform >= 0 ) {
+		state->fns.Uniform1i( liquid->depthTextureUniform, 1 );
 	}
 	state->fns.UseProgram( 0 );
 	state->currentProgram = 0;
@@ -2176,12 +2213,13 @@ qboolean GLX_Material_BindFog( MaterialState *state,
 }
 
 qboolean GLX_Material_BindLiquid( MaterialState *state, const float *params,
-	const float *eyeAndCount, const float *targetInverse,
+	const float *eyeAndCount, const float *targetInverse, const float *reflect,
 	const float *impulses, const float *amplitudes )
 {
 	LiquidProgram *liquid;
 
-	if ( !state || !params || !eyeAndCount || !targetInverse || !impulses || !amplitudes ) {
+	if ( !state || !params || !eyeAndCount || !targetInverse || !reflect ||
+		!impulses || !amplitudes ) {
 		return qfalse;
 	}
 	state->bindAttempts++;
@@ -2215,6 +2253,9 @@ qboolean GLX_Material_BindLiquid( MaterialState *state, const float *params,
 	}
 	if ( liquid->targetInverseUniform >= 0 ) {
 		state->fns.Uniform4fv( liquid->targetInverseUniform, 1, targetInverse );
+	}
+	if ( liquid->reflectUniform >= 0 ) {
+		state->fns.Uniform4fv( liquid->reflectUniform, 1, reflect );
 	}
 	if ( liquid->impulsesUniform >= 0 ) {
 		state->fns.Uniform4fv( liquid->impulsesUniform, 8, impulses );

@@ -791,10 +791,10 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 	liquidNeedsNormal = qfalse;
 #ifdef USE_FBO
 	liquidNeedsNormal = ( fboEnabled && FBO_LiquidScreenTexture() &&
-		r_liquidReflections && r_liquidReflections->integer > 0 && shader->sort >= SS_FOG &&
+		r_liquid && r_liquid->integer > 0 && shader->sort >= SS_FOG &&
 		R_LiquidShaderSupported( state ) &&
 			R_LiquidContentsEnabled( shader->contentFlags | state->contentFlags,
-				r_liquidReflections->integer ) ) ? qtrue : qfalse;
+				r_liquid->integer ) ) ? qtrue : qfalse;
 #endif
 #endif
 
@@ -1813,12 +1813,12 @@ static qboolean RB_LiquidEffectActive( const shaderCommands_t *input )
 	return input && input->shader && input->numPasses > 0 &&
 		input->numIndexes > 0 && input->numVertexes > 0 &&
 		fboEnabled && FBO_LiquidScreenTexture() &&
-		r_liquidReflections && r_liquidReflections->integer > 0 &&
-		R_LiquidContentsEnabled( input->liquidContentFlags, r_liquidReflections->integer ) &&
+		r_liquid && r_liquid->integer > 0 &&
+		R_LiquidContentsEnabled( input->liquidContentFlags, r_liquid->integer ) &&
 		input->liquidSort >= SS_FOG &&
 		R_LiquidShaderSupported( input->shader ) &&
 		( ( r_liquidRefraction && r_liquidRefraction->value > 0.0f ) ||
-			( r_liquidFresnel && r_liquidFresnel->value > 0.0f ) ) &&
+			( r_liquidReflection && r_liquidReflection->value > 0.0f ) ) &&
 		!( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) &&
 		!backEnd.screenshotCubeActive && !backEnd.screenshotCubeFrontPending &&
 		!R_ViewPassIsPortal( &backEnd.viewParms ) && !glConfig.stereoEnabled ? qtrue : qfalse;
@@ -1865,32 +1865,132 @@ static void RB_LiquidFixedFunctionTexEnv( qboolean enable, qboolean sampleScene 
 	}
 }
 
+typedef struct rbLiquidRipple_s {
+	vec3_t center;
+	vec4_t screenCenter;
+	float radius;
+	float width;
+	float amplitude;	// screen-pixel displacement, resolution-scaled
+} rbLiquidRipple_t;
+
+/* out = b * a, both column-major; same semantics as tr_main.c myGlMultMatrix */
+static void RB_LiquidMultMatrix( const float *a, const float *b, float *out )
+{
+	int i, j;
+
+	for ( i = 0; i < 4; i++ ) {
+		for ( j = 0; j < 4; j++ ) {
+			out[ i * 4 + j ] =
+				a[ i * 4 + 0 ] * b[ 0 * 4 + j ] +
+				a[ i * 4 + 1 ] * b[ 1 * 4 + j ] +
+				a[ i * 4 + 2 ] * b[ 2 * 4 + j ] +
+				a[ i * 4 + 3 ] * b[ 3 * 4 + j ];
+		}
+	}
+}
+
+static vec2_t rb_liquidRippleOffsets[SHADER_MAX_VERTEXES];
+
+/* Per-vertex ripple pixel offsets shared by the ARB program path (as a
+ * texcoord varying) and the projective fixed-function fallback. */
+static void RB_ComputeLiquidRippleOffsets( const shaderCommands_t *input,
+	const rbLiquidRipple_t *ripples, int rippleCount )
+{
+	int i, j;
+
+	if ( rippleCount <= 0 ) {
+		Com_Memset( rb_liquidRippleOffsets, 0,
+			input->numVertexes * sizeof( rb_liquidRippleOffsets[0] ) );
+		return;
+	}
+	for ( i = 0; i < input->numVertexes; i++ ) {
+		vec4_t screen;
+		vec3_t normal;
+		float normalLength;
+		float invQ;
+		float screenU;
+		float screenV;
+		float offsetX = 0.0f;
+		float offsetY = 0.0f;
+
+		RB_ProjectLiquidVertex( input->xyz[i], screen );
+		invQ = fabsf( screen[3] ) > 1e-6f ? 1.0f / screen[3] : 0.0f;
+		screenU = screen[0] * invQ;
+		screenV = screen[1] * invQ;
+		VectorCopy( input->normal[i], normal );
+		normalLength = VectorLength( normal );
+		if ( normalLength > 1e-6f ) {
+			VectorScale( normal, 1.0f / normalLength, normal );
+		} else {
+			VectorSet( normal, 0.0f, 0.0f, 1.0f );
+		}
+
+		for ( j = 0; j < rippleCount; j++ ) {
+			vec3_t delta;
+			float height;
+			float distance;
+			float ringSigned;
+			float ring;
+			float heightFade;
+			float centerInvQ;
+			float screenDeltaX;
+			float screenDeltaY;
+			float screenDistance;
+
+			VectorSubtract( input->xyz[i], ripples[j].center, delta );
+			height = DotProduct( delta, normal );
+			VectorMA( delta, -height, normal, delta );
+			distance = VectorLength( delta );
+			if ( distance <= 1e-4f ) {
+				continue;
+			}
+			ringSigned = Com_Clamp( -1.0f, 1.0f,
+				( distance - ripples[j].radius ) / ripples[j].width );
+			ring = ( 1.0f - fabsf( ringSigned ) ) * sinf( ringSigned * (float)M_PI );
+			heightFade = 1.0f - Com_Clamp( 0.0f, 1.0f,
+				fabsf( height ) / MAX( 48.0f, ripples[j].width * 3.0f ) );
+			ring *= heightFade * ripples[j].amplitude;
+			centerInvQ = fabsf( ripples[j].screenCenter[3] ) > 1e-6f ?
+				1.0f / ripples[j].screenCenter[3] : 0.0f;
+			screenDeltaX = screenU - ripples[j].screenCenter[0] * centerInvQ;
+			screenDeltaY = screenV - ripples[j].screenCenter[1] * centerInvQ;
+			screenDistance = sqrtf( screenDeltaX * screenDeltaX + screenDeltaY * screenDeltaY );
+			if ( screenDistance > 1e-6f ) {
+				offsetX += screenDeltaX * ( ring / screenDistance );
+				offsetY += screenDeltaY * ( ring / screenDistance );
+			}
+		}
+		rb_liquidRippleOffsets[i][0] = offsetX;
+		rb_liquidRippleOffsets[i][1] = offsetY;
+	}
+}
+
 static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase )
 {
-	typedef struct {
-		vec3_t center;
-		vec4_t screenCenter;
-		float radius;
-		float width;
-		float amplitude;
-	} localRipple_t;
-	localRipple_t ripples[LIQUID_MAX_ACTIVE_IMPULSES];
-	const float time = (float)backEnd.refdef.floatTime;
-	const float warp = r_liquidWarp ? r_liquidWarp->value : 0.0f;
-	const float warpPixels = MIN( LIQUID_MAX_WARP_PIXELS,
-		Com_Clamp( 0.0f, 0.05f, warp ) * LIQUID_WARP_TO_PIXELS );
-	const float fresnelStrength = r_liquidFresnel ? r_liquidFresnel->value : 0.0f;
+	rbLiquidRipple_t ripples[LIQUID_MAX_ACTIVE_IMPULSES];
+	const float time = R_LiquidWaveTime( backEnd.refdef.floatTime );
+	const float heightScale = R_LiquidViewHeightScale( backEnd.viewParms.viewportHeight );
+	/* R_LiquidWarpPixels maps the archived cvar through LIQUID_WARP_TO_PIXELS
+	 * and scales it to the active viewport height. */
+	const float warpPixels = R_LiquidWarpPixels( r_liquidWarpScale ? r_liquidWarpScale->value : 0.0f,
+		backEnd.viewParms.viewportHeight );
+	const float fresnelStrength = r_liquidReflection ? r_liquidReflection->value : 0.0f;
 	const float refractionStrength = r_liquidRefraction ? r_liquidRefraction->value : 1.0f;
-	const float rippleStrength = r_liquidRippleStrength ? r_liquidRippleStrength->value : 0.0f;
+	const float rippleStrength = r_liquidRipples ? r_liquidRipples->value : 0.0f;
 	const float typeScale = R_LiquidContentsReflectionScale( input->liquidContentFlags );
+	const float passStrength = Com_Clamp( 0.0f, 1.0f,
+		refractionBase ? refractionStrength : fresnelStrength );
+	const float reflectivity = backEnd.liquidScreenMapDone ? LIQUID_REFLECT_INTENSITY : 0.0f;
 	vec3_t fresnelColor;
 	GLboolean previousColorMask[4];
+	qboolean rippleOffsetsReady = qfalse;
 	int rippleCount = 0;
 	int i;
 #ifdef RENDERER_GLX
 	vec4_t glxParams;
 	vec4_t glxEyeAndCount;
 	vec4_t glxTargetInverse;
+	vec4_t glxReflect;
 	vec4_t glxImpulses[LIQUID_MAX_ACTIVE_IMPULSES];
 	vec4_t glxAmplitudes[2];
 	qboolean glxLiquidBound;
@@ -1903,7 +2003,9 @@ static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase 
 	}
 	R_LiquidContentsFresnelColor( input->liquidContentFlags, fresnelColor );
 
-	if ( r_liquidRipples && r_liquidRipples->integer && rippleStrength > 0.0f ) {
+	/* Ripple rings displace the refraction underlay only; the sheen pass sees
+	 * the liquid motion through its wave-perturbed normal instead. */
+	if ( refractionBase && rippleStrength > 0.0f ) {
 		for ( i = 0; i < backEnd.refdef.numLiquidInteractions &&
 			rippleCount < LIQUID_MAX_ACTIVE_IMPULSES; i++ ) {
 			const liquidInteraction_t *interaction = &backEnd.refdef.liquidInteractions[i];
@@ -1918,7 +2020,8 @@ static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase 
 				backEnd.or.axis, ripples[rippleCount].center );
 			ripples[rippleCount].radius = interaction->radius + age * 150.0f;
 			ripples[rippleCount].width = 20.0f + interaction->radius * 0.35f;
-			ripples[rippleCount].amplitude = interaction->strength * rippleStrength * life;
+			ripples[rippleCount].amplitude = interaction->strength * rippleStrength * life *
+				LIQUID_RIPPLE_PIXEL_SCALE * heightScale;
 			rippleCount++;
 		}
 	}
@@ -1936,8 +2039,7 @@ static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase 
 #ifdef RENDERER_GLX
 	Com_Memset( glxImpulses, 0, sizeof( glxImpulses ) );
 	Com_Memset( glxAmplitudes, 0, sizeof( glxAmplitudes ) );
-	Vector4Set( glxParams, time, warpPixels,
-		Com_Clamp( 0.0f, 1.0f, refractionBase ? refractionStrength : fresnelStrength ),
+	Vector4Set( glxParams, time, warpPixels, passStrength,
 		refractionBase ? -typeScale : typeScale );
 	Vector4Set( glxEyeAndCount, backEnd.or.viewOrigin[0], backEnd.or.viewOrigin[1],
 		backEnd.or.viewOrigin[2], (float)rippleCount );
@@ -1946,24 +2048,29 @@ static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase 
 			1.0f / (float)backEnd.viewParms.viewportWidth : 1.0f,
 		backEnd.viewParms.viewportHeight > 0 ?
 			1.0f / (float)backEnd.viewParms.viewportHeight : 1.0f,
-		(float)backEnd.viewParms.viewportX, (float)backEnd.viewParms.viewportY );
+		FBO_LiquidDepthReady() ? 1.0f : 0.0f, 0.0f );
+	Vector4Set( glxReflect, fresnelColor[0], fresnelColor[1], fresnelColor[2],
+		reflectivity );
 	for ( i = 0; i < rippleCount; i++ ) {
 		VectorCopy( ripples[i].center, glxImpulses[i] );
 		glxImpulses[i][3] = ripples[i].radius;
 		glxAmplitudes[i >> 2][i & 3] = ripples[i].amplitude;
 	}
 
-	/* The normal GLx path evaluates waves, refraction, sheen, and ripple rings
-	 * per fragment. Keep destination alpha intact so later idTech3 blend modes
-	 * see exactly the value produced by the authored scene. */
+	/* The normal GLx path evaluates waves, refraction, reflection, and ripple
+	 * rings per fragment. Keep destination alpha intact so later idTech3 blend
+	 * modes see exactly the value produced by the authored scene. */
 	GL_ProgramDisable();
 	GLX_CompatUnbindMaterial();
+	if ( refractionBase ) {
+		FBO_BindLiquidDepthTexture( 1 );
+	}
 	GL_SelectTexture( 0 );
 	GL_BindTexNum( FBO_LiquidScreenTexture() );
 	GL_TexEnv( GL_MODULATE );
 	GL_State( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
 	glxLiquidBound = GLX_CompatBindLiquidMaterial( glxParams, glxEyeAndCount,
-		glxTargetInverse, glxImpulses[0], glxAmplitudes[0] );
+		glxTargetInverse, glxReflect, glxImpulses[0], glxAmplitudes[0] );
 	if ( glxLiquidBound ) {
 		if ( GLX_TryStreamDrawLiquidPass( input ) ) {
 			GLX_CompatUnbindMaterial();
@@ -1975,14 +2082,64 @@ static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase 
 	}
 #endif
 
+	/* FBO support guarantees ARB programs on this renderer, so the normal
+	 * OpenGL-lineage tier evaluates the liquid function per fragment. */
+	if ( GL_LiquidProgramAvailable() ) {
+		liquidArbParams_t arb;
+
+		RB_LiquidMultMatrix( backEnd.or.modelMatrix,
+			backEnd.viewParms.projectionMatrix, arb.mvp );
+		VectorCopy( backEnd.or.viewOrigin, arb.eyePos );
+		arb.wrappedTime = time;
+		arb.warpPixels = warpPixels;
+		arb.alphaScale = typeScale * passStrength;
+		arb.reflectivity = reflectivity;
+		arb.depthAvailable = FBO_LiquidDepthReady();
+		VectorCopy( fresnelColor, arb.fresnelColor );
+
+		GL_ProgramDisable();
+		if ( refractionBase ) {
+			FBO_BindLiquidDepthTexture( 1 );
+		}
+		GL_SelectTexture( 0 );
+		GL_BindTexNum( FBO_LiquidScreenTexture() );
+		GL_TexEnv( GL_MODULATE );
+		GL_State( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
+		GL_LiquidProgramEnable( &arb, refractionBase );
+		GL_ClientState( 1, CLS_NONE );
+		if ( refractionBase ) {
+			RB_ComputeLiquidRippleOffsets( input, ripples, rippleCount );
+			rippleOffsetsReady = qtrue;
+			GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_NORMAL_ARRAY );
+			qglTexCoordPointer( 2, GL_FLOAT, 0, rb_liquidRippleOffsets );
+		} else {
+			GL_ClientState( 0, CLS_NORMAL_ARRAY );
+		}
+		qglNormalPointer( GL_FLOAT, sizeof( input->normal[0] ), input->normal );
+		qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
+		R_DrawElements( input->numIndexes, input->indexes );
+		GL_ProgramDisable();
+		GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+		GL_ColorMask( previousColorMask[0], previousColorMask[1],
+			previousColorMask[2], previousColorMask[3] );
+		return;
+	}
+
+	/* Projective per-vertex fallback for program compile failures. */
+	if ( refractionBase && !rippleOffsetsReady ) {
+		RB_ComputeLiquidRippleOffsets( input, ripples, rippleCount );
+	}
 	for ( i = 0; i < input->numVertexes; i++ ) {
 		vec4_t *screen = &rb_liquidTexcoords[i];
 		vec3_t normal;
 		vec3_t view;
 		float normalLength;
 		float viewLength;
-		float waveX;
-		float waveY;
+		float gradientX;
+		float gradientY;
+		float distanceAtten;
+		float ambientX;
+		float ambientY;
 		float rippleX = 0.0f;
 		float rippleY = 0.0f;
 		float fresnel;
@@ -1991,7 +2148,6 @@ static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase 
 		float invQ;
 		float screenU;
 		float screenV;
-		int j;
 
 		RB_ProjectLiquidVertex( input->xyz[i], *screen );
 		VectorCopy( input->normal[i], normal );
@@ -2010,42 +2166,15 @@ static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase 
 			VectorScale( view, 1.0f / viewLength, view );
 		}
 
-		waveX = sinf( input->xyz[i][0] * 0.031f + input->xyz[i][1] * 0.017f + time * 1.13f );
-		waveY = sinf( input->xyz[i][1] * 0.027f - input->xyz[i][0] * 0.013f +
-			input->xyz[i][2] * 0.019f - time * 0.87f );
-
-		for ( j = 0; j < rippleCount; j++ ) {
-			vec3_t delta;
-			float height;
-			float distance;
-			float ring;
-			float heightFade;
-			float centerInvQ;
-			float screenDeltaX;
-			float screenDeltaY;
-			float screenDistance;
-
-			VectorSubtract( input->xyz[i], ripples[j].center, delta );
-			height = DotProduct( delta, normal );
-			VectorMA( delta, -height, normal, delta );
-			distance = VectorLength( delta );
-			if ( distance <= 1e-4f ) {
-				continue;
-			}
-			ring = 1.0f - Com_Clamp( 0.0f, 1.0f,
-				fabsf( distance - ripples[j].radius ) / ripples[j].width );
-			heightFade = 1.0f - Com_Clamp( 0.0f, 1.0f,
-				fabsf( height ) / MAX( 48.0f, ripples[j].width * 3.0f ) );
-			ring *= heightFade * ripples[j].amplitude;
-			centerInvQ = fabsf( ripples[j].screenCenter[3] ) > 1e-6f ?
-				1.0f / ripples[j].screenCenter[3] : 0.0f;
-			screenDeltaX = screenU - ripples[j].screenCenter[0] * centerInvQ;
-			screenDeltaY = screenV - ripples[j].screenCenter[1] * centerInvQ;
-			screenDistance = sqrtf( screenDeltaX * screenDeltaX + screenDeltaY * screenDeltaY );
-			if ( screenDistance > 1e-6f ) {
-				rippleX += screenDeltaX * ( ring * LIQUID_RIPPLE_PIXEL_SCALE / screenDistance );
-				rippleY += screenDeltaY * ( ring * LIQUID_RIPPLE_PIXEL_SCALE / screenDistance );
-			}
+		R_LiquidWaveGradient( input->xyz[i], time, &gradientX, &gradientY );
+		distanceAtten = R_LiquidDistanceAttenuation( fabsf( (*screen)[3] ) );
+		distanceAtten *= Com_Clamp( 0.0f, 1.0f,
+			fabsf( DotProduct( normal, view ) ) * LIQUID_GRAZING_FADE_SCALE );
+		ambientX = gradientX * warpPixels * distanceAtten;
+		ambientY = gradientY * warpPixels * distanceAtten;
+		if ( refractionBase ) {
+			rippleX = rb_liquidRippleOffsets[i][0];
+			rippleY = rb_liquidRippleOffsets[i][1];
 		}
 
 		edgeFade = MIN( MIN( screenU, 1.0f - screenU ),
@@ -2053,20 +2182,21 @@ static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase 
 		edgeFade = Com_Clamp( 0.0f, 1.0f, edgeFade * ( 1.0f / 0.06f ) );
 		edgeFade = edgeFade * edgeFade * ( 3.0f - 2.0f * edgeFade );
 		(*screen)[0] = Com_Clamp( 0.002f, 0.998f,
-			screenU + edgeFade * ( waveX * warpPixels + rippleX ) /
+			screenU + edgeFade * ( ambientX + rippleX ) /
 				(float)MAX( 1, backEnd.viewParms.viewportWidth ) ) * (*screen)[3];
 		(*screen)[1] = Com_Clamp( 0.002f, 0.998f,
-			screenV + edgeFade * ( waveY * warpPixels + rippleY ) /
+			screenV + edgeFade * ( ambientY + rippleY ) /
 				(float)MAX( 1, backEnd.viewParms.viewportHeight ) ) * (*screen)[3];
 
 		if ( refractionBase ) {
-			alpha = typeScale * Com_Clamp( 0.0f, 1.0f, refractionStrength );
+			alpha = typeScale * passStrength;
 		} else {
 			fresnel = 1.0f - fabsf( DotProduct( normal, view ) );
 			fresnel = Com_Clamp( 0.0f, 1.0f, fresnel );
 			fresnel *= fresnel;
-			alpha = typeScale * Com_Clamp( 0.0f, 1.0f, fresnelStrength ) *
-				Com_Clamp( 0.0f, 0.30f, 0.03f + fresnel * 0.27f );
+			alpha = typeScale * passStrength *
+				Com_Clamp( 0.0f, 0.60f, LIQUID_FRESNEL_ALPHA_BASE +
+					fresnel * LIQUID_FRESNEL_ALPHA_SPAN );
 		}
 		rb_liquidColors[i].rgba[0] = refractionBase ? 255 : (byte)( fresnelColor[0] * 255.0f + 0.5f );
 		rb_liquidColors[i].rgba[1] = refractionBase ? 255 : (byte)( fresnelColor[1] * 255.0f + 0.5f );

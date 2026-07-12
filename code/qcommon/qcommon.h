@@ -1172,6 +1172,12 @@ void CL_CharEvent( int key );
 
 void CL_MouseEvent( int dx, int dy /*, int time*/ );
 
+void CL_MouseAbsEvent( int x, int y );
+// absolute pointer position in window pixels, used to snap the software cursor
+// to the OS pointer while a menu or the console is open
+void CL_ClearMouseAbs( void );
+// invalidate the cached UI cursor mirror so the next absolute event re-syncs it
+
 void CL_JoystickEvent( int axis, int value, int time );
 
 void CL_PacketEvent( const netadr_t *from, msg_t *msg );
@@ -1268,6 +1274,7 @@ typedef enum {
 	SE_KEY,		// evValue is a key code, evValue2 is the down flag
 	SE_CHAR,	// evValue is an ascii char
 	SE_MOUSE,	// evValue and evValue2 are relative signed x / y moves
+	SE_MOUSE_ABS,	// evValue and evValue2 are the absolute pointer position, in window pixels
 	SE_JOYSTICK_AXIS,	// evValue is an axis number and evValue2 is the current state (-127 to 127)
 	SE_CONSOLE,	// evPtr is a char*
 	SE_MAX,

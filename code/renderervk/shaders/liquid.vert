@@ -5,13 +5,17 @@ layout(push_constant) uniform Transform {
 };
 
 /* Prefix-compatible with vkUniform_t. Liquid draws reuse otherwise idle
- * generic-light/fog slots for a bounded impulse list. */
+ * generic-light/fog/CSM slots for a bounded impulse list, the reflection
+ * color/weight, the depth-reject toggle, and the model-to-clip matrix. */
 layout(set = 0, binding = 0) uniform LiquidUniforms {
 	vec4 eye_pos;
-	vec4 liquid_params;              // time, warp pixels, pass strength, inverse target width
+	vec4 liquid_params;              // wrapped time, warp pixels, pass strength, inverse target width
 	vec4 liquid_info;                // type scale, impulse count, inverse target height, refraction pass
-	vec4 liquid_impulse[8];          // local xyz, expanding ring radius
-	vec4 liquid_amplitude[2];        // eight packed amplitudes
+	vec4 liquid_impulse[8];          // model-space xyz, expanding ring radius
+	vec4 liquid_amplitude[2];        // eight packed ripple pixel amplitudes
+	vec4 liquid_reflect;             // material sheen color, reflection weight
+	vec4 liquid_depth;               // x: depth reject enabled
+	mat4 liquid_mvp;                 // model space -> clip space for reflection reprojection
 };
 
 layout(location = 0) in vec3 in_position;

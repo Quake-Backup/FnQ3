@@ -79,7 +79,7 @@ The fast path is safe to use unconditionally: if the window cannot be reused —
 
 These settings control the render path behind the display output.
 
-- `r_fbo`: Enables framebuffer-object rendering. This is the foundation for the modern display path and is required for bloom, HDR, multisample anti-aliasing, supersampling, greyscale, and arbitrary internal render resolutions.
+- `r_fbo`: Enables framebuffer-object rendering. This is the foundation for the modern display path and is required for bloom, motion blur, enhanced liquid refraction, HDR, multisample anti-aliasing, supersampling, greyscale, and arbitrary internal render resolutions.
 - `r_hdr`: Selects the HDR-capable FBO render pipeline.
   - `0`: Display-referred SDR compatibility path.
   - `1`: High-precision FBO path. With the default legacy tone mapper this preserves Quake III's display-referred lighting; non-legacy tone mapping, color grading, and explicit HDR output use scene-linear color.
@@ -352,6 +352,46 @@ seta r_celShadingWorldDepthThreshold "0.0015"
 
 For a harsher stylized model-lighting look, reduce `r_celShadingSteps` to `2` or `3`. For a softer result, keep the outline enabled but raise `r_celShadingSteps` to `5` or `6`. For stronger world edges, raise `r_celShadingWorldWidth`; for fewer world edges, raise `r_celShadingWorldDepthThreshold`.
 
+## Map Flares And Lens Effects
+
+Quake III maps can author flare surfaces as part of the BSP. FnQuake3 keeps the original visibility, fog, distance falloff, and fade behavior, while offering an enhanced optical presentation on GLx/OpenGL and Vulkan.
+
+- `r_flares 0`: Disable map flares. This remains the default.
+- `r_flares 1`: Draw the classic Quake III corona only. Existing configurations retain their original presentation.
+- `r_flares 2`: Draw the classic corona and supplement it with a broad source halo, a restrained horizontal lens streak, and chromatic aperture ghosts along the light-to-screen-centre axis.
+
+The enhanced effect reuses the retail flare image through a dedicated additive surface, so black texels stay neutral and no replacement assets or map-format change are required. It also reuses the classic flare's occlusion and fade result; hidden lights cannot leave detached lens ghosts behind. Bloom is optional, but enabling it can make the brightest corona layers spread more naturally.
+
+## Enhanced Liquids
+
+The OpenGL-lineage renderers, including GLx, and Vulkan can add warped same-frame scene-color refraction, a bounded material Fresnel sheen, and visual interaction ripples to existing liquid surfaces. Warped scene color is drawn behind each qualifying transparent water face before the map's authored stages; those stages still provide their original tint, scroll, animation, blend, and deformation. The later sheen does not resample the scene, avoiding the duplicated and smeared camera-image feedback produced by the earlier experimental path. Enhancements and ripples both default to off, so existing maps, configurations, and demos keep the classic presentation unless you opt in.
+
+- `r_liquidReflections` selects qualifying liquids from their shader contents. The default `0` disables the enhancement, `1` enhances shaders marked as water, and `2` also enhances shaders marked as slime or lava with more subdued material-specific strengths. This setting is latched.
+- `r_liquidReflectionScale` sets the snapshot resolution from `0.125` to `1.0`; the default is `0.5`. It scales both dimensions, so `0.5` uses roughly one quarter of the full-resolution pixels. Lower values cost less bandwidth and look softer; `1.0` is sharpest and most expensive. This setting is latched.
+- `r_liquidRefraction` controls the opacity of warped scene color behind the authored transparent stages, from `0.0` to `1.0`. The default is `0.65`; lower values retain more of the original destination.
+- `r_liquidWarp` retains its `0.0` to `0.05` tuning range and `0.012` default, but the renderer converts it to a resolution-independent `0` to `8` pixel displacement (about `1.9` pixels by default). Existing archived values therefore keep working without producing larger distortion at higher resolutions.
+- `r_liquidFresnel` controls the bounded material-coloured sheen at shallow viewing angles, from `0.0` to `1.0`. The default is `0.65`; `0` completely skips the sheen draw.
+- `r_liquidRipples` enables visual disturbances from players and missiles entering, leaving, or moving through liquid. The default is `0`, and a nonzero `r_liquidReflections` mode is required.
+- `r_liquidRippleStrength` multiplies interaction amplitude from `0.0` to `2.0`. The default is `1.0`.
+
+`r_liquidReflections` is retained as the compatibility name for the master/material selector; the corrected low-cost path does not claim a geometrically valid reflection source.
+
+The effect requires `r_fbo 1`. Changing `r_liquidReflections` or `r_liquidReflectionScale` reallocates the snapshot resource, so issue `vid_restart` after changing either one. Refraction, warp, Fresnel, ripple toggle, and ripple strength can be tuned live. A balanced starting point is:
+
+```cfg
+seta r_fbo "1"
+seta r_liquidReflections "1"
+seta r_liquidReflectionScale "0.5"
+seta r_liquidRefraction "0.65"
+seta r_liquidWarp "0.012"
+seta r_liquidRipples "1"
+vid_restart
+```
+
+This is an intentionally inexpensive refraction effect, not a second mirrored world render, depth-ray-marched true SSR, or a fluid simulation. It can only reuse the same-frame color already captured from the current view; the Fresnel component is a procedural sheen rather than a false screen-space reflection. Objects outside the screen, behind the camera, occluded, or drawn later in the transparent sort cannot appear in refraction. Warp fades near screen edges. Unusually early custom sorts, alpha-tested liquid stages, depth-fade or line-mode stages, and nonstandard depth-test modes retain their fully authored appearance because a geometry-only underlay cannot reproduce their coverage safely. Ripples are bounded visual responses to player and missile motion with amplitude independent of ambient warp; they distort the sampled image but do not deform the liquid mesh or change collision, buoyancy, player movement, projectile paths, networking, game logic, or demo state. If the framebuffer path or private liquid snapshot is unavailable, the original authored liquid remains visible.
+
+For the pass ordering, backend tiers, dedicated snapshot, and compatibility invariants, see [Liquid Rendering](fnquake3/LIQUID_RENDERING.md).
+
 ## Bloom
 
 Bloom extracts bright areas from the rendered frame, blurs them through a downsampled chain, and blends the result back over the original image. It is a post-processing effect, so it depends on the framebuffer path.
@@ -501,6 +541,25 @@ If nothing happens at all:
 - Lower `r_bloom_threshold` to test.
 - If you just changed renderer, display mode, or other latched video settings, use `vid_restart`.
 
+## Motion Blur
+
+GLx and Vulkan provide optional camera-driven screen motion blur. After the completed world view, the renderer measures camera rotation and lateral movement and applies a bounded seven-tap directional kernel to the current scene before bloom, tone mapping, and output encoding. Sampling is clamped to the 3D view rectangle, including when `cg_viewsize` is reduced. It does not blend previous-frame pixels, so a stationary view is unchanged and moving entities cannot leave persistent trails.
+
+- `r_motionBlur`: Master toggle. The default is `0` (disabled), and `r_fbo 1` is required.
+- `r_motionBlurStrength`: Camera-motion shutter scale from `0.0` to `1.0`. The default `0.25` is deliberately subtle; higher values increase the directional blur radius.
+- HUD, console, and other 2D drawing are always added after motion blur and remain sharp. `r_hudExcludePostProcess` continues to control the separate bloom/3D-HUD behavior.
+
+Recommended subtle setup:
+
+```cfg
+seta r_fbo "1"
+seta r_motionBlur "1"
+seta r_motionBlurStrength "0.25"
+seta r_hudExcludePostProcess "1"
+```
+
+The blur is skipped below a sub-pixel motion threshold and capped at a 32-pixel radius, preventing needless work during stationary play and pathological smearing during fast turns. Long frame stalls, minimize/restore, stereo rendering, large camera cuts, and teleports reset the camera sample. GLX allocates its scratch buffer lazily when motion first needs it and can toggle the effect live. Vulkan allocates its scratch image at renderer initialization, so changing `r_motionBlur` there requires `vid_restart`.
+
 ## When To Use `vid_restart`
 
 Use `vid_restart` after changes to:
@@ -521,6 +580,8 @@ Use `vid_restart` after changes to:
 - OpenGL or GLx `r_bloom_passes`
 - OpenGL or GLx `r_hdrBloomFormat`
 - Vulkan `r_bloom`
+- Vulkan `r_motionBlur`
+- `r_liquidReflections` or `r_liquidReflectionScale`
 
 For pure window-state changes (`r_fullscreen`, `r_mode`, `r_noborder`, window size or position), prefer `vid_restart fast`: it applies the change on the existing window when possible and falls back to a full restart automatically. See [Fast Windowed/Fullscreen Toggle](#fast-windowedfullscreen-toggle).
 
@@ -535,6 +596,7 @@ Settings that are usually safe to tune live:
 - `r_bloom_soft_knee`
 - `r_bloom_modulate`
 - `r_bloom_intensity`
+- `r_motionBlurStrength`
 - `r_tonemap`
 - `r_tonemapExposure`
 - `r_colorGrade`

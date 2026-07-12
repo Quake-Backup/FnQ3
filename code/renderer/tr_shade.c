@@ -24,6 +24,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_local.h"
 #include "tr_glx_compat.h"
 
+#ifndef GL_COMBINE
+#define GL_COMBINE 0x8570
+#define GL_COMBINE_RGB 0x8571
+#define GL_COMBINE_ALPHA 0x8572
+#define GL_SOURCE0_RGB 0x8580
+#define GL_SOURCE0_ALPHA 0x8588
+#define GL_PRIMARY_COLOR 0x8577
+#define GL_OPERAND0_RGB 0x8590
+#define GL_OPERAND0_ALPHA 0x8598
+#endif
+
 /*
 
   THIS ENTIRE FILE IS BACK END
@@ -512,6 +523,80 @@ static qboolean GLX_TryStreamDrawDynamicLightPass( const shaderCommands_t *input
 		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse, materialFlags, categoryMask, ok );
 	return ok;
 }
+
+static qboolean GLX_TryStreamDrawLiquidPass( const shaderCommands_t *input )
+{
+	glxStreamReservation_t reservation;
+	qboolean ok = qtrue;
+	const int materialFlags = GLX_STAGE_SCREEN_MAP | GLX_STAGE_BLEND;
+	unsigned int categoryMask;
+	unsigned int oldArrayBuffer;
+	unsigned int oldElementArrayBuffer;
+	int xyzBytes;
+	int normalBytes;
+	int indexBytes;
+	int normalOffset;
+	int indexOffset;
+	int totalBytes;
+
+	/* Enhanced liquids are themselves an explicit opt-in. Use the GLx transient
+	 * stream even when the developer-wide streamed-stage cvar is off: modern
+	 * contexts cannot legally source this programmable pass from client memory. */
+	if ( !qglBindBufferARB || !input ||
+		input->numVertexes <= 0 || input->numIndexes <= 0 ) {
+		return qfalse;
+	}
+
+	categoryMask = GLX_CompatDynamicCategoryMaskForTess( input, materialFlags );
+	xyzBytes = input->numVertexes * (int)sizeof( input->xyz[0] );
+	normalBytes = input->numVertexes * (int)sizeof( input->normal[0] );
+	indexBytes = input->numIndexes * (int)sizeof( input->indexes[0] );
+	normalOffset = GLX_CompatAlignInt( xyzBytes, 16 );
+	indexOffset = GLX_CompatAlignInt( normalOffset + normalBytes, 16 );
+	totalBytes = GLX_CompatAlignInt( indexOffset + indexBytes, 64 );
+
+	if ( !GLX_CompatStreamReserve( totalBytes, 64, &reservation ) ) {
+		return qfalse;
+	}
+	if ( !GLX_CompatStreamUploadAt( &reservation, 0, input->xyz, xyzBytes ) ||
+		!GLX_CompatStreamUploadAt( &reservation, normalOffset,
+			input->normal, normalBytes ) ||
+		!GLX_CompatStreamUploadAt( &reservation, indexOffset,
+			input->indexes, indexBytes ) ) {
+		ok = qfalse;
+	}
+	GLX_CompatStreamCommit( &reservation );
+	if ( !ok ) {
+		return qfalse;
+	}
+
+	oldArrayBuffer = GLX_CompatBindStreamArrayBuffer( reservation.buffer );
+	oldElementArrayBuffer = GLX_CompatBindStreamElementArrayBuffer( reservation.buffer );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_NORMAL_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ),
+		(const GLvoid *)(intptr_t)reservation.offset );
+	qglNormalPointer( GL_FLOAT, sizeof( input->normal[0] ),
+		(const GLvoid *)(intptr_t)( reservation.offset + normalOffset ) );
+
+	ok = GLX_CompatDrawElementsClassified( GL_TRIANGLES, input->numIndexes,
+		GL_INDEX_TYPE, (const GLvoid *)(intptr_t)( reservation.offset + indexOffset ),
+		GLX_LEGACY_DELEGATION_NONE, GLX_DRAW_STREAM_GENERIC,
+		materialFlags, categoryMask );
+
+	GLX_CompatRestoreStreamElementArrayBuffer( oldElementArrayBuffer );
+	GLX_CompatRestoreStreamArrayBuffer( 0 );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
+	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, input->svars.colors[0].rgba );
+	qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoords[0] );
+	GLX_CompatRestoreStreamArrayBuffer( oldArrayBuffer );
+	GLX_CompatRecordStreamDrawResult( input->numVertexes, input->numIndexes,
+		totalBytes, indexBytes, 0, qfalse, qfalse, qfalse,
+		materialFlags, categoryMask, ok );
+	return ok;
+}
 #endif
 
 /*
@@ -693,12 +778,25 @@ to overflow.
 void RB_BeginSurface( shader_t *shader, int fogNum ) {
 
 	shader_t *state;
+#ifdef USE_TESS_NEEDS_NORMAL
+	qboolean liquidNeedsNormal;
+#endif
 
 	if ( shader->remappedShader ) {
 		state = shader->remappedShader;
 	} else {
 		state = shader;
 	}
+#ifdef USE_TESS_NEEDS_NORMAL
+	liquidNeedsNormal = qfalse;
+#ifdef USE_FBO
+	liquidNeedsNormal = ( fboEnabled && FBO_LiquidScreenTexture() &&
+		r_liquidReflections && r_liquidReflections->integer > 0 && shader->sort >= SS_FOG &&
+		R_LiquidShaderSupported( state ) &&
+			R_LiquidContentsEnabled( shader->contentFlags | state->contentFlags,
+				r_liquidReflections->integer ) ) ? qtrue : qfalse;
+#endif
+#endif
 
 #ifdef USE_PMLIGHT
 #ifdef RENDERER_GLX
@@ -730,12 +828,14 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 
 #ifdef USE_TESS_NEEDS_NORMAL
 #ifdef USE_PMLIGHT
-	tess.needsNormal = state->needsNormal || tess.dlightPass || r_shownormals->integer;
+	tess.needsNormal = state->needsNormal || tess.dlightPass ||
+		r_shownormals->integer || liquidNeedsNormal;
 	if ( backEnd.viewParms.passFlags & VPF_DLIGHT_SHADOW ) {
 		tess.needsNormal = qtrue;
 	}
 #else
-	tess.needsNormal = state->needsNormal || r_shownormals->integer;
+	tess.needsNormal = state->needsNormal || r_shownormals->integer ||
+		liquidNeedsNormal;
 #endif
 #endif
 
@@ -746,6 +846,8 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 	tess.numIndexes = 0;
 	tess.numVertexes = 0;
 	tess.shader = state;
+	tess.liquidContentFlags = shader->contentFlags | state->contentFlags;
+	tess.liquidSort = shader->sort;
 	tess.fogNum = fogNum;
 	tess.glxDynamicCategoryMask = 0;
 
@@ -1702,6 +1804,312 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 	}
 }
 
+#ifdef USE_FBO
+static vec4_t rb_liquidTexcoords[SHADER_MAX_VERTEXES];
+static color4ub_t rb_liquidColors[SHADER_MAX_VERTEXES];
+
+static qboolean RB_LiquidEffectActive( const shaderCommands_t *input )
+{
+	return input && input->shader && input->numPasses > 0 &&
+		input->numIndexes > 0 && input->numVertexes > 0 &&
+		fboEnabled && FBO_LiquidScreenTexture() &&
+		r_liquidReflections && r_liquidReflections->integer > 0 &&
+		R_LiquidContentsEnabled( input->liquidContentFlags, r_liquidReflections->integer ) &&
+		input->liquidSort >= SS_FOG &&
+		R_LiquidShaderSupported( input->shader ) &&
+		( ( r_liquidRefraction && r_liquidRefraction->value > 0.0f ) ||
+			( r_liquidFresnel && r_liquidFresnel->value > 0.0f ) ) &&
+		!( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) &&
+		!backEnd.screenshotCubeActive && !backEnd.screenshotCubeFrontPending &&
+		!R_ViewPassIsPortal( &backEnd.viewParms ) && !glConfig.stereoEnabled ? qtrue : qfalse;
+}
+
+static void RB_ProjectLiquidVertex( const vec4_t position, vec4_t screen )
+{
+	const float *model = backEnd.or.modelMatrix;
+	const float *projection = backEnd.viewParms.projectionMatrix;
+	vec4_t eye;
+	vec4_t clip;
+
+	eye[0] = model[0] * position[0] + model[4] * position[1] + model[8] * position[2] + model[12];
+	eye[1] = model[1] * position[0] + model[5] * position[1] + model[9] * position[2] + model[13];
+	eye[2] = model[2] * position[0] + model[6] * position[1] + model[10] * position[2] + model[14];
+	eye[3] = model[3] * position[0] + model[7] * position[1] + model[11] * position[2] + model[15];
+
+	clip[0] = projection[0] * eye[0] + projection[4] * eye[1] + projection[8] * eye[2] + projection[12] * eye[3];
+	clip[1] = projection[1] * eye[0] + projection[5] * eye[1] + projection[9] * eye[2] + projection[13] * eye[3];
+	clip[3] = projection[3] * eye[0] + projection[7] * eye[1] + projection[11] * eye[2] + projection[15] * eye[3];
+	screen[0] = clip[0] * 0.5f + clip[3] * 0.5f;
+	screen[1] = clip[1] * 0.5f + clip[3] * 0.5f;
+	screen[2] = 0.0f;
+	screen[3] = clip[3];
+}
+
+static void RB_LiquidFixedFunctionTexEnv( qboolean enable, qboolean sampleScene )
+{
+	if ( enable ) {
+		/* Refraction takes RGB from the scene copy; the Fresnel pass takes RGB
+		 * from the bounded material tint. Alpha always comes from primary color. */
+		qglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE );
+		qglTexEnvi( GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_REPLACE );
+		qglTexEnvi( GL_TEXTURE_ENV, GL_SOURCE0_RGB,
+			sampleScene ? GL_TEXTURE : GL_PRIMARY_COLOR );
+		qglTexEnvi( GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_SRC_COLOR );
+		qglTexEnvi( GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE );
+		qglTexEnvi( GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_PRIMARY_COLOR );
+		qglTexEnvi( GL_TEXTURE_ENV, GL_OPERAND0_ALPHA, GL_SRC_ALPHA );
+		glState.texEnv[glState.currenttmu] = GL_COMBINE;
+	} else {
+		qglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+		glState.texEnv[glState.currenttmu] = GL_MODULATE;
+	}
+}
+
+static void RB_DrawLiquidPass( shaderCommands_t *input, qboolean refractionBase )
+{
+	typedef struct {
+		vec3_t center;
+		vec4_t screenCenter;
+		float radius;
+		float width;
+		float amplitude;
+	} localRipple_t;
+	localRipple_t ripples[LIQUID_MAX_ACTIVE_IMPULSES];
+	const float time = (float)backEnd.refdef.floatTime;
+	const float warp = r_liquidWarp ? r_liquidWarp->value : 0.0f;
+	const float warpPixels = MIN( LIQUID_MAX_WARP_PIXELS,
+		Com_Clamp( 0.0f, 0.05f, warp ) * LIQUID_WARP_TO_PIXELS );
+	const float fresnelStrength = r_liquidFresnel ? r_liquidFresnel->value : 0.0f;
+	const float refractionStrength = r_liquidRefraction ? r_liquidRefraction->value : 1.0f;
+	const float rippleStrength = r_liquidRippleStrength ? r_liquidRippleStrength->value : 0.0f;
+	const float typeScale = R_LiquidContentsReflectionScale( input->liquidContentFlags );
+	vec3_t fresnelColor;
+	GLboolean previousColorMask[4];
+	int rippleCount = 0;
+	int i;
+#ifdef RENDERER_GLX
+	vec4_t glxParams;
+	vec4_t glxEyeAndCount;
+	vec4_t glxTargetInverse;
+	vec4_t glxImpulses[LIQUID_MAX_ACTIVE_IMPULSES];
+	vec4_t glxAmplitudes[2];
+	qboolean glxLiquidBound;
+#endif
+
+	if ( !RB_LiquidEffectActive( input ) ||
+		( refractionBase && ( !backEnd.liquidScreenMapDone || refractionStrength <= 0.0f ) ) ||
+		( !refractionBase && fresnelStrength <= 0.0f ) ) {
+		return;
+	}
+	R_LiquidContentsFresnelColor( input->liquidContentFlags, fresnelColor );
+
+	if ( r_liquidRipples && r_liquidRipples->integer && rippleStrength > 0.0f ) {
+		for ( i = 0; i < backEnd.refdef.numLiquidInteractions &&
+			rippleCount < LIQUID_MAX_ACTIVE_IMPULSES; i++ ) {
+			const liquidInteraction_t *interaction = &backEnd.refdef.liquidInteractions[i];
+			const float age = (float)( backEnd.refdef.time - interaction->time ) * 0.001f;
+			float life;
+
+			if ( !R_LiquidInteractionActive( interaction, backEnd.refdef.time ) ) {
+				continue;
+			}
+			life = 1.0f - age * ( 1000.0f / (float)LIQUID_IMPULSE_LIFETIME_MSEC );
+			R_LiquidWorldToLocal( interaction->origin, backEnd.or.origin,
+				backEnd.or.axis, ripples[rippleCount].center );
+			ripples[rippleCount].radius = interaction->radius + age * 150.0f;
+			ripples[rippleCount].width = 20.0f + interaction->radius * 0.35f;
+			ripples[rippleCount].amplitude = interaction->strength * rippleStrength * life;
+			rippleCount++;
+		}
+	}
+	for ( i = 0; i < rippleCount; i++ ) {
+		vec4_t centerPosition;
+
+		Vector4Set( centerPosition, ripples[i].center[0], ripples[i].center[1],
+			ripples[i].center[2], 1.0f );
+		RB_ProjectLiquidVertex( centerPosition, ripples[i].screenCenter );
+	}
+	GL_GetColorMask( previousColorMask );
+	GL_ColorMask( previousColorMask[0], previousColorMask[1],
+		previousColorMask[2], GL_FALSE );
+
+#ifdef RENDERER_GLX
+	Com_Memset( glxImpulses, 0, sizeof( glxImpulses ) );
+	Com_Memset( glxAmplitudes, 0, sizeof( glxAmplitudes ) );
+	Vector4Set( glxParams, time, warpPixels,
+		Com_Clamp( 0.0f, 1.0f, refractionBase ? refractionStrength : fresnelStrength ),
+		refractionBase ? -typeScale : typeScale );
+	Vector4Set( glxEyeAndCount, backEnd.or.viewOrigin[0], backEnd.or.viewOrigin[1],
+		backEnd.or.viewOrigin[2], (float)rippleCount );
+	Vector4Set( glxTargetInverse,
+		backEnd.viewParms.viewportWidth > 0 ?
+			1.0f / (float)backEnd.viewParms.viewportWidth : 1.0f,
+		backEnd.viewParms.viewportHeight > 0 ?
+			1.0f / (float)backEnd.viewParms.viewportHeight : 1.0f,
+		(float)backEnd.viewParms.viewportX, (float)backEnd.viewParms.viewportY );
+	for ( i = 0; i < rippleCount; i++ ) {
+		VectorCopy( ripples[i].center, glxImpulses[i] );
+		glxImpulses[i][3] = ripples[i].radius;
+		glxAmplitudes[i >> 2][i & 3] = ripples[i].amplitude;
+	}
+
+	/* The normal GLx path evaluates waves, refraction, sheen, and ripple rings
+	 * per fragment. Keep destination alpha intact so later idTech3 blend modes
+	 * see exactly the value produced by the authored scene. */
+	GL_ProgramDisable();
+	GLX_CompatUnbindMaterial();
+	GL_SelectTexture( 0 );
+	GL_BindTexNum( FBO_LiquidScreenTexture() );
+	GL_TexEnv( GL_MODULATE );
+	GL_State( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
+	glxLiquidBound = GLX_CompatBindLiquidMaterial( glxParams, glxEyeAndCount,
+		glxTargetInverse, glxImpulses[0], glxAmplitudes[0] );
+	if ( glxLiquidBound ) {
+		if ( GLX_TryStreamDrawLiquidPass( input ) ) {
+			GLX_CompatUnbindMaterial();
+			GL_ColorMask( previousColorMask[0], previousColorMask[1],
+				previousColorMask[2], previousColorMask[3] );
+			return;
+		}
+		GLX_CompatUnbindMaterial();
+	}
+#endif
+
+	for ( i = 0; i < input->numVertexes; i++ ) {
+		vec4_t *screen = &rb_liquidTexcoords[i];
+		vec3_t normal;
+		vec3_t view;
+		float normalLength;
+		float viewLength;
+		float waveX;
+		float waveY;
+		float rippleX = 0.0f;
+		float rippleY = 0.0f;
+		float fresnel;
+		float alpha;
+		float edgeFade;
+		float invQ;
+		float screenU;
+		float screenV;
+		int j;
+
+		RB_ProjectLiquidVertex( input->xyz[i], *screen );
+		VectorCopy( input->normal[i], normal );
+		normalLength = VectorLength( normal );
+		if ( normalLength > 1e-6f ) {
+			VectorScale( normal, 1.0f / normalLength, normal );
+		} else {
+			VectorSet( normal, 0.0f, 0.0f, 1.0f );
+		}
+		invQ = fabsf( (*screen)[3] ) > 1e-6f ? 1.0f / (*screen)[3] : 0.0f;
+		screenU = (*screen)[0] * invQ;
+		screenV = (*screen)[1] * invQ;
+		VectorSubtract( backEnd.or.viewOrigin, input->xyz[i], view );
+		viewLength = VectorLength( view );
+		if ( viewLength > 1e-6f ) {
+			VectorScale( view, 1.0f / viewLength, view );
+		}
+
+		waveX = sinf( input->xyz[i][0] * 0.031f + input->xyz[i][1] * 0.017f + time * 1.13f );
+		waveY = sinf( input->xyz[i][1] * 0.027f - input->xyz[i][0] * 0.013f +
+			input->xyz[i][2] * 0.019f - time * 0.87f );
+
+		for ( j = 0; j < rippleCount; j++ ) {
+			vec3_t delta;
+			float height;
+			float distance;
+			float ring;
+			float heightFade;
+			float centerInvQ;
+			float screenDeltaX;
+			float screenDeltaY;
+			float screenDistance;
+
+			VectorSubtract( input->xyz[i], ripples[j].center, delta );
+			height = DotProduct( delta, normal );
+			VectorMA( delta, -height, normal, delta );
+			distance = VectorLength( delta );
+			if ( distance <= 1e-4f ) {
+				continue;
+			}
+			ring = 1.0f - Com_Clamp( 0.0f, 1.0f,
+				fabsf( distance - ripples[j].radius ) / ripples[j].width );
+			heightFade = 1.0f - Com_Clamp( 0.0f, 1.0f,
+				fabsf( height ) / MAX( 48.0f, ripples[j].width * 3.0f ) );
+			ring *= heightFade * ripples[j].amplitude;
+			centerInvQ = fabsf( ripples[j].screenCenter[3] ) > 1e-6f ?
+				1.0f / ripples[j].screenCenter[3] : 0.0f;
+			screenDeltaX = screenU - ripples[j].screenCenter[0] * centerInvQ;
+			screenDeltaY = screenV - ripples[j].screenCenter[1] * centerInvQ;
+			screenDistance = sqrtf( screenDeltaX * screenDeltaX + screenDeltaY * screenDeltaY );
+			if ( screenDistance > 1e-6f ) {
+				rippleX += screenDeltaX * ( ring * LIQUID_RIPPLE_PIXEL_SCALE / screenDistance );
+				rippleY += screenDeltaY * ( ring * LIQUID_RIPPLE_PIXEL_SCALE / screenDistance );
+			}
+		}
+
+		edgeFade = MIN( MIN( screenU, 1.0f - screenU ),
+			MIN( screenV, 1.0f - screenV ) );
+		edgeFade = Com_Clamp( 0.0f, 1.0f, edgeFade * ( 1.0f / 0.06f ) );
+		edgeFade = edgeFade * edgeFade * ( 3.0f - 2.0f * edgeFade );
+		(*screen)[0] = Com_Clamp( 0.002f, 0.998f,
+			screenU + edgeFade * ( waveX * warpPixels + rippleX ) /
+				(float)MAX( 1, backEnd.viewParms.viewportWidth ) ) * (*screen)[3];
+		(*screen)[1] = Com_Clamp( 0.002f, 0.998f,
+			screenV + edgeFade * ( waveY * warpPixels + rippleY ) /
+				(float)MAX( 1, backEnd.viewParms.viewportHeight ) ) * (*screen)[3];
+
+		if ( refractionBase ) {
+			alpha = typeScale * Com_Clamp( 0.0f, 1.0f, refractionStrength );
+		} else {
+			fresnel = 1.0f - fabsf( DotProduct( normal, view ) );
+			fresnel = Com_Clamp( 0.0f, 1.0f, fresnel );
+			fresnel *= fresnel;
+			alpha = typeScale * Com_Clamp( 0.0f, 1.0f, fresnelStrength ) *
+				Com_Clamp( 0.0f, 0.30f, 0.03f + fresnel * 0.27f );
+		}
+		rb_liquidColors[i].rgba[0] = refractionBase ? 255 : (byte)( fresnelColor[0] * 255.0f + 0.5f );
+		rb_liquidColors[i].rgba[1] = refractionBase ? 255 : (byte)( fresnelColor[1] * 255.0f + 0.5f );
+		rb_liquidColors[i].rgba[2] = refractionBase ? 255 : (byte)( fresnelColor[2] * 255.0f + 0.5f );
+		rb_liquidColors[i].rgba[3] = (byte)( alpha * 255.0f + 0.5f );
+	}
+
+	GL_ProgramDisable();
+#ifdef RENDERER_GLX
+	GLX_CompatUnbindMaterial();
+#endif
+	GL_SelectTexture( 0 );
+	GL_BindTexNum( FBO_LiquidScreenTexture() );
+	GL_TexEnv( GL_MODULATE );
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
+	qglTexCoordPointer( 4, GL_FLOAT, 0, rb_liquidTexcoords );
+	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, rb_liquidColors[0].rgba );
+	GL_State( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
+	RB_LiquidFixedFunctionTexEnv( qtrue, refractionBase );
+#ifdef RENDERER_GLX
+	/* GL12 and allocation-failure fallback. The dedicated shader is the normal
+	 * GLx path; fixed function retains conservative compatibility behavior. */
+	GL_ClientState( 1, CLS_NONE );
+	GL_ClientState( 0, CLS_TEXCOORD_ARRAY | CLS_COLOR_ARRAY );
+	qglVertexPointer( 3, GL_FLOAT, sizeof( input->xyz[0] ), input->xyz );
+	qglTexCoordPointer( 4, GL_FLOAT, 0, rb_liquidTexcoords );
+	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, rb_liquidColors[0].rgba );
+	(void)GLX_CompatDrawElementsClassified( GL_TRIANGLES, input->numIndexes,
+		GL_INDEX_TYPE, input->indexes, GLX_LEGACY_DELEGATION_GENERIC,
+		GLX_DRAW_GENERIC, GLX_STAGE_SCREEN_MAP | GLX_STAGE_BLEND,
+		GLX_CompatDynamicCategoryMaskForTess( input,
+			GLX_STAGE_SCREEN_MAP | GLX_STAGE_BLEND ) );
+#else
+	R_DrawElements( input->numIndexes, input->indexes );
+#endif
+	RB_LiquidFixedFunctionTexEnv( qfalse, qfalse );
+	GL_ColorMask( previousColorMask[0], previousColorMask[1],
+		previousColorMask[2], previousColorMask[3] );
+}
+#endif /* USE_FBO */
+
 
 /*
 ** RB_StageIteratorGeneric
@@ -1760,6 +2168,14 @@ void RB_StageIteratorGeneric( void )
 		qglEnable( GL_POLYGON_OFFSET_FILL );
 		qglPolygonOffset( r_offsetFactor->value, r_offsetUnits->value );
 	}
+
+#ifdef USE_FBO
+	/* Draw the warped captured scene first. Authored translucent stages then tint,
+	 * scroll, and deform that refracted background instead of hiding it. */
+	if ( RB_LiquidEffectActive( input ) ) {
+		RB_DrawLiquidPass( &tess, qtrue );
+	}
+#endif
 
 	//
 	// if there is only a single pass then we can enable color
@@ -1820,6 +2236,16 @@ void RB_StageIteratorGeneric( void )
 	// call shader function
 	//
 	RB_IterateStagesGeneric( input );
+
+#ifdef USE_FBO
+	if ( RB_LiquidEffectActive( input ) ) {
+		if ( arraysLocked && qglUnlockArraysEXT ) {
+			qglUnlockArraysEXT();
+			arraysLocked = qfalse;
+		}
+		RB_DrawLiquidPass( &tess, qfalse );
+	}
+#endif
 
 	//
 	// now do any dynamic lighting needed

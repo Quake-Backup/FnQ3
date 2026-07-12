@@ -218,6 +218,12 @@ static qboolean isStaticShader( shader_t *shader )
 	const shaderStage_t* stage;
 	int i, b, svarsSize;
 
+	if ( r_fbo && r_fbo->integer && r_liquidReflections &&
+		r_liquidReflections->integer > 0 &&
+		shader->sort >= SS_FOG && R_LiquidShaderSupported( shader ) &&
+		R_LiquidContentsEnabled( shader->contentFlags, r_liquidReflections->integer ) )
+		return qfalse;
+
 	if ( shader->isStaticShader )
 		return qtrue;
 

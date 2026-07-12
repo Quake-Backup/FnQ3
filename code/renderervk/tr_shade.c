@@ -307,6 +307,9 @@ to overflow.
 void RB_BeginSurface( shader_t *shader, int fogNum ) {
 
 	shader_t *state;
+#ifdef USE_TESS_NEEDS_NORMAL
+	qboolean liquidNeedsNormal;
+#endif
 
 #ifdef USE_VBO
 	if ( shader->isStaticShader && !shader->remappedShader ) {
@@ -322,6 +325,15 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 		state = shader;
 	}
 
+#ifdef USE_TESS_NEEDS_NORMAL
+	liquidNeedsNormal = ( vk.fboActive &&
+		vk.liquidSnapshot.color_descriptor != VK_NULL_HANDLE &&
+		r_liquidReflections && r_liquidReflections->integer > 0 && shader->sort >= SS_FOG &&
+		R_LiquidShaderSupported( state ) &&
+		R_LiquidContentsEnabled( shader->contentFlags | state->contentFlags,
+			r_liquidReflections->integer ) ) ? qtrue : qfalse;
+#endif
+
 #ifdef USE_PMLIGHT
 	if ( tess.fogNum != fogNum ) {
 		tess.dlightUpdateParams = qtrue;
@@ -330,12 +342,14 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 
 #ifdef USE_TESS_NEEDS_NORMAL
 #ifdef USE_PMLIGHT
-	tess.needsNormal = state->needsNormal || tess.dlightPass || r_shownormals->integer;
+	tess.needsNormal = state->needsNormal || tess.dlightPass || r_shownormals->integer ||
+		liquidNeedsNormal;
 	if ( backEnd.viewParms.passFlags & VPF_DLIGHT_SHADOW ) {
 		tess.needsNormal = qtrue;
 	}
 #else
-	tess.needsNormal = state->needsNormal || r_shownormals->integer;
+	tess.needsNormal = state->needsNormal || r_shownormals->integer ||
+		liquidNeedsNormal;
 #endif
 #endif
 
@@ -346,6 +360,8 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 	tess.numIndexes = 0;
 	tess.numVertexes = 0;
 	tess.shader = state;
+	tess.liquidContentFlags = shader->contentFlags | state->contentFlags;
+	tess.liquidSort = shader->sort;
 	tess.fogNum = fogNum;
 
 #ifdef USE_LEGACY_DLIGHTS
@@ -1789,6 +1805,112 @@ void VK_LightingPass( void )
 #endif // USE_PMLIGHT
 
 
+#ifdef USE_VULKAN
+static qboolean VK_LiquidEffectActive( const shaderCommands_t *input )
+{
+	return input && input->shader && input->numPasses > 0 &&
+		input->numIndexes > 0 && input->numVertexes > 0 &&
+		vk.fboActive && vk.liquidSnapshot.color_descriptor != VK_NULL_HANDLE &&
+		r_liquidReflections && r_liquidReflections->integer > 0 &&
+		R_LiquidContentsEnabled( input->liquidContentFlags, r_liquidReflections->integer ) &&
+		input->liquidSort >= SS_FOG &&
+		R_LiquidShaderSupported( input->shader ) &&
+		( ( r_liquidRefraction && r_liquidRefraction->value > 0.0f ) ||
+			( r_liquidFresnel && r_liquidFresnel->value > 0.0f ) ) &&
+		vk.renderPassIndex == RENDER_PASS_MAIN &&
+		!( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) &&
+		!backEnd.screenshotCubeActive && !backEnd.screenshotCubeFrontPending &&
+		!R_ViewPassIsPortal( &backEnd.viewParms ) && !glConfig.stereoEnabled ? qtrue : qfalse;
+}
+
+
+static void VK_DrawLiquidPass( const shaderCommands_t *input, qboolean refractionBase )
+{
+	vkUniform_t liquid;
+	vec_t *slots[12];
+	vk_material_t material;
+	const float rippleStrength = r_liquidRippleStrength ? r_liquidRippleStrength->value : 0.0f;
+	int rippleCount = 0;
+	int i;
+	uint32_t pipeline;
+
+	if ( !VK_LiquidEffectActive( input ) ||
+		( refractionBase && ( !backEnd.liquidScreenMapDone ||
+			( r_liquidRefraction && r_liquidRefraction->value <= 0.0f ) ) ) ||
+		( !refractionBase && r_liquidFresnel && r_liquidFresnel->value <= 0.0f ) ) {
+		return;
+	}
+
+	Com_Memset( &liquid, 0, sizeof( liquid ) );
+	VectorCopy( backEnd.or.viewOrigin, liquid.eyePos );
+
+	/* The liquid shaders use the first twelve vec4 slots after eyePos. Keeping
+	 * this mapping explicit makes the shared vkUniform_t layout auditable. */
+	slots[0] = liquid.light.pos;
+	slots[1] = liquid.light.color;
+	slots[2] = liquid.light.vector;
+	slots[3] = liquid.fogDistanceVector;
+	slots[4] = liquid.fogDepthVector;
+	slots[5] = liquid.fogEyeT;
+	slots[6] = liquid.fogColor;
+	slots[7] = liquid.texFactors;
+	slots[8] = liquid.depthFadeInfo;
+	slots[9] = liquid.depthFadeScale;
+	slots[10] = liquid.depthFadeBias;
+	slots[11] = liquid.dlightFactors;
+
+	slots[0][0] = (float)backEnd.refdef.floatTime;
+	slots[0][1] = r_liquidWarp ?
+		MIN( LIQUID_MAX_WARP_PIXELS,
+			Com_Clamp( 0.0f, 0.05f, r_liquidWarp->value ) * LIQUID_WARP_TO_PIXELS ) : 0.0f;
+	slots[0][2] = refractionBase ?
+		( r_liquidRefraction ? Com_Clamp( 0.0f, 1.0f, r_liquidRefraction->value ) : 1.0f ) :
+		( r_liquidFresnel ? Com_Clamp( 0.0f, 1.0f, r_liquidFresnel->value ) : 0.0f );
+	slots[0][3] = glConfig.vidWidth > 0 ? 1.0f / (float)glConfig.vidWidth : 1.0f;
+	slots[1][0] = R_LiquidContentsReflectionScale( input->liquidContentFlags );
+	slots[1][2] = glConfig.vidHeight > 0 ? 1.0f / (float)glConfig.vidHeight : 1.0f;
+	slots[1][3] = refractionBase ? 1.0f : 0.0f;
+
+	if ( r_liquidRipples && r_liquidRipples->integer && rippleStrength > 0.0f ) {
+		for ( i = 0; i < backEnd.refdef.numLiquidInteractions &&
+			rippleCount < LIQUID_MAX_ACTIVE_IMPULSES; i++ ) {
+			const liquidInteraction_t *interaction = &backEnd.refdef.liquidInteractions[i];
+			const float age = (float)( backEnd.refdef.time - interaction->time ) * 0.001f;
+			float life;
+
+			if ( !R_LiquidInteractionActive( interaction, backEnd.refdef.time ) ) {
+				continue;
+			}
+			life = 1.0f - age * ( 1000.0f / (float)LIQUID_IMPULSE_LIFETIME_MSEC );
+			R_LiquidWorldToLocal( interaction->origin, backEnd.or.origin,
+				backEnd.or.axis, slots[2 + rippleCount] );
+			slots[2 + rippleCount][3] = interaction->radius + age * 150.0f;
+			slots[10 + rippleCount / 4][rippleCount & 3] =
+				interaction->strength * rippleStrength * life;
+			rippleCount++;
+		}
+	}
+	slots[1][1] = (float)rippleCount;
+
+	if ( VK_PushUniform( &liquid ) == ~0U ) {
+		return;
+	}
+	vk_material_init( &material );
+	vk_material_set_descriptor( &material, VK_DESC_TEXTURE0,
+		vk.liquidSnapshot.color_descriptor );
+	vk_bind_material( &material );
+
+	pipeline = vk.liquid_pipelines[input->shader->cullType]
+		[input->shader->polygonOffset ? 1 : 0]
+		[R_ViewPassIsMirror( &backEnd.viewParms ) ? 1 : 0];
+	vk_bind_pipeline( pipeline );
+	vk_bind_index();
+	vk_bind_geometry( TESS_XYZ | TESS_NNN );
+	vk_draw_geometry( tess.depthRange, qtrue );
+}
+#endif
+
+
 void RB_StageIteratorGeneric( void )
 {
 #ifdef USE_VULKAN
@@ -1818,10 +1940,23 @@ void RB_StageIteratorGeneric( void )
 
 #ifdef USE_FOG_COLLAPSE
 	fogCollapse = tess.fogNum && tess.shader->fogPass && tess.shader->fogCollapse;
+	if ( VK_LiquidEffectActive( &tess ) ) {
+		fogCollapse = qfalse;
+	}
+#endif
+
+	/* Seed transparent liquid faces with a warped copy of the captured scene.
+	 * The authored material stages then tint and animate the refraction. */
+#ifdef USE_VULKAN
+	VK_DrawLiquidPass( &tess, qtrue );
 #endif
 
 	// call shader function
 	RB_IterateStagesGeneric( &tess, fogCollapse );
+
+#ifdef USE_VULKAN
+	VK_DrawLiquidPass( &tess, qfalse );
+#endif
 
 	// now do any dynamic lighting needed
 #ifdef USE_LEGACY_DLIGHTS

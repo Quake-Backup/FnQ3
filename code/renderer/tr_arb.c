@@ -1,6 +1,7 @@
 #include "tr_local.h"
 #include "tr_common.h"
 #include "tr_glx_compat.h"
+#include "../renderercommon/tr_motion_blur.h"
 
 #ifndef GL_RG
 #define GL_RG 0x8227
@@ -101,7 +102,12 @@ static unsigned int csmShadowAtlasGeneration;
 
 static frameBuffer_t frameBufferMS;
 static frameBuffer_t frameBuffers[ FBO_COUNT ];
+static frameBuffer_t liquidScreenBuffer;
 static frameBuffer_t menuDofBuffers[ 2 ];
+static frameBuffer_t motionBlurBuffer;
+static motionBlurViewState_t motionBlurViewState;
+static int motionBlurFrame = -1;
+static qboolean motionBlurCreateFailed = qfalse;
 
 static qboolean frameBufferMultiSampling = qfalse;
 
@@ -2768,7 +2774,8 @@ static char *ARB_BuildBloomProgram( char *buf ) {
 
 
 // Gaussian blur shader
-static char *ARB_BuildBlurProgram( char *buf, int taps ) {
+static char *ARB_BuildBlurProgram( char *buf, int taps, qboolean clampOutput,
+	qboolean clampSamples ) {
 	int i;
 	char *s = buf;
 
@@ -2782,6 +2789,10 @@ static char *ARB_BuildBlurProgram( char *buf, int taps ) {
 	for ( i = 0; i < taps; i++ ) {
 		s = Q_stradd( s, va( "PARAM p%i = program.local[%i]; \n", i, i ) ); // tex_offset_x, tex_offset_y, 0.0, weight
 	}
+	if ( clampSamples ) {
+		s = Q_stradd( s, va( "PARAM sampleMin = program.local[%i]; \n"
+			"PARAM sampleMax = program.local[%i]; \n", taps, taps + 1 ) );
+	}
 
 	s = Q_stradd( s, "TEMP cc; \n"
 		"MOV cc, {0.0, 0.0, 0.0, 1.0};\n" ); // initialize final color
@@ -2792,6 +2803,10 @@ static char *ARB_BuildBlurProgram( char *buf, int taps ) {
 
 	for ( i = 0; i < taps; i++ ) {
 		s = Q_stradd( s, va( "ADD tc%i.xy, tc, p%i; \n", i, i ) );
+		if ( clampSamples ) {
+			s = Q_stradd( s, va( "MAX tc%i.xy, tc%i, sampleMin; \n"
+				"MIN tc%i.xy, tc%i, sampleMax; \n", i, i, i, i ) );
+		}
 	}
 
 	for ( i = 0; i < taps; i++ ) {
@@ -2799,10 +2814,10 @@ static char *ARB_BuildBlurProgram( char *buf, int taps ) {
 		s = Q_stradd( s, va( "MAD cc, c%i, p%i.w, cc; \n", i, i ) ); // cc = cc + cN + pN.w
 	}
 
-	/*s = */ Q_stradd( s,
-		"MOV cc.a, 1.0; \n"
-		"MOV_SAT result.color, cc; \n"
-		"END \n" );
+	s = Q_stradd( s, "MOV cc.a, 1.0; \n" );
+	s = Q_stradd( s, clampOutput ? "MOV_SAT result.color, cc; \n" :
+		"MOV result.color, cc; \n" );
+	/*s = */ Q_stradd( s, "END \n" );
 
 	return buf;
 }
@@ -3015,6 +3030,25 @@ static void ARB_BlurParams( int width, int height, int ksize, qboolean horizonta
 			qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, i, 0.0, offset[i][1], 0.0, weight[i] );
 	}
 }
+
+
+static void ARB_MotionBlurParams( const float radiusUv[2], const float sampleBounds[4] )
+{
+	static const float offsets[7] = { -1.0f, -0.6666667f, -0.3333333f, 0.0f,
+		0.3333333f, 0.6666667f, 1.0f };
+	static const float weights[7] = { 1.0f / 64.0f, 6.0f / 64.0f, 15.0f / 64.0f,
+		20.0f / 64.0f, 15.0f / 64.0f, 6.0f / 64.0f, 1.0f / 64.0f };
+	int i;
+
+	for ( i = 0; i < 7; i++ ) {
+		qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, i,
+			radiusUv[0] * offsets[i], radiusUv[1] * offsets[i], 0.0f, weights[i] );
+	}
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 7,
+		sampleBounds[0], sampleBounds[1], 0.0f, 0.0f );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 8,
+		sampleBounds[2], sampleBounds[3], 0.0f, 0.0f );
+}
 #endif // USE_FBO
 
 
@@ -3156,6 +3190,8 @@ qboolean ARB_UpdatePrograms( void )
 #ifdef USE_FBO
 	if ( !ARB_CompileProgram( Fragment, worldCelOutlineFP, programs[ WORLD_CEL_FRAGMENT ] ) )
 		return qfalse;
+	if ( !ARB_CompileProgram( Fragment, ARB_BuildBlurProgram( buf, 7, qfalse, qtrue ), programs[ MOTION_BLUR_FRAGMENT ] ) )
+		return qfalse;
 
 	if ( !ARB_CompileProgram( Fragment, va( gammaFP,
 			ARB_BuildColorGradeProgram( buf ), ARB_BuildToneMapProgram( buf2 ),
@@ -3168,10 +3204,10 @@ qboolean ARB_UpdatePrograms( void )
 	
 	// only 1, 2, 3, 6, 8, 10, 12, 14, 16, 18 and 20 produces real visual difference
 	fboBloomFilterSize = r_bloom_filter_size->integer;
-	if ( !ARB_CompileProgram( Fragment, ARB_BuildBlurProgram( buf, fboBloomFilterSize ), programs[ BLUR_FRAGMENT ] ) )
+	if ( !ARB_CompileProgram( Fragment, ARB_BuildBlurProgram( buf, fboBloomFilterSize, qtrue, qfalse ), programs[ BLUR_FRAGMENT ] ) )
 		return qfalse;
 
-	if ( !ARB_CompileProgram( Fragment, ARB_BuildBlurProgram( buf, 6 ), programs[ BLUR2_FRAGMENT ] ) )
+	if ( !ARB_CompileProgram( Fragment, ARB_BuildBlurProgram( buf, 6, qtrue, qfalse ), programs[ BLUR2_FRAGMENT ] ) )
 		return qfalse;
 
 	fboBloomBlendBase = r_bloom_blend_base->integer;
@@ -4133,6 +4169,11 @@ GLuint FBO_ScreenTexture( void )
 	return frameBuffers[ 2 ].color;
 }
 
+GLuint FBO_LiquidScreenTexture( void )
+{
+	return liquidScreenBuffer.color;
+}
+
 qboolean FBO_MultisamplingEnabled( void )
 {
 	return ( fboEnabled && frameBufferMultiSampling ) ? qtrue : qfalse;
@@ -4874,11 +4915,16 @@ void FBO_MenuDepthOfField( float amount )
 }
 
 
-void FBO_CopyScreen( void )
+static qboolean FBO_CopyScreenInternal( qboolean liquidSnapshot )
 {
 	const frameBuffer_t *dst;
 	const frameBuffer_t *src;
 	int yCrop;
+
+	if ( !fboEnabled || !frameBuffers[0].fbo ||
+		( liquidSnapshot ? !liquidScreenBuffer.fbo : !frameBuffers[2].fbo ) ) {
+		return qfalse;
+	}
 #ifdef RENDERER_GLX
 	GLX_CompatRecordFboCopyScreen( backEnd.viewParms.viewportWidth,
 		backEnd.viewParms.viewportHeight );
@@ -4903,7 +4949,7 @@ void FBO_CopyScreen( void )
 	}
 
 	src = &frameBuffers[ 0 ];
-	dst = &frameBuffers[ 2 ];
+	dst = liquidSnapshot ? &liquidScreenBuffer : &frameBuffers[ 2 ];
 #ifdef RENDERER_GLX
 	GLX_CompatRecordFboBlit( GLX_FBO_BLIT_COPY_SCREEN, qfalse,
 		src->width, src->height, dst->width, dst->height );
@@ -4911,7 +4957,7 @@ void FBO_CopyScreen( void )
 	FBO_Bind( GL_READ_FRAMEBUFFER, src->fbo );
 	FBO_Bind( GL_DRAW_FRAMEBUFFER, dst->fbo );
 
-	yCrop = backEnd.viewParms.viewportHeight / 4;
+	yCrop = liquidSnapshot ? 0 : backEnd.viewParms.viewportHeight / 4;
 
 	qglBlitFramebuffer( backEnd.viewParms.viewportX, backEnd.viewParms.viewportY + yCrop,
 		backEnd.viewParms.viewportWidth + backEnd.viewParms.viewportX,
@@ -4930,7 +4976,9 @@ void FBO_CopyScreen( void )
 
 	qglColor4f( 1, 1, 1, 1 );
 	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
-	FBO_Blur2( dst, dst+1, dst );
+	if ( !liquidSnapshot ) {
+		FBO_Blur2( dst, dst+1, dst );
+	}
 	ARB_ProgramDisable();
 
 	//restore viewport and scissor
@@ -4943,6 +4991,17 @@ void FBO_CopyScreen( void )
 #ifdef RENDERER_GLX
 	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_COPY_SCREEN );
 #endif
+	return qtrue;
+}
+
+void FBO_CopyScreen( void )
+{
+	(void)FBO_CopyScreenInternal( qfalse );
+}
+
+qboolean FBO_CopyLiquidScreen( void )
+{
+	return FBO_CopyScreenInternal( qtrue );
 }
 
 
@@ -5039,6 +5098,104 @@ static void R_Bloom_LensEffect( float alpha )
 }
 
 
+void FBO_MotionBlur( void )
+{
+	const int w = glConfig.vidWidth;
+	const int h = glConfig.vidHeight;
+	const qboolean requested = ( r_motionBlur && r_motionBlur->integer &&
+		r_motionBlurStrength && r_motionBlurStrength->value > 0.0f ) ? qtrue : qfalse;
+	float radiusUv[2];
+	float sampleBounds[4];
+	int viewRect[4];
+	int viewX, viewY, viewWidth, viewHeight;
+	frameBuffer_t *source = &frameBuffers[ 0 ];
+
+	if ( !requested ) {
+		R_MotionBlur_ResetView( &motionBlurViewState );
+		motionBlurFrame = -1;
+		motionBlurCreateFailed = qfalse;
+		if ( motionBlurBuffer.fbo ) {
+			FBO_Clean( &motionBlurBuffer );
+		}
+		return;
+	}
+
+	if ( backEnd.screenshotCubeActive || backEnd.screenshotCubeFrontPending ) {
+		R_MotionBlur_ResetView( &motionBlurViewState );
+		return;
+	}
+
+	if ( !fboEnabled || !programCompiled || !backEnd.doneSurfaces || ri.CL_IsMinimized() ||
+		glConfig.stereoEnabled || ( r_anaglyphMode && r_anaglyphMode->integer ) ) {
+		R_MotionBlur_ResetView( &motionBlurViewState );
+		return;
+	}
+	if ( motionBlurFrame == tr.frameCount || motionBlurCreateFailed ) {
+		return;
+	}
+	motionBlurFrame = tr.frameCount;
+	if ( !R_MotionBlur_Calculate( &motionBlurViewState, qtrue,
+		r_motionBlurStrength->value, ri.Milliseconds(), backEnd.refdef.vieworg,
+		backEnd.refdef.viewaxis, backEnd.refdef.fov_x, backEnd.refdef.fov_y,
+		w, h, radiusUv ) ) {
+		return;
+	}
+
+	if ( !motionBlurBuffer.fbo ) {
+		if ( !FBO_CreateWithFormat( &motionBlurBuffer, w, h, qfalse,
+			fboInternalFormat, NULL, NULL ) ) {
+			ri.Printf( PRINT_WARNING, "...unable to create motion-blur buffer; disabling r_motionBlur\n" );
+			motionBlurCreateFailed = qtrue;
+			R_MotionBlur_ResetView( &motionBlurViewState );
+			ri.Cvar_Set( "r_motionBlur", "0" );
+			return;
+		}
+		ri.Printf( PRINT_ALL, "...motion-blur buffer created (%ix%i, %s)\n",
+			w, h, glDefToStr( motionBlurBuffer.internalFormat ) );
+	}
+
+	if ( blitMSfbo ) {
+		FBO_BlitMS( qfalse );
+		blitMSfbo = qfalse;
+	}
+	if ( !backEnd.projection2D ) {
+		RB_SetGL2D();
+	}
+	if ( !R_MotionBlur_CalculateViewRect( w, h, backEnd.viewParms.viewportX,
+		backEnd.viewParms.viewportY, backEnd.viewParms.viewportWidth,
+		backEnd.viewParms.viewportHeight, viewRect, sampleBounds ) ) {
+		return;
+	}
+	viewX = viewRect[0];
+	viewY = viewRect[1];
+	viewWidth = viewRect[2];
+	viewHeight = viewRect[3];
+
+	qglViewport( 0, 0, w, h );
+	qglScissor( viewX, viewY, viewWidth, viewHeight );
+	FBO_Bind( GL_FRAMEBUFFER, motionBlurBuffer.fbo );
+	GL_BindTexture( 0, source->color );
+	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
+	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	ARB_ProgramEnable( DUMMY_VERTEX, MOTION_BLUR_FRAGMENT );
+	ARB_MotionBlurParams( radiusUv, sampleBounds );
+	RenderQuad( w, h );
+	ARB_ProgramDisable();
+
+	FBO_Bind( GL_READ_FRAMEBUFFER, motionBlurBuffer.fbo );
+	FBO_Bind( GL_DRAW_FRAMEBUFFER, source->fbo );
+	qglBlitFramebuffer( viewX, viewY, viewX + viewWidth, viewY + viewHeight,
+		viewX, viewY, viewX + viewWidth, viewY + viewHeight,
+		GL_COLOR_BUFFER_BIT, GL_NEAREST );
+
+	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
+	FBO_Bind( GL_FRAMEBUFFER, source->fbo );
+	qglScissor( 0, 0, w, h );
+	fboReadIndex = 0;
+}
+
+
 qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage )
 {
 	const int w = glConfig.vidWidth;
@@ -5053,6 +5210,10 @@ qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalStage 
 #ifdef RENDERER_GLX
 	qboolean glxPostShaderBound = qfalse;
 #endif
+
+	if ( backEnd.screenshotCubeActive || backEnd.screenshotCubeFrontPending ) {
+		return qfalse;
+	}
 
 	if ( backEnd.doneBloom || !backEnd.doneSurfaces )
 	{
@@ -5317,6 +5478,58 @@ void R_BloomScreen( void )
 }
 
 
+qboolean FBO_CubemapCaptureOutput( void )
+{
+	const float obScale = 1 << tr.overbrightBits;
+	const float gamma = 1.0f / r_gamma->value;
+	const int w = glConfig.vidWidth;
+	const int h = glConfig.vidHeight;
+
+	if ( !fboEnabled || !programCompiled || w <= 0 || h <= 0 ) {
+		return qfalse;
+	}
+
+	ARB_ProgramDisable();
+	if ( blitMSfbo ) {
+		FBO_BlitMS( qfalse );
+		blitMSfbo = qfalse;
+	}
+	FBO_UpdateTonemapExposure();
+
+	if ( !backEnd.projection2D ) {
+		qglMatrixMode( GL_PROJECTION );
+		qglLoadMatrixf( GL_Ortho( 0, w, h, 0, 0, 1 ) );
+		qglMatrixMode( GL_MODELVIEW );
+		qglLoadIdentity();
+		backEnd.projection2D = qtrue;
+	}
+
+	qglViewport( 0, 0, w, h );
+	qglScissor( 0, 0, w, h );
+	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
+	GL_Cull( CT_TWO_SIDED );
+	FBO_Bind( GL_FRAMEBUFFER, frameBuffers[ 1 ].fbo );
+	GL_BindTexture( 0, frameBuffers[ 0 ].color );
+	ARB_ProgramEnable( DUMMY_VERTEX, GAMMA_FRAGMENT );
+	FBO_SetOutputTransformParams( gamma, obScale );
+	FBO_BindColorGradeLut();
+	RenderQuad( w, h );
+	ARB_ProgramDisable();
+
+	fboReadIndex = 1;
+	FBO_Bind( GL_READ_FRAMEBUFFER, frameBuffers[ 1 ].fbo );
+	return qtrue;
+}
+
+
+void FBO_FinishCubemapCaptureOutput( void )
+{
+	fboReadIndex = 0;
+	FBO_BindMain();
+}
+
+
 void FBO_PostProcess( void )
 {
 	const float obScale = 1 << tr.overbrightBits;
@@ -5562,12 +5775,17 @@ void QGL_DoneFBO( void )
 		FBO_Clean(&frameBuffers[2]);
 		FBO_Clean(&frameBuffers[3]);
 		FBO_Clean(&frameBuffers[4]);
+		FBO_Clean(&liquidScreenBuffer);
 		FBO_Clean(&menuDofBuffers[0]);
 		FBO_Clean(&menuDofBuffers[1]);
+		FBO_Clean(&motionBlurBuffer);
 		FBO_CleanBloom();
 		FBO_CleanDepth();
 		fboEnabled = qfalse;
 		fboBloomInited = qfalse;
+		R_MotionBlur_ResetView( &motionBlurViewState );
+		motionBlurFrame = -1;
+		motionBlurCreateFailed = qfalse;
 #ifdef RENDERER_GLX
 		GLX_CompatRecordFboShutdown();
 #endif
@@ -5578,6 +5796,10 @@ void QGL_DoneFBO( void )
 void QGL_InitFBO( void )
 {
 	int w, h;
+	int screenMapWidth = SCR_WIDTH;
+	int screenMapHeight = SCR_HEIGHT;
+	int liquidScreenWidth = 0;
+	int liquidScreenHeight = 0;
 	qboolean programReady;
 	qboolean depthStencil;
 	qboolean result = qfalse;
@@ -5588,6 +5810,11 @@ void QGL_InitFBO( void )
 
 	w = glConfig.vidWidth;
 	h = glConfig.vidHeight;
+	if ( r_liquidReflections && r_liquidReflections->integer > 0 && r_liquidReflectionScale ) {
+		const float scale = Com_Clamp( 0.125f, 1.0f, r_liquidReflectionScale->value );
+		liquidScreenWidth = MAX( 64, (int)( (float)w * scale + 0.5f ) );
+		liquidScreenHeight = MAX( 64, (int)( (float)h * scale + 0.5f ) );
+	}
 	
 	fboEnabled = qfalse;
 	frameBufferMultiSampling = qfalse;
@@ -5648,21 +5875,29 @@ void QGL_InitFBO( void )
 			depthStencil = qfalse;
 		result = FBO_Create( &frameBuffers[ 0 ], w, h, depthStencil, &fboTextureFormat, &fboTextureType )
 			&& FBO_Create( &frameBuffers[ 1 ], w, h, depthStencil, NULL, NULL )
-			&& FBO_Create( &frameBuffers[ 2 ], SCR_WIDTH, SCR_HEIGHT, qfalse, NULL, NULL )
-			&& FBO_Create( &frameBuffers[ 3 ], SCR_WIDTH, SCR_HEIGHT, qfalse, NULL, NULL );
+			&& FBO_Create( &frameBuffers[ 2 ], screenMapWidth, screenMapHeight, qfalse, NULL, NULL )
+			&& FBO_Create( &frameBuffers[ 3 ], screenMapWidth, screenMapHeight, qfalse, NULL, NULL );
 		frameBufferMultiSampling = result;
 	}
 	else
 	{
 		result = FBO_Create( &frameBuffers[ 0 ], w, h, qtrue, &fboTextureFormat, &fboTextureType )
 			&& FBO_Create( &frameBuffers[ 1 ], w, h, qtrue, NULL, NULL )
-			&& FBO_Create( &frameBuffers[ 2 ], SCR_WIDTH, SCR_HEIGHT, qfalse, NULL, NULL )
-			&& FBO_Create( &frameBuffers[ 3 ], SCR_WIDTH, SCR_HEIGHT, qfalse, NULL, NULL );
+			&& FBO_Create( &frameBuffers[ 2 ], screenMapWidth, screenMapHeight, qfalse, NULL, NULL )
+			&& FBO_Create( &frameBuffers[ 3 ], screenMapWidth, screenMapHeight, qfalse, NULL, NULL );
 	}
 
 	if ( result && superSampled )
 	{
 		result &= FBO_Create( &frameBuffers[ 4 ], gls.captureWidth, gls.captureHeight, qfalse, NULL, NULL );
+	}
+
+	if ( result && liquidScreenWidth > 0 && liquidScreenHeight > 0 &&
+		!FBO_Create( &liquidScreenBuffer, liquidScreenWidth, liquidScreenHeight,
+			qfalse, NULL, NULL ) ) {
+		FBO_Clean( &liquidScreenBuffer );
+		ri.Printf( PRINT_WARNING,
+			"WARNING: could not create the liquid scene snapshot; enhanced liquid rendering is disabled\n" );
 	}
 
 	if ( result )

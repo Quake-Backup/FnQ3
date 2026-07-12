@@ -1020,6 +1020,89 @@ static qboolean GLX_Material_FragmentSource( const MaterialStageKey &stageKey,
 	return written >= 0 && static_cast<size_t>( written ) < outSize ? qtrue : qfalse;
 }
 
+static const char kLiquidVertexSource[] =
+	"#version 120\n"
+	"varying vec4 v_ScreenPosition;\n"
+	"varying vec3 v_Position;\n"
+	"varying vec3 v_Normal;\n"
+	"void main(void)\n"
+	"{\n"
+	"    vec4 clipPosition = ftransform();\n"
+	"    gl_Position = clipPosition;\n"
+	"    v_ScreenPosition = clipPosition;\n"
+	"    v_Position = gl_Vertex.xyz;\n"
+	"    v_Normal = gl_Normal;\n"
+	"}\n";
+
+static const char kLiquidFragmentSource[] =
+	"#version 120\n"
+	"uniform sampler2D u_Texture0;\n"
+	"uniform vec4 u_Params;\n"
+	"uniform vec4 u_EyeAndCount;\n"
+	"uniform vec4 u_TargetInverse;\n"
+	"uniform vec4 u_Impulse[8];\n"
+	"uniform vec4 u_Amplitude[2];\n"
+	"varying vec4 v_ScreenPosition;\n"
+	"varying vec3 v_Position;\n"
+	"varying vec3 v_Normal;\n"
+	"void GLX_ApplyLiquidImpulse(vec4 impulse, float amplitude, vec3 normal, inout vec2 ripplePixels)\n"
+	"{\n"
+	"    vec3 delta = v_Position - impulse.xyz;\n"
+	"    float height = dot(delta, normal);\n"
+	"    vec3 tangentDelta = delta - normal * height;\n"
+	"    float distanceToCenter = length(tangentDelta);\n"
+	"    float width = 20.0 + impulse.w * 0.12;\n"
+	"    float ring = 1.0 - clamp(abs(distanceToCenter - impulse.w) / width, 0.0, 1.0);\n"
+	"    float heightFade = 1.0 - clamp(abs(height) / max(48.0, width * 3.0), 0.0, 1.0);\n"
+	"    vec2 screenGradient = vec2(dFdx(distanceToCenter), dFdy(distanceToCenter));\n"
+	"    float gradientLength = length(screenGradient);\n"
+	"    vec2 direction = gradientLength > 0.0001 ? screenGradient / gradientLength : vec2(0.0);\n"
+	"    ripplePixels += direction * ring * heightFade * amplitude * 3.0;\n"
+	"}\n"
+	"void main(void)\n"
+	"{\n"
+	"    float normalLength = length(v_Normal);\n"
+	"    vec3 normal = normalLength > 0.000001 ? v_Normal / normalLength : vec3(0.0, 0.0, 1.0);\n"
+	"    vec3 viewVector = u_EyeAndCount.xyz - v_Position;\n"
+	"    float viewLength = length(viewVector);\n"
+	"    vec3 viewDirection = viewLength > 0.000001 ? viewVector / viewLength : normal;\n"
+	"    float fresnel = 1.0 - abs(dot(normal, viewDirection));\n"
+	"    fresnel *= fresnel;\n"
+	"    float typeScale = abs(u_Params.w);\n"
+	"    if (u_Params.w < 0.0)\n"
+	"    {\n"
+	"        vec2 uv = v_ScreenPosition.xy / v_ScreenPosition.w * 0.5 + 0.5;\n"
+	"        vec2 ambientPixels;\n"
+	"        vec2 ripplePixels = vec2(0.0);\n"
+	"        ambientPixels.x = sin(dot(v_Position, vec3(0.031, 0.017, 0.0)) + u_Params.x * 1.13);\n"
+	"        ambientPixels.y = sin(dot(v_Position, vec3(-0.013, 0.027, 0.019)) - u_Params.x * 0.87);\n"
+	"        ambientPixels *= clamp(u_Params.y, 0.0, 8.0);\n"
+	"        if (u_EyeAndCount.w > 0.5) GLX_ApplyLiquidImpulse(u_Impulse[0], u_Amplitude[0].x, normal, ripplePixels);\n"
+	"        if (u_EyeAndCount.w > 1.5) GLX_ApplyLiquidImpulse(u_Impulse[1], u_Amplitude[0].y, normal, ripplePixels);\n"
+	"        if (u_EyeAndCount.w > 2.5) GLX_ApplyLiquidImpulse(u_Impulse[2], u_Amplitude[0].z, normal, ripplePixels);\n"
+	"        if (u_EyeAndCount.w > 3.5) GLX_ApplyLiquidImpulse(u_Impulse[3], u_Amplitude[0].w, normal, ripplePixels);\n"
+	"        if (u_EyeAndCount.w > 4.5) GLX_ApplyLiquidImpulse(u_Impulse[4], u_Amplitude[1].x, normal, ripplePixels);\n"
+	"        if (u_EyeAndCount.w > 5.5) GLX_ApplyLiquidImpulse(u_Impulse[5], u_Amplitude[1].y, normal, ripplePixels);\n"
+	"        if (u_EyeAndCount.w > 6.5) GLX_ApplyLiquidImpulse(u_Impulse[6], u_Amplitude[1].z, normal, ripplePixels);\n"
+	"        if (u_EyeAndCount.w > 7.5) GLX_ApplyLiquidImpulse(u_Impulse[7], u_Amplitude[1].w, normal, ripplePixels);\n"
+	"        vec2 edge = smoothstep(vec2(0.0), vec2(0.06), uv)\n"
+	"            * smoothstep(vec2(0.0), vec2(0.06), vec2(1.0) - uv);\n"
+	"        float edgeFade = min(edge.x, edge.y);\n"
+	"        vec2 sampleUv = clamp(uv + (ambientPixels + ripplePixels) * u_TargetInverse.xy * edgeFade, vec2(0.002), vec2(0.998));\n"
+	"        vec3 sceneColor = texture2D(u_Texture0, sampleUv).rgb;\n"
+	"        float alpha = typeScale * clamp(u_Params.z, 0.0, 1.0);\n"
+	"        gl_FragColor = vec4(sceneColor, alpha);\n"
+	"    }\n"
+	"    else\n"
+	"    {\n"
+	"        vec3 sheenColor = typeScale > 0.8 ? vec3(0.42, 0.58, 0.70)\n"
+	"            : (typeScale > 0.4 ? vec3(0.30, 0.55, 0.18) : vec3(0.95, 0.38, 0.08));\n"
+	"        float alpha = typeScale * clamp(u_Params.z, 0.0, 1.0)\n"
+	"            * clamp(0.03 + fresnel * 0.27, 0.0, 0.30);\n"
+	"        gl_FragColor = vec4(sheenColor, alpha);\n"
+	"    }\n"
+	"}\n";
+
 static GLuint GLX_Material_CompileShader( MaterialState *state, GLenum shaderType, const char *source )
 {
 	GLuint shader;
@@ -1055,6 +1138,91 @@ static GLuint GLX_Material_CompileShader( MaterialState *state, GLenum shaderTyp
 	}
 
 	return shader;
+}
+
+static void GLX_Material_DeleteLiquidProgram( MaterialState *state )
+{
+	LiquidProgram *liquid;
+
+	if ( !state ) {
+		return;
+	}
+	liquid = &state->liquidProgram;
+	if ( liquid->program && state->currentProgram == liquid->program && state->fns.UseProgram ) {
+		state->fns.UseProgram( 0 );
+		state->currentProgram = 0;
+	}
+	if ( liquid->program && state->fns.DeleteProgram ) {
+		state->fns.DeleteProgram( liquid->program );
+	}
+	if ( liquid->vertexShader && state->fns.DeleteShader ) {
+		state->fns.DeleteShader( liquid->vertexShader );
+	}
+	if ( liquid->fragmentShader && state->fns.DeleteShader ) {
+		state->fns.DeleteShader( liquid->fragmentShader );
+	}
+	*liquid = {};
+}
+
+static qboolean GLX_Material_CreateLiquidProgram( MaterialState *state )
+{
+	LiquidProgram *liquid;
+	GLint ok = 0;
+
+	if ( !state ) {
+		return qfalse;
+	}
+	liquid = &state->liquidProgram;
+	GLX_Material_DeleteLiquidProgram( state );
+	state->compileAttempts++;
+	liquid->vertexShader = GLX_Material_CompileShader( state, GL_VERTEX_SHADER,
+		kLiquidVertexSource );
+	liquid->fragmentShader = GLX_Material_CompileShader( state, GL_FRAGMENT_SHADER,
+		kLiquidFragmentSource );
+	if ( !liquid->vertexShader || !liquid->fragmentShader ) {
+		GLX_Material_DeleteLiquidProgram( state );
+		return qfalse;
+	}
+
+	liquid->program = state->fns.CreateProgram();
+	if ( !liquid->program ) {
+		GLX_Material_SetLastError( state, "glCreateProgram returned 0 for liquid shader" );
+		GLX_Material_DeleteLiquidProgram( state );
+		return qfalse;
+	}
+	state->fns.AttachShader( liquid->program, liquid->vertexShader );
+	state->fns.AttachShader( liquid->program, liquid->fragmentShader );
+	state->fns.LinkProgram( liquid->program );
+	state->fns.GetProgramiv( liquid->program, GL_LINK_STATUS, &ok );
+	if ( !ok ) {
+		state->linkFailures++;
+		GLX_Material_SetLastError( state, "liquid program link failed" );
+		RI().Printf( PRINT_WARNING, "GLx liquid program link failed:\n" );
+		GLX_Material_PrintObjectLog( *state, liquid->program, qtrue, PRINT_WARNING );
+		GLX_Material_DeleteLiquidProgram( state );
+		return qfalse;
+	}
+
+	liquid->textureUniform = state->fns.GetUniformLocation( liquid->program, "u_Texture0" );
+	liquid->paramsUniform = state->fns.GetUniformLocation( liquid->program, "u_Params" );
+	liquid->eyeAndCountUniform = state->fns.GetUniformLocation( liquid->program, "u_EyeAndCount" );
+	liquid->targetInverseUniform = state->fns.GetUniformLocation( liquid->program, "u_TargetInverse" );
+	liquid->impulsesUniform = state->fns.GetUniformLocation( liquid->program, "u_Impulse[0]" );
+	liquid->amplitudesUniform = state->fns.GetUniformLocation( liquid->program, "u_Amplitude[0]" );
+	state->fns.UseProgram( liquid->program );
+	if ( liquid->textureUniform >= 0 ) {
+		state->fns.Uniform1i( liquid->textureUniform, 0 );
+	}
+	state->fns.UseProgram( 0 );
+	state->currentProgram = 0;
+	if ( state->fns.ObjectLabel ) {
+		state->fns.ObjectLabel( GL_PROGRAM, liquid->program,
+			static_cast<GLsizei>( -1 ), "GLx enhanced liquid" );
+		state->debugLabels++;
+	}
+	liquid->valid = qtrue;
+	GLX_Material_SetLastError( state, "" );
+	return qtrue;
 }
 
 static void GLX_Material_DeleteProgram( MaterialState *state, MaterialProgram *program )
@@ -1093,13 +1261,18 @@ static void GLX_Material_ResetRuntime( MaterialState *state, qboolean deleteProg
 	if ( state->programCount > 0 && !canDeletePrograms ) {
 		state->contextlessDeletes += static_cast<unsigned int>( state->programCount );
 	}
+	if ( state->liquidProgram.program && !canDeletePrograms ) {
+		state->contextlessDeletes++;
+	}
 
 	if ( canDeletePrograms ) {
+		GLX_Material_DeleteLiquidProgram( state );
 		for ( int i = 0; i < state->programCount; i++ ) {
 			GLX_Material_DeleteProgram( state, &state->programs[i] );
 		}
 	} else {
 		state->currentProgram = 0;
+		state->liquidProgram = {};
 		for ( int i = 0; i < state->programCount; i++ ) {
 			state->programs[i] = {};
 		}
@@ -1114,6 +1287,7 @@ static void GLX_Material_ResetRuntime( MaterialState *state, qboolean deleteProg
 	state->programCount = 0;
 	state->lastFoundProgram = 0;
 	state->currentProgram = 0;
+	state->liquidProgramAttempted = qfalse;
 	state->ready = qfalse;
 	GLX_Material_SetReason( state, "not initialized" );
 }
@@ -1857,7 +2031,6 @@ void GLX_Material_OnOpenGLReady( MaterialState *state, const Capabilities &caps 
 		GLX_Material_SetReason( state, "GLSL material program precache failed" );
 		return;
 	}
-
 	GLX_Material_SetReason( state, "GLSL material program path ready" );
 }
 
@@ -2002,6 +2175,59 @@ qboolean GLX_Material_BindFog( MaterialState *state,
 	return qtrue;
 }
 
+qboolean GLX_Material_BindLiquid( MaterialState *state, const float *params,
+	const float *eyeAndCount, const float *targetInverse,
+	const float *impulses, const float *amplitudes )
+{
+	LiquidProgram *liquid;
+
+	if ( !state || !params || !eyeAndCount || !targetInverse || !impulses || !amplitudes ) {
+		return qfalse;
+	}
+	state->bindAttempts++;
+	liquid = &state->liquidProgram;
+	if ( !state->ready ) {
+		state->notReadySkips++;
+		return qfalse;
+	}
+	if ( !liquid->valid && !state->liquidProgramAttempted ) {
+		state->liquidProgramAttempted = qtrue;
+		if ( !GLX_Material_CreateLiquidProgram( state ) ) {
+			RI().Printf( PRINT_WARNING,
+				"GLx enhanced liquid shader unavailable; using the fixed-function fallback\n" );
+		}
+		liquid = &state->liquidProgram;
+	}
+	if ( !liquid->valid || !liquid->program ) {
+		state->bindFailures++;
+		return qfalse;
+	}
+	if ( state->currentProgram != liquid->program ) {
+		state->fns.UseProgram( liquid->program );
+		state->currentProgram = liquid->program;
+		state->programSwitches++;
+	}
+	if ( liquid->paramsUniform >= 0 ) {
+		state->fns.Uniform4fv( liquid->paramsUniform, 1, params );
+	}
+	if ( liquid->eyeAndCountUniform >= 0 ) {
+		state->fns.Uniform4fv( liquid->eyeAndCountUniform, 1, eyeAndCount );
+	}
+	if ( liquid->targetInverseUniform >= 0 ) {
+		state->fns.Uniform4fv( liquid->targetInverseUniform, 1, targetInverse );
+	}
+	if ( liquid->impulsesUniform >= 0 ) {
+		state->fns.Uniform4fv( liquid->impulsesUniform, 8, impulses );
+	}
+	if ( liquid->amplitudesUniform >= 0 ) {
+		state->fns.Uniform4fv( liquid->amplitudesUniform, 2, amplitudes );
+	}
+	liquid->binds++;
+	state->binds++;
+	GLX_Material_SetLastError( state, "" );
+	return qtrue;
+}
+
 void GLX_Material_Unbind( MaterialState *state )
 {
 	if ( !state || !state->currentProgram || !state->fns.UseProgram ) {
@@ -2046,6 +2272,9 @@ void GLX_Material_PrintInfo( const MaterialState &state )
 	RI().Printf( PRINT_ALL, "  material programs: %i/%i, attempts %u, binds %u, switches %u, unbinds %u, cache %u hits/%u misses\n",
 		state.programCount, GLX_MATERIAL_PROGRAM_LIMIT, state.bindAttempts, state.binds,
 		state.programSwitches, state.unbinds, state.cacheHits, state.cacheMisses );
+	RI().Printf( PRINT_ALL, "  enhanced liquid program: attempted %s, ready %s, handle %u, binds %u\n",
+		BoolName( state.liquidProgramAttempted ), BoolName( state.liquidProgram.valid ),
+		state.liquidProgram.program, state.liquidProgram.binds );
 	RI().Printf( PRINT_ALL, "  material hash index: %u probes, %u collisions, %u fallback scans\n",
 		state.hashProbes, state.hashCollisions, state.hashFallbackScans );
 	RI().Printf( PRINT_ALL, "  material compiles: %u attempts, %u compile failures, %u link failures, precache %u/%u, bind failures %u, labels %u\n",

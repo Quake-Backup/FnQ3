@@ -31,7 +31,7 @@ What sets it apart is the balance: FnQ3 keeps retail compatibility, demos, and c
 
 ### Sharper presentation without changing the identity of Quake III
 
-- Flexible display options with renderer choice, fullscreen and windowed play, render scaling, texture picmip filtering, HDR, anti-aliasing, bloom tuning, and cel-shaded world/model presentation. See the [Display Guide](docs/DISPLAY.md).
+- Flexible display options with renderer choice, fullscreen and windowed play, render scaling, texture picmip filtering, HDR, anti-aliasing, bloom tuning, optional motion blur, enhanced map lens flares, and cel-shaded world/model presentation. See the [Display Guide](docs/DISPLAY.md).
 - High-quality dynamic lights and opt-in dynamic-light shadow maps for GLx/OpenGL-lineage and Vulkan renderers, with compatibility-safe defaults. See the [Display Guide](docs/DISPLAY.md#dynamic-lighting-and-shadowing).
 - Optional visual polish such as soft particles, player rim lighting, stencil-style highlights, model cel lighting, and BSP world depth-edge outlines. See the [Display Guide](docs/DISPLAY.md#soft-particles) and [Visuals Guide](docs/VISUALS.md).
 - Better widescreen handling for HUDs, menus, UI previews, and cinematics. See the [Aspect Correction Guide](docs/ASPECT_CORRECTION.md).
@@ -62,7 +62,7 @@ If you want to compile FnQuake3 yourself instead, start with the [Build Guide](B
 
 ### Player guides
 
-- [Display Guide](docs/DISPLAY.md) for renderer choice, video modes, render scaling, texture picmip, HDR, anti-aliasing, bloom, soft particles, dynamic lighting, shadow maps, and cel shading.
+- [Display Guide](docs/DISPLAY.md) for renderer choice, video modes, render scaling, texture picmip, HDR, anti-aliasing, bloom, motion blur, map lens flares, soft particles, dynamic lighting, shadow maps, and cel shading.
 - [Visuals Guide](docs/VISUALS.md) for player highlighting and other presentation controls.
 - [Aspect Correction Guide](docs/ASPECT_CORRECTION.md) for HUD, menu, and cinematic layout options.
 - [Audio Guide](docs/AUDIO.md) for backend selection, devices, HRTF, fallback behavior, and troubleshooting.

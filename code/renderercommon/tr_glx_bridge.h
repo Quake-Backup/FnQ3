@@ -717,6 +717,23 @@ static ID_INLINE qboolean GLX_CompatBindFogMaterial( const float *fogDistanceVec
 #endif
 }
 
+static ID_INLINE qboolean GLX_CompatBindLiquidMaterial( const float *params,
+	const float *eyeAndCount, const float *targetInverse,
+	const float *impulses, const float *amplitudes )
+{
+#ifdef RENDERER_GLX
+	return GLX_Renderer_BindLiquidMaterial( params, eyeAndCount, targetInverse,
+		impulses, amplitudes );
+#else
+	(void)params;
+	(void)eyeAndCount;
+	(void)targetInverse;
+	(void)impulses;
+	(void)amplitudes;
+	return qfalse;
+#endif
+}
+
 static ID_INLINE void GLX_CompatUnbindMaterial( void )
 {
 #ifdef RENDERER_GLX

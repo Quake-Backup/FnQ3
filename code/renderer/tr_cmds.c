@@ -621,6 +621,9 @@ void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 	cmd = R_GetCommandBuffer( sizeof( *cmd ) );
 	if ( !cmd ) {
+		if ( backEnd.screenshotCubeActive ) {
+			backEnd.screenshotCubeFailed = qtrue;
+		}
 		return;
 	}
 	cmd->commandId = RC_DRAW_SURFS;
@@ -634,12 +637,16 @@ void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	cmd->shadowManager = tr.shadowManager;
 }
 
-void R_AddScreenshotCmd( int x, int y, int width, int height, int format, const char *fileName, qboolean silent, qboolean allowWatermark ) {
+qboolean R_AddScreenshotCmd( int x, int y, int width, int height, int format, const char *fileName,
+	qboolean silent, qboolean allowWatermark, int cubemapFace ) {
 	screenshotCommand_t *cmd;
 
 	cmd = R_GetCommandBuffer( sizeof( *cmd ) );
 	if ( !cmd ) {
-		return;
+		if ( cubemapFace >= 0 ) {
+			backEnd.screenshotCubeFailed = qtrue;
+		}
+		return qfalse;
 	}
 
 	cmd->commandId = RC_SCREENSHOT;
@@ -650,7 +657,9 @@ void R_AddScreenshotCmd( int x, int y, int width, int height, int format, const 
 	cmd->format = format;
 	cmd->silent = silent;
 	cmd->allowWatermark = allowWatermark;
+	cmd->cubemapFace = cubemapFace;
 	Q_strncpyz( cmd->fileName, fileName, sizeof( cmd->fileName ) );
+	return qtrue;
 }
 
 
@@ -929,6 +938,13 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 	if ( ri.Cvar_CheckGroup( CVG_RENDERER ) )
 	{
 		qboolean updateColorMappings = r_gamma->modified;
+		qboolean flareFboStateChanged = qfalse;
+
+		if ( r_flares->modified ) {
+			qboolean enabled = r_flares->integer ? qtrue : qfalse;
+			flareFboStateChanged = enabled != r_flaresFboEnabled;
+			r_flaresFboEnabled = enabled;
+		}
 
 		ARB_UpdatePrograms();
 
@@ -936,7 +952,7 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 		if ( r_ext_multisample->modified || r_hdrPrecision->modified ||
 			r_hdrBloomFormat->modified ||
 			r_fbo->modified || r_ext_supersample->modified || r_renderWidth->modified ||
-			r_renderHeight->modified || r_renderScale->modified || r_flares->modified ||
+			r_renderHeight->modified || r_renderScale->modified || flareFboStateChanged ||
 			r_bloom_passes->modified || r_csmShadows->modified ||
 			r_csmCascadeCount->modified || r_csmResolution->modified ) {
 			QGL_InitFBO();

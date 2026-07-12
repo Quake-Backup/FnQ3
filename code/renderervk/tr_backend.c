@@ -661,6 +661,61 @@ static void RB_RunScheduledShadowManagerPreMainPasses( drawSurf_t *drawSurfs, in
 }
 #endif
 
+#ifdef USE_VULKAN
+static qboolean RB_ShaderNeedsLiquidSnapshot( const shader_t *shader )
+{
+	const shader_t *state;
+
+	/* Deferred opaque lighting lands at SS_FOG. Earlier custom sort classes
+	 * cannot be snapshotted without changing their established draw order. */
+	if ( !shader || shader->sort < SS_FOG ) {
+		return qfalse;
+	}
+	state = shader->remappedShader ? shader->remappedShader : shader;
+	if ( !R_LiquidShaderSupported( state ) ||
+		!r_liquidReflections ||
+		!r_liquidRefraction || r_liquidRefraction->value <= 0.0f ||
+		!R_LiquidContentsEnabled( shader->contentFlags | state->contentFlags,
+			r_liquidReflections->integer ) ) {
+		return qfalse;
+	}
+	if ( !vk.fboActive || backEnd.liquidScreenMapDone ||
+		vk.renderPassIndex != RENDER_PASS_MAIN ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		backEnd.screenshotCubeActive || backEnd.screenshotCubeFrontPending ||
+		R_ViewPassIsPortal( &backEnd.viewParms ) || glConfig.stereoEnabled ) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static qboolean RB_DrawSurfListNeedsLiquidSnapshot( drawSurf_t *drawSurfs,
+	int numDrawSurfs )
+{
+	int i;
+
+	if ( !drawSurfs || numDrawSurfs <= 0 || !r_liquidReflections ||
+		r_liquidReflections->integer <= 0 || !r_liquidRefraction ||
+		r_liquidRefraction->value <= 0.0f || !vk.fboActive ||
+		vk.liquidSnapshot.color_descriptor == VK_NULL_HANDLE ) {
+		return qfalse;
+	}
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		shader_t *shader;
+		int entityNum, fogNum, dlighted;
+
+		if ( drawSurfs[i].flags & DSF_SHADOW_CASTER_ONLY ) {
+			continue;
+		}
+		R_DecomposeSort( drawSurfs[i].sort, &entityNum, &shader, &fogNum, &dlighted );
+		if ( RB_ShaderNeedsLiquidSnapshot( shader ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+#endif
+
 /*
 ==================
 RB_RenderDrawSurfList
@@ -685,11 +740,18 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 #ifdef USE_VULKAN
 	qboolean		depthFadeSnapshot;
 	qboolean		worldCelOutlineDrawn;
+	qboolean		liquidSnapshotPending;
 #endif
 	double			originalTime; // -EC-
 
 	// save original time for entity shader offsets
 	originalTime = backEnd.refdef.floatTime;
+	if ( vk.renderPassIndex == RENDER_PASS_MAIN &&
+		!( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) &&
+		!R_ViewPassIsPortal( &backEnd.viewParms ) &&
+		!backEnd.screenshotCubeActive && !backEnd.screenshotCubeFrontPending ) {
+		backEnd.liquidScreenMapDone = qfalse;
+	}
 
 	// draw everything
 	oldEntityNum = -1;
@@ -707,6 +769,8 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 #ifdef USE_VULKAN
 	depthFadeSnapshot = qfalse;
 	worldCelOutlineDrawn = qfalse;
+	liquidSnapshotPending = RB_DrawSurfListNeedsLiquidSnapshot( drawSurfs,
+		numDrawSurfs );
 #endif
 	depthRange = qfalse;
 
@@ -776,6 +840,15 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 			// view-facing see-through/autosprite passes stay above it.
 			if ( shader->sort > SS_OPAQUE ) {
 				RB_DrawWorldCelOutlineForScene( &worldCelOutlineDrawn );
+			}
+			/* Capture at one deterministic boundary, after deferred opaque work and
+			 * before fog/underwater/regular transparency. */
+			if ( liquidSnapshotPending && shader->sort >= SS_FOG ) {
+				if ( vk_capture_liquid_scene() ) {
+					oldSort = MAX_UINT;
+					oldEntityNum = -1;
+				}
+				liquidSnapshotPending = qfalse;
 			}
 #endif
 			RB_BeginSurface( shader, fogNum );
@@ -3517,8 +3590,11 @@ RB_DrawSurfs
 =============
 */
 #ifdef USE_VULKAN
-static void RB_FinishBloomForHud3D( const trRefdef_t *refdef ) {
-	if ( !r_bloom->integer || backEnd.doneBloom || !backEnd.doneSurfaces ) {
+static void RB_PreparePostProcessForHud3D( const trRefdef_t *refdef ) {
+	if ( !backEnd.doneSurfaces ) {
+		return;
+	}
+	if ( backEnd.screenshotCubeActive || backEnd.screenshotCubeFrontPending ) {
 		return;
 	}
 	if ( !r_hudExcludePostProcess->integer ) {
@@ -3528,7 +3604,9 @@ static void RB_FinishBloomForHud3D( const trRefdef_t *refdef ) {
 		return;
 	}
 
-	vk_bloom();
+	if ( r_bloom->integer && !backEnd.doneBloom ) {
+		vk_bloom();
+	}
 }
 #endif
 
@@ -3547,7 +3625,7 @@ static const void *RB_DrawSurfs( const void *data ) {
 	RB_EndSurface();
 
 #ifdef USE_VULKAN
-	RB_FinishBloomForHud3D( &cmd->refdef );
+	RB_PreparePostProcessForHud3D( &cmd->refdef );
 #endif
 
 	backEnd.refdef = cmd->refdef;
@@ -3614,6 +3692,12 @@ static const void *RB_DrawSurfs( const void *data ) {
 
 	//TODO Maybe check for rdf_noworld stuff but q3mme has full 3d ui
 	backEnd.doneSurfaces = qtrue; // for bloom
+#ifdef USE_VULKAN
+	if ( vk.renderPassIndex == RENDER_PASS_MAIN &&
+		!( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		vk_motion_blur();
+	}
+#endif
 
 	return (const void *)(cmd + 1);
 }
@@ -3894,6 +3978,46 @@ static const void *RB_FinishBloom( const void *data )
 }
 
 
+#ifdef USE_VULKAN
+static qboolean RB_SaveCubemapScreenshots( void )
+{
+	const int size = backEnd.screenshotCubeFrontSize;
+	const size_t bufferBytes = (size_t)size * size * 3;
+	byte *rgb;
+	int i;
+
+	if ( backEnd.screenshotCubeFailed || size <= 0 || bufferBytes > INT_MAX ) {
+		vk_release_cubemap_capture();
+		return qfalse;
+	}
+
+	rgb = ri.Hunk_AllocateTempMemory( bufferBytes );
+	for ( i = 0; i < 6; i++ ) {
+		const qboolean readOk = vk_read_cubemap_face( rgb, i, size );
+		if ( !readOk ) {
+			ri.Printf( PRINT_WARNING,
+				"WARNING: screenshot cubemap cancelled: Vulkan face %d readback is incomplete.\n", i );
+			backEnd.screenshotCubeFailed = qtrue;
+			break;
+		}
+		if ( !vk.fboActive ) {
+			R_GammaCorrect( rgb, (int)bufferBytes );
+		}
+		RB_SaveCubemapScreenshot( rgb, size, size, backEnd.screenshotCubeFormat,
+			backEnd.screenshotCubeNames[i], backEnd.screenshotCubeVieworg[i],
+			backEnd.screenshotCubeViewaxis[i] );
+		if ( !backEnd.screenshotCubeSilent ) {
+			ri.Printf( PRINT_ALL, "Wrote %s\n", backEnd.screenshotCubeNames[i] );
+		}
+	}
+
+	ri.Hunk_FreeTempMemory( rgb );
+	vk_release_cubemap_capture();
+	return backEnd.screenshotCubeFailed ? qfalse : qtrue;
+}
+#endif
+
+
 static const void *RB_SwapBuffers( const void *data ) {
 
 	const swapBuffersCommand_t	*cmd;
@@ -3923,7 +4047,8 @@ static const void *RB_SwapBuffers( const void *data ) {
 #endif
 
 #ifdef USE_VULKAN
-	if ( ( backEnd.screenshotMask || backEnd.levelshotPending ) && vk.cmd->waitForFence ) {
+	if ( ( backEnd.screenshotMask || backEnd.levelshotPending ||
+		backEnd.screenshotCubeFrontPending ) && vk.cmd->waitForFence ) {
 #else
 	if ( ( backEnd.screenshotMask || backEnd.levelshotPending ) && tr.frameCount > 1 ) {
 #endif
@@ -3958,6 +4083,17 @@ static const void *RB_SwapBuffers( const void *data ) {
 			RB_TakeLevelShot();
 			backEnd.levelshotPending = qfalse;
 		}
+		if ( backEnd.screenshotCubeFrontPending ) {
+			/*
+			 * All six faces share one host-visible readback buffer.  Wait once
+			 * after the frame submission before mapping any of its face slots.
+			 */
+			vk_queue_wait_idle();
+			RB_SaveCubemapScreenshots();
+			backEnd.screenshotCubeFrontPending = qfalse;
+			backEnd.screenshotCubeActive = qfalse;
+			backEnd.screenshotCubeFailed = qfalse;
+		}
 
 		backEnd.screenshotPNG[0] = '\0';
 		backEnd.screenshotJPG[0] = '\0';
@@ -3965,7 +4101,8 @@ static const void *RB_SwapBuffers( const void *data ) {
 		backEnd.screenshotBMP[0] = '\0';
 		backEnd.screenshotMask = 0;
 
-		if ( !backEnd.levelshotPending ) {
+		if ( !backEnd.levelshotPending && !backEnd.screenshotCubeActive &&
+			!backEnd.screenshotCubeFrontPending ) {
 			ri.Cvar_Set( "cl_captureActive", "0" );
 		}
 	}
@@ -3984,6 +4121,25 @@ static const void *RB_SwapBuffers( const void *data ) {
 	backEnd.doneBloom = qfalse;
 #endif
 
+	return (const void *)(cmd + 1);
+}
+
+
+static const void *RB_TakeScreenshotCmd( const void *data )
+{
+	const screenshotCommand_t *cmd = (const screenshotCommand_t *)data;
+
+#ifdef USE_VULKAN
+	if ( cmd->cubemapFace >= 1 && cmd->cubemapFace <= 5 &&
+		!backEnd.screenshotCubeFailed ) {
+		if ( !vk_capture_cubemap_face( cmd->cubemapFace, cmd->width ) ) {
+			backEnd.screenshotCubeFailed = qtrue;
+			ri.Printf( PRINT_WARNING,
+				"WARNING: screenshot cubemap cancelled: Vulkan face %d capture failed.\n",
+				cmd->cubemapFace );
+		}
+	}
+#endif
 	return (const void *)(cmd + 1);
 }
 
@@ -4009,6 +4165,9 @@ void RB_ExecuteRenderCommands( const void *data ) {
 			break;
 		case RC_DRAW_SURFS:
 			data = RB_DrawSurfs( data );
+			break;
+		case RC_SCREENSHOT:
+			data = RB_TakeScreenshotCmd( data );
 			break;
 		case RC_DRAW_BUFFER:
 			data = RB_DrawBuffer( data );

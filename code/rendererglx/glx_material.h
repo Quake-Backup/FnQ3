@@ -66,6 +66,22 @@ struct MaterialProgram {
 	qboolean valid;
 };
 
+struct LiquidProgram {
+	GLuint program;
+	GLuint vertexShader;
+	GLuint fragmentShader;
+	GLint textureUniform;
+	GLint depthTextureUniform;
+	GLint paramsUniform;
+	GLint eyeAndCountUniform;
+	GLint targetInverseUniform;
+	GLint reflectUniform;
+	GLint impulsesUniform;
+	GLint amplitudesUniform;
+	unsigned int binds;
+	qboolean valid;
+};
+
 struct MaterialRequest {
 	int flags;
 	unsigned int stateBits;
@@ -94,6 +110,8 @@ struct MaterialState {
 	cvar_t *r_glxMaterialPrecache;
 	MaterialFns fns;
 	MaterialProgram programs[GLX_MATERIAL_PROGRAM_LIMIT];
+	LiquidProgram liquidProgram;
+	qboolean liquidProgramAttempted;
 	unsigned short programHashTable[GLX_MATERIAL_PROGRAM_HASH_SIZE];
 	RenderProductTier tier;
 	int programCount;
@@ -148,6 +166,9 @@ qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &re
 qboolean GLX_Material_BindFog( MaterialState *state,
 	const float *fogDistanceVector, const float *fogDepthVector, float fogEyeT,
 	const float *fogColor );
+qboolean GLX_Material_BindLiquid( MaterialState *state, const float *params,
+	const float *eyeAndCount, const float *targetInverse, const float *reflect,
+	const float *impulses, const float *amplitudes );
 void GLX_Material_Unbind( MaterialState *state );
 void GLX_Material_PrintInfo( const MaterialState &state );
 const char *GLX_Material_ModeName( MaterialProgramMode mode );

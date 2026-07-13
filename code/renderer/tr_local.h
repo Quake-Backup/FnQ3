@@ -44,6 +44,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qfiles.h"
 #include "../qcommon/qcommon.h"
 #include "../renderercommon/tr_public.h"
+#include "../renderercommon/tr_liquid.h"
 #include "tr_common.h"
 #include "iqm.h"
 #include "qgl.h"
@@ -555,6 +556,9 @@ typedef struct {
 
 	unsigned int num_dlights;
 	struct dlight_s	*dlights;
+
+	int			numLiquidInteractions;
+	liquidInteraction_t liquidInteractions[LIQUID_MAX_ACTIVE_IMPULSES];
 
 	int			numPolys;
 	struct srfPoly_s	*polys;
@@ -1771,6 +1775,7 @@ typedef struct {
 	color4ub_t	color2D;
 	qboolean	doneBloom;		// done bloom this frame
 	qboolean	doneSurfaces;   // done any 3d surfaces already
+	qboolean	liquidScreenMapDone; // stable pre-fog snapshot is ready for liquid refraction
 	qboolean	framePostProcessed; // final scene postprocess has been resolved
 	qboolean	bloomProtectHighlights; // preserve dark cel/player-highlight edges during bloom composite
 	trRefEntity_t	entity2D;	// currentEntity will point at this when doing 2D rendering
@@ -1789,10 +1794,13 @@ typedef struct {
 	qboolean screenshotCubeSilent;
 	qboolean screenshotCubeActive;
 	qboolean screenshotCubeFrontPending;
+	qboolean screenshotCubeFailed;
 	int		screenshotCubeFrontX;
 	int		screenshotCubeFrontY;
 	int		screenshotCubeFrontSize;
 	char	screenshotCubeNames[6][ MAX_OSPATH ];
+	vec3_t	screenshotCubeVieworg[6];
+	vec3_t	screenshotCubeViewaxis[6][3];
 	videoFrameCommand_t	vcmd;	// avi capture
 	
 	qboolean throttle;
@@ -1823,6 +1831,8 @@ typedef struct {
 #endif
 
 	int						frameSceneNum;	// zeroed at RE_BeginFrame
+	int						cubemapDrawSurfLimit;
+	qboolean				cubemapDrawSurfLimitHit;
 
 	qboolean				worldMapLoaded;
 	world_t					*world;
@@ -1846,6 +1856,7 @@ typedef struct {
 	shader_t				*enemyOutlineShader;
 
 	shader_t				*flareShader;
+	shader_t				*lensFlareShader;
 	shader_t				*sunShader;
 
 	int						numLightmaps;
@@ -2065,6 +2076,14 @@ extern cvar_t	*r_bloom_blend_base;
 extern cvar_t	*r_bloom_intensity;
 extern cvar_t	*r_bloom_filter_size;
 extern cvar_t	*r_bloom_reflection;
+extern cvar_t	*r_motionBlur;
+extern cvar_t	*r_motionBlurStrength;
+extern cvar_t	*r_liquid;
+extern cvar_t	*r_liquidResolution;
+extern cvar_t	*r_liquidRefraction;
+extern cvar_t	*r_liquidWarpScale;
+extern cvar_t	*r_liquidReflection;
+extern cvar_t	*r_liquidRipples;
 
 extern cvar_t	*r_ext_multisample;
 extern cvar_t	*r_ext_supersample;
@@ -2112,6 +2131,7 @@ extern	cvar_t	*r_clear;						// force screen clear every frame
 
 extern	cvar_t	*r_shadows;						// controls shadows: 0 = none, 1 = blur, 2 = stencil, 3 = black planar projection
 extern	cvar_t	*r_flares;						// light flares
+extern	qboolean r_flaresFboEnabled;			// cached zero/nonzero state for FBO depth allocation
 
 extern	cvar_t	*r_intensity;
 
@@ -2297,6 +2317,7 @@ shader_t	*R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 shader_t	*R_GetShaderByHandle( qhandle_t hShader );
 shader_t	*R_GetShaderByState( int index, long *cycleTime );
 shader_t	*R_FindShaderByName( const char *name );
+qboolean	R_LiquidShaderSupported( const shader_t *shader );
 void		R_InitShaders( void );
 void		R_ShaderList_f( void );
 void		RE_RemapShader(const char *oldShader, const char *newShader, const char *timeOffset);
@@ -2348,6 +2369,8 @@ typedef struct shaderCommands_s
 	unsigned int	glxDynamicCategoryMask;
 
 	shader_t	*shader;
+	int			liquidContentFlags;	// original and remapped shader contents
+	float		liquidSort;			// original shader sort used for safe snapshot ordering
 	double		shaderTime;	// -EC- set to double for frameloss fix
 	int			fogNum;
 #ifdef USE_LEGACY_DLIGHTS
@@ -2481,12 +2504,17 @@ extern qboolean		blitMSfbo;
 void FBO_BindMain( void );
 qboolean FBO_MultisamplingEnabled( void );
 void FBO_PostProcess( void );
+qboolean FBO_CubemapCaptureOutput( void );
+void FBO_FinishCubemapCaptureOutput( void );
+void FBO_MotionBlur( void );
 void FBO_BlitMS( qboolean depthOnly );
 void FBO_BlitSS( void );
 qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalPass );
 void FBO_CopyScreen( void );
+qboolean FBO_CopyLiquidScreen( void );
 void FBO_MenuDepthOfField( float amount );
 GLuint FBO_ScreenTexture( void );
+GLuint FBO_LiquidScreenTexture( void );
 qboolean FBO_DepthFadeAvailable( void );
 qboolean FBO_DepthFadeReady( void );
 void FBO_ResetDepthFade( void );
@@ -2602,6 +2630,7 @@ void RE_AddPolyToScene( qhandle_t hShader , int numVerts, const polyVert_t *vert
 void RE_AddLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float intensity, float r, float g, float b );
+void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction );
 #ifdef USE_PMLIGHT
 void R_DlightTest_f( void );
 #endif
@@ -2754,6 +2783,7 @@ typedef struct {
 	int		format;
 	qboolean	silent;
 	qboolean	allowWatermark;
+	int		cubemapFace;	// -1 for a normal screenshot, otherwise 0..5
 	char	fileName[MAX_OSPATH];
 } screenshotCommand_t;
 
@@ -2842,7 +2872,8 @@ void RB_TakeLevelShot( void );
 void R_IssuePendingRenderCommands( void );
 
 void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs );
-void R_AddScreenshotCmd( int x, int y, int width, int height, int format, const char *fileName, qboolean silent, qboolean allowWatermark );
+qboolean R_AddScreenshotCmd( int x, int y, int width, int height, int format, const char *fileName,
+	qboolean silent, qboolean allowWatermark, int cubemapFace );
 
 void RE_SetColor( const float *rgba );
 void RE_StretchPic ( float x, float y, float w, float h, 
@@ -2954,7 +2985,11 @@ typedef enum {
 	SPRITE_FRAGMENT,
 	DEPTH_FADE_FRAGMENT,
 #ifdef USE_FBO
+	LIQUID_VERTEX,
+	LIQUID_REFRACTION_FRAGMENT,
+	LIQUID_SHEEN_FRAGMENT,
 	WORLD_CEL_FRAGMENT,
+	MOTION_BLUR_FRAGMENT,
 	GAMMA_FRAGMENT,
 	BLOOM_EXTRACT_FRAGMENT,
 	BLUR_FRAGMENT,
@@ -2972,6 +3007,28 @@ extern const char *fogInVPCode;
 
 qboolean ARB_CompileProgram( programType ptype, const char *text, GLuint program );
 void ARB_ProgramEnableExt( GLuint vertexProgram, GLuint fragmentProgram );
+
+#ifdef USE_FBO
+/* Per-fragment enhanced-liquid pass on the OpenGL-lineage renderer. The FBO
+ * requirement guarantees ARB program support, so this is the normal quality
+ * tier; the projective per-vertex path remains as a compile-failure fallback. */
+typedef struct liquidArbParams_s {
+	float	mvp[16];		// model space -> clip space, matching the active draw matrices
+	vec3_t	eyePos;			// model-space view origin
+	float	wrappedTime;	// R_LiquidWaveTime( backEnd.refdef.floatTime )
+	float	warpPixels;		// resolution-scaled ambient displacement
+	float	alphaScale;		// material type scale * pass strength, pre-clamped
+	float	reflectivity;	// screen-space reflection weight, 0 when the snapshot is unavailable
+	qboolean	depthAvailable;	// scene depth copied for waterline rejection
+	vec3_t	fresnelColor;
+} liquidArbParams_t;
+
+qboolean GL_LiquidProgramAvailable( void );
+void GL_LiquidProgramEnable( const liquidArbParams_t *params, qboolean refractionBase );
+void FBO_CopyLiquidDepth( void );
+qboolean FBO_LiquidDepthReady( void );
+void FBO_BindLiquidDepthTexture( int texUnit );
+#endif
 
 void QGL_SetRenderScale( qboolean verbose );
 

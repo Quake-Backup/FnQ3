@@ -36,7 +36,7 @@ Project Meson options:
 
 `-Dcurl=auto|enabled|disabled` - enable, require, or disable cURL download support
 
-`-Dcurl-dlopen=true|false` - resolve cURL at runtime instead of linking libcurl, enabled by default
+`-Dcurl-dlopen=auto|true|false` - resolve cURL at runtime instead of linking libcurl; `auto` (the default) links libcurl on Windows and resolves at runtime elsewhere
 
 `-Dsystem-jpeg=true|false` - require a system JPEG library instead of allowing the libjpeg-turbo subproject fallback, disabled by default
 

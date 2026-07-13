@@ -3530,6 +3530,28 @@ static const char *FindShaderInShaderText( const char *shadername ) {
 }
 
 
+qboolean R_LiquidShaderSupported( const shader_t *shader ) {
+	int i;
+
+	if ( !shader || shader->numUnfoggedPasses <= 0 || shader->dfType != DFT_NONE ) {
+		return qfalse;
+	}
+	for ( i = 0; i < shader->numUnfoggedPasses; i++ ) {
+		const shaderStage_t *stage = shader->stages[i];
+
+		/* The synthetic pass has geometry coverage and ordinary LEQUAL depth.
+		 * Leave masked or unusual-depth materials entirely authored rather than
+		 * filling pixels their own stages deliberately reject. */
+		if ( !stage || stage->depthFragment ||
+			( stage->stateBits & ( GLS_ATEST_BITS | GLS_DEPTHTEST_DISABLE |
+				GLS_DEPTHFUNC_EQUAL | GLS_POLYMODE_LINE ) ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+
 /*
 ==================
 R_FindShaderByName
@@ -4302,6 +4324,8 @@ CreateExternalShaders
 ====================
 */
 static void CreateExternalShaders( void ) {
+	image_t *lensFlareImage = tr.dlightImage;
+
 	tr.projectionShadowShader = R_FindShader( "projectionShadow", LIGHTMAP_NONE, qtrue );
 	tr.flareShader = R_FindShader( "flareShader", LIGHTMAP_NONE, qtrue );
 
@@ -4316,7 +4340,22 @@ static void CreateExternalShaders( void ) {
 			tr.flareShader->stages[index]->adjustColorsForFog = ACFF_NONE;
 			tr.flareShader->stages[index]->stateBits |= GLS_DEPTHTEST_DISABLE;
 		}
+
+		if ( tr.flareShader->numUnfoggedPasses > 0 && tr.flareShader->stages[0] &&
+			tr.flareShader->stages[0]->bundle[0].image[0] ) {
+			lensFlareImage = tr.flareShader->stages[0]->bundle[0].image[0];
+		}
 	}
+
+	InitShader( "<fnq3_lens_flare>", LIGHTMAP_NONE );
+	stages[0].bundle[0].image[0] = lensFlareImage;
+	stages[0].bundle[0].tcGen = TCGEN_TEXTURE;
+	stages[0].active = qtrue;
+	stages[0].rgbGen = CGEN_EXACT_VERTEX;
+	stages[0].adjustColorsForFog = ACFF_NONE;
+	stages[0].stateBits = GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE;
+	shader.sort = SS_BLEND1;
+	tr.lensFlareShader = FinishShader();
 
 	tr.sunShader = R_FindShader( "sun", LIGHTMAP_NONE, qtrue );
 }

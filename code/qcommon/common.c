@@ -2579,6 +2579,7 @@ static const char *Sys_EventName( sysEventType_t evType ) {
 		"SE_KEY",
 		"SE_CHAR",
 		"SE_MOUSE",
+		"SE_MOUSE_ABS",
 		"SE_JOYSTICK_AXIS",
 		"SE_CONSOLE"
 	};
@@ -2873,6 +2874,9 @@ int Com_EventLoop( void ) {
 			break;
 		case SE_MOUSE:
 			CL_MouseEvent( ev.evValue, ev.evValue2 /*, ev.evTime*/ );
+			break;
+		case SE_MOUSE_ABS:
+			CL_MouseAbsEvent( ev.evValue, ev.evValue2 );
 			break;
 		case SE_JOYSTICK_AXIS:
 			CL_JoystickEvent( ev.evValue, ev.evValue2, ev.evTime );

@@ -505,7 +505,11 @@ endif
 
 curl_opt = get_option('curl')
 use_curl = false
-use_curl_dlopen = get_option('curl-dlopen')
+# Windows has no system libcurl to resolve at runtime (the engine would look for
+# libcurl-3.dll and nothing ships it), so 'auto' links libcurl there and keeps
+# runtime resolution on platforms with a system libcurl.
+curl_dlopen_opt = get_option('curl-dlopen')
+use_curl_dlopen = curl_dlopen_opt == 'true' or (curl_dlopen_opt == 'auto' and not win32)
 curl_dep = dependency('', required: false)
 curl_header_dep = dependency('', required: false)
 curl_c_args = []

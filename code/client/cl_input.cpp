@@ -456,6 +456,79 @@ void CL_MouseEvent( int dx, int dy /*, int time*/ ) {
 }
 
 
+// Engine-side mirror of the UI VM's cursor, in its 640x480 space. The VM only
+// accepts relative moves, so to snap its cursor to an absolute position we
+// track what we have fed it and send the difference. Reset via CL_ClearMouseAbs
+// whenever the absolute stream (re)starts so the mirror is re-synced.
+static int      cl_uiCursorX;
+static int      cl_uiCursorY;
+static qboolean cl_uiCursorPrimed;
+
+/*
+=================
+CL_ClearMouseAbs
+
+Invalidate the UI cursor mirror so the next absolute event re-primes it. Called
+when a menu is (re)entered or focus returns to it.
+=================
+*/
+void CL_ClearMouseAbs( void ) {
+	cl_uiCursorPrimed = qfalse;
+}
+
+/*
+=================
+CL_MouseAbsEvent
+
+Absolute pointer position, in window pixels. Used while a menu or the console
+is open in windowed mode: the OS cursor is hidden and freed, and the software
+cursor is snapped to the real pointer so the two stay locked together.
+=================
+*/
+void CL_MouseAbsEvent( int x, int y ) {
+	int tx, ty;
+
+	if ( Key_GetCatcher() & KEYCATCH_CONSOLE ) {
+		// the console renders in real screen pixels - use the position directly
+		Con_SetMousePos( x, y );
+		// re-prime the UI mirror in case focus returns to a menu underneath
+		cl_uiCursorPrimed = qfalse;
+		return;
+	}
+
+	if ( !( Key_GetCatcher() & KEYCATCH_UI ) || !uivm ) {
+		return;
+	}
+
+	if ( cls.glconfig.vidWidth <= 0 || cls.glconfig.vidHeight <= 0 ) {
+		return;
+	}
+
+	// The UI VM accumulates relative moves 1:1 in 640x480 space, clamping to
+	// [0..640]x[0..480]. Prime the VM cursor to a known origin, then feed the
+	// delta that walks it to the mapped target. A missed re-prime is
+	// self-correcting: reaching any screen edge clamps both the VM cursor and
+	// the mirror to the same bound, re-syncing them.
+	if ( !cl_uiCursorPrimed ) {
+		VM_Call( uivm, 2, UI_MOUSE_EVENT, -0x4000, -0x4000 ); // clamp to (0,0)
+		cl_uiCursorX = 0;
+		cl_uiCursorY = 0;
+		cl_uiCursorPrimed = qtrue;
+	}
+
+	tx = (int)( (float)x * 640.0f / (float)cls.glconfig.vidWidth );
+	ty = (int)( (float)y * 480.0f / (float)cls.glconfig.vidHeight );
+	if ( tx < 0 ) tx = 0; else if ( tx > 640 ) tx = 640;
+	if ( ty < 0 ) ty = 0; else if ( ty > 480 ) ty = 480;
+
+	if ( tx != cl_uiCursorX || ty != cl_uiCursorY ) {
+		VM_Call( uivm, 2, UI_MOUSE_EVENT, tx - cl_uiCursorX, ty - cl_uiCursorY );
+		cl_uiCursorX = tx;
+		cl_uiCursorY = ty;
+	}
+}
+
+
 /*
 =================
 CL_JoystickEvent

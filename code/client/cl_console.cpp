@@ -55,6 +55,7 @@ constexpr float CON_SELECTION_ALPHA = 0.35f;
 constexpr int CON_COMPLETION_MAX_MATCHES = 64;
 constexpr int CON_COMPLETION_MAX_VISIBLE = 8;
 constexpr float CON_TEXT_DRAG_THRESHOLD = 4.0f;
+constexpr float CON_CURSOR_IMAGE_SIZE = 32.0f;
 
 static int RoundToInt( float value )
 {
@@ -3154,12 +3155,17 @@ static void Con_DrawMouseCursor( float alphaScale, const vec4_t lineColor ) {
 	y = con.mouseY;
 
 	if ( cls.cursorShader ) {
+		// The cursor image's hot point is its center, so offset the top-left
+		// draw origin by half its size to place the center on (mouseX, mouseY) -
+		// the same point used for all console hit-testing.
+		const float size = CON_CURSOR_IMAGE_SIZE;
+		const float half = size * 0.5f;
 		cursorColor[ 0 ] = 1.0f;
 		cursorColor[ 1 ] = 1.0f;
 		cursorColor[ 2 ] = 1.0f;
 		cursorColor[ 3 ] = alphaScale;
 		re.SetColor( cursorColor );
-		re.DrawStretchPic( x - 16.0f, y - 16.0f, 32.0f, 32.0f, 0, 0, 1, 1, cls.cursorShader );
+		re.DrawStretchPic( x - half, y - half, size, size, 0, 0, 1, 1, cls.cursorShader );
 		re.SetColor( nullptr );
 		return;
 	}
@@ -3471,20 +3477,18 @@ void Con_CharEvent( int key ) {
 }
 
 
-void Con_MouseEvent( int dx, int dy ) {
+/*
+==================
+Con_ProcessMouseMotion
+
+Runs the drag/selection state machine after con.mouseX/mouseY has been updated
+and clamped. Shared by the relative (Con_MouseEvent) and absolute
+(Con_SetMousePos) entry points.
+==================
+*/
+static void Con_ProcessMouseMotion( void ) {
 	int line, column;
 	float moveX, moveY;
-
-	if ( !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) {
-		return;
-	}
-
-	Con_ClampMouseToConsole();
-
-	con.mouseX += dx;
-	con.mouseY += dy;
-
-	Con_ClampMouseToConsole();
 
 	if ( con.scrollbarDragging ) {
 		Con_UpdateScrollbarDrag();
@@ -3518,6 +3522,53 @@ void Con_MouseEvent( int dx, int dy ) {
 	}
 
 	Con_UpdateScrollbarDrag();
+}
+
+
+/*
+==================
+Con_MouseEvent
+
+Relative pointer motion (window-pixel deltas).
+==================
+*/
+void Con_MouseEvent( int dx, int dy ) {
+	if ( !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) {
+		return;
+	}
+
+	Con_ClampMouseToConsole();
+
+	con.mouseX += dx;
+	con.mouseY += dy;
+
+	Con_ClampMouseToConsole();
+	Con_ProcessMouseMotion();
+}
+
+
+/*
+==================
+Con_SetMousePos
+
+Absolute pointer position (window pixels). The console renders in real screen
+pixels, so the OS pointer maps straight onto con.mouseX/mouseY, keeping the
+software cursor locked to the hidden system cursor.
+==================
+*/
+void Con_SetMousePos( int x, int y ) {
+	if ( !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) {
+		return;
+	}
+
+	// take ownership of the position before clamping, otherwise the first-time
+	// initialization in Con_ClampMouseToConsole would discard it
+	con.mouseInitialized = true;
+	con.mouseX = (float)x;
+	con.mouseY = (float)y;
+
+	Con_ClampMouseToConsole();
+	Con_ProcessMouseMotion();
 }
 
 

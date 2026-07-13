@@ -80,6 +80,15 @@ static cvar_t *cl_consoleKeys;
 static int in_eventTime = 0;
 static qboolean mouse_focus;
 
+// When a menu or the console is up in windowed mode the OS cursor is freed and
+// hidden, and the engine reports the absolute OS pointer position to the client
+// (SE_MOUSE_ABS) so the software cursor stays locked to it. See IN_ActivateMouse
+// and IN_DriveAbsCursor.
+static qboolean s_absCursor;   // reporting the absolute pointer to the client
+static qboolean s_absHaveLast; // s_absLast{X,Y} hold a valid previous sample
+static int      s_absLastX;    // last reported position, to suppress duplicates
+static int      s_absLastY;
+
 #define CTRL(a) ((a)-'a'+1)
 
 static void IN_ShowCursor( qboolean show )
@@ -426,44 +435,79 @@ IN_ActivateMouse
 */
 static void IN_ActivateMouse( void )
 {
-	const qboolean consoleActive = ( Key_GetCatcher() & KEYCATCH_CONSOLE ) ? qtrue : qfalse;
-	const qboolean grabMouse = ( !in_nograb->integer || consoleActive ) ? qtrue : qfalse;
+	// A menu or console is up: the player is pointing at UI, not aiming down a
+	// weapon. In windowed mode the OS cursor must NOT be confined to the window
+	// so it can cross the window border to reach the desktop (or another
+	// monitor) and return seamlessly. Fullscreen always confines - there is
+	// nowhere else for the cursor to go, and in_nograb makes no sense there.
+	const int catcher = Key_GetCatcher();
+	const qboolean uiCursor = ( catcher & ( KEYCATCH_UI | KEYCATCH_CONSOLE ) ) ? qtrue : qfalse;
+	const qboolean freeCursor = ( !glw_state.isFullscreen && ( in_nograb->integer || uiCursor ) ) ? qtrue : qfalse;
+	const qboolean grabMouse = freeCursor ? qfalse : qtrue;
+	const qboolean relativeMouse = ( in_mouse->integer == 1 && grabMouse ) ? qtrue : qfalse;
+
+	// The menu and the console both draw their own cursor. When the OS cursor is
+	// freed for them, hide it and drive the software cursor from the absolute
+	// pointer position (SE_MOUSE_ABS) so it snaps to the real pointer within the
+	// canvas. The client maps that position into each consumer's coordinate
+	// space (640x480 for the UI, screen pixels for the console).
+	const qboolean absCursor = ( freeCursor && ( catcher & ( KEYCATCH_UI | KEYCATCH_CONSOLE ) ) ) ? qtrue : qfalse;
+	const qboolean showCursor = ( freeCursor && !absCursor ) ? qtrue : qfalse;
+
+	// Remember the last applied grab state so it can be re-evaluated every frame:
+	// opening/closing a menu or console must toggle the confine live, not only
+	// on the initial (de)activation.
+	static qboolean haveState = qfalse;
+	static qboolean lastGrab = qfalse;
+	static qboolean lastRelative = qfalse;
+	static qboolean lastShow = qfalse;
 
 	if ( !mouseAvailable )
 		return;
 
+	if ( absCursor && !s_absCursor ) {
+		// entering absolute-cursor mode: re-sync the client's UI mirror and
+		// force the first pointer sample to be reported
+		CL_ClearMouseAbs();
+		s_absHaveLast = qfalse;
+	}
+	s_absCursor = absCursor;
+
 	if ( !mouseActive )
 	{
 		IN_GobbleMouseEvents();
-
-		SDL_SetWindowRelativeMouseMode( SDL_window, ( in_mouse->integer == 1 && grabMouse ) ? true : false );
-		SDL_SetWindowMouseGrab( SDL_window, grabMouse ? true : false );
-
-		if ( glw_state.isFullscreen )
-			IN_ShowCursor( qfalse );
-
-		SDL_WarpMouseInWindow( SDL_window, glw_state.window_width / 2, glw_state.window_height / 2 );
-
-#ifdef DEBUG_EVENTS
-		Com_Printf( "%4i %s\n", Sys_Milliseconds(), __func__ );
-#endif
+		haveState = qfalse; // force the grab state to be (re)applied below
 	}
 
-	// in_nograb makes no sense in fullscreen mode
-	if ( !glw_state.isFullscreen )
+	if ( !haveState || grabMouse != lastGrab || relativeMouse != lastRelative ||
+		showCursor != lastShow || in_nograb->modified )
 	{
-		if ( in_nograb->modified || !mouseActive )
-		{
-			if ( !grabMouse ) {
-				SDL_SetWindowRelativeMouseMode( SDL_window, false );
-				SDL_SetWindowMouseGrab( SDL_window, false );
-			} else {
-				SDL_SetWindowRelativeMouseMode( SDL_window, in_mouse->integer == 1 ? true : false );
-				SDL_SetWindowMouseGrab( SDL_window, true );
-			}
+		// discard the motion spike SDL emits when relative mode is toggled
+		if ( haveState && relativeMouse != lastRelative )
+			IN_GobbleMouseEvents();
 
-			in_nograb->modified = qfalse;
-		}
+		SDL_SetWindowRelativeMouseMode( SDL_window, relativeMouse ? true : false );
+		SDL_SetWindowMouseGrab( SDL_window, grabMouse ? true : false );
+
+		// Show the OS cursor only when it is free AND the game is not drawing
+		// its own cursor. It stays hidden while confined (fullscreen/gameplay)
+		// and while the game cursor snaps to it in menus.
+		IN_ShowCursor( showCursor );
+
+		// Only re-center for the confined/relative case. Warping a free cursor
+		// would fight the player as they move it out of the window.
+		if ( !freeCursor )
+			SDL_WarpMouseInWindow( SDL_window, glw_state.window_width / 2, glw_state.window_height / 2 );
+
+		lastGrab = grabMouse;
+		lastRelative = relativeMouse;
+		lastShow = showCursor;
+		haveState = qtrue;
+		in_nograb->modified = qfalse;
+
+#ifdef DEBUG_EVENTS
+		Com_Printf( "%4i %s grab=%i relative=%i\n", Sys_Milliseconds(), __func__, grabMouse, relativeMouse );
+#endif
 	}
 
 	mouseActive = qtrue;
@@ -506,6 +550,9 @@ static void IN_DeactivateMouse( void )
 
 		mouseActive = qfalse;
 	}
+
+	s_absCursor = qfalse;
+	s_absHaveLast = qfalse;
 
 	// Always show the cursor when the mouse is disabled,
 	// but not when fullscreen
@@ -1323,6 +1370,39 @@ static void IN_QueueTextInput( const char *text )
 
 /*
 ===============
+IN_DriveAbsCursor
+
+Report the absolute OS pointer position (in window pixels) to the client via
+SE_MOUSE_ABS. The client maps it into whichever cursor space is active - 640x480
+for the UI, screen pixels for the console - and snaps the software cursor to it.
+
+Emitted only when the position changes: an unconditional per-drain event would
+keep the event queue perpetually non-empty and stall Com_EventLoop, which
+re-pumps input whenever the queue drains.
+===============
+*/
+static void IN_DriveAbsCursor( void )
+{
+	float fx = 0.0f, fy = 0.0f;
+	int   x, y;
+
+	SDL_GetMouseState( &fx, &fy );
+	x = (int)fx;
+	y = (int)fy;
+
+	if ( s_absHaveLast && x == s_absLastX && y == s_absLastY )
+		return;
+
+	s_absLastX = x;
+	s_absLastY = y;
+	s_absHaveLast = qtrue;
+
+	Com_QueueEvent( in_eventTime, SE_MOUSE_ABS, x, y, 0, NULL );
+}
+
+
+/*
+===============
 HandleEvents
 ===============
 */
@@ -1404,7 +1484,10 @@ void HandleEvents( void )
 				break;
 
 			case SDL_EVENT_MOUSE_MOTION:
-				if( mouseActive )
+				// While snapping the UI cursor to the absolute pointer position
+				// the engine drives it from IN_DriveAbsCursor; feeding raw
+				// relative deltas here as well would double-move it.
+				if( mouseActive && !s_absCursor )
 				{
 					if( !e.motion.xrel && !e.motion.yrel )
 						break;
@@ -1481,6 +1564,10 @@ void HandleEvents( void )
 				break;
 		}
 	}
+
+	// with the SDL queue drained, snap the UI cursor to the OS pointer
+	if ( s_absCursor )
+		IN_DriveAbsCursor();
 
 #ifndef _WIN32
 	Sys_ConsoleFrame();

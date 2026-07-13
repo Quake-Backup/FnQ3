@@ -539,9 +539,11 @@ void SV_SpawnDemoServer( const char *demoName )
 	CL_ShutdownAll();
 #endif
 
-	// Do NOT clear the hunk — we have no BSP, so no new hunk allocation
-	// is needed.  Just clear the per-level server_t and reset snapshot
-	// storage.
+	// We still hunk-allocate snapshot entity storage below on every call
+	// (same as SV_SpawnServer), so the hunk must be cleared first or it
+	// fills up and Hunk_Alloc starts failing after a handful of demos.
+	Hunk_Clear();
+	CM_ClearMap();
 
 	// Init/resize client slots if needed.
 	if ( !Cvar_VariableIntegerValue( "sv_running" ) ) {
@@ -643,11 +645,12 @@ void SV_SpawnDemoServer( const char *demoName )
 	sv_mapname = Cvar_Get( "mapname", "nomap", CVAR_SERVERINFO | CVAR_ROM );
 
 	// Mark demo playback active.
-	sv.demoPlayback = qtrue;
-	sv.demoEnded    = qfalse;
-	sv.demoNumEnts  = 0;
-	sv.demoPS       = {};
-	sv.demoPrevPS   = {};
+	sv.demoPlayback         = qtrue;
+	sv.demoEnded            = qfalse;
+	sv.demoWaitingForViewer = qtrue;
+	sv.demoNumEnts          = 0;
+	sv.demoPS               = {};
+	sv.demoPrevPS           = {};
 
 	sv.state = SS_GAME;
 

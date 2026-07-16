@@ -21,7 +21,7 @@ cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 
 fallback_defaults = ['default_library=static']
-quiet_fallback_defaults = fallback_defaults + ['warning_level=0', 'c_args=-w', 'cpp_args=-w']
+quiet_fallback_defaults = fallback_defaults + ['warning_level=0']
 curl_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
 openal_fallback_defaults = quiet_fallback_defaults
 vorbis_fallback_defaults = quiet_fallback_defaults + ['tests=false', 'ogg:default_library=static']
@@ -103,14 +103,16 @@ if cc.get_argument_syntax() == 'gcc'
   else
     link_args += cc.get_supported_link_arguments(['-Wl,--gc-sections'])
   endif
-elif cc.get_id() == 'msvc'
-  common_c_args += ['/D_CRT_SECURE_NO_WARNINGS', '/D_CRT_NONSTDC_NO_WARNINGS', '/D_WINSOCK_DEPRECATED_NO_WARNINGS']
-  common_cpp_args += ['/D_CRT_SECURE_NO_WARNINGS', '/D_CRT_NONSTDC_NO_WARNINGS', '/D_WINSOCK_DEPRECATED_NO_WARNINGS']
 endif
 
 if win32
-  common_c_args += ['-DWIN32', '-D_WINDOWS', '-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
-  common_cpp_args += ['-DWIN32', '-D_WINDOWS', '-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
+  # MSVC marks portable C and Winsock interfaces as deprecated. Apply the
+  # compatibility policy globally so bundled fallback dependencies receive the
+  # same warning-clean Windows build as project-owned targets.
+  win32_compat_args = ['-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
+  add_global_arguments(win32_compat_args, language: ['c', 'cpp'])
+  common_c_args += ['-DWIN32', '-D_WINDOWS']
+  common_cpp_args += ['-DWIN32', '-D_WINDOWS']
 elif darwin
   common_c_args += ['-DMACOS_X']
   common_cpp_args += ['-DMACOS_X']
@@ -132,8 +134,8 @@ if not ['x86', 'x86_64', 'aarch64', 'arm', 'ppc64le', 'ppc64'].contains(cpu_fami
   common_cpp_args += ['-DNO_VM_COMPILED']
 endif
 
-use_opengl_api = renderer_dlopen or renderer_default in ['opengl', 'glx', 'opengl2'] or 'opengl' in enabled_renderers or 'glx' in enabled_renderers or 'opengl2' in enabled_renderers
-use_vulkan_api = 'vulkan' in enabled_renderers
+use_opengl_api = renderer_default == 'glx' or 'glx' in enabled_renderers
+use_vulkan_api = renderer_default in ['vk', 'rtx'] or 'vk' in enabled_renderers or 'rtx' in enabled_renderers
 
 if use_opengl_api
   common_c_args += ['-DUSE_OPENGL_API']
@@ -357,81 +359,9 @@ renderer_vk_src = [
   'code/renderervk/vk.c',
 ]
 
-renderer2_src = [
-  'code/renderer2/tr_animation.c',
-  'code/renderer2/tr_backend.c',
-  'code/renderer2/tr_bsp.c',
-  'code/renderer2/tr_cmds.c',
-  'code/renderer2/tr_curve.c',
-  'code/renderer2/tr_dsa.c',
-  'code/renderer2/tr_extensions.c',
-  'code/renderer2/tr_extramath.c',
-  'code/renderer2/tr_fbo.c',
-  'code/renderer2/tr_flares.c',
-  'code/renderer2/tr_glsl.c',
-  'code/renderer2/tr_image_dds.c',
-  'code/renderer2/tr_image.c',
-  'code/renderer2/tr_init.c',
-  'code/renderer2/tr_light.c',
-  'code/renderer2/tr_main.c',
-  'code/renderer2/tr_marks.c',
-  'code/renderer2/tr_mesh.c',
-  'code/renderer2/tr_model_iqm.c',
-  'code/renderer2/tr_model.c',
-  'code/renderer2/tr_postprocess.c',
-  'code/renderer2/tr_scene.c',
-  'code/renderer2/tr_shade_calc.c',
-  'code/renderer2/tr_shade.c',
-  'code/renderer2/tr_shader.c',
-  'code/renderer2/tr_shadows.c',
-  'code/renderer2/tr_sky.c',
-  'code/renderer2/tr_surface.c',
-  'code/renderer2/tr_vbo.c',
-  'code/renderer2/tr_world.c',
-]
-
-renderer2_glsl_files = [
-  'code/renderer2/glsl/bokeh_fp.glsl',
-  'code/renderer2/glsl/bokeh_vp.glsl',
-  'code/renderer2/glsl/calclevels4x_fp.glsl',
-  'code/renderer2/glsl/calclevels4x_vp.glsl',
-  'code/renderer2/glsl/depthblur_fp.glsl',
-  'code/renderer2/glsl/depthblur_vp.glsl',
-  'code/renderer2/glsl/dlight_fp.glsl',
-  'code/renderer2/glsl/dlight_vp.glsl',
-  'code/renderer2/glsl/down4x_fp.glsl',
-  'code/renderer2/glsl/down4x_vp.glsl',
-  'code/renderer2/glsl/fogpass_fp.glsl',
-  'code/renderer2/glsl/fogpass_vp.glsl',
-  'code/renderer2/glsl/gamma_fp.glsl',
-  'code/renderer2/glsl/gamma_vp.glsl',
-  'code/renderer2/glsl/generic_fp.glsl',
-  'code/renderer2/glsl/generic_vp.glsl',
-  'code/renderer2/glsl/lightall_fp.glsl',
-  'code/renderer2/glsl/lightall_vp.glsl',
-  'code/renderer2/glsl/pshadow_fp.glsl',
-  'code/renderer2/glsl/pshadow_vp.glsl',
-  'code/renderer2/glsl/shadowfill_fp.glsl',
-  'code/renderer2/glsl/shadowfill_vp.glsl',
-  'code/renderer2/glsl/shadowmask_fp.glsl',
-  'code/renderer2/glsl/shadowmask_vp.glsl',
-  'code/renderer2/glsl/ssao_fp.glsl',
-  'code/renderer2/glsl/ssao_vp.glsl',
-  'code/renderer2/glsl/texturecolor_fp.glsl',
-  'code/renderer2/glsl/texturecolor_vp.glsl',
-  'code/renderer2/glsl/tonemap_fp.glsl',
-  'code/renderer2/glsl/tonemap_vp.glsl',
-]
-
-renderer2_glsl_src = []
-foreach shader : renderer2_glsl_files
-  shader_name = shader.split('/')[-1].replace('.glsl', '')
-  renderer2_glsl_src += custom_target(
-    'renderer2_' + shader_name,
-    input: shader,
-    output: shader_name + '.c',
-    command: [python, files('scripts/stringify_shader.py'), '@INPUT@', '@OUTPUT@'],
-  )
+renderer_rtx_src = []
+foreach renderer_vk_file : renderer_vk_src
+  renderer_rtx_src += renderer_vk_file.replace('code/renderervk/', 'code/rendererrtx/')
 endforeach
 
 client_deps = []
@@ -688,21 +618,6 @@ if renderer_dlopen
   renderer_c_args = common_c_args + ['-DUSE_RENDERER_DLOPEN']
   renderer_cpp_args = common_cpp_args + ['-DUSE_RENDERER_DLOPEN']
 
-  if 'opengl' in enabled_renderers
-    renderer_targets += shared_library(renderer_prefix + '_opengl_' + renderer_arch,
-      renderer_gl_src + renderer_base_src,
-      include_directories: include_dirs,
-      dependencies: renderer_deps,
-      c_args: renderer_c_args,
-      cpp_args: renderer_cpp_args,
-      link_args: dll_link_args,
-      name_prefix: '',
-      gnu_symbol_visibility: 'hidden',
-      install: true,
-      install_dir: '.',
-    )
-  endif
-
   if 'glx' in enabled_renderers
     renderer_targets += shared_library(renderer_prefix + '_glx_' + renderer_arch,
       renderer_gl_src + renderer_glx_src + renderer_base_src,
@@ -718,8 +633,8 @@ if renderer_dlopen
     )
   endif
 
-  if 'vulkan' in enabled_renderers
-    renderer_targets += shared_library(renderer_prefix + '_vulkan_' + renderer_arch,
+  if 'vk' in enabled_renderers
+    renderer_targets += shared_library(renderer_prefix + '_vk_' + renderer_arch,
       renderer_vk_src + renderer_base_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
@@ -733,13 +648,13 @@ if renderer_dlopen
     )
   endif
 
-  if 'opengl2' in enabled_renderers
-    renderer_targets += shared_library(renderer_prefix + '_opengl2_' + renderer_arch,
-      renderer2_src + renderer2_glsl_src + renderer_base_src,
+  if 'rtx' in enabled_renderers
+    renderer_targets += shared_library(renderer_prefix + '_rtx_' + renderer_arch,
+      renderer_rtx_src + renderer_base_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: renderer_c_args,
-      cpp_args: renderer_cpp_args,
+      c_args: renderer_c_args + ['-DRENDERER_RTX'],
+      cpp_args: renderer_cpp_args + ['-DRENDERER_RTX'],
       link_args: dll_link_args,
       name_prefix: '',
       gnu_symbol_visibility: 'hidden',
@@ -761,8 +676,8 @@ if not renderer_dlopen
       install: false,
     )
     static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
-  elif renderer_default == 'vulkan'
-    static_renderer = static_library('renderer_static_vulkan',
+  elif renderer_default == 'vk'
+    static_renderer = static_library('renderer_static_vk',
       renderer_vk_src + renderer_common_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
@@ -771,23 +686,13 @@ if not renderer_dlopen
       install: false,
     )
     static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
-  elif renderer_default == 'opengl2'
-    static_renderer = static_library('renderer_static_opengl2',
-      renderer2_src + renderer2_glsl_src + renderer_common_src,
-      include_directories: include_dirs,
-      dependencies: renderer_deps,
-      c_args: common_c_args,
-      cpp_args: common_cpp_args,
-      install: false,
-    )
-    static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
   else
-    static_renderer = static_library('renderer_static_opengl',
-      renderer_gl_src + renderer_common_src,
+    static_renderer = static_library('renderer_static_rtx',
+      renderer_rtx_src + renderer_common_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: common_c_args,
-      cpp_args: common_cpp_args,
+      c_args: common_c_args + ['-DRENDERER_RTX'],
+      cpp_args: common_cpp_args + ['-DRENDERER_RTX'],
       install: false,
     )
     static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
@@ -884,7 +789,74 @@ standard_audio_zone_sidecars = []
 foreach map_name : standard_audio_zone_maps
   standard_audio_zone_sidecars += files('pkg/baseq3/maps/' + map_name + '.azb')
 endforeach
-root_package_assets = standard_audio_zone_sidecars + files(
+
+standard_global_fog_baseq3_maps = [
+  'pro-q3dm13',
+  'pro-q3dm6',
+  'pro-q3tourney2',
+  'pro-q3tourney4',
+  'q3ctf1',
+  'q3ctf2',
+  'q3ctf3',
+  'q3ctf4',
+  'q3ctf5',
+  'q3dm0',
+  'q3dm1',
+  'q3dm2',
+  'q3dm3',
+  'q3dm4',
+  'q3dm5',
+  'q3dm6',
+  'q3dm7',
+  'q3dm8',
+  'q3dm9',
+  'q3dm10',
+  'q3dm11',
+  'q3dm12',
+  'q3dm13',
+  'q3dm14',
+  'q3dm15',
+  'q3dm16',
+  'q3dm17',
+  'q3dm18',
+  'q3dm19',
+  'q3tourney1',
+  'q3tourney2',
+  'q3tourney3',
+  'q3tourney4',
+  'q3tourney6', # q3tourney5 (Fatal Instinct) already uses authored fog.
+]
+standard_global_fog_missionpack_maps = [
+  'mpq3ctf1',
+  'mpq3ctf2',
+  'mpq3ctf3',
+  'mpq3ctf4',
+  'mpq3tourney6',
+  'mpteam1',
+  'mpteam2',
+  'mpteam3',
+  'mpteam4',
+  'mpteam5',
+  'mpteam6',
+  'mpteam7',
+  'mpteam8',
+  'mpterra1',
+  'mpterra2',
+  'mpterra3',
+  'mptourney1',
+  'mptourney2',
+  'mptourney3',
+  'mptourney4',
+]
+standard_global_fog_sidecars = []
+foreach map_name : standard_global_fog_baseq3_maps
+  standard_global_fog_sidecars += files('pkg/baseq3/maps/' + map_name + '.fog')
+endforeach
+foreach map_name : standard_global_fog_missionpack_maps
+  standard_global_fog_sidecars += files('pkg/missionpack/maps/' + map_name + '.fog')
+endforeach
+
+root_package_assets = standard_audio_zone_sidecars + standard_global_fog_sidecars + files(
   'pkg/baseq3/fnq3-hud.json',
   'pkg/baseq3/sound/fnq3-weapon-sounds.sndshd',
   'pkg/missionpack/sound/fnq3-weapon-sounds.sndshd',
@@ -989,6 +961,9 @@ if get_option('glx-tests')
   )
   test('fnq3_vid_restart_fast_source', python,
     args: files('tests/vid_restart_fast_source_tests.py'),
+  )
+  test('fnq3_global_fog_source', python,
+    args: files('tests/global_fog_source_tests.py'),
   )
 endif
 

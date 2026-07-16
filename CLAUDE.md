@@ -17,9 +17,9 @@ meson test -C meson/build
 ```
 
 Useful Meson options:
-- `-Drenderers=opengl,glx,vulkan` — which renderer modules to build
-- `-Drenderer-default=opengl` — default `cl_renderer` value (keep `opengl` until GLx promotion gate is green)
-- `-Drenderer-dlopen=false -Drenderer-default=vulkan` — link one renderer statically for testing
+- `-Drenderers=glx,vk,rtx` — which of the three renderer modules to build
+- `-Drenderer-default=glx` — default `cl_renderer` value
+- `-Drenderer-dlopen=false -Drenderer-default=vk` — link one renderer statically for testing
 - `-Daudio-tests=true` / `-Dglx-tests=true` — include C++ test binaries
 - `--wrap-mode=nofallback` — force system libraries only; `--wrap-mode=forcefallback` — force subproject fallbacks
 
@@ -27,10 +27,10 @@ Makefile equivalents for quick Linux builds:
 ```sh
 make                                          # full default build
 make BUILD_SERVER=0 USE_GLX=1                 # client + GLx module, no dedicated server
-make BUILD_SERVER=0 USE_RENDERER_DLOPEN=0 RENDERER_DEFAULT=vulkan  # static Vulkan client
+make BUILD_SERVER=0 USE_RENDERER_DLOPEN=0 RENDERER_DEFAULT=vk  # static Vulkan client
 ```
 
-Output binaries: `fnquake3[.x86_64]` (client), `fnquake3.ded[.x86_64]` (server), `fnquake3_{opengl,glx,vulkan}_x86_64` (renderer modules).
+Output binaries: `fnquake3[.x86_64]` (client), `fnquake3.ded[.x86_64]` (server), `fnquake3_{glx,vk,rtx}_x86_64` (renderer modules).
 
 ## Tests
 
@@ -62,9 +62,9 @@ Audio C++ tests are built with `-Daudio-tests=true` and run via `meson test`.
 
 Three backends coexist as runtime-selectable dynamic modules, chosen via `cl_renderer`:
 
-- `opengl` — legacy renderer, the current release default. Lives in `code/renderer/`.
-- `glx` — canonical OpenGL-lineage replacement under active development. GLx-specific code lives in `code/rendererglx/`; it also compiles in `code/renderer/*.c` as a compatibility baseline (tracked in `docs/fnquake3/GLX_LEGACY_COUPLING.md`). Not the default yet — gated by `scripts/glx_promotion.py`.
-- `vulkan` — modern backend. Lives in `code/renderervk/`.
+- `glx` — default OpenGL-lineage renderer. GLx-specific code lives in `code/rendererglx/`; `code/renderer/*.c` is its compatibility implementation base, not a separately selectable module.
+- `vk` — Vulkan raster backend. Lives in `code/renderervk/`.
+- `rtx` — Vulkan ray-tracing backend. Lives in `code/rendererrtx/`.
 
 Shared renderer types and image loaders are in `code/renderercommon/`. All renderers implement the same `refexport_t` / `refimport_t` ABI (`REF_API_VERSION 8`, single `GetRefAPI` export).
 
@@ -97,8 +97,6 @@ Modern audio lives in `code/client/audio/`. OpenAL Soft is the default backend; 
 
 **Scratch space:** Use `.tmp/` for temporary investigation files and intermediate staging. `.install/` is the tracked distribution area for release artifacts.
 
-**GLx promotion gate:** `opengl` must not be aliased to GLx and `RENDERER_DEFAULT` must not be changed to `glx` in release builds until `python scripts/glx_promotion.py --require-ready` passes. Local `RENDERER_DEFAULT=glx` builds are fine for explicit developer testing.
-
 ## Maintainer Docs
 
 Technical docs that require reading before making significant changes to a subsystem:
@@ -107,7 +105,7 @@ Technical docs that require reading before making significant changes to a subsy
 - `docs/fnquake3/GLX_RENDERER.md` — GLx architecture and tier definitions
 - `docs/fnquake3/GLX_FEATURE_MATRIX.md` — coverage ledger for each legacy feature
 - `docs/fnquake3/GLX_LEGACY_COUPLING.md` — which `code/renderer/*.c` files GLx still compiles and why
-- `docs/fnquake3/GLX_PROMOTION.md` — promotion gate requirements
+- `docs/RTX.md` — RTX requirements, selection, and diagnostics
 - `docs/fnquake3/AUDIO_ENGINE.md` — modern audio architecture and compatibility boundaries
 - `docs/fnquake3/DLIGHT_SHADOWMAP_ROADMAP.md` — shadow system roadmap
 - `AGENTS.md` — project constraints and guardrails for automated agents

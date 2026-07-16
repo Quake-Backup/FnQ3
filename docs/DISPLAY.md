@@ -8,11 +8,11 @@ For HUD, menu, and cinematic layout on widescreen displays, use the separate [As
 
 `cl_renderer` selects the rendering backend and requires `vid_restart`.
 
-- `cl_renderer opengl`: Legacy OpenGL renderer and current compatibility default.
-- `cl_renderer glx`: Canonical OpenGL-lineage renderer module. Normal modular builds include it, and it preserves the OpenGL display and bloom surface while adding GLx-owned capability tiers, streaming, static-world, material, postprocess, output, and profiling paths.
-- `cl_renderer vulkan`: Modern backend with the same core display path controls for FBO rendering, HDR, multisampling, supersampling, render scaling, shader-based SDR gamma/overbright, and greyscale. Bloom is available here too, but the exposed control set is smaller.
+- `cl_renderer glx`: Default OpenGL-lineage renderer. It provides compatibility tiers, streaming, static-world, material, postprocess, output, and profiling paths.
+- `cl_renderer vk`: Vulkan raster renderer with FBO rendering, HDR, multisampling, supersampling, render scaling, shader-based SDR gamma/overbright, greyscale, and bloom.
+- `cl_renderer rtx`: Vulkan ray-tracing renderer. It requires a ray-tracing-capable Vulkan GPU for full RT mode; see the [RTX Renderer Guide](RTX.md).
 
-Use `glx` for OpenGL-lineage validation, GLx diagnostics, and the renderer path intended for promotion once [GLX_PROMOTION.md](fnquake3/GLX_PROMOTION.md) is green. Use `opengl` when you need the current legacy default for comparison or rollback. If you want the simpler cross-platform path and do not need the OpenGL-only bloom extras, `vulkan` is fine. See [GLX.md](GLX.md) for GLx migration and troubleshooting notes.
+Only `glx`, `vk`, and `rtx` are valid renderer selectors. Use `glx` for the broadest OpenGL compatibility, `vk` for Vulkan rasterization, or `rtx` for the ray-traced path. See [GLX.md](GLX.md) for GLx diagnostics.
 
 ## Display Modes And Window Behavior
 
@@ -80,6 +80,8 @@ The fast path is safe to use unconditionally: if the window cannot be reused —
 These settings control the render path behind the display output.
 
 - `r_fbo`: Enables framebuffer-object rendering. This is the foundation for the modern display path and is required for bloom, motion blur, enhanced liquid refraction, HDR, multisample anti-aliasing, supersampling, greyscale, and arbitrary internal render resolutions.
+- `r_globalFog`: Enables the optional, visual-only per-map fog sidecar layer. It is off by default, requires the framebuffer path, and is latched: use `vid_restart` after changing it.
+- `r_globalFogStrength`: Multiplies the loaded map fog opacity from `0.0` to `1.0`. Default is `1.0`; it can be adjusted live.
 - `r_hdr`: Selects the HDR-capable FBO render pipeline.
   - `0`: Display-referred SDR compatibility path.
   - `1`: High-precision FBO path. With the default legacy tone mapper this preserves Quake III's display-referred lighting; non-legacy tone mapping, color grading, and explicit HDR output use scene-linear color.
@@ -134,6 +136,45 @@ seta r_renderHeight "720"
 seta r_renderScale "4"
 vid_restart
 ```
+
+## Per-Map Global Fog
+
+Global fog is an optional presentation layer for maps which ship a matching
+ASCII sidecar at `maps/<mapname>.fog`. It is composited from the completed
+scene depth after the map's original authored brush fog, so it gives distant
+geometry a gentle atmospheric falloff without changing the BSP, gameplay,
+demos, networking, VM behavior, or normal Quake III fog volumes.
+
+Enable it with the framebuffer path:
+
+```cfg
+seta r_fbo "1"
+seta r_globalFog "1"
+seta r_globalFogStrength "1.0"
+vid_restart
+```
+
+The renderer looks up the current world basename (for example, `q3dm17` uses
+`maps/q3dm17.fog`) when the map loads. A missing sidecar is silently ignored;
+an invalid one is disabled with a console warning. Map authors can supply
+their own sidecar in a pk3 using this compact format:
+
+```text
+// normalized RGB color
+color 0.58 0.60 0.60
+mode exp2
+density 0.00014
+start 192
+opacity 0.28
+sky 1
+```
+
+`color` and `density` are required. `mode` can be `exp`, `exp2` (the default),
+or `linear`; linear mode additionally requires `end` greater than `start`.
+`opacity` ranges from `0` to `1`, while `sky` decides whether clear-depth sky
+pixels receive the layer. The stock presets deliberately use low-saturation
+colors and restrained density. For the full data contract and renderer
+ordering, see [Fog Rendering](fnquake3/FOG_RENDERING.md).
 
 ## Scene Presentation Controls
 
@@ -472,10 +513,10 @@ seta r_bloom_modulate "2"
 seta r_bloom_intensity "0.45"
 ```
 
-OpenGL haze-heavy bloom:
+GLx haze-heavy bloom:
 
 ```cfg
-seta cl_renderer "opengl"
+seta cl_renderer "glx"
 seta r_fbo "1"
 seta r_bloom "1"
 seta r_bloom_threshold "0.55"
@@ -488,10 +529,10 @@ seta r_bloom_filter_size "8"
 vid_restart
 ```
 
-OpenGL HUD-inclusive bloom:
+GLx HUD-inclusive bloom:
 
 ```cfg
-seta cl_renderer "opengl"
+seta cl_renderer "glx"
 seta r_fbo "1"
 seta r_bloom "2"
 seta r_bloom_threshold "0.65"
@@ -499,10 +540,10 @@ seta r_bloom_threshold_mode "2"
 seta r_bloom_intensity "0.35"
 ```
 
-OpenGL lens reflection add-on:
+GLx lens reflection add-on:
 
 ```cfg
-seta cl_renderer "opengl"
+seta cl_renderer "glx"
 seta r_fbo "1"
 seta r_bloom "1"
 seta r_bloom_threshold "0.60"

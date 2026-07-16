@@ -41,6 +41,47 @@ static int	c_gridVerts;
 
 //===============================================================================
 
+static void R_LoadGlobalFogForWorld( void )
+{
+	union {
+		char *c;
+		void *v;
+	} buffer;
+	char filename[MAX_OSPATH];
+	char error[128];
+	int size;
+
+	R_GlobalFogClear( &s_worldData.globalFog );
+	Com_sprintf( filename, sizeof( filename ), "maps/%s.fog", s_worldData.baseName );
+	buffer.v = NULL;
+	size = ri.FS_ReadFile( filename, &buffer.v );
+	if ( !buffer.v || size <= 0 ) {
+		if ( buffer.v ) {
+			ri.FS_FreeFile( buffer.v );
+		}
+		return;
+	}
+	if ( size > GLOBAL_FOG_SIDECAR_MAX_BYTES ) {
+		ri.Printf( PRINT_WARNING, "WARNING: global fog sidecar %s is too large (%i bytes, limit %i)\n",
+			filename, size, GLOBAL_FOG_SIDECAR_MAX_BYTES );
+		ri.FS_FreeFile( buffer.v );
+		return;
+	}
+	if ( !R_GlobalFogParse( &s_worldData.globalFog, buffer.c, error, sizeof( error ) ) ) {
+		R_GlobalFogClear( &s_worldData.globalFog );
+		ri.Printf( PRINT_WARNING, "WARNING: invalid global fog sidecar %s: %s\n", filename, error );
+	} else {
+		ri.Printf( PRINT_DEVELOPER, "Global fog: loaded %s (%s, density %.6f, start %.1f, opacity %.2f, sky %i)\n",
+			filename,
+			s_worldData.globalFog.mode == GLOBAL_FOG_EXP ? "exp" :
+				( s_worldData.globalFog.mode == GLOBAL_FOG_EXP2 ? "exp2" : "linear" ),
+			s_worldData.globalFog.density, s_worldData.globalFog.start,
+			s_worldData.globalFog.opacity, s_worldData.globalFog.sky );
+	}
+
+	ri.FS_FreeFile( buffer.v );
+}
+
 static void HSVtoRGB( float h, float s, float v, float rgb[3] )
 {
 	int i;
@@ -3659,6 +3700,7 @@ void RE_LoadWorldMap( const char *name ) {
 
 	// only set tr.world now that we know the entire level has loaded properly
 	tr.world = &s_worldData;
+	R_LoadGlobalFogForWorld();
 	R_BuildSurfaceLightProxiesForWorld();
 	R_LoadStaticMapLightsForWorld();
 

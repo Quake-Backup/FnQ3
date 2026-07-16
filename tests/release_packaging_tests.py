@@ -112,6 +112,7 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("README.html", destinations)
         self.assertIn("docs/fnquake3/TECHNICAL.md", destinations)
         self.assertIn("docs/GLX.md", destinations)
+        self.assertIn("docs/RTX.md", destinations)
         self.assertNotIn("docs/fnquake3/GLX_PROMOTION.md", destinations)
         self.assertNotIn("docs/fnquake3/GLX_ROLLBACK_PACKAGE.md", destinations)
         self.assertNotIn("docs/fnquake3/GLX_VISUAL_DOSSIER.md", destinations)
@@ -367,6 +368,31 @@ class ReleasePackagingTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "filtered build byproducts"):
                 verify_release_layout.verify_release_layout(root)
+
+    def test_release_layout_rejects_renderer_modules_outside_public_three(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fnquake3.x64.exe").write_text("binary", encoding="utf-8")
+            (root / "fnquake3_opengl_x86_64.dll").write_text("old renderer", encoding="utf-8")
+            release.copy_docs(root)
+            release.build_root_archive(root)
+
+            with self.assertRaisesRegex(ValueError, "only glx, vk, and rtx"):
+                verify_release_layout.verify_release_layout(root)
+
+    def test_release_layout_accepts_the_public_renderer_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fnquake3.x64.exe").write_text("binary", encoding="utf-8")
+            for renderer in ("glx", "vk", "rtx"):
+                (root / f"fnquake3_{renderer}_x86_64.dll").write_text(
+                    renderer,
+                    encoding="utf-8",
+                )
+            release.copy_docs(root)
+            release.build_root_archive(root)
+
+            verify_release_layout.verify_release_layout(root)
 
     def test_release_layout_verifier_rejects_symlinks_in_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

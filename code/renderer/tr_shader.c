@@ -2007,9 +2007,9 @@ static qboolean ParseShader( const char **text )
 	const char *token;
 	int numStages;
 	qboolean skySunValid;
-	vec3_t skySunColor;
-	vec3_t skySunDirection;
-	vec3_t skySunLight;
+	vec3_t skySunColor = { 0.0f, 0.0f, 0.0f };
+	vec3_t skySunDirection = { 0.0f, 0.0f, 0.0f };
+	vec3_t skySunLight = { 0.0f, 0.0f, 0.0f };
 	float skySunIntensity;
 
 	numStages = 0;

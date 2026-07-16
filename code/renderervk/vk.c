@@ -4768,12 +4768,14 @@ static void vk_create_shader_modules( void )
 	vk.modules.blend_fs = SHADER_MODULE( blend_frag_spv );
 	vk.modules.motion_blur_fs = SHADER_MODULE( motion_blur_frag_spv );
 	vk.modules.world_outline_fs = SHADER_MODULE( world_outline_frag_spv );
+	vk.modules.global_fog_fs = SHADER_MODULE( global_fog_frag_spv );
 
 	SET_OBJECT_NAME( vk.modules.bloom_fs, "bloom extraction fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.blur_fs, "gaussian blur fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.blend_fs, "final bloom blend fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.motion_blur_fs, "motion blur fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.world_outline_fs, "world cel depth-outline fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+	SET_OBJECT_NAME( vk.modules.global_fog_fs, "global fog fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 
 	vk.modules.gamma_fs = SHADER_MODULE( gamma_frag_spv );
 	vk.modules.gamma_vs = SHADER_MODULE( gamma_vert_spv );
@@ -5316,7 +5318,7 @@ static void vk_bind_gamma_descriptor_sets( void )
 
 static void vk_push_post_process_constants( void )
 {
-	float constants[4];
+	float constants[4] = { 0.0f };
 	float invWidth = glConfig.vidWidth > 0 ? 1.0f / (float)glConfig.vidWidth : 1.0f;
 	float invHeight = glConfig.vidHeight > 0 ? 1.0f / (float)glConfig.vidHeight : 1.0f;
 
@@ -5324,7 +5326,6 @@ static void vk_push_post_process_constants( void )
 		(float)tr.frameCount * ( 1.0f / 60.0f );
 	constants[1] = invWidth;
 	constants[2] = invHeight;
-	constants[3] = 0.0f;
 
 	qvkCmdPushConstants( vk.cmd->command_buffer, vk.pipeline_layout_post_process,
 		VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof( constants ), constants );
@@ -5338,6 +5339,9 @@ void vk_update_post_process_pipelines( void )
 		// update gamma shader
 		vk_create_post_process_pipeline( 0, 0, 0 );
 		vk_create_post_process_pipeline( 5, glConfig.vidWidth, glConfig.vidHeight );
+		if ( r_globalFog && r_globalFog->integer ) {
+			vk_create_post_process_pipeline( 10, glConfig.vidWidth, glConfig.vidHeight );
+		}
 		if ( r_motionBlur && r_motionBlur->integer ) {
 			vk_create_post_process_pipeline( 6, glConfig.vidWidth, glConfig.vidHeight );
 			vk_create_post_process_pipeline( 7, glConfig.vidWidth, glConfig.vidHeight );
@@ -6966,7 +6970,7 @@ void vk_initialize( void )
 		push_range.size = 64; // 16 floats
 		post_push_range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 		post_push_range.offset = 0;
-		post_push_range.size = 32; // post-process values plus motion-blur view bounds
+		post_push_range.size = 48; // CRT values or global-fog color, mode, and depth reconstruction
 
 		// standard pipelines
 		set_layouts[0] = vk.set_layout_uniform; // fog/dlight parameters
@@ -7000,8 +7004,6 @@ void vk_initialize( void )
 		// post-processing pipeline
 		set_layouts[0] = vk.set_layout_sampler; // sampler
 		set_layouts[1] = vk.set_layout_sampler; // sampler
-		set_layouts[2] = vk.set_layout_sampler; // sampler
-		set_layouts[3] = vk.set_layout_sampler; // sampler
 
 		desc.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		desc.pNext = NULL;
@@ -7280,6 +7282,10 @@ static void vk_destroy_pipelines( qboolean resetCounter )
 		qvkDestroyPipeline( vk.device, vk.world_outline_pipeline, NULL );
 		vk.world_outline_pipeline = VK_NULL_HANDLE;
 	}
+	if ( vk.global_fog_pipeline != VK_NULL_HANDLE ) {
+		qvkDestroyPipeline( vk.device, vk.global_fog_pipeline, NULL );
+		vk.global_fog_pipeline = VK_NULL_HANDLE;
+	}
 
 	for ( i = 0; i < ARRAY_LEN( vk.blur_pipeline ); i++ ) {
 		if ( vk.blur_pipeline[i] != VK_NULL_HANDLE ) {
@@ -7437,6 +7443,7 @@ void vk_shutdown( refShutdownCode_t code )
 	qvkDestroyShaderModule(vk.device, vk.modules.blend_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.motion_blur_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.world_outline_fs, NULL);
+	qvkDestroyShaderModule(vk.device, vk.modules.global_fog_fs, NULL);
 
 	qvkDestroyShaderModule(vk.device, vk.modules.gamma_vs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.gamma_fs, NULL);
@@ -8041,6 +8048,15 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 			pipeline_name = "world cel depth-outline pipeline";
 			blend = qtrue;
 			break;
+		case 10: // depth-aware global fog overlay
+			pipeline = &vk.global_fog_pipeline;
+			fsmodule = vk.modules.global_fog_fs;
+			renderpass = vk.render_pass.main_load;
+			layout = vk.pipeline_layout_post_process;
+			samples = vkSamples;
+			pipeline_name = "global fog overlay pipeline";
+			blend = qtrue;
+			break;
 		case 3: // capture buffer extraction
 			pipeline = &vk.capture_pipeline;
 			fsmodule = vk.modules.gamma_fs;
@@ -8418,7 +8434,7 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	attachment_blend_state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 	if ( blend ) {
 		attachment_blend_state.blendEnable = VK_TRUE;
-		if ( program_index == 5 ) {
+		if ( program_index == 5 || program_index == 10 ) {
 			attachment_blend_state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
 			attachment_blend_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 			attachment_blend_state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -10847,7 +10863,8 @@ static qboolean vk_depth_fade_uses_depth_resolve( void )
 
 static qboolean vk_depth_fade_requested( void )
 {
-	return ( ( r_depthFade && r_depthFade->integer ) || R_CelShadingWorldActive() ) ? qtrue : qfalse;
+	return ( ( r_depthFade && r_depthFade->integer ) || R_CelShadingWorldActive() ||
+		( r_globalFog && r_globalFog->integer ) ) ? qtrue : qfalse;
 }
 
 
@@ -11127,7 +11144,8 @@ void vk_copy_depth_fade( void )
 		return;
 	}
 
-	if ( vk_current_render_pass != vk.render_pass.main ) {
+	if ( vk_current_render_pass != vk.render_pass.main &&
+		vk_current_render_pass != vk.render_pass.main_load ) {
 		return;
 	}
 
@@ -11214,6 +11232,61 @@ void vk_draw_world_cel_outline( void )
 	vk.cmd->descriptor_set.end = VK_DESC_COUNT - 1;
 	/* The static-scissor overlay pipeline left the dynamic scissor undefined;
 	 * poison the cache so the next 3D draw re-emits it. */
+	Com_Memset( &vk.cmd->scissor_rect, 0xff, sizeof( vk.cmd->scissor_rect ) );
+}
+
+
+void vk_draw_global_fog( void )
+{
+	const globalFog_t *fog = tr.world ? &tr.world->globalFog : NULL;
+	float constants[12];
+	float opacity;
+	float zNear;
+	float zFar;
+	VkDescriptorSet descriptor;
+
+	if ( !r_globalFog || !r_globalFog->integer || !r_globalFogStrength || !fog ||
+		!fog->loaded || !vk.fboActive || vk.global_fog_pipeline == VK_NULL_HANDLE ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) || !vk_depth_fade_ready() ||
+		vk.renderPassIndex != RENDER_PASS_MAIN ) {
+		return;
+	}
+
+	opacity = Com_Clamp( 0.0f, 1.0f, fog->opacity * r_globalFogStrength->value );
+	zNear = r_znear ? r_znear->value : 4.0f;
+	zFar = backEnd.viewParms.zFar;
+	if ( opacity <= 0.0f || zNear <= 0.0f || zFar <= zNear ) {
+		return;
+	}
+
+	constants[0] = fog->color[0];
+	constants[1] = fog->color[1];
+	constants[2] = fog->color[2];
+	constants[3] = opacity;
+	constants[4] = fog->start;
+	constants[5] = fog->end;
+	constants[6] = fog->density;
+	constants[7] = (float)fog->mode;
+	constants[8] = zNear;
+	constants[9] = zFar;
+	constants[10] = fog->sky ? 1.0f : 0.0f;
+	constants[11] = 1.0f; // USE_REVERSED_DEPTH
+
+	descriptor = vk.depth_fade_descriptor;
+	qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		vk.global_fog_pipeline );
+	qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		vk.pipeline_layout_post_process, 0, 1, &descriptor, 0, NULL );
+	qvkCmdPushConstants( vk.cmd->command_buffer, vk.pipeline_layout_post_process,
+		VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof( constants ), constants );
+	qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
+
+	/* This pass binds a private post-process layout; resume normal material
+	 * binding before the motion-blur or HUD draws that follow. */
+	vk.cmd->last_pipeline = VK_NULL_HANDLE;
+	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
+	vk.cmd->descriptor_set.start = 0;
+	vk.cmd->descriptor_set.end = VK_DESC_COUNT - 1;
 	Com_Memset( &vk.cmd->scissor_rect, 0xff, sizeof( vk.cmd->scissor_rect ) );
 }
 
@@ -11817,7 +11890,7 @@ qboolean vk_capture_cubemap_face( uint32_t faceIndex, uint32_t faceSize )
 
 	vk_end_render_pass();
 	if ( vk.fboActive ) {
-		float constants[4];
+		float constants[4] = { 0.0f };
 
 		sourceFaceSize = MIN( glConfig.vidWidth, glConfig.vidHeight );
 		constants[0] = 0.0f;

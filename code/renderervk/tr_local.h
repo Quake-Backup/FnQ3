@@ -51,6 +51,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qfiles.h"
 #include "../qcommon/qcommon.h"
 #include "../renderercommon/tr_public.h"
+#include "../renderercommon/tr_global_fog.h"
 #include "../renderercommon/tr_liquid.h"
 #include "tr_common.h"
 #include "iqm.h"
@@ -1604,6 +1605,7 @@ typedef struct {
 
 	int			numfogs;
 	fog_t		*fogs;
+	globalFog_t	globalFog;
 
 	vec3_t		lightGridOrigin;
 	vec3_t		lightGridSize;
@@ -2059,6 +2061,8 @@ extern cvar_t	*r_drawSun;				// controls drawing of sun quad
 extern cvar_t	*r_dynamiclight;		// dynamic lights enabled/disabled
 extern cvar_t	*r_depthFade;			// soft-particle depth fade enabled/disabled
 extern cvar_t	*r_fogMode;			// 0 - legacy lookup, 1 - analytic
+extern cvar_t	*r_globalFog;			// opt-in per-map screen-space global fog
+extern cvar_t	*r_globalFogStrength;	// global fog opacity multiplier
 extern cvar_t	*r_celShading;			// cel shading enabled/disabled on model entities
 extern cvar_t	*r_celShadingWorld;		// cel edge outlines enabled/disabled on BSP world geometry
 extern cvar_t	*r_celShadingWorldWidth;		// screen-space world cel outline radius in pixels

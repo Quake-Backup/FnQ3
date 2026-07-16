@@ -390,6 +390,7 @@ qboolean vk_motion_blur( void );
 qboolean vk_capture_liquid_scene( void );
 void vk_get_liquid_mvp( float *mvp );
 void vk_draw_world_cel_outline( void );
+void vk_draw_global_fog( void );
 
 qboolean vk_alloc_vbo( const byte *vbo_data, int vbo_size );
 void vk_update_mvp( const float *m );
@@ -727,6 +728,7 @@ typedef struct {
 		VkShaderModule blend_fs;
 		VkShaderModule motion_blur_fs;
 		VkShaderModule world_outline_fs;
+		VkShaderModule global_fog_fs;
 
 		VkShaderModule gamma_fs;
 		VkShaderModule gamma_vs;
@@ -814,6 +816,7 @@ typedef struct {
 	VkPipeline motion_blur_copy_pipeline;
 	VkPipeline liquid_snapshot_pipeline;
 	VkPipeline world_outline_pipeline;
+	VkPipeline global_fog_pipeline;
 
 	uint32_t frame_count;
 	qboolean active;

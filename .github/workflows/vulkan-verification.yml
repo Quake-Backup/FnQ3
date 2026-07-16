@@ -84,14 +84,14 @@ jobs:
             -Dsdl=disabled \
             -Dcurl=disabled \
             -Drenderer-dlopen=true \
-            -Drenderers=vulkan \
+            -Drenderers=vk \
             -Dbuild-client=false \
             -Dbuild-server=false \
             -Daudio-tests=false \
             -Dglx-tests=false
 
       - name: Build Vulkan renderer
-        run: meson compile -C .tmp/meson-vk-verification fnquake3_vulkan_x86_64
+        run: meson compile -C .tmp/meson-vk-verification fnquake3_vk_x86_64
 
   vulkan-gate-plans:
     name: Vulkan RC gate plans

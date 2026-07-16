@@ -151,6 +151,7 @@ qboolean RandR_SetMode( int *width, int *height, int *rate )
 	int best_fit, best_dist, best_rate;
 	int dist, r, rr;
 	int x, y, w, h;
+	int modeWidth, modeHeight;
 	int n;
 
 	glw_state.randr_active = qfalse;
@@ -184,10 +185,14 @@ qboolean RandR_SetMode( int *width, int *height, int *rate )
 	
 		// change original policy, i.e. allow selecting lower resolution modes
 		// as it is very unlikely that current mode is lower than mode you want to set
-		if ( mode_info->width > *width || mode_info->height > *height )
+		if ( *width <= 0 || *height <= 0 ||
+			mode_info->width > static_cast<unsigned int>( *width ) ||
+			mode_info->height > static_cast<unsigned int>( *height ) )
 			continue;
-		x = *width - mode_info->width;
-		y = *height - mode_info->height;
+		modeWidth = static_cast<int>( mode_info->width );
+		modeHeight = static_cast<int>( mode_info->height );
+		x = *width - modeWidth;
+		y = *height - modeHeight;
 		dist = ( x * x ) + ( y * y );
 
 		if ( *rate ) {
@@ -203,8 +208,8 @@ qboolean RandR_SetMode( int *width, int *height, int *rate )
 			best_rate = r;
 			best_fit = n;
 			newMode = output_info->modes[ n ];
-			w = mode_info->width; // save adjusted with
-			h = mode_info->height; // save adjusted height
+			w = modeWidth; // save adjusted width
+			h = modeHeight; // save adjusted height
 			rr = getRefreshRate( mode_info );
 			
 		}

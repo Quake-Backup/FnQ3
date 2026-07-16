@@ -2064,6 +2064,7 @@ static void CL_RendererSwitch_f( void ) {
 
 	if ( Cmd_Argc() < 2 || Cmd_Argc() > 3 ) {
 		Com_Printf( "usage: renderer_switch <renderer> [fast|keep_window|full]\n" );
+		Com_Printf( "renderers: glx, vk, rtx\n" );
 		Com_Printf( "current renderer: %s\n", cl_renderer->string );
 		return;
 	}
@@ -4036,12 +4037,7 @@ static void CL_ModeList_f( void )
 
 #ifdef USE_RENDERER_DLOPEN
 static bool isValidRenderer( const char *s ) {
-	while ( *s ) {
-		if ( !((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '1' && *s <= '9')) )
-			return false;
-		++s;
-	}
-	return true;
+	return s && ( strcmp( s, "glx" ) == 0 || strcmp( s, "vk" ) == 0 || strcmp( s, "rtx" ) == 0 );
 }
 #endif
 
@@ -4109,9 +4105,9 @@ static void CL_InitGLimp_Cvars( void )
 #ifdef RENDERER_DEFAULT
 	cl_renderer = Cvar_Get( "cl_renderer", XSTRING( RENDERER_DEFAULT ), CVAR_ARCHIVE | CVAR_LATCH );
 #else
-	cl_renderer = Cvar_Get( "cl_renderer", "vulkan", CVAR_ARCHIVE | CVAR_LATCH );
+	cl_renderer = Cvar_Get( "cl_renderer", "glx", CVAR_ARCHIVE | CVAR_LATCH );
 #endif
-	Cvar_SetDescription( cl_renderer, "Sets your desired renderer, requires \\vid_restart." );
+	Cvar_SetDescription( cl_renderer, "Selects glx, vk, or rtx; requires \\vid_restart." );
 
 	if ( !isValidRenderer( cl_renderer->string ) ) {
 		Cvar_ForceReset( "cl_renderer" );

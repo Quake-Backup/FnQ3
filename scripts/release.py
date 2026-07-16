@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -45,6 +46,10 @@ DEFAULT_DOCS = [
         ROOT / "docs" / "GLX.md",
         Path("docs") / "GLX.md",
     ),
+    (
+        ROOT / "docs" / "RTX.md",
+        Path("docs") / "RTX.md",
+    ),
     (ROOT / ".install" / "README.html", Path("README.html")),
 ]
 
@@ -52,6 +57,12 @@ REQUIRED_RELEASE_ARCHIVE_ENTRIES = [
     ROOT_ARCHIVE_NAME,
     *(destination.as_posix() for _source, destination in DEFAULT_DOCS),
 ]
+
+PUBLIC_RENDERERS = frozenset({"glx", "vk", "rtx"})
+RENDERER_MODULE_RE = re.compile(
+    r"(?:^|/)fnquake3_(?P<renderer>[a-z0-9]+)_[^/]+\.(?:dll|so|dylib)$",
+    re.IGNORECASE,
+)
 
 GLX_RELEASE_EVIDENCE_DOCS = {
     "visualDossier": {
@@ -276,6 +287,19 @@ def build_root_archive(stage_root: Path) -> Path:
     return archive_path
 
 
+def validate_renderer_module_names(names: list[str]) -> None:
+    unsupported = []
+    for name in names:
+        match = RENDERER_MODULE_RE.search(name.replace("\\", "/"))
+        if match and match.group("renderer").lower() not in PUBLIC_RENDERERS:
+            unsupported.append(name)
+    if unsupported:
+        raise ValueError(
+            "release package contains unsupported renderer modules; "
+            "only glx, vk, and rtx are allowed: " + ", ".join(unsupported[:12])
+        )
+
+
 def validate_release_archive_contents(archive_path: Path) -> None:
     with zipfile.ZipFile(archive_path) as archive:
         archived_names = []
@@ -288,6 +312,7 @@ def validate_release_archive_contents(archive_path: Path) -> None:
                 )
             archived_names.append(info.filename)
         validate_archive_member_names(archived_names, archive_name=archive_path.name)
+        validate_renderer_module_names(archived_names)
         filtered_release_entries = [
             name
             for name in archived_names
@@ -360,6 +385,7 @@ def validate_stage_tree(stage_root: Path) -> None:
             + ", ".join(offenders[:12])
         )
     validate_archive_member_names(archived_names, archive_name=stage_root.name)
+    validate_renderer_module_names(archived_names)
 
 
 def write_deterministic_zip(archive_path: Path, source_root: Path) -> None:

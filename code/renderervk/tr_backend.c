@@ -3693,6 +3693,17 @@ static const void *RB_DrawSurfs( const void *data ) {
 	RB_DebugGraphics();
 
 #ifdef USE_VULKAN
+	/* Preserve the completed world depth before the fog pass, optional motion
+	 * blur, or later HUD passes. */
+	if ( !( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) && r_globalFog &&
+		r_globalFog->integer && tr.world && tr.world->globalFog.loaded &&
+		!vk_depth_fade_ready() ) {
+		vk_copy_depth_fade();
+	}
+	if ( !( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		vk_draw_global_fog();
+	}
+
 	if ( cmd->refdef.switchRenderPass ) {
 		vk_end_render_pass();
 		vk_begin_main_render_pass();

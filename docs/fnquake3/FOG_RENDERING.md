@@ -32,6 +32,55 @@ texture is always generated from the legacy table rather than the active mode,
 so switching back to `0` restores the original lookup instead of a quantized
 copy of the analytic curve.
 
+## Optional Global Map Fog
+
+Global fog is a separate, opt-in visual layer. It does not replace retail BSP
+fog and it does not alter fog assignment, shader data, collision, visibility,
+demo playback, protocol, VM behavior, or game state. The layer is disabled by
+default with the archived, latched `r_globalFog 0` cvar. It needs the modern
+framebuffer/depth path, so users enable it with `r_fbo 1`, `r_globalFog 1`, and
+`vid_restart`. `r_globalFogStrength` is archived, ranges from `0.0` to `1.0`,
+and multiplies the sidecar opacity live.
+
+At world load, both raster backends resolve `maps/<world-basename>.fog` through
+the normal virtual filesystem. Thus `q3dm17.bsp` uses `maps/q3dm17.fog`, and a
+mod may provide an override in its pk3 without modifying the BSP. Missing
+files have no effect. A sidecar larger than 16 KiB or one with invalid input is
+rejected and reported as a warning; the level proceeds without the layer. The
+root FnQuake3 package permits only `maps/*.fog` (and existing `.azb` audio
+sidecars), keeping the package-file allowlist narrow.
+
+The format is ASCII, whitespace-delimited, and accepts `//` comments. Each
+directive may appear once:
+
+| Directive | Required | Meaning and valid range |
+| --- | --- | --- |
+| `color r g b` | Yes | Normalized fog RGB; each component is in `[0, 1]`. |
+| `density value` | Yes | Positive exponential coefficient, at most `0.1`. |
+| `mode exp\|exp2\|linear` | No | Falloff curve. The default is `exp2`. |
+| `start units` | No | Non-negative distance before the falloff begins; default `0`. |
+| `end units` | Linear only | Positive terminal distance, strictly greater than `start`. |
+| `opacity value` | No | Final layer multiplier in `[0, 1]`; default `1`. |
+| `sky 0\|1` | No | Whether clear-depth sky pixels receive fog; default `1`. |
+
+For a scene distance `d = max(viewDistance - start, 0)`, the layer amount is
+`1 - exp(-density * d)` for `exp`, `1 - exp(-(density * d)^2)` for `exp2`, or
+`clamp(d / (end - start), 0, 1)` for `linear`. The amount is multiplied by
+`opacity * r_globalFogStrength` and then mixes the completed scene color toward
+`color`. The checked-in Quake III Arena and Team Arena presets use
+low-saturation colors and deliberately readable densities. The supplied
+profiles use `exp`, with opacity caps keeping the layer atmospheric rather
+than opaque. `q3tourney5` (Fatal Instinct) has no
+sidecar because its native map content is already fully fogged.
+
+OpenGL/GLx composites the layer into the framebuffer after opaque and
+translucent scene rendering, including the existing BSP fog, and before final
+bloom/gamma. Vulkan keeps a resolved copy of the completed world depth and
+blends the same formula into the main scene render pass before optional motion
+blur, bloom, and later HUD/console draws. HUD and console draws are excluded
+in both cases. This is intentionally a depth-aware
+atmospheric grade, not a BSP fog replacement or a protocol-visible feature.
+
 ## Analytic Programmable Path
 
 The original renderer rasterized the density function into a 256 by 32 RGBA8
@@ -91,7 +140,8 @@ Recommended local checks:
 
 ```powershell
 meson compile -C meson/build
-meson test -C meson/build fnq3_glx_logic fnq3_glx_header_boundary --print-errorlogs
+meson test -C meson/build fnq3_glx_logic fnq3_glx_header_boundary fnq3_global_fog_source --print-errorlogs
+python tests/global_fog_source_tests.py
 python tests/glx/glx_runtime_sweep_tests.py
 python tests/vulkan/vk_runtime_sweep_tests.py
 ```

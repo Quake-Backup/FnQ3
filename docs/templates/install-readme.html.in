@@ -320,9 +320,9 @@
         <article class="feature-group">
           <h3>Sharper presentation without losing Quake III's look</h3>
           <ul>
-            <li>Flexible display controls for renderer choice, fullscreen and windowed play, render scaling, texture picmip filtering, HDR, anti-aliasing, bloom, optional motion blur, enhanced map lens flares, and cel-shaded world/model presentation.</li>
+            <li>Exactly three renderer choices: GLx, Vulkan raster (<code>vk</code>), and Vulkan ray tracing (<code>rtx</code>), with flexible fullscreen and windowed play, render scaling, HDR, anti-aliasing, bloom, motion blur, lens flares, and cel shading.</li>
             <li>High-quality dynamic lights and opt-in dynamic-light shadow maps for GLx/OpenGL-lineage and Vulkan renderers, with compatibility-safe defaults.</li>
-            <li>Optional extras such as soft particles, player rim lighting, stencil-style highlights, model cel lighting, and BSP world depth-edge outlines.</li>
+            <li>Optional extras such as soft particles, player rim lighting, stencil-style highlights, model cel lighting, BSP world depth-edge outlines, and subtle per-map global fog.</li>
             <li>Better widescreen handling for HUDs, menus, UI previews, and cinematics.</li>
           </ul>
         </article>
@@ -370,6 +370,7 @@
           <h3>Player guides</h3>
           <ul>
             <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/DISPLAY.md">Display Guide</a> for renderer choice, video modes, render scaling, texture picmip, HDR, anti-aliasing, bloom, motion blur, map lens flares, soft particles, dynamic lighting, shadow maps, and cel shading.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/RTX.md">RTX Renderer Guide</a> for ray-tracing requirements, selection, quality presets, and troubleshooting.</li>
             <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/VISUALS.md">Visuals Guide</a> for player highlighting and other presentation controls.</li>
             <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/ASPECT_CORRECTION.md">Aspect Correction Guide</a> for HUD, menu, and cinematic layout options.</li>
             <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/AUDIO.md">Audio Guide</a> for backend selection, devices, HRTF, fallback behavior, and troubleshooting.</li>
@@ -382,7 +383,7 @@
           <h3>Technical and build docs</h3>
           <ul>
             <li><a href="https://github.com/themuffinator/FnQ3/blob/main/BUILD.md">Build Guide</a> for compiling FnQuake3 locally.</li>
-            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/GLX.md">GLx Renderer Guide</a> for the canonical OpenGL-lineage renderer, migration notes, and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/GLX.md">GLx Renderer Guide</a> for the default OpenGL-lineage renderer, diagnostics, and troubleshooting.</li>
             <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/fnquake3/AUDIO_ENGINE.md">Modern Audio Engine Notes</a> for engine architecture and compatibility boundaries.</li>
             <li><a href="https://github.com/themuffinator/FnQ3/blob/main/docs/fnquake3/TECHNICAL.md">Technical Notes</a> for repository structure, release flow, and maintainer conventions.</li>
           </ul>

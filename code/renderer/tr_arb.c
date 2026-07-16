@@ -1221,11 +1221,12 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 {
 	// one-entry cache: the plan lookups below are linear scans that run twice
 	// per lit batch (program eligibility + program setup) with identical
-	// inputs for every batch of the same light. tess.dlightUpdateParams is
-	// set whenever the light, fog or cull state changes, which covers every
-	// input this function reads (shadow manager and atlas state are constant
-	// across a lit pass).
+	// inputs for every batch of the same light. Keep the cache scoped to the
+	// current frame/view so live shadow cvar changes and a later atlas
+	// publication cannot reuse parameters from an earlier view.
 	static const dlight_t *cachedLight;
+	static int cachedFrameCount = -1;
+	static int cachedViewCount = -1;
 	static qboolean cachedResult;
 	static vec4_t cachedShadow;
 	static vec4_t cachedAtlas;
@@ -1238,7 +1239,9 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 	int atlasWidth;
 	int atlasHeight;
 
-	if ( !tess.dlightUpdateParams && dl == cachedLight ) {
+	if ( !tess.dlightUpdateParams && dl == cachedLight &&
+		cachedFrameCount == backEnd.viewParms.frameCount &&
+		cachedViewCount == tr.shadowManager.viewCount ) {
 		Vector4Copy( cachedShadow, dlightShadow );
 		Vector4Copy( cachedAtlas, shadowAtlas );
 		Vector4Copy( cachedDepth, shadowDepth );
@@ -1280,6 +1283,8 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 	}
 
 	cachedLight = dl;
+	cachedFrameCount = backEnd.viewParms.frameCount;
+	cachedViewCount = tr.shadowManager.viewCount;
 	Vector4Copy( dlightShadow, cachedShadow );
 	Vector4Copy( shadowAtlas, cachedAtlas );
 	Vector4Copy( shadowDepth, cachedDepth );

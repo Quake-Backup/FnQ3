@@ -282,8 +282,17 @@ static void R_PerformanceCounters( void ) {
 		Com_Memset( &tr.shadowCorrectnessDebug, 0, sizeof( tr.shadowCorrectnessDebug ) );
 		Com_Memset( &tr.csmDebugPlan, 0, sizeof( tr.csmDebugPlan ) );
 		Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
+#ifdef USE_PMLIGHT
+		Com_Memset( &backEnd.shadowManagerDebug, 0, sizeof( backEnd.shadowManagerDebug ) );
+#endif
 		return;
 	}
+
+#ifdef USE_PMLIGHT
+	if ( backEnd.shadowManagerDebug.planned ) {
+		tr.shadowManager = backEnd.shadowManagerDebug;
+	}
+#endif
 
 	if (r_speeds->integer == 1) {
 		ri.Printf (PRINT_ALL, "%i/%i shaders/surfs %i leafs %i verts %i/%i tris %.2f mtex\n",
@@ -514,6 +523,9 @@ static void R_PerformanceCounters( void ) {
 	Com_Memset( &tr.shadowCorrectnessDebug, 0, sizeof( tr.shadowCorrectnessDebug ) );
 	Com_Memset( &tr.csmDebugPlan, 0, sizeof( tr.csmDebugPlan ) );
 	Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
+#ifdef USE_PMLIGHT
+	Com_Memset( &backEnd.shadowManagerDebug, 0, sizeof( backEnd.shadowManagerDebug ) );
+#endif
 }
 
 

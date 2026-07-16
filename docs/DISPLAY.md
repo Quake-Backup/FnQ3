@@ -181,6 +181,7 @@ ordering, see [Fog Rendering](fnquake3/FOG_RENDERING.md).
 These settings affect the rendered scene itself rather than the window mode.
 
 - `r_gamma`: Gamma correction factor. This is one of the first settings to check if the whole frame looks too dark or too washed out.
+- `r_mapOverBrightCap`: Caps normalized baked map lighting after `r_mapOverBrightBits` is applied. It ranges from `0` to `255` and defaults to `255`, which preserves classic behavior; lower values retain the RGB ratio of bright texels while limiting their peak intensity. It is latched, so use `vid_restart` after changing it.
 - `r_tonemap`: Final-pass tone scale for `r_hdr 1`.
   - `0`: Legacy gamma/overbright behavior.
   - `1`: Simple Reinhard, the per-channel `x / (1 + x)` curve. Existing configs that referred to this as `Reinhard` keep the same behavior for this release cycle.
@@ -263,14 +264,14 @@ Classic model shadow controls:
 
 Dynamic-light shadow-map controls:
 
-- `r_dlightShadows`: Enables dynamic-light shadow-map planning, atlas rendering, and filtered sampling. Default is `0`. This is latched, so use `vid_restart` after changing it.
+- `r_dlightShadows`: Enables dynamic-light shadow-map planning, atlas rendering, and filtered sampling. Default is `1`. This is latched, so use `vid_restart` after changing it.
 - `r_dlightShadowFilter`: Selects shadow filtering. Default is `2`.
   - `0`: Hard shadows.
   - `1`: 2x2 PCF.
   - `2`: Four-tap poisson PCF.
 - `r_dlightShadowResolution`: Requested per-face shadow-map resolution. Valid range is `64..1024`, default is `256`. The renderer rounds this down to a power of two and may reduce it to fit the atlas.
 - `r_dlightShadowMaxLights`: Maximum dynamic lights allowed to cast shadows in one view. Default is `4`. Lower values give each light more atlas space; higher values favor coverage over sharpness.
-- `r_dlightShadowStrength`: Controls how strongly shadow-map occlusion dims the dynamic light. Default is `0.6`.
+- `r_dlightShadowStrength`: Controls how strongly shadow-map occlusion dims the dynamic light. Default is `0.95`.
 - `r_dlightShadowBias`: Receiver bias in world units. Default is `4`.
 - `r_dlightShadowCasterDepthBias`: Constant depth bias while rendering shadow casters. Default is `1`.
 - `r_dlightShadowCasterSlopeBias`: Slope-scaled caster depth bias. Default is `1`.

@@ -1769,6 +1769,9 @@ typedef struct {
 	viewParms_t	viewParms;
 	orientationr_t	or;
 	backEndCounters_t	pc;
+#ifdef USE_PMLIGHT
+	shadowManager_t	shadowManagerDebug;
+#endif
 	qboolean	isHyperspace;
 	const trRefEntity_t *currentEntity;
 	qboolean	skyRenderedThisView;	// flag for drawing sun
@@ -2161,6 +2164,7 @@ extern	cvar_t	*r_ignoreGLErrors;
 
 extern	cvar_t	*r_overBrightBits;
 extern	cvar_t	*r_mapOverBrightBits;
+extern	cvar_t	*r_mapOverBrightCap;
 extern	cvar_t	*r_mapGreyScale;
 
 extern	cvar_t	*r_debugSurface;

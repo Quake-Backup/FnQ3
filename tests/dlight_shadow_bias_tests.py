@@ -86,6 +86,28 @@ class DlightShadowBiasTests(unittest.TestCase):
         self.assertNotIn('"MIN tile.xy, tile.xy, local.wwww; \\n"', source)
         self.assertNotIn('"MUL tile.xy, tile.xy, dlightShadow.xy; \\n"', source)
 
+    def test_glx_shadow_parameter_cache_is_scoped_to_the_current_view(self):
+        source = read_text("code/renderer/tr_arb.c")
+
+        self.assertIn("static int cachedFrameCount = -1;", source)
+        self.assertIn("static int cachedViewCount = -1;", source)
+        self.assertIn(
+            "cachedFrameCount == backEnd.viewParms.frameCount &&",
+            source,
+        )
+        self.assertIn(
+            "cachedViewCount == tr.shadowManager.viewCount",
+            source,
+        )
+        self.assertIn(
+            "cachedFrameCount = backEnd.viewParms.frameCount;",
+            source,
+        )
+        self.assertIn(
+            "cachedViewCount = tr.shadowManager.viewCount;",
+            source,
+        )
+
     def test_caster_bias_fallbacks_are_contact_preserving(self):
         expected_normal_scale = (
             "normalScale = 0.25f + 0.50f * ( 1.0f - "

@@ -155,7 +155,7 @@ R_ColorShiftLightingBytes
 ===============
 */
 void R_ColorShiftLightingBytes( const byte in[4], byte out[4], qboolean hasAlpha ) {
-	int		shift, r, g, b;
+	int		shift, r, g, b, cap;
 
 	// shift the color data based on overbright range
 	shift = r_mapOverBrightBits->integer - tr.overbrightBits;
@@ -169,9 +169,10 @@ void R_ColorShiftLightingBytes( const byte in[4], byte out[4], qboolean hasAlpha
 		if ( ( r | g | b ) > 255 ) {
 			int max = r > g ? r : g;
 			max = max > b ? max : b;
-			r = r * 255 / max;
-			g = g * 255 / max;
-			b = b * 255 / max;
+			cap = r_mapOverBrightCap ? r_mapOverBrightCap->integer : 255;
+			r = r * cap / max;
+			g = g * cap / max;
+			b = b * cap / max;
 		}
 	} else {
 		r = in[0] >> -shift;

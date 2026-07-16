@@ -158,6 +158,7 @@ cvar_t	*r_lodCurveError;
 
 cvar_t	*r_overBrightBits;
 cvar_t	*r_mapOverBrightBits;
+cvar_t	*r_mapOverBrightCap;
 cvar_t	*r_mapGreyScale;
 
 cvar_t	*r_debugSurface;
@@ -1609,6 +1610,9 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_overBrightBits, "Sets the intensity of overall brightness of texture pixels." );
 	r_mapOverBrightBits = ri.Cvar_Get( "r_mapOverBrightBits", "2", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_mapOverBrightBits, "Sets the number of overbright bits baked into all lightmaps and map data." );
+	r_mapOverBrightCap = ri.Cvar_Get( "r_mapOverBrightCap", "255", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_mapOverBrightCap, "0", "255", CV_INTEGER );
+	ri.Cvar_SetDescription( r_mapOverBrightCap, "Caps normalized baked map lighting after overbright adjustment. Lower values preserve RGB ratios while limiting peak brightness." );
 	r_intensity = ri.Cvar_Get( "r_intensity", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_intensity, "1", "255", CV_FLOAT );
 	ri.Cvar_SetDescription( r_intensity, "Global texture lighting scale." );
@@ -1691,7 +1695,7 @@ static void R_Register( void )
 #if arm32 || arm64 // RPi4 Vulkan driver have very poor GLSL shaders performance...
 	r_dlightMode = ri.Cvar_Get( "r_dlightMode", "0", CVAR_ARCHIVE );
 #else
-	r_dlightMode = ri.Cvar_Get( "r_dlightMode", "1", CVAR_ARCHIVE );
+	r_dlightMode = ri.Cvar_Get( "r_dlightMode", "2", CVAR_ARCHIVE );
 #endif
 	ri.Cvar_CheckRange( r_dlightMode, "0", "2", CV_INTEGER );
 	ri.Cvar_SetDescription( r_dlightMode, "Dynamic light mode:\n 0: VQ3 'fake' dynamic lights\n 1: High-quality per-pixel dynamic lights, slightly faster than VQ3's on modern hardware\n 2: Same as 1 but applies to all MD3 models too" );
@@ -2222,11 +2226,11 @@ static void R_Register( void )
 		" -2 - first integrated GPU" );
 	r_device->modified = qfalse;
 
-	r_fbo = ri.Cvar_Get( "r_fbo", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_fbo = ri.Cvar_Get( "r_fbo", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_fbo, "Use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary video size and screenshot/video capture.\n Required for bloom, HDR rendering, anti-aliasing and greyscale effects." );
-	r_hdr = ri.Cvar_Get( "r_hdr", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_hdr = ri.Cvar_Get( "r_hdr", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription(r_hdr, "Enables high dynamic range frame buffer texture format. Requires \\r_fbo 1.\n -1: 4-bit, for testing purposes, heavy color banding, might not work on all systems\n  0: 8 bit, default, moderate color banding with multi-stage shaders\n  1: 16 bit, enhanced blending precision, no color banding, might decrease performance on AMD / Intel GPUs\n" );
-	r_bloom = ri.Cvar_Get( "r_bloom", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_bloom = ri.Cvar_Get( "r_bloom", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_bloom, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription(r_bloom, "Enables bloom post-processing effect. Requires \\r_fbo 1.");
 

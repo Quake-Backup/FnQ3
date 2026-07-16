@@ -5,7 +5,7 @@
       "name": "upper_right_text",
       "match": {
         "textLike": 1,
-        "region": { "x": 168.000, "y": 2.000, "w": 469.000, "h": 76.000 }
+        "region": { "x": 112.000, "y": 2.000, "w": 526.000, "h": 76.000 }
       },
       "mode": "uniform",
       "align": {
@@ -18,7 +18,7 @@
       "match": {
         "shader": "icons/*",
         "textLike": 0,
-        "region": { "x": 560.000, "y": 380.000, "w": 80.000, "h": 24.000 }
+        "region": { "x": 256.000, "y": 380.000, "w": 384.000, "h": 24.000 }
       },
       "mode": "uniform",
       "align": {
@@ -30,7 +30,7 @@
       "name": "mini_scores_backing",
       "match": {
         "textLike": 0,
-        "region": { "x": 560.000, "y": 404.000, "w": 80.000, "h": 24.000 }
+        "region": { "x": 256.000, "y": 404.000, "w": 384.000, "h": 24.000 }
       },
       "mode": "uniform",
       "align": {
@@ -42,7 +42,7 @@
       "name": "mini_scores_text",
       "match": {
         "textLike": 1,
-        "region": { "x": 540.000, "y": 408.000, "w": 98.000, "h": 18.000 }
+        "region": { "x": 80.000, "y": 408.000, "w": 558.000, "h": 18.000 }
       },
       "mode": "uniform",
       "align": {
@@ -67,12 +67,51 @@
       "name": "pickup_text",
       "match": {
         "textLike": 1,
-        "region": { "x": 64.000, "y": 400.000, "w": 242.000, "h": 18.000 }
+        "region": { "x": 64.000, "y": 400.000, "w": 384.000, "h": 18.000 }
       },
       "mode": "uniform",
       "align": {
         "x": "left",
         "y": "bottom"
+      }
+    },
+    {
+      "name": "attacker_head_3d",
+      "match": {
+        "refdef": 1,
+        "textLike": 0,
+        "region": { "x": 568.000, "y": 0.000, "w": 72.000, "h": 72.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "right",
+        "y": "top"
+      }
+    },
+    {
+      "name": "attacker_head_icon",
+      "match": {
+        "shader": "models/players/*",
+        "textLike": 0,
+        "region": { "x": 568.000, "y": 0.000, "w": 72.000, "h": 72.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "right",
+        "y": "top"
+      }
+    },
+    {
+      "name": "attacker_head_deferred",
+      "match": {
+        "shader": "gfx/2d/defer.tga",
+        "textLike": 0,
+        "region": { "x": 568.000, "y": 0.000, "w": 72.000, "h": 72.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "right",
+        "y": "top"
       }
     },
     {

@@ -3719,6 +3719,15 @@ static const void *RB_DrawSurfs( const void *data ) {
 		vk_motion_blur();
 	}
 #endif
+#ifdef USE_PMLIGHT
+	if ( !( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) &&
+		( ( r_speeds && r_speeds->integer == 4 ) ||
+			( r_dlightShadowDebug && r_dlightShadowDebug->integer ) ||
+			( r_csmDebug && r_csmDebug->integer ) ||
+			( r_spotShadowDebug && r_spotShadowDebug->integer ) ) ) {
+		backEnd.shadowManagerDebug = tr.shadowManager;
+	}
+#endif
 
 	return (const void *)(cmd + 1);
 }

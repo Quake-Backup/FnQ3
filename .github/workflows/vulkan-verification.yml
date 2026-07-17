@@ -12,12 +12,36 @@ on:
       - '.github/workflows/vulkan-verification.yml'
       - 'meson.build'
       - 'meson_options.txt'
+      - 'code/client/cl_cgame.cpp'
       - 'code/renderercommon/**'
+      - 'code/rendererrtx/**'
       - 'code/renderervk/**'
+      - 'code/win32/win_glimp.cpp'
+      - 'docs/RTX.md'
+      - 'docs/SCREENSHOTS.md'
+      - 'docs/fnquake3/FOG_RENDERING.md'
+      - 'docs/fnquake3/LIQUID_RENDERING.md'
+      - 'docs/fnquake3/RTX_*.md'
       - 'docs/fnquake3/TECHNICAL.md'
       - 'docs/fnquake3/VK_*.md'
+      - 'pkg/baseq3/maps/*.fog'
+      - 'pkg/missionpack/maps/*.fog'
+      - 'scripts/rtx_runtime_smoke.py'
       - 'scripts/vk_runtime_sweep.py'
       - 'scripts/stringify_shader.py'
+      - 'tests/global_fog_source_tests.py'
+      - 'tests/liquid_interaction_source_tests.py'
+      - 'tests/liquid_rendering_source_tests.py'
+      - 'tests/renderer_contract_source_tests.py'
+      - 'tests/rtx_fog_dlight_source_tests.py'
+      - 'tests/rtx_hdr_source_tests.py'
+      - 'tests/rtx_light_visibility_source_tests.py'
+      - 'tests/rtx_liquid_rendering_source_tests.py'
+      - 'tests/rtx_raster_overlay_parity_source_tests.py'
+      - 'tests/rtx_renderer_parity_source_tests.py'
+      - 'tests/rtx_runtime_smoke_tests.py'
+      - 'tests/rtx_surface_light_source_tests.py'
+      - 'tests/static_map_lights_source_tests.py'
       - 'tests/vulkan/**'
   push:
     branches:
@@ -26,17 +50,41 @@ on:
       - '.github/workflows/vulkan-verification.yml'
       - 'meson.build'
       - 'meson_options.txt'
+      - 'code/client/cl_cgame.cpp'
       - 'code/renderercommon/**'
+      - 'code/rendererrtx/**'
       - 'code/renderervk/**'
+      - 'code/win32/win_glimp.cpp'
+      - 'docs/RTX.md'
+      - 'docs/SCREENSHOTS.md'
+      - 'docs/fnquake3/FOG_RENDERING.md'
+      - 'docs/fnquake3/LIQUID_RENDERING.md'
+      - 'docs/fnquake3/RTX_*.md'
       - 'docs/fnquake3/TECHNICAL.md'
       - 'docs/fnquake3/VK_*.md'
+      - 'pkg/baseq3/maps/*.fog'
+      - 'pkg/missionpack/maps/*.fog'
+      - 'scripts/rtx_runtime_smoke.py'
       - 'scripts/vk_runtime_sweep.py'
       - 'scripts/stringify_shader.py'
+      - 'tests/global_fog_source_tests.py'
+      - 'tests/liquid_interaction_source_tests.py'
+      - 'tests/liquid_rendering_source_tests.py'
+      - 'tests/renderer_contract_source_tests.py'
+      - 'tests/rtx_fog_dlight_source_tests.py'
+      - 'tests/rtx_hdr_source_tests.py'
+      - 'tests/rtx_light_visibility_source_tests.py'
+      - 'tests/rtx_liquid_rendering_source_tests.py'
+      - 'tests/rtx_raster_overlay_parity_source_tests.py'
+      - 'tests/rtx_renderer_parity_source_tests.py'
+      - 'tests/rtx_runtime_smoke_tests.py'
+      - 'tests/rtx_surface_light_source_tests.py'
+      - 'tests/static_map_lights_source_tests.py'
       - 'tests/vulkan/**'
   workflow_dispatch:
     inputs:
       run_runtime_sweep:
-        description: Run the selected Vulkan gate on a self-hosted GPU runner with retail assets.
+        description: Run the selected Vulkan-family gate on a self-hosted GPU runner with retail assets.
         required: true
         default: false
         type: boolean
@@ -46,7 +94,7 @@ on:
         default: '["self-hosted","vulkan"]'
         type: string
       runtime_gate:
-        description: Vulkan RC gate to execute on the runtime runner.
+        description: Vulkan-family RC gate to execute on the runtime runner.
         required: true
         default: vk-smoke
         type: choice
@@ -54,6 +102,7 @@ on:
           - vk-smoke
           - vk-modern
           - vk-hdr
+          - rtx-smoke
       runtime_exe:
         description: Path to the built FnQuake3 client executable on the runtime runner.
         required: false
@@ -67,31 +116,96 @@ on:
 
 jobs:
   vulkan-renderer-build:
-    name: Vulkan Meson renderer build
+    name: Vulkan-family Meson renderer build (${{ matrix.renderer }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        renderer:
+          - vk
+          - rtx
     steps:
       - uses: actions/checkout@v6
 
       - name: Install build tools
         run: |
           sudo apt-get -qq update
-          sudo apt-get install -y meson ninja-build gcc g++ libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
+          sudo apt-get install -y meson ninja-build gcc g++ glslang-tools libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
 
-      - name: Configure focused Meson Vulkan build
+      - name: Verify RTX shader outputs are current
+        if: matrix.renderer == 'rtx'
+        run: python code/rendererrtx/shaders/build_shaders.py --check
+
+      - name: Run RTX parity source contracts
+        if: matrix.renderer == 'rtx'
         run: |
-          meson setup .tmp/meson-vk-verification \
+          python tests/rtx_fog_dlight_source_tests.py
+          python tests/rtx_hdr_source_tests.py
+          python tests/rtx_light_visibility_source_tests.py
+          python tests/rtx_liquid_rendering_source_tests.py
+          python tests/rtx_raster_overlay_parity_source_tests.py
+          python tests/rtx_renderer_parity_source_tests.py
+          python tests/rtx_runtime_smoke_tests.py
+          python tests/rtx_surface_light_source_tests.py
+          python tests/global_fog_source_tests.py
+          python tests/liquid_interaction_source_tests.py
+          python tests/liquid_rendering_source_tests.py
+          python tests/renderer_contract_source_tests.py
+          python tests/static_map_lights_source_tests.py
+
+      - name: Configure focused Meson Vulkan-family build
+        run: |
+          meson setup ".tmp/meson-${{ matrix.renderer }}-verification" \
             --buildtype=debugoptimized \
             -Dsdl=disabled \
             -Dcurl=disabled \
             -Drenderer-dlopen=true \
+            -Drenderers=${{ matrix.renderer }} \
+            -Dbuild-client=false \
+            -Dbuild-server=false \
+            -Daudio-tests=false \
+            -Dglx-tests=false
+
+      - name: Build Vulkan-family renderer
+        run: meson compile -C ".tmp/meson-${{ matrix.renderer }}-verification" "fnquake3_${{ matrix.renderer }}_x86_64"
+
+      - name: Configure static RTX renderer build
+        if: matrix.renderer == 'rtx'
+        run: |
+          meson setup .tmp/meson-rtx-static-verification \
+            --buildtype=debugoptimized \
+            -Dsdl=disabled \
+            -Dcurl=disabled \
+            -Drenderer-dlopen=false \
+            -Drenderer-default=rtx \
+            -Drenderers=rtx \
+            -Dbuild-client=false \
+            -Dbuild-server=false \
+            -Daudio-tests=false \
+            -Dglx-tests=false
+
+      - name: Build static RTX renderer
+        if: matrix.renderer == 'rtx'
+        run: meson compile -C .tmp/meson-rtx-static-verification renderer_static_rtx
+
+      - name: Configure static Vulkan renderer build
+        if: matrix.renderer == 'vk'
+        run: |
+          meson setup .tmp/meson-vk-static-verification \
+            --buildtype=debugoptimized \
+            -Dsdl=disabled \
+            -Dcurl=disabled \
+            -Drenderer-dlopen=false \
+            -Drenderer-default=vk \
             -Drenderers=vk \
             -Dbuild-client=false \
             -Dbuild-server=false \
             -Daudio-tests=false \
             -Dglx-tests=false
 
-      - name: Build Vulkan renderer
-        run: meson compile -C .tmp/meson-vk-verification fnquake3_vk_x86_64
+      - name: Build static Vulkan renderer
+        if: matrix.renderer == 'vk'
+        run: meson compile -C .tmp/meson-vk-static-verification renderer_static_vk
 
   vulkan-gate-plans:
     name: Vulkan RC gate plans
@@ -103,9 +217,11 @@ jobs:
         run: python scripts/vk_runtime_sweep.py --list-gates
 
       - name: Run Vulkan sweep Python tests
-        run: python tests/vulkan/vk_runtime_sweep_tests.py
+        run: |
+          python tests/vulkan/vk_runtime_sweep_tests.py
+          python tests/rtx_runtime_smoke_tests.py
 
-      - name: Generate dry-run gate artifacts
+      - name: Generate dry-run Vulkan gate artifacts
         run: |
           mkdir -p .tmp/vk-gate-plans
           for gate in vk-smoke vk-modern vk-hdr; do
@@ -119,16 +235,30 @@ jobs:
             cat ".tmp/vk-gate-plans/${gate}.md" >> "$GITHUB_STEP_SUMMARY"
           done
 
+      - name: Generate dry-run RTX gate artifacts
+        run: |
+          mkdir -p .tmp/rtx-gate-plans
+          python scripts/rtx_runtime_smoke.py \
+            --gate rtx-smoke \
+            --dry-run \
+            --exe ".tmp/rtx-gate-plans/fnquake3" \
+            --basepath ".tmp/rtx-gate-plans/basepath" \
+            --output-dir ".tmp/rtx-gate-plans" \
+            --summary-markdown ".tmp/rtx-gate-plans/rtx-smoke.md"
+          cat ".tmp/rtx-gate-plans/rtx-smoke.md" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload dry-run gate artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: vulkan-gate-plans
-          path: .tmp/vk-gate-plans
+          name: vulkan-family-gate-plans
+          path: |
+            .tmp/vk-gate-plans
+            .tmp/rtx-gate-plans
           if-no-files-found: error
           retention-days: 14
 
   vulkan-runtime-sweep:
-    name: Vulkan runtime sweep
+    name: Vulkan-family runtime sweep
     if: github.event_name == 'workflow_dispatch' && inputs.run_runtime_sweep
     runs-on: ${{ fromJSON(inputs.runtime_runner_labels || '["self-hosted","vulkan"]') }}
     steps:
@@ -153,7 +283,7 @@ jobs:
                   print(f"{name} is required when run_runtime_sweep is true.", file=sys.stderr)
               sys.exit(2)
 
-      - name: Run Vulkan runtime gate
+      - name: Run Vulkan-family runtime gate
         shell: python
         env:
           FNQ3_VK_RUNTIME_GATE: ${{ inputs.runtime_gate }}
@@ -166,11 +296,18 @@ jobs:
           from pathlib import Path
 
           gate = os.environ["FNQ3_VK_RUNTIME_GATE"]
-          output_dir = Path(".tmp") / "vk-runtime-sweeps"
+          is_rtx = gate == "rtx-smoke"
+          output_dir = Path(".tmp") / (
+              "rtx-runtime-smoke" if is_rtx else "vk-runtime-sweeps"
+          )
           summary_path = output_dir / f"{gate}.md"
           command = [
               sys.executable,
-              "scripts/vk_runtime_sweep.py",
+              (
+                  "scripts/rtx_runtime_smoke.py"
+                  if is_rtx
+                  else "scripts/vk_runtime_sweep.py"
+              ),
               "--gate",
               gate,
               "--exe",
@@ -194,7 +331,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: vulkan-runtime-sweep-${{ inputs.runtime_gate }}
-          path: .tmp/vk-runtime-sweeps
+          name: vulkan-family-runtime-${{ inputs.runtime_gate }}
+          path: |
+            .tmp/vk-runtime-sweeps
+            .tmp/rtx-runtime-smoke
           if-no-files-found: error
           retention-days: 30

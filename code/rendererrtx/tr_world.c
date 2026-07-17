@@ -780,6 +780,35 @@ static const byte *R_ClusterPVS (int cluster) {
 }
 
 /*
+=====================
+R_PointLeafClusterArea
+=====================
+*/
+qboolean R_PointLeafClusterArea( const vec3_t point, int *cluster, int *area ) {
+	const mnode_t *leaf;
+
+	if ( cluster ) {
+		*cluster = -1;
+	}
+	if ( area ) {
+		*area = -1;
+	}
+	if ( !tr.world || !tr.world->nodes ) {
+		return qfalse;
+	}
+
+	leaf = R_PointInLeaf( point );
+	if ( cluster ) {
+		*cluster = leaf->cluster;
+	}
+	if ( area ) {
+		*area = leaf->area;
+	}
+
+	return ( leaf->cluster >= 0 && leaf->cluster < tr.world->numClusters ) ? qtrue : qfalse;
+}
+
+/*
 =================
 R_inPVS
 =================
@@ -796,6 +825,56 @@ qboolean R_inPVS( const vec3_t p1, const vec3_t p2 ) {
 		return qfalse;
 	}
 	return qtrue;
+}
+
+/*
+=====================
+R_LeafClusterInCurrentPVS
+=====================
+*/
+qboolean R_LeafClusterInCurrentPVS( const vec3_t vieworg, int cluster, int area ) {
+	const mnode_t *viewLeaf;
+	const byte *vis;
+	int viewCluster;
+
+	if ( !tr.world || !tr.world->nodes || ( r_novis && r_novis->integer ) ) {
+		return qtrue;
+	}
+
+	viewLeaf = R_PointInLeaf( vieworg );
+	viewCluster = viewLeaf->cluster;
+	if ( viewCluster < 0 || cluster < 0 ||
+		viewCluster >= tr.world->numClusters || cluster >= tr.world->numClusters ) {
+		return qtrue;
+	}
+
+	vis = R_ClusterPVS( viewCluster );
+	if ( !( vis[cluster >> 3] & ( 1 << ( cluster & 7 ) ) ) ) {
+		return qfalse;
+	}
+
+	if ( area >= 0 && area < MAX_MAP_AREA_BYTES * 8 &&
+		( tr.refdef.areamask[area >> 3] & ( 1 << ( area & 7 ) ) ) ) {
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+/*
+=====================
+R_PointInCurrentPVS
+=====================
+*/
+qboolean R_PointInCurrentPVS( const vec3_t vieworg, const vec3_t point ) {
+	const mnode_t *leaf;
+
+	if ( !tr.world || !tr.world->nodes || ( r_novis && r_novis->integer ) ) {
+		return qtrue;
+	}
+
+	leaf = R_PointInLeaf( point );
+	return R_LeafClusterInCurrentPVS( vieworg, leaf->cluster, leaf->area );
 }
 
 /*

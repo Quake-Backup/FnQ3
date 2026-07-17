@@ -6,6 +6,9 @@ struct RtRadiancePayload {
 	float hitT;
 	vec3 normal;
 	uint flags;
+	float shadowFactor;
+	float shadowResponse;
+	vec3 shadowLoss;
 };
 
 layout(location = 0) rayPayloadInEXT RtRadiancePayload payloadRadiance;
@@ -50,4 +53,7 @@ void main()
 	payloadRadiance.hitT = 0.0;
 	payloadRadiance.normal = vec3(0.0, 0.0, 1.0);
 	payloadRadiance.flags = 0u;
+	payloadRadiance.shadowFactor = 1.0;
+	payloadRadiance.shadowResponse = 0.0;
+	payloadRadiance.shadowLoss = vec3(0.0);
 }

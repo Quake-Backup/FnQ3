@@ -4,19 +4,38 @@ FnQuake3 keeps the classic screenshot commands, then extends them into a more fl
 
 All screenshot output is written under the active game directory in `screenshots/`.
 
+Backend coverage is not identical for every optional capture convenience. GLx
+and Vulkan provide the extended automatic naming, view-position sidecars,
+watermarks, and cube-map capture described below. RTX provides ordinary
+PNG/TGA/JPG/BMP screenshots and the flexible levelshot crop/resize/downscale
+path, but does not currently implement those optional extended conveniences.
+
 ## Color Capture Policy
 
 Screenshots, levelshots, cube-map faces, clipboard BMP captures, and AVI frame capture default to SDR sRGB byte output. This remains true even when the renderer is using the scene-linear HDR pipeline internally: the final output transform is captured after tone mapping so existing PNG, TGA, JPG, BMP, baselines, and scripts keep their historical expectations.
 
-`r_screenshotCaptureMode` records the explicit capture policy:
+With RTX and framebuffer rendering enabled, ordinary screenshots, levelshots,
+and AVI frames use a dedicated SDR capture target even when supersampling is
+off. This keeps capture on the same exposure, tone-map, linear-to-sRGB, gamma,
+and dither path as the presented frame instead of reading the floating-point
+scene target directly.
+
+On the OpenGL-lineage renderer, `r_screenshotCaptureMode` records the explicit capture policy:
 
 - `0`: SDR sRGB byte capture. This is the default.
 - `1`: Reserved scene-linear HDR export request. It currently falls back to SDR sRGB byte output and prints a warning; use it only when a capture run needs to prove that an HDR-aware request was made explicitly.
 - `2`: Reserved HDR-output export request. It currently falls back to SDR sRGB byte output and prints a warning; it is a forward-compatible slot for future output-encoded HDR screenshots.
 
-GLx diagnostics report both the requested policy and the selected capture policy. Until float/HDR image export is implemented, HDR-aware requests are recorded as explicit but unsupported and the selected capture remains `sdr-srgb`.
+OpenGL-lineage diagnostics report both the requested policy and the selected
+capture policy. Until float/HDR image export is implemented, HDR-aware
+requests are recorded as explicit but unsupported and the selected capture
+remains `sdr-srgb`. Vulkan and RTX ordinary captures also remain SDR sRGB, but
+do not currently expose this reserved HDR-export selector.
 
-When `r_screenshotWriteViewpos 1` is enabled, sidecars include `captureMode` and `captureColorSpace` lines so proof artifacts identify the capture policy without changing the image format.
+On the OpenGL-lineage renderer, view-position sidecars include `captureMode`
+and `captureColorSpace` lines so proof artifacts identify the capture policy
+without changing the image format. Vulkan sidecars contain the map/camera
+fields but not these two capture-policy fields.
 
 ## Overview
 
@@ -71,6 +90,9 @@ Capture visibility rules:
 - If `r_levelshotHideHud 0`, the levelshot includes the current HUD.
 - If `r_levelshotHideViewWeapon 0`, the levelshot includes the current first-person weapon model.
 
+GLx, Vulkan, and RTX share this levelshot sizing, crop, downscale, and capture
+visibility contract.
+
 Examples:
 
 Keep the full viewport at its current capture size:
@@ -118,6 +140,9 @@ screenshot levelshot
 
 ## Automatic Naming
 
+This section applies to GLx and Vulkan. RTX currently uses its ordinary
+screenshot naming behavior.
+
 When you do not pass an explicit filename, FnQuake3 builds one from `r_screenshotNameFormat`.
 
 - `r_screenshotNameFormat "shot-{date}-{time}"`: Default pattern.
@@ -155,6 +180,9 @@ If a cube-map pattern does not include `{face}`, FnQuake3 appends the face name 
 
 ## View Metadata Sidecars
 
+This section applies to GLx and Vulkan; RTX does not currently write these
+optional sidecars.
+
 Set `r_screenshotWriteViewpos 1` to make FnQuake3 write a plain-text sidecar next to each saved screenshot.
 
 - The sidecar uses the same base filename as the image and ends in `.txt`.
@@ -175,6 +203,9 @@ setviewpos 128.000 -64.000 512.000 -10.000 90.000 0.000
 This is useful when you want to recreate a shot later, compare captures across builds, or keep precise camera notes alongside exported images.
 
 ## Watermarks
+
+This section applies to GLx and Vulkan; RTX does not currently composite
+optional screenshot watermarks.
 
 FnQuake3 can composite an image watermark directly into saved screenshots.
 
@@ -249,14 +280,14 @@ Renderer status:
 
 ## Recommended Starting Points
 
-For an organized screenshot archive:
+For an organized GLx/Vulkan screenshot archive:
 
 ```cfg
 seta r_screenshotNameFormat "{map}-{datetime}-{iter:3}"
 seta r_screenshotWriteViewpos "1"
 ```
 
-For a capture setup with a logo watermark:
+For a GLx/Vulkan capture setup with a logo watermark:
 
 ```cfg
 seta r_screenshotNameFormat "{map}-{datetime}"

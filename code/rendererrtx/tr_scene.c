@@ -38,6 +38,94 @@ static int			r_firstScenePoly;
 
 static int			r_numpolyverts;
 
+static liquidInteraction_t r_liquidInteractions[LIQUID_MAX_STORED_IMPULSES];
+static int r_numLiquidInteractions;
+static int r_liquidInteractionTime = -1;
+
+static void R_ResetStaticMapLightFrameCounters( void )
+{
+	tr.staticMapLights.promotedThisFrame = 0;
+	tr.staticMapLights.skippedDisabledThisFrame = 0;
+	tr.staticMapLights.skippedPVSThisFrame = 0;
+	tr.staticMapLights.skippedBudgetThisFrame = 0;
+}
+
+static void R_ResetSurfaceLightProxyFrameCounters( void )
+{
+	tr.surfaceLightProxies.selectedThisFrame = 0;
+	tr.surfaceLightProxies.skippedDisabledThisFrame = 0;
+	tr.surfaceLightProxies.skippedPVSThisFrame = 0;
+	tr.surfaceLightProxies.skippedBudgetThisFrame = 0;
+}
+
+static void R_PruneLiquidInteractions( int sceneTime )
+{
+	int readIndex;
+	int writeIndex = 0;
+
+	if ( r_liquidInteractionTime > sceneTime ) {
+		r_numLiquidInteractions = 0;
+	}
+	r_liquidInteractionTime = sceneTime;
+	for ( readIndex = 0; readIndex < r_numLiquidInteractions; readIndex++ ) {
+		if ( !R_LiquidInteractionActive( &r_liquidInteractions[readIndex], sceneTime ) ) {
+			continue;
+		}
+		if ( writeIndex != readIndex ) {
+			r_liquidInteractions[writeIndex] = r_liquidInteractions[readIndex];
+		}
+		writeIndex++;
+	}
+	r_numLiquidInteractions = writeIndex;
+}
+
+void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction )
+{
+	int i;
+
+	if ( !r_liquidRipples || r_liquidRipples->value <= 0.0f ||
+		!interaction || interaction->radius <= 0.0f || interaction->strength <= 0.0f ) {
+		return;
+	}
+
+	R_PruneLiquidInteractions( interaction->time );
+	for ( i = 0; i < r_numLiquidInteractions; i++ ) {
+		if ( abs( r_liquidInteractions[i].time - interaction->time ) <= 80 &&
+			DistanceSquared( r_liquidInteractions[i].origin, interaction->origin ) <= Square( 20.0f ) ) {
+			r_liquidInteractions[i].radius = MAX( r_liquidInteractions[i].radius, interaction->radius );
+			r_liquidInteractions[i].strength = MAX( r_liquidInteractions[i].strength, interaction->strength );
+			return;
+		}
+	}
+
+	if ( r_numLiquidInteractions == LIQUID_MAX_STORED_IMPULSES ) {
+		memmove( r_liquidInteractions, r_liquidInteractions + 1,
+			( LIQUID_MAX_STORED_IMPULSES - 1 ) * sizeof( r_liquidInteractions[0] ) );
+		r_numLiquidInteractions--;
+	}
+	r_liquidInteractions[r_numLiquidInteractions++] = *interaction;
+}
+
+static void R_CopyLiquidInteractionsToRefdef( int sceneTime )
+{
+	int first;
+	int count;
+
+	tr.refdef.numLiquidInteractions = 0;
+	if ( !r_liquidRipples || r_liquidRipples->value <= 0.0f ) {
+		r_numLiquidInteractions = 0;
+		return;
+	}
+	R_PruneLiquidInteractions( sceneTime );
+	count = MIN( r_numLiquidInteractions, LIQUID_MAX_ACTIVE_IMPULSES );
+	first = r_numLiquidInteractions - count;
+	if ( count > 0 ) {
+		Com_Memcpy( tr.refdef.liquidInteractions, r_liquidInteractions + first,
+			count * sizeof( tr.refdef.liquidInteractions[0] ) );
+		tr.refdef.numLiquidInteractions = count;
+	}
+}
+
 
 /*
 ====================
@@ -64,6 +152,9 @@ void R_InitNextFrame( void ) {
 	r_firstScenePoly = 0;
 
 	r_numpolyverts = 0;
+
+	R_ResetStaticMapLightFrameCounters();
+	R_ResetSurfaceLightProxyFrameCounters();
 }
 
 
@@ -204,6 +295,101 @@ static int isnan_fp( const float *f )
 	return (int)( u >> 31 );
 }
 
+static float R_DlightSrgbToLinear( float c )
+{
+	if ( c <= 0.0f ) {
+		return 0.0f;
+	}
+	if ( c <= 0.04045f ) {
+		return c / 12.92f;
+	}
+	if ( c < 1.0f ) {
+		return powf( ( c + 0.055f ) / 1.055f, 2.4f );
+	}
+	return c;
+}
+
+static float R_DlightLinearToSrgb( float c )
+{
+	if ( c <= 0.0f ) {
+		return 0.0f;
+	}
+	if ( c <= 0.0031308f ) {
+		return c * 12.92f;
+	}
+	if ( c < 1.0f ) {
+		return 1.055f * powf( c, 1.0f / 2.4f ) - 0.055f;
+	}
+	return c;
+}
+
+static void R_CompressDlightOverbrightGamut( vec3_t linearColor, float amount )
+{
+	float maxChannel;
+	float linearLuma;
+	float overbright;
+	float chromaScale;
+
+	if ( amount <= 0.0f ) {
+		return;
+	}
+
+	maxChannel = MAX( linearColor[0], MAX( linearColor[1], linearColor[2] ) );
+	if ( maxChannel <= 1.0f ) {
+		return;
+	}
+
+	linearLuma = LUMA( linearColor[0], linearColor[1], linearColor[2] );
+	if ( linearLuma <= 0.0f || maxChannel <= linearLuma ) {
+		return;
+	}
+
+	overbright = maxChannel - 1.0f;
+	chromaScale = 1.0f - amount * ( overbright / ( overbright + 1.0f ) );
+
+	linearColor[0] = linearLuma + ( linearColor[0] - linearLuma ) * chromaScale;
+	linearColor[1] = linearLuma + ( linearColor[1] - linearLuma ) * chromaScale;
+	linearColor[2] = linearLuma + ( linearColor[2] - linearLuma ) * chromaScale;
+}
+
+static void R_ApplyDlightColorControls( float *r, float *g, float *b )
+{
+	float saturation;
+	float overbrightGamut;
+	qboolean needsSaturation;
+	qboolean needsGamut;
+	vec3_t linearColor;
+	float linearLuma;
+
+	saturation = r_dlightSaturation ? r_dlightSaturation->value : 1.0f;
+	overbrightGamut = r_dlightOverbrightGamut ? r_dlightOverbrightGamut->value : 0.0f;
+	needsSaturation = ( saturation != 1.0f );
+	needsGamut = ( overbrightGamut > 0.0f && ( *r > 1.0f || *g > 1.0f || *b > 1.0f ) );
+
+	if ( !needsSaturation && !needsGamut ) {
+		return;
+	}
+
+	linearColor[0] = R_DlightSrgbToLinear( *r );
+	linearColor[1] = R_DlightSrgbToLinear( *g );
+	linearColor[2] = R_DlightSrgbToLinear( *b );
+
+	if ( needsSaturation ) {
+		linearLuma = LUMA( linearColor[0], linearColor[1], linearColor[2] );
+		linearColor[0] = LERP( linearLuma, linearColor[0], saturation );
+		linearColor[1] = LERP( linearLuma, linearColor[1], saturation );
+		linearColor[2] = LERP( linearLuma, linearColor[2], saturation );
+	}
+
+	if ( needsGamut ) {
+		R_CompressDlightOverbrightGamut( linearColor, overbrightGamut );
+	}
+
+	*r = R_DlightLinearToSrgb( linearColor[0] );
+	*g = R_DlightLinearToSrgb( linearColor[1] );
+	*b = R_DlightLinearToSrgb( linearColor[2] );
+}
+
 
 /*
 =====================
@@ -273,13 +459,7 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	}
 #endif
 
-	if ( r_dlightSaturation->value != 1.0 )
-	{
-		float luminance = LUMA( r, g, b );
-		r = LERP( luminance, r, r_dlightSaturation->value );
-		g = LERP( luminance, g, r_dlightSaturation->value );
-		b = LERP( luminance, b, r_dlightSaturation->value );
-	}
+	R_ApplyDlightColorControls( &r, &g, &b );
 
 	dl = &backEndData->dlights[r_numdlights++];
 	VectorCopy( org, dl->origin );
@@ -289,6 +469,7 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	dl->color[2] = b;
 	dl->additive = additive;
 	dl->linear = qfalse;
+	dl->castsRtShadows = qtrue;
 }
 
 
@@ -324,13 +505,7 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	}
 #endif
 
-	if ( r_dlightSaturation->value != 1.0 )
-	{
-		float luminance = LUMA( r, g, b );
-		r = LERP( luminance, r, r_dlightSaturation->value );
-		g = LERP( luminance, g, r_dlightSaturation->value );
-		b = LERP( luminance, b, r_dlightSaturation->value );
-	}
+	R_ApplyDlightColorControls( &r, &g, &b );
 
 	dl = &backEndData->dlights[ r_numdlights++ ];
 	VectorCopy( start, dl->origin );
@@ -341,6 +516,433 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	dl->color[2] = b;
 	dl->additive = 0;
 	dl->linear = qtrue;
+	dl->castsRtShadows = qtrue;
+}
+
+static qboolean R_LightCandidateVisibleInPVS( const refdef_t *fd, const vec3_t origin,
+	float radius, int leafCluster, int leafArea )
+{
+	vec3_t sample;
+	float sampleRadius;
+	int axis;
+
+	if ( !tr.world || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+		return qtrue;
+	}
+	if ( leafCluster >= 0 ) {
+		if ( R_LeafClusterInCurrentPVS( fd->vieworg, leafCluster, leafArea ) ) {
+			return qtrue;
+		}
+	} else if ( R_PointInCurrentPVS( fd->vieworg, origin ) ) {
+		return qtrue;
+	}
+	if ( radius <= 32.0f ) {
+		return qfalse;
+	}
+	if ( radius > 1024.0f ) {
+		return qtrue;
+	}
+
+	sampleRadius = Com_Clamp( 32.0f, 512.0f, radius );
+	for ( axis = 0; axis < 3; axis++ ) {
+		VectorCopy( origin, sample );
+		sample[axis] += sampleRadius;
+		if ( R_PointInCurrentPVS( fd->vieworg, sample ) ) {
+			return qtrue;
+		}
+		sample[axis] -= sampleRadius * 2.0f;
+		if ( R_PointInCurrentPVS( fd->vieworg, sample ) ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static float R_StaticMapLightScenePriority( const mapLightDef_t *light, const refdef_t *fd )
+{
+	vec3_t delta;
+	float brightness;
+	float dist2;
+	float radius2;
+	float directionalWeight;
+
+	brightness = light->color[0];
+	if ( light->color[1] > brightness ) {
+		brightness = light->color[1];
+	}
+	if ( light->color[2] > brightness ) {
+		brightness = light->color[2];
+	}
+	if ( brightness <= 0.0f || light->radius <= 0.0f || light->designerPriority <= 0.0f ) {
+		return 0.0f;
+	}
+
+	VectorSubtract( light->origin, fd->vieworg, delta );
+	dist2 = DotProduct( delta, delta );
+	radius2 = Square( light->radius );
+	directionalWeight = 1.0f;
+	if ( light->type == MAP_LIGHT_SPOT ) {
+		vec3_t toView;
+		float facing;
+
+		VectorSubtract( fd->vieworg, light->origin, toView );
+		if ( VectorNormalize2( toView, toView ) > 1.0f ) {
+			facing = DotProduct( light->direction, toView );
+			directionalWeight = Com_Clamp( 0.15f, 1.0f, 0.35f + 0.65f * facing );
+		}
+	}
+
+	return brightness * directionalWeight * light->designerPriority * light->intensity * radius2 /
+		( dist2 + radius2 + 1.0f );
+}
+
+static void R_StaticMapLightSpotEnd( const mapLightDef_t *light, vec3_t end )
+{
+	VectorMA( light->origin, light->radius, light->direction, end );
+}
+
+static qboolean R_StaticMapLightVisibleInPVS( const refdef_t *fd, const mapLightDef_t *light )
+{
+	if ( R_LightCandidateVisibleInPVS( fd, light->origin, light->radius,
+		light->leafCluster, light->leafArea ) ) {
+		return qtrue;
+	}
+	if ( light->type == MAP_LIGHT_SPOT ) {
+		vec3_t end;
+
+		R_StaticMapLightSpotEnd( light, end );
+		if ( R_LightCandidateVisibleInPVS( fd, end, light->radius * 0.25f, -1, -1 ) ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static void R_AddStaticMapLightsToScene( const refdef_t *fd )
+{
+	qboolean selected[MAX_STATIC_MAP_LIGHTS];
+	qboolean visible[MAX_STATIC_MAP_LIGHTS];
+	float priorities[MAX_STATIC_MAP_LIGHTS];
+	int budget;
+	int promotedThisScene;
+	int visibleCount;
+	int pass;
+	int i;
+
+	if ( !tr.staticMapLights.loaded || tr.staticMapLights.parseFailed || tr.staticMapLights.count <= 0 ) {
+		return;
+	}
+	if ( !r_staticLights || !r_staticLights->integer || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+		tr.staticMapLights.skippedDisabledThisFrame += tr.staticMapLights.count;
+		return;
+	}
+
+	budget = r_staticLightMaxLights ? r_staticLightMaxLights->integer : 8;
+	budget = (int)Com_Clamp( 0.0f, (float)MAX_DLIGHTS, (float)budget );
+	if ( budget > (int)ARRAY_LEN( backEndData->dlights ) - r_numdlights ) {
+		budget = (int)ARRAY_LEN( backEndData->dlights ) - r_numdlights;
+	}
+	if ( budget <= 0 ) {
+		tr.staticMapLights.skippedBudgetThisFrame += tr.staticMapLights.count;
+		return;
+	}
+
+	Com_Memset( selected, 0, sizeof( selected ) );
+	Com_Memset( visible, 0, sizeof( visible ) );
+	Com_Memset( priorities, 0, sizeof( priorities ) );
+	promotedThisScene = 0;
+	visibleCount = 0;
+
+	for ( i = 0; i < tr.staticMapLights.count; i++ ) {
+		const mapLightDef_t *light = &tr.staticMapLights.lights[i];
+
+		if ( R_StaticMapLightVisibleInPVS( fd, light ) ) {
+			visible[i] = qtrue;
+			priorities[i] = R_StaticMapLightScenePriority( light, fd );
+			visibleCount++;
+		} else {
+			tr.staticMapLights.skippedPVSThisFrame++;
+		}
+	}
+	if ( visibleCount <= 0 ) {
+		return;
+	}
+
+	for ( pass = 0; pass < budget; pass++ ) {
+		const mapLightDef_t *light;
+		dlight_t *dl;
+		float bestPriority;
+		int bestIndex;
+		int before;
+
+		bestPriority = 0.0f;
+		bestIndex = -1;
+		for ( i = 0; i < tr.staticMapLights.count; i++ ) {
+			if ( selected[i] || !visible[i] ) {
+				continue;
+			}
+			if ( priorities[i] > bestPriority ) {
+				bestPriority = priorities[i];
+				bestIndex = i;
+			}
+		}
+
+		if ( bestIndex < 0 || bestPriority <= 0.0f || r_numdlights >= ARRAY_LEN( backEndData->dlights ) ) {
+			break;
+		}
+
+		selected[bestIndex] = qtrue;
+		light = &tr.staticMapLights.lights[bestIndex];
+		before = r_numdlights;
+		if ( light->type == MAP_LIGHT_SPOT ) {
+			vec3_t end;
+
+			R_StaticMapLightSpotEnd( light, end );
+			RE_AddLinearLightToScene( light->origin, end, light->radius,
+				light->color[0], light->color[1], light->color[2] );
+		} else {
+			RE_AddDynamicLightToScene( light->origin, light->radius,
+				light->color[0], light->color[1], light->color[2], qfalse );
+		}
+		if ( r_numdlights <= before ) {
+			continue;
+		}
+
+		dl = &backEndData->dlights[before];
+		dl->castsRtShadows = light->castsShadows;
+		tr.staticMapLights.promotedThisFrame++;
+		promotedThisScene++;
+	}
+
+	if ( visibleCount > promotedThisScene ) {
+		tr.staticMapLights.skippedBudgetThisFrame +=
+			visibleCount - promotedThisScene;
+	}
+}
+
+static float R_SurfaceLightProxyHemisphereWeight( const surfaceLightProxy_t *proxy,
+	const refdef_t *fd )
+{
+	vec3_t toView;
+	float facing;
+
+	if ( proxy->area <= Square( 64.0f ) ) {
+		return 1.0f;
+	}
+
+	VectorSubtract( fd->vieworg, proxy->origin, toView );
+	if ( VectorNormalize2( toView, toView ) <= 1.0f ) {
+		return 1.0f;
+	}
+
+	facing = DotProduct( proxy->normal, toView );
+	if ( facing <= -0.35f ) {
+		return 0.05f;
+	}
+
+	return Com_Clamp( 0.15f, 1.0f, 0.35f + 0.65f * facing );
+}
+
+static float R_SurfaceLightProxyViewWeight( const surfaceLightProxy_t *proxy,
+	const refdef_t *fd, float tanHalfFovX, float tanHalfFovY )
+{
+	vec3_t delta;
+	float forward;
+	float side;
+	float up;
+	float radius;
+	float sideLimit;
+	float upLimit;
+	float sideRatio;
+	float upRatio;
+	float edgeRatio;
+
+	VectorSubtract( proxy->origin, fd->vieworg, delta );
+	forward = DotProduct( delta, fd->viewaxis[0] );
+	radius = Com_Clamp( 32.0f, 1024.0f, proxy->radius );
+	if ( forward <= -radius ) {
+		return 0.08f;
+	}
+	if ( forward <= radius ) {
+		return 0.75f;
+	}
+
+	side = fabsf( DotProduct( delta, fd->viewaxis[1] ) );
+	up = fabsf( DotProduct( delta, fd->viewaxis[2] ) );
+	sideLimit = forward * tanHalfFovX + radius;
+	upLimit = forward * tanHalfFovY + radius;
+	if ( sideLimit <= 1.0f || upLimit <= 1.0f ) {
+		return 1.0f;
+	}
+
+	sideRatio = side / sideLimit;
+	upRatio = up / upLimit;
+	edgeRatio = MAX( sideRatio, upRatio );
+	if ( edgeRatio <= 1.0f ) {
+		return 1.0f;
+	}
+	if ( edgeRatio >= 2.0f ) {
+		return 0.12f;
+	}
+
+	return Com_Clamp( 0.12f, 1.0f, 1.0f - ( edgeRatio - 1.0f ) * 0.65f );
+}
+
+static float R_SurfaceLightProxyScenePriority( const surfaceLightProxy_t *proxy,
+	const refdef_t *fd, float tanHalfFovX, float tanHalfFovY )
+{
+	vec3_t delta;
+	float brightness;
+	float dist2;
+	float radius2;
+	float hemisphereWeight;
+	float viewWeight;
+
+	brightness = proxy->color[0];
+	if ( proxy->color[1] > brightness ) {
+		brightness = proxy->color[1];
+	}
+	if ( proxy->color[2] > brightness ) {
+		brightness = proxy->color[2];
+	}
+	if ( brightness <= 0.0f || proxy->radius <= 0.0f ||
+		proxy->intensity <= 0.0f || proxy->designerPriority <= 0.0f ) {
+		return 0.0f;
+	}
+
+	hemisphereWeight = R_SurfaceLightProxyHemisphereWeight( proxy, fd );
+	if ( hemisphereWeight <= 0.0f ) {
+		return 0.0f;
+	}
+	viewWeight = R_SurfaceLightProxyViewWeight( proxy, fd, tanHalfFovX, tanHalfFovY );
+	if ( viewWeight <= 0.0f ) {
+		return 0.0f;
+	}
+
+	VectorSubtract( proxy->origin, fd->vieworg, delta );
+	dist2 = DotProduct( delta, delta );
+	radius2 = Square( proxy->radius );
+
+	return brightness * proxy->designerPriority * proxy->intensity *
+		hemisphereWeight * viewWeight * radius2 /
+		( dist2 + radius2 + 1.0f );
+}
+
+static void R_SurfaceLightProxyLinearEnd( const surfaceLightProxy_t *proxy, vec3_t end )
+{
+	VectorMA( proxy->origin, proxy->radius, proxy->normal, end );
+}
+
+static qboolean R_SurfaceLightProxyVisibleInPVS( const refdef_t *fd,
+	const surfaceLightProxy_t *proxy )
+{
+	if ( R_LightCandidateVisibleInPVS( fd, proxy->origin, proxy->radius,
+		proxy->leafCluster, proxy->leafArea ) ) {
+		return qtrue;
+	}
+	if ( proxy->projection == SURFACE_LIGHT_PROXY_LINEAR ) {
+		vec3_t end;
+
+		R_SurfaceLightProxyLinearEnd( proxy, end );
+		if ( R_LightCandidateVisibleInPVS( fd, end, proxy->radius * 0.25f, -1, -1 ) ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static void R_SelectSurfaceLightProxiesForRt( const refdef_t *fd )
+{
+	qboolean selected[MAX_SURFACELIGHT_PROXIES];
+	qboolean visible[MAX_SURFACELIGHT_PROXIES];
+	float priorities[MAX_SURFACELIGHT_PROXIES];
+	float tanHalfFovX;
+	float tanHalfFovY;
+	int budget;
+	int visibleCount;
+	int selectedThisScene;
+	int pass;
+	int i;
+
+	tr.refdef.numRtSurfaceLights = 0;
+
+	if ( !tr.surfaceLightProxies.built || tr.surfaceLightProxies.count <= 0 ) {
+		return;
+	}
+	if ( !r_surfaceLightProxies || !r_surfaceLightProxies->integer ||
+		( fd->rdflags & RDF_NOWORLDMODEL ) ||
+		( rtx_rt_raster_reference && rtx_rt_raster_reference->integer ) ) {
+		tr.surfaceLightProxies.skippedDisabledThisFrame += tr.surfaceLightProxies.count;
+		return;
+	}
+
+	budget = r_surfaceLightProxyMaxLights ?
+		r_surfaceLightProxyMaxLights->integer : MAX_RT_SURFACELIGHT_LIGHTS;
+	budget = (int)Com_Clamp( 0.0f, (float)MAX_RT_SURFACELIGHT_LIGHTS, (float)budget );
+	if ( budget <= 0 ) {
+		tr.surfaceLightProxies.skippedBudgetThisFrame += tr.surfaceLightProxies.count;
+		return;
+	}
+
+	tanHalfFovX = tanf( Com_Clamp( 30.0f, 160.0f, fd->fov_x ) * M_PI / 360.0f );
+	tanHalfFovY = tanf( Com_Clamp( 30.0f, 160.0f, fd->fov_y ) * M_PI / 360.0f );
+	Com_Memset( selected, 0, sizeof( selected ) );
+	Com_Memset( visible, 0, sizeof( visible ) );
+	Com_Memset( priorities, 0, sizeof( priorities ) );
+	visibleCount = 0;
+	selectedThisScene = 0;
+
+	for ( i = 0; i < tr.surfaceLightProxies.count; i++ ) {
+		const surfaceLightProxy_t *proxy = &tr.surfaceLightProxies.proxies[i];
+
+		if ( R_SurfaceLightProxyVisibleInPVS( fd, proxy ) ) {
+			visible[i] = qtrue;
+			priorities[i] = R_SurfaceLightProxyScenePriority( proxy, fd,
+				tanHalfFovX, tanHalfFovY );
+			visibleCount++;
+		} else {
+			tr.surfaceLightProxies.skippedPVSThisFrame++;
+		}
+	}
+	if ( visibleCount <= 0 ) {
+		return;
+	}
+
+	for ( pass = 0; pass < budget; pass++ ) {
+		float bestPriority;
+		int bestIndex;
+
+		bestPriority = 0.0f;
+		bestIndex = -1;
+		for ( i = 0; i < tr.surfaceLightProxies.count; i++ ) {
+			if ( selected[i] || !visible[i] ) {
+				continue;
+			}
+			if ( priorities[i] > bestPriority ) {
+				bestPriority = priorities[i];
+				bestIndex = i;
+			}
+		}
+
+		if ( bestIndex < 0 || bestPriority <= 0.0f ||
+			selectedThisScene >= MAX_RT_SURFACELIGHT_LIGHTS ) {
+			break;
+		}
+
+		selected[bestIndex] = qtrue;
+		tr.refdef.rtSurfaceLights[selectedThisScene++] =
+			tr.surfaceLightProxies.proxies[bestIndex];
+	}
+
+	tr.refdef.numRtSurfaceLights = selectedThisScene;
+	tr.surfaceLightProxies.selectedThisFrame += selectedThisScene;
+	if ( visibleCount > selectedThisScene ) {
+		tr.surfaceLightProxies.skippedBudgetThisFrame +=
+			visibleCount - selectedThisScene;
+	}
 }
 
 
@@ -409,6 +1011,9 @@ void RE_RenderScene( const refdef_t *fd ) {
 	tr.refdef.height = fd->height;
 	tr.refdef.fov_x = fd->fov_x;
 	tr.refdef.fov_y = fd->fov_y;
+	if ( ( fd->rdflags & RDF_NOFOVCORRECTION ) == 0 ) {
+		R_ApplyViewportFovCorrection( tr.refdef.width, tr.refdef.height, qtrue, &tr.refdef.fov_x, &tr.refdef.fov_y );
+	}
 
 	VectorCopy( fd->vieworg, tr.refdef.vieworg );
 	VectorCopy( fd->viewaxis[0], tr.refdef.viewaxis[0] );
@@ -438,6 +1043,8 @@ void RE_RenderScene( const refdef_t *fd ) {
 		}
 	}
 
+	R_AddStaticMapLightsToScene( fd );
+	R_SelectSurfaceLightProxiesForRt( fd );
 
 	// derived info
 
@@ -456,6 +1063,7 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 	tr.refdef.num_dlights = r_numdlights - r_firstSceneDlight;
 	tr.refdef.dlights = &backEndData->dlights[r_firstSceneDlight];
+	R_CopyLiquidInteractionsToRefdef( tr.refdef.time );
 
 	tr.refdef.numPolys = r_numpolys - r_firstScenePoly;
 	tr.refdef.polys = &backEndData->polys[r_firstScenePoly];

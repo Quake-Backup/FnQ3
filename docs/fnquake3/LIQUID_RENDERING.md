@@ -4,7 +4,20 @@
 
 FnQuake3's enhanced liquid path is an opt-in renderer extension for existing idTech3 liquid shaders. It adds warped sampling of a same-frame scene-color snapshot, a Fresnel-weighted single-tap screen-space reflection of that same snapshot, and visual ripple impulses without changing BSP data, collision, snapshots, prediction, protocols, demos, or VM-visible gameplay. With `r_liquid 0`, the renderer follows the authored liquid path alone.
 
-This is deliberately a screen-space effect rather than a planar reflection renderer, a depth-ray-marched screen-space reflection (SSR), or a gameplay fluid simulation. That choice gives the OpenGL-lineage and Vulkan renderers a useful liquid upgrade with one private scaled color copy and no second world traversal, PVS calculation, reflected entity submission, depth-ray hit search, or clip-plane pass. Both liquid passes sample only the immutable snapshot captured before any transparent work: the earlier experimental path smeared because it resampled the live color buffer after the authored water stages had already been blended into it, creating a feedback loop. Sampling a fixed pre-transparency capture — whether straight (refraction) or mirrored (reflection) — cannot feed back, so the reflection tap is safe even though it remains a geometric approximation.
+This is deliberately a screen-space effect rather than a planar reflection
+renderer, a depth-ray-marched screen-space reflection (SSR), or a gameplay
+fluid simulation. That choice gives the OpenGL-lineage, Vulkan, and RTX
+renderers a useful liquid upgrade with one private scaled color copy and no
+second world traversal, PVS calculation, reflected entity submission,
+depth-ray hit search, or clip-plane pass. Both liquid passes sample only the
+immutable color snapshot captured before any transparent work: the earlier
+experimental path smeared because it resampled the live color buffer after the
+authored water stages had already been blended into it, creating a feedback
+loop. Sampling a fixed pre-transparency capture — whether straight
+(refraction) or mirrored (reflection) — cannot feed back, so the reflection
+tap is safe even though it remains a geometric approximation. Backends with a
+compatible resolved scene-depth snapshot also use it for a bounded refraction
+rejection, not for reflection ray marching.
 
 ## Capture And Refraction Architecture
 
@@ -26,7 +39,26 @@ The OpenGL-lineage renderer owns a dedicated `liquidScreenBuffer`; `FBO_CopyLiqu
 
 Vulkan ends the active main pass on demand, resolves it when required, linearly downsamples through a dedicated source sampler into its private scaled `liquidSnapshot` attachment, and resumes through the load-preserving main pass. A dedicated liquid vertex/fragment pipeline samples that attachment for the refraction underlay and the post-authored reflection pass; the reflection re-projection matrix travels in otherwise idle `vkUniform_t` slots, in the same Vulkan clip conventions as the draw's push-constant transform. Because the copy binds the post-process pipeline layout and a static-scissor pipeline mid-scene, the capture must restore command-buffer state the way the other mid-frame overlays do: keep the cached descriptor handles, force a full-range rebind on the next draw, and poison the scissor cache so the next 3D draw re-emits it rather than trusting a stale match against undefined state.
 
-The GLx GL2+, ARB, and Vulkan paths all evaluate the liquid function per fragment from one shared model: the wave-octave constants, pixel scaling, distance attenuation, ripple ring shape, Fresnel curve, and reflection bounds live in `renderercommon/tr_liquid.h`, and `tests/liquid_rendering_source_tests.py` enforces that the GLSL copies keep identical constants. Scene time is wrapped to the octaves' common period before upload so trigonometric precision holds on low-precision fragment hardware. The per-vertex fallback is expected to look smoother and less locally detailed; parity is visual rather than pixel-for-pixel.
+RTX follows the Vulkan pass contract but captures the completed hybrid
+opaque-world result. The RT base has already been copied into the active scene
+target, compatibility lighting is present, and the liquid snapshot is taken
+at the same deterministic translucency boundary before the raster overlay
+draws authored liquid stages. Dedicated RTX liquid and copy pipelines preserve
+the private color/depth snapshot across the load-preserving pass transition.
+The liquid remains raster-owned final-frame content: it receives the enhanced
+screen-space treatment without being inserted into the opaque world BLAS.
+Capture failure, a secondary view, or another unsupported view shape falls
+back to the authored liquid stages.
+
+The GLx GL2+, ARB, Vulkan, and RTX paths all evaluate the liquid function per
+fragment from one shared model: the wave-octave constants, pixel scaling,
+distance attenuation, ripple ring shape, Fresnel curve, and reflection bounds
+live in `renderercommon/tr_liquid.h`, and
+`tests/liquid_rendering_source_tests.py` enforces that the GLSL copies keep
+identical constants. Scene time is wrapped to the octaves' common period
+before upload so trigonometric precision holds on low-precision fragment
+hardware. The per-vertex fallback is expected to look smoother and less
+locally detailed; parity is visual rather than pixel-for-pixel.
 
 The six public controls are:
 
@@ -41,7 +73,16 @@ These names replace the original `r_liquidReflections`, `r_liquidReflectionScale
 
 `r_liquid` and `r_liquidResolution` are latched because the scaled target and backend pipeline resources are established at renderer initialization. Both require `r_fbo 1` and `vid_restart`. The remaining controls are runtime tuning values. Because the reflection pass samples the snapshot, a reflection-only configuration (`r_liquidRefraction 0`) still triggers the capture.
 
-When the opaque scene depth is available — the depth-fade infrastructure copies it at the same capture boundary — the refraction rejects warped samples that land on geometry nearer than the liquid surface and falls back to the unwarped coordinate there. This keeps the waterline crisp: without it, pool rims and ledges smear into the water in stepped bands that follow the wave. The fixed-function fallback cannot sample depth per vertex and skips the rejection.
+When compatible opaque scene depth is available — the depth-fade
+infrastructure copies it at the same capture boundary — the refraction rejects
+warped samples that land on geometry nearer than the liquid surface and falls
+back to the unwarped coordinate there. This keeps the waterline crisp: without
+it, pool rims and ledges smear into the water in stepped bands that follow the
+wave. RTX active-RT composition is single-sample and supports this rejection.
+A raster-fallback configuration that retains MSAA may use the color-only
+liquid fallback rather than sample a multisampled depth target. The
+fixed-function fallback cannot sample depth per vertex and also skips the
+rejection.
 
 ## Client Visual Impulse Feed
 
@@ -57,13 +98,57 @@ This separation is a compatibility requirement. A demo can produce local visual 
 
 The dominant fixed cost is one linearly filtered copy into the dedicated liquid snapshot in a view that contains an eligible liquid. Pixel count and approximate copy bandwidth scale quadratically with `r_liquidResolution`; the full-resolution default keeps warped edges crisp, and `0.5` cuts the copy to about a quarter of the pixels when bandwidth matters more. Refraction and the reflection pass add two blended liquid draws with one snapshot sample each; they do not render the world twice or invoke the legacy `$screenMap` rerender. Setting `r_liquidRefraction 0` skips the underlay draw but keeps the capture while the reflection pass still needs it; setting `r_liquidReflection 0` skips the reflection pass; setting both to zero skips the capture entirely. Both passes preserve destination alpha. GLx uses transient streamed geometry for the programmable liquid passes because the positions and normals are consumed by the current view's shader evaluation.
 
-The snapshot has no information beyond the current captured color buffer. The implementation does not sample scene depth or ray-march reflection directions, so it cannot recover off-screen, behind-camera, or occluded geometry; reject a sample using depth; reveal objects covered by foreground pixels; or include transparent work submitted later. The reflection advances each mirrored ray to a single proxy distance before re-projecting it, so its parallax is approximate and its content is limited to what the capture already shows; screen-edge fades and the sheen fallback bound the error. Warp is expressed in view-height-scaled pixels, attenuates with eye distance, and fades to zero near screen edges to bound clamp smearing. The result is artistic same-frame refraction plus a bounded screen-space reflection, not depth-tested SSR or a geometrically correct mirror. The impulse rings add an independent push-pull pixel displacement: they do not move vertices, conserve volume, flow downhill, or interact physically with collision geometry.
+The color snapshot has no information beyond the current captured frame.
+Optional scene depth can reject a refraction offset that crosses foreground
+geometry, but the renderer does not ray-march reflection directions or recover
+off-screen, behind-camera, or occluded color. It cannot reveal objects hidden
+by foreground pixels or include transparent work submitted after the capture.
+The reflection advances each mirrored ray to a single proxy distance before
+re-projecting it, so its parallax is approximate and its content is limited to
+what the capture already shows; screen-edge fades and the sheen fallback bound
+the error. Warp is expressed in view-height-scaled pixels, attenuates with eye
+distance, and fades to zero near screen edges to bound clamp smearing. The
+result is artistic same-frame refraction plus a bounded screen-space
+reflection, not depth-tested SSR or a geometrically correct mirror. The
+impulse rings add an independent push-pull pixel displacement: they do not
+move vertices, conserve volume, flow downhill, or interact physically with
+collision geometry.
 
 These constraints are preferable to silently changing the meaning of retail shader stages. Authored `tcMod`, blend, deform, fog, and texture animation remain the base appearance, and the optional overlay either augments that appearance or cleanly drops out.
 
+## Verification
+
+The shared model, client impulse feed, and RTX pass ownership have focused
+source checks:
+
+```powershell
+python tests/liquid_rendering_source_tests.py
+python tests/liquid_interaction_source_tests.py
+python tests/rtx_liquid_rendering_source_tests.py
+python tests/rtx_raster_overlay_parity_source_tests.py
+```
+
+Runtime review should include water, slime, and lava with refraction and
+reflection independently disabled; ripple entry/exit and projectile events;
+pool rims and ledges for depth rejection; fogged liquids; capture failure and
+portal fallback; active RT; and raster fallback with MSAA. Every case must
+retain the authored stages and draw order.
+
 ## Future Directions
 
-The technique ladder for liquid reflection and refraction, in ascending cost and fidelity: (1) the current same-frame snapshot with depth-rejected refraction and a single mirrored tap; (2) a multi-step screen-space reflection march against the captured depth, which finds true intersections for contact reflections but still cannot show off-screen content; (3) planar reflection rendering — a second mirrored world pass per dominant water plane, the classic idTech-era approach, geometrically correct and able to show off-screen content at the cost of a second scene traversal with reflected-view PVS and entity submission; and (4) hardware ray tracing in the separate RTX renderer. GLx keeps its compatibility-oriented screen-space and planar options rather than requiring ray-tracing hardware.
+The technique ladder for liquid reflection and refraction, in ascending cost
+and fidelity: (1) the current same-frame snapshot with depth-rejected
+refraction and a single mirrored tap, including the RTX compatibility overlay;
+(2) a multi-step screen-space reflection march against captured depth, which
+finds true intersections for contact reflections but still cannot show
+off-screen content; (3) planar reflection rendering — a second mirrored world
+pass per dominant water plane, the classic idTech-era approach, geometrically
+correct and able to show off-screen content at the cost of a second scene
+traversal with reflected-view PVS and entity submission; and (4) native RT
+liquid transport in the RTX renderer, with ray-traced reflection/refraction
+and an explicit authored-material policy. GLx and Vulkan keep their
+compatibility-oriented screen-space and planar options rather than requiring
+ray-tracing hardware.
 
 Future work should preserve the current underlay and single-tap reflection as the compatibility and low-cost tier. Plausible higher tiers include:
 
@@ -73,4 +158,6 @@ Future work should preserve the current underlay and single-tap reflection as th
 - A small renderer-local height field for richer wake propagation and projectile splashes. Inputs must remain visual records, simulation bounds must be deterministic and capped, and no result may feed collision or game logic.
 - Temporal stabilization for the screen-space sample, provided camera cuts, portals, stereo views, and demo seeks invalidate history conservatively.
 
-Any higher tier should remain default-off until GLx/Vulkan visual parity, failure fallback, retail map coverage, demo seeking, and performance budgets have been validated.
+Any higher tier should remain default-off until GLx/Vulkan/RTX visual
+ownership, failure fallback, retail map coverage, demo seeking, and
+performance budgets have been validated.

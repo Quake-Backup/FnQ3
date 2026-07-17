@@ -8,7 +8,10 @@
 #define USE_CL1
 #endif
 
-#if defined (USE_FOG) || defined (USE_ENT_COLOR)
+#if !defined(USE_TX1) && !defined(USE_TX2) && !defined(USE_DF)
+#define USE_DEPTH_FADE
+#endif
+
 layout(set = 0, binding = 0) uniform UBO {
 	// light/env parameters:
 	vec4 eyePos;				// vertex
@@ -27,9 +30,11 @@ layout(set = 0, binding = 0) uniform UBO {
 	vec4 fogDepthVector;		// vertex
 	vec4 fogEyeT;				// vertex
 	vec4 fogColor;				// fragment
-//#endif
+	vec4 texFactors;			// fragment
+	vec4 depthFadeInfo;			// fragment: zfar/znear, zfar, invDist, bias
+	vec4 depthFadeScale;		// fragment
+	vec4 depthFadeBias;			// fragment
 };
-#endif
 
 layout(set = 1, binding = 0) uniform sampler2D texture0;
 #ifdef USE_TX1
@@ -40,6 +45,9 @@ layout(set = 3, binding = 0) uniform sampler2D texture2;
 #endif
 #ifdef USE_FOG
 layout(set = 4, binding = 0) uniform sampler2D fog_texture;
+#endif
+#ifdef USE_DEPTH_FADE
+layout(set = 2, binding = 0) uniform sampler2D depth_texture;
 #endif
 
 #if defined (USE_CLX_IDENT)
@@ -100,6 +108,46 @@ layout (constant_id = 9) const float identity_alpha = 1.0;
 #ifdef USE_FOG
 layout (constant_id = 10) const int acff = 0; // NONE, RGB, RGBA, ALPHA
 #endif
+layout (constant_id = 11) const int depth_fade = 0;
+
+#ifdef USE_DEPTH_FADE
+float DepthFadeLinearDepth(float depth)
+{
+	return depthFadeInfo.y / mix(1.0, depthFadeInfo.x, depth);
+}
+
+vec4 ApplyDepthFade(vec4 color)
+{
+	if (depthFadeInfo.z <= 0.0)
+	{
+		return color;
+	}
+
+	vec2 depthUV = gl_FragCoord.xy / vec2(textureSize(depth_texture, 0));
+	float sceneDepth = texture(depth_texture, depthUV).r;
+	float sceneLinear = DepthFadeLinearDepth(sceneDepth);
+	float fragLinear = DepthFadeLinearDepth(gl_FragCoord.z);
+	float fade = clamp((sceneLinear - fragLinear + depthFadeInfo.w) * depthFadeInfo.z, 0.0, 1.0);
+
+	fade = fade * fade * (3.0 - 2.0 * fade);
+	return mix(color * depthFadeScale + depthFadeBias, color, fade);
+}
+#endif
+
+#ifdef USE_FOG
+float FogFactor(vec2 fogCoord)
+{
+	if (fogEyeT.z < 0.5)
+		return texture(fog_texture, fogCoord).a;
+
+	float fogDistance = fogCoord.x - 0.001953125;
+	if (fogDistance <= 0.0 || fogCoord.y < 0.03125)
+		return 0.0;
+	if (fogCoord.y < 0.96875)
+		fogDistance *= (fogCoord.y - 0.03125) / 0.9375;
+	return sqrt(clamp(fogDistance * 8.0, 0.0, 1.0));
+}
+#endif
 
 #ifdef USE_ATEST
 #if 0
@@ -118,7 +166,7 @@ float CorrectAlpha(float threshold, float alpha, vec2 tc)
 
 void main() {
 #ifdef USE_FOG
-	vec4 fog = texture(fog_texture, fog_tex_coord);
+	vec4 fog = vec4(1.0, 1.0, 1.0, FogFactor(fog_tex_coord));
 #endif
 
 #if defined (USE_CLX_IDENT)
@@ -131,6 +179,7 @@ void main() {
 #else
 	vec4 color0 = texture(texture0, frag_tex_coord0) * frag_color0;
 #endif
+	color0.rgb *= texFactors.x;
 	vec4 base;
 
 	// triple-texture with non-identity colors in color1 and color2
@@ -510,6 +559,11 @@ void main() {
 
 	gl_FragDepth = gl_FragCoord.z;
 #else
+#ifdef USE_DEPTH_FADE
+	if ( depth_fade != 0 ) {
+		base = ApplyDepthFade(base);
+	}
+#endif
 	out_color = base;
 #endif
 }

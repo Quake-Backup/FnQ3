@@ -26,13 +26,17 @@ const uint RTX_RT_PAYLOAD_FLAG_DYNAMIC = 1u << 1;
 const uint RTX_RT_TEMPORAL_FLAG_HISTORY_VALID = 1u << 0;
 const uint RTX_RT_TEMPORAL_FLAG_RESET = 1u << 1;
 const uint RTX_RT_TEMPORAL_FLAG_AUTO_EXPOSURE = 1u << 2;
-const uint RTX_RT_MODE_FLAG_LEGACY_COLOR_COMPAT = 1u << 4;
+const uint RTX_RT_MODE_FLAG_RASTER_REFERENCE = 1u << 4;
+const uint RTX_RT_MODE_FLAG_SCENE_LINEAR_OUTPUT = 1u << 5;
 
 struct RtRadiancePayload {
 	vec3 color;
 	float hitT;
 	vec3 normal;
 	uint flags;
+	float shadowFactor;
+	float shadowResponse;
+	vec3 shadowLoss;
 };
 
 layout(location = 0) rayPayloadEXT RtRadiancePayload payloadRadiance;
@@ -101,12 +105,23 @@ vec3 tone_map(vec3 color, float exposure, uint mode)
 	return mapped;
 }
 
+vec3 linear_to_srgb(vec3 color)
+{
+	color = max(color, vec3(0.0));
+	vec3 encodedLow = color * 12.92;
+	vec3 encodedHigh = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
+	return mix(encodedLow, encodedHigh, step(vec3(0.0031308), color));
+}
+
 RtRadiancePayload trace_radiance(vec3 origin, vec3 direction)
 {
 	payloadRadiance.color = vec3(0.0);
 	payloadRadiance.hitT = 0.0;
 	payloadRadiance.normal = vec3(0.0, 0.0, 1.0);
 	payloadRadiance.flags = 0u;
+	payloadRadiance.shadowFactor = 1.0;
+	payloadRadiance.shadowResponse = 0.0;
+	payloadRadiance.shadowLoss = vec3(0.0);
 
 	traceRayEXT(
 		u_tlas,
@@ -193,14 +208,56 @@ vec3 suppress_fireflies(vec3 color)
 	return mix(color, color * (threshold / max(luma, 1e-5)), strength);
 }
 
-vec3 apply_legacy_color_compat(vec3 color)
+vec3 apply_legacy_color_compat(
+	vec3 rtColor,
+	vec3 rasterReference,
+	float shadowFactor,
+	float shadowResponse,
+	vec3 shadowLoss,
+	bool primaryHit)
 {
-	if ((u_temporal.modes.w & RTX_RT_MODE_FLAG_LEGACY_COLOR_COMPAT) == 0u) {
-		return color;
+	float contributionStrength;
+	float resolvedShadow;
+	vec3 authoredReference;
+	vec3 highlights;
+	float highlightLuma;
+	float highlightLimit;
+
+	if ((u_temporal.modes.w & RTX_RT_MODE_FLAG_RASTER_REFERENCE) == 0u) {
+		return max(rtColor * max(u_temporal.legacyColorParams.y, 0.0), vec3(0.0));
+	}
+
+	/*
+	 * The raster base is authoritative for lightmaps and Quake shader stages.
+	 * RT contributes a bounded shadow modulation and positive lighting/
+	 * specular detail without replacing the authored material result.
+	 */
+	rasterReference = max(rasterReference, vec3(0.0));
+	authoredReference = rasterReference;
+	if (!primaryHit) {
+		return rasterReference;
+	}
+
+	contributionStrength = clamp(u_temporal.legacyColorParams.z, 0.0, 1.0);
+	/* Shadow-only PMLIGHT inputs remove only their own estimated blocked color. */
+	shadowLoss = max(shadowLoss, vec3(0.0)) *
+		(contributionStrength * clamp(shadowResponse, 0.0, 1.0));
+	shadowLoss = min(shadowLoss, rasterReference * 0.65);
+	rasterReference = max(rasterReference - shadowLoss, vec3(0.0));
+	resolvedShadow = mix(
+		1.0,
+		clamp(shadowFactor, 0.35, 1.0),
+		contributionStrength * clamp(shadowResponse, 0.0, 1.0));
+	rtColor = max(rtColor * max(u_temporal.legacyColorParams.y, 0.0), vec3(0.0));
+	highlights = max(rtColor - authoredReference, vec3(0.0));
+	highlightLuma = luminance(highlights);
+	highlightLimit = max(luminance(authoredReference) * 0.35, 0.05);
+	if (highlightLuma > highlightLimit) {
+		highlights *= highlightLimit / max(highlightLuma, 1e-5);
 	}
 
 	return max(
-		color * max(u_temporal.legacyColorParams.y, 0.0) * max(u_temporal.legacyColorParams.z, 0.0),
+		rasterReference * resolvedShadow + highlights * (0.25 * contributionStrength),
 		vec3(0.0));
 }
 
@@ -241,7 +298,10 @@ void main()
 	vec2 motionVector = vec2(0.0);
 	bool debugRaster = (pc.debugMode > 0u && pc.debugMode < 9u);
 	float exposure;
+	vec3 rasterReference;
 	vec3 finalColor;
+	bool sceneLinearOutput =
+		(u_temporal.modes.w & RTX_RT_MODE_FLAG_SCENE_LINEAR_OUTPUT) != 0u;
 
 	if ((u_temporal.modes.y != 0u) && !debugRaster) {
 		currentColor = spatial_filter(origin, ndc, launch_size, center);
@@ -297,17 +357,42 @@ void main()
 	imageStore(u_historyOut, pixel, vec4(accumulatedColor, currentDepth));
 
 	exposure = clamp(u_temporal.dynamicMotionAndExposure.w, u_temporal.exposureParams.x, u_temporal.exposureParams.y);
-	if ((u_temporal.modes.w & RTX_RT_TEMPORAL_FLAG_AUTO_EXPOSURE) != 0u) {
-		float targetExposure = 0.18 / max(luminance(accumulatedColor), 0.02);
-		targetExposure = clamp(targetExposure, u_temporal.exposureParams.x, u_temporal.exposureParams.y);
-		exposure = mix(exposure, targetExposure, clamp(u_temporal.exposureParams.z, 0.0, 1.0));
-	}
+	rasterReference = texture(u_sceneColor, uv).rgb;
 
 	finalColor = accumulatedColor;
 	if (!debugRaster && pc.debugMode != 9u && pc.debugMode != 10u) {
-		finalColor = tone_map(accumulatedColor, exposure, u_temporal.modes.z);
-		finalColor = apply_legacy_color_compat(finalColor);
-		finalColor = apply_readability(finalColor);
+		if ((u_temporal.modes.w & RTX_RT_MODE_FLAG_RASTER_REFERENCE) != 0u) {
+			vec3 compatibleRtColor = sceneLinearOutput ?
+				accumulatedColor :
+				linear_to_srgb(tone_map(accumulatedColor, exposure, u_temporal.modes.z));
+			finalColor = apply_legacy_color_compat(
+				compatibleRtColor,
+				rasterReference,
+				center.shadowFactor,
+				center.shadowResponse,
+				center.shadowLoss,
+				(center.flags & RTX_RT_PAYLOAD_FLAG_HIT) != 0u);
+		} else {
+			/*
+			 * r_hdr owns the shared scene-linear pipeline. Keep the RT result
+			 * linear here so the raster-reference bridge, overlays, bloom,
+			 * capture, and final exposure/tone pass all operate in one domain.
+			 * The RT-local tone mapper remains available only for the SDR
+			 * compatibility path.
+			 */
+			finalColor =
+				sceneLinearOutput ?
+					accumulatedColor :
+					linear_to_srgb(tone_map(accumulatedColor, exposure, u_temporal.modes.z));
+			finalColor = apply_legacy_color_compat(
+				finalColor,
+				rasterReference,
+				center.shadowFactor,
+				center.shadowResponse,
+				center.shadowLoss,
+				(center.flags & RTX_RT_PAYLOAD_FLAG_HIT) != 0u);
+			finalColor = apply_readability(finalColor);
+		}
 	}
 
 	if (pc.debugMode == 9u) {

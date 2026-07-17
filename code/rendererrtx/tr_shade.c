@@ -288,6 +288,8 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 	tess.numIndexes = 0;
 	tess.numVertexes = 0;
 	tess.shader = state;
+	tess.liquidContentFlags = shader->contentFlags | state->contentFlags;
+	tess.liquidSort = shader->sort;
 	tess.fogNum = fogNum;
 
 #ifdef USE_LEGACY_DLIGHTS
@@ -546,6 +548,43 @@ static void ProjectDlightTexture( void ) {
 uint32_t VK_PushUniform( const vkUniform_t *uniform );
 void VK_SetFogParams( vkUniform_t *uniform, int *fogStage );
 static vkUniform_t uniform;
+
+static float VK_ComputeTextureIntensityScale( const image_t *image )
+{
+	if ( image == NULL || r_intensity->value <= 1.0f )
+	{
+		return 1.0f;
+	}
+
+	if ( image->flags & IMGFLAG_NOLIGHTSCALE )
+	{
+		return 1.0f;
+	}
+
+	if ( ( image->flags & IMGFLAG_MIPMAP ) || image->uploadWidth != image->width || image->uploadHeight != image->height )
+	{
+		return r_intensity->value;
+	}
+
+	return 1.0f;
+}
+
+static void VK_SetTextureFactors( vkUniform_t *uniform, const shaderStage_t *pStage, int bundle )
+{
+	float specColor;
+
+	uniform->texFactors[0] = VK_ComputeTextureIntensityScale( pStage->bundle[ bundle ].image[0] );
+	uniform->texFactors[1] = r_dlightSpecPower ? r_dlightSpecPower->value : 10.0f;
+
+	specColor = r_dlightSpecColor ? r_dlightSpecColor->value : -0.2f;
+	if ( specColor > 0.0f ) {
+		uniform->texFactors[2] = 0.0f;
+		uniform->texFactors[3] = specColor;
+	} else {
+		uniform->texFactors[2] = -specColor;
+		uniform->texFactors[3] = 0.0f;
+	}
+}
 
 /*
 ===================
@@ -924,6 +963,73 @@ void R_ComputeTexCoords( const int b, const textureBundle_t *bundle ) {
 	tess.svars.texcoordPtr[ b ] = src;
 }
 
+#ifdef USE_VULKAN
+static qboolean RB_DepthFadeShaderSupported( const shaderStage_t *pStage )
+{
+	return ( r_depthFade && r_depthFade->integer &&
+		pStage &&
+		tess.shader->dfType > DFT_NONE &&
+		tess.shader->dfType < DFT_TBD &&
+		pStage->bundle[1].image[0] == NULL &&
+		!pStage->depthFragment &&
+		vk_depth_fade_supported() ) ? qtrue : qfalse;
+}
+
+static qboolean RB_DepthFadeActive( const shaderStage_t *pStage )
+{
+	return ( RB_DepthFadeShaderSupported( pStage ) &&
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0 &&
+		( !backEnd.currentEntity ||
+		  ( backEnd.currentEntity->e.renderfx & RF_DEPTHHACK ) == 0 ) &&
+		vk_depth_fade_ready() ) ? qtrue : qfalse;
+}
+
+static void RB_SetDepthFade( const shaderStage_t *pStage )
+{
+	byte scaleAndBias;
+	float zNear;
+	float zFar;
+	int i;
+
+	if ( !RB_DepthFadeShaderSupported( pStage ) ) {
+		return;
+	}
+	scaleAndBias = r_depthFadeScaleAndBias[tess.shader->dfType];
+
+	if ( !RB_DepthFadeActive( pStage ) ) {
+		Com_Memset( uniform.depthFadeInfo, 0,
+			sizeof( uniform.depthFadeInfo ) );
+		vk_update_descriptor( VK_DESC_DEPTH_FADE,
+			vk_depth_fade_available() ?
+				vk.liquidDepth.descriptor : VK_NULL_HANDLE );
+		return;
+	}
+
+	zNear = r_znear ? r_znear->value : 4.0f;
+	zFar = backEnd.viewParms.zFar;
+	if ( zNear <= 0.0f || zFar <= zNear ) {
+		Com_Memset( uniform.depthFadeInfo, 0,
+			sizeof( uniform.depthFadeInfo ) );
+		vk_update_descriptor( VK_DESC_DEPTH_FADE,
+			vk.liquidDepth.descriptor );
+		return;
+	}
+
+	uniform.depthFadeInfo[0] = zFar / zNear;
+	uniform.depthFadeInfo[1] = zFar;
+	uniform.depthFadeInfo[2] = tess.shader->dfInvDist;
+	uniform.depthFadeInfo[3] = tess.shader->dfBias;
+
+	for ( i = 0; i < 4; i++ ) {
+		uniform.depthFadeScale[i] =
+			( scaleAndBias & ( 1 << i ) ) ? 1.0f : 0.0f;
+		uniform.depthFadeBias[i] =
+			( scaleAndBias & ( 1 << ( i + 4 ) ) ) ? 1.0f : 0.0f;
+	}
+
+	vk_update_descriptor( VK_DESC_DEPTH_FADE, vk.liquidDepth.descriptor );
+}
+#endif
 
 /*
 ** RB_IterateStagesGeneric
@@ -999,6 +1105,10 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 				}
 			}
 		}
+
+		VK_SetTextureFactors( &uniform, pStage, 0 );
+		RB_SetDepthFade( pStage );
+		pushUniform = qtrue;
 
 		if ( pushUniform ) {
 			pushUniform = qfalse;
@@ -1102,6 +1212,7 @@ void VK_SetFogParams( vkUniform_t *uniform, int *fogStage )
 		} else {
 			uniform->fogEyeT[1] = 1.0; // fog eye in
 		}
+		uniform->fogEyeT[2] = r_fogMode && r_fogMode->integer ? 1.0f : 0.0f;
 		// fragment data
 		Vector4Copy( fp->fogColor, uniform->fogColor );
 		*fogStage = 1;
@@ -1132,6 +1243,10 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 
 	// fragment data
 	uniform->light.color[3] = 1.0f / Square( radius );
+	uniform->dlightFactors[0] = r_dlightFalloff ? r_dlightFalloff->value : 1.0f;
+	uniform->dlightFactors[1] = 0.0f;
+	uniform->dlightFactors[2] = 0.0f;
+	uniform->dlightFactors[3] = 0.0f;
 
 	if ( dl->linear )
 	{
@@ -1183,18 +1298,13 @@ void VK_LightingPass( void )
 
 	pStage = tess.xstages[ tess.shader->lightingStage ];
 
-	// we may need to update programs for fog transitions
-	if ( tess.dlightUpdateParams ) {
+	// Fog, light and texture scaling are all surface-dependent in the shader path.
+	VK_SetFogParams( &uniform, &fog_stage );
+	VK_SetLightParams( &uniform, tess.light );
+	VK_SetTextureFactors( &uniform, pStage, tess.shader->lightingBundle );
 
-		// fog parameters
-		VK_SetFogParams( &uniform, &fog_stage );
-		// light parameters
-		VK_SetLightParams( &uniform, tess.light );
-
-		uniform_offset = VK_PushUniform( &uniform );
-
-		tess.dlightUpdateParams = qfalse;
-	}
+	uniform_offset = VK_PushUniform( &uniform );
+	tess.dlightUpdateParams = qfalse;
 
 	if ( uniform_offset == ~0 )
 		return; // no space left...
@@ -1236,6 +1346,141 @@ void VK_LightingPass( void )
 #endif // USE_PMLIGHT
 
 
+#ifdef USE_VULKAN
+static qboolean VK_LiquidEffectActive( const shaderCommands_t *input )
+{
+	return input && input->shader && input->numPasses > 0 &&
+		input->numIndexes > 0 && input->numVertexes > 0 &&
+		vk.fboActive && vk.liquidSnapshot.color_descriptor != VK_NULL_HANDLE &&
+		r_liquid && r_liquid->integer > 0 &&
+		R_LiquidContentsEnabled( input->liquidContentFlags, r_liquid->integer ) &&
+		input->liquidSort >= SS_FOG &&
+		R_LiquidShaderSupported( input->shader ) &&
+		( ( r_liquidRefraction && r_liquidRefraction->value > 0.0f ) ||
+			( r_liquidReflection && r_liquidReflection->value > 0.0f ) ) &&
+		( vk.renderPassIndex == RENDER_PASS_MAIN ||
+			vk.renderPassIndex == RENDER_PASS_POST_BLOOM ) &&
+		!( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) &&
+		backEnd.viewParms.portalView == PV_NONE &&
+		!glConfig.stereoEnabled ? qtrue : qfalse;
+}
+
+
+static void VK_DrawLiquidPass( const shaderCommands_t *input, qboolean refractionBase )
+{
+	vkUniform_t liquid;
+	vec_t *slots[18];
+	const float rippleStrength = r_liquidRipples ? r_liquidRipples->value : 0.0f;
+	const float heightScale = R_LiquidViewHeightScale( glConfig.vidHeight );
+	vec3_t fresnelColor;
+	float liquidMvp[16];
+	int rippleCount = 0;
+	int i;
+	uint32_t pipeline;
+
+	if ( !VK_LiquidEffectActive( input ) ||
+		( refractionBase && ( !backEnd.liquidScreenMapDone ||
+			( r_liquidRefraction && r_liquidRefraction->value <= 0.0f ) ) ) ||
+		( !refractionBase && r_liquidReflection &&
+			r_liquidReflection->value <= 0.0f ) ) {
+		return;
+	}
+
+	Com_Memset( &liquid, 0, sizeof( liquid ) );
+	VectorCopy( backEnd.or.viewOrigin, liquid.eyePos );
+
+	slots[0] = liquid.light.pos;
+	slots[1] = liquid.light.color;
+	slots[2] = liquid.light.vector;
+	slots[3] = liquid.fogDistanceVector;
+	slots[4] = liquid.fogDepthVector;
+	slots[5] = liquid.fogEyeT;
+	slots[6] = liquid.fogColor;
+	slots[7] = liquid.texFactors;
+	slots[8] = liquid.depthFadeInfo;
+	slots[9] = liquid.depthFadeScale;
+	slots[10] = liquid.depthFadeBias;
+	slots[11] = liquid.dlightFactors;
+	slots[12] = liquid.csmModelX;
+	slots[13] = liquid.csmModelY;
+	slots[14] = liquid.csmModelZ;
+	slots[15] = liquid.csmAxisX;
+	slots[16] = liquid.csmAxisY;
+	slots[17] = liquid.csmAxisZ;
+
+	slots[0][0] = R_LiquidWaveTime( backEnd.refdef.floatTime );
+	slots[0][1] = r_liquidWarpScale ?
+		R_LiquidWarpPixels( r_liquidWarpScale->value, glConfig.vidHeight ) : 0.0f;
+	slots[0][2] = refractionBase ?
+		( r_liquidRefraction ? Com_Clamp( 0.0f, 1.0f,
+			r_liquidRefraction->value ) : 1.0f ) :
+		( r_liquidReflection ? Com_Clamp( 0.0f, 1.0f,
+			r_liquidReflection->value ) : 0.0f );
+	slots[0][3] = glConfig.vidWidth > 0 ?
+		1.0f / (float)glConfig.vidWidth : 1.0f;
+	slots[1][0] = R_LiquidContentsReflectionScale( input->liquidContentFlags );
+	slots[1][2] = glConfig.vidHeight > 0 ?
+		1.0f / (float)glConfig.vidHeight : 1.0f;
+	slots[1][3] = refractionBase ? 1.0f : 0.0f;
+
+	if ( refractionBase && rippleStrength > 0.0f ) {
+		for ( i = 0; i < backEnd.refdef.numLiquidInteractions &&
+			rippleCount < LIQUID_MAX_ACTIVE_IMPULSES; i++ ) {
+			const liquidInteraction_t *interaction =
+				&backEnd.refdef.liquidInteractions[i];
+			const float age =
+				(float)( backEnd.refdef.time - interaction->time ) * 0.001f;
+			float life;
+
+			if ( !R_LiquidInteractionActive( interaction,
+				backEnd.refdef.time ) ) {
+				continue;
+			}
+			life = 1.0f - age *
+				( 1000.0f / (float)LIQUID_IMPULSE_LIFETIME_MSEC );
+			R_LiquidWorldToLocal( interaction->origin, backEnd.or.origin,
+				backEnd.or.axis, slots[2 + rippleCount] );
+			slots[2 + rippleCount][3] =
+				interaction->radius + age * 150.0f;
+			slots[10 + rippleCount / 4][rippleCount & 3] =
+				interaction->strength * rippleStrength * life *
+				LIQUID_RIPPLE_PIXEL_SCALE * heightScale;
+			rippleCount++;
+		}
+	}
+	slots[1][1] = (float)rippleCount;
+
+	R_LiquidContentsFresnelColor( input->liquidContentFlags, fresnelColor );
+	VectorCopy( fresnelColor, slots[12] );
+	slots[12][3] = backEnd.liquidScreenMapDone ?
+		LIQUID_REFLECT_INTENSITY : 0.0f;
+	slots[13][0] = vk_liquid_depth_ready() ? 1.0f : 0.0f;
+	vk_get_liquid_mvp( liquidMvp );
+	Com_Memcpy( slots[14], liquidMvp + 0, sizeof( vec4_t ) );
+	Com_Memcpy( slots[15], liquidMvp + 4, sizeof( vec4_t ) );
+	Com_Memcpy( slots[16], liquidMvp + 8, sizeof( vec4_t ) );
+	Com_Memcpy( slots[17], liquidMvp + 12, sizeof( vec4_t ) );
+
+	if ( VK_PushUniform( &liquid ) == ~0U ) {
+		return;
+	}
+	vk_update_descriptor( VK_DESC_TEXTURE0,
+		vk.liquidSnapshot.color_descriptor );
+	vk_update_descriptor( VK_DESC_DEPTH_FADE,
+		vk_liquid_depth_ready() ? vk.liquidDepth.descriptor :
+			VK_NULL_HANDLE );
+
+	pipeline = vk.liquid_pipelines[input->shader->cullType]
+		[input->shader->polygonOffset ? 1 : 0]
+		[backEnd.viewParms.portalView == PV_MIRROR ? 1 : 0];
+	vk_bind_pipeline( pipeline );
+	vk_bind_index();
+	vk_bind_geometry( TESS_XYZ | TESS_NNN );
+	vk_draw_geometry( tess.depthRange, qtrue );
+}
+#endif
+
+
 void RB_StageIteratorGeneric( void )
 {
 #ifdef USE_VULKAN
@@ -1260,10 +1505,21 @@ void RB_StageIteratorGeneric( void )
 
 #ifdef USE_FOG_COLLAPSE
 	fogCollapse = tess.fogNum && tess.shader->fogPass && tess.shader->fogCollapse;
+	if ( VK_LiquidEffectActive( &tess ) ) {
+		fogCollapse = qfalse;
+	}
+#endif
+
+#ifdef USE_VULKAN
+	VK_DrawLiquidPass( &tess, qtrue );
 #endif
 
 	// call shader function
 	RB_IterateStagesGeneric( &tess, fogCollapse );
+
+#ifdef USE_VULKAN
+	VK_DrawLiquidPass( &tess, qfalse );
+#endif
 
 	// now do any dynamic lighting needed
 #ifdef USE_LEGACY_DLIGHTS

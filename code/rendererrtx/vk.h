@@ -30,7 +30,7 @@
 #define USE_DEDICATED_ALLOCATION
 #endif
 //#define MIN_IMAGE_ALIGN (128*1024)
-#define MAX_ATTACHMENTS_IN_POOL (8+VK_NUM_BLOOM_PASSES*2) // depth + msaa + msaa-resolve + depth-resolve + screenmap.msaa + screenmap.resolve + screenmap.depth + bloom_extract + blur pairs
+#define MAX_ATTACHMENTS_IN_POOL (10+VK_NUM_BLOOM_PASSES*2) // existing targets + liquid color/depth snapshots
 
 // Descriptor-slot registry used by the main material pipeline layout.
 // Keep these slots stable so shader/pipeline code can bind descriptors consistently.
@@ -40,6 +40,7 @@
 #define VK_DESC_TEXTURE1     2
 #define VK_DESC_TEXTURE2     3
 #define VK_DESC_FOG_COLLAPSE 4
+#define VK_DESC_DEPTH_FADE   VK_DESC_TEXTURE1
 #define VK_DESC_COUNT        5
 
 #define VK_DESC_TEXTURE_BASE VK_DESC_TEXTURE0
@@ -53,6 +54,7 @@ typedef enum {
 	TYPE_COLOR_RED,
 	TYPE_FOG_ONLY,
 	TYPE_DOT,
+	TYPE_LIQUID,
 
 	TYPE_SIGNLE_TEXTURE_LIGHTING,
 	TYPE_SIGNLE_TEXTURE_LIGHTING_LINEAR,
@@ -166,6 +168,7 @@ typedef struct {
 typedef enum {
 	RENDER_PASS_MAIN = 0,
 	RENDER_PASS_SCREENMAP,
+	RENDER_PASS_LIQUID_SNAPSHOT,
 	RENDER_PASS_POST_BLOOM,
 	RENDER_PASS_COUNT
 } renderPass_t;
@@ -180,6 +183,7 @@ typedef struct {
 	Vk_Primitive_Topology primitives;
 	int line_width;
 	int fog_stage; // off, fog-in / fog-out
+	int depth_fade;
 	int abs_light;
 	int allow_discard;
 	int acff; // none, rgb, rgba, alpha
@@ -213,6 +217,17 @@ typedef struct vkUniform_s {
 	vec4_t fogDepthVector;		// vertex
 	vec4_t fogEyeT;				// vertex
 	vec4_t fogColor;			// fragment
+	vec4_t texFactors;
+	vec4_t depthFadeInfo;
+	vec4_t depthFadeScale;
+	vec4_t depthFadeBias;
+	vec4_t dlightFactors;
+	vec4_t csmModelX;
+	vec4_t csmModelY;
+	vec4_t csmModelZ;
+	vec4_t csmAxisX;
+	vec4_t csmAxisY;
+	vec4_t csmAxisZ;
 } vkUniform_t;
 
 #define TESS_XYZ   (1)
@@ -244,7 +259,7 @@ void vk_shutdown( refShutdownCode_t code );
 
 // Releases vulkan resources allocated during program execution.
 // This effectively puts vulkan subsystem into initial state (the state we have after vk_initialize call).
-void vk_release_resources( void );
+void vk_release_resources( refShutdownCode_t code );
 
 void vk_wait_idle( void );
 void vk_queue_wait_idle( void );
@@ -262,8 +277,17 @@ void vk_get_pipeline_def( uint32_t pipeline, Vk_Pipeline_Def *def );
 
 void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_t height );
 void vk_create_pipelines( void );
-void vk_rt_trace_frame( void );
+qboolean vk_rt_primary_view_eligible( void );
+qboolean vk_rt_trace_frame( void );
 void vk_rt_invalidate( const char *reason );
+void vk_draw_global_fog( void );
+qboolean vk_capture_liquid_scene( void );
+qboolean vk_liquid_depth_ready( void );
+qboolean vk_depth_fade_supported( void );
+qboolean vk_depth_fade_available( void );
+qboolean vk_depth_fade_ready( void );
+void vk_copy_depth_fade( void );
+void vk_get_liquid_mvp( float *mvp );
 
 //
 // Rendering setup.
@@ -304,6 +328,7 @@ void vk_update_descriptor_offset( int index, uint32_t offset );
 void vk_update_post_process_pipelines( void );
 
 const char *vk_format_string( VkFormat format );
+qboolean vk_scene_linear_enabled( void );
 
 void VBO_PrepareQueues( void );
 void VBO_RenderIBOItems( void );
@@ -418,6 +443,8 @@ typedef struct {
 		VkRenderPass bloom_extract;
 		VkRenderPass blur[VK_NUM_BLOOM_PASSES*2]; // horizontal-vertical pairs
 		VkRenderPass post_bloom;
+		VkRenderPass global_fog;
+		VkRenderPass liquid_snapshot;
 	} render_pass;
 
 	VkDescriptorPool descriptor_pool;
@@ -442,6 +469,15 @@ typedef struct {
 
 	VkImage depth_image;
 	VkImageView depth_image_view;
+	VkImageView depth_sample_image_view;
+	VkDescriptorSet depth_sample_descriptor;
+
+	struct {
+		VkImage image;
+		VkImageView image_view;
+		VkDescriptorSet descriptor;
+		qboolean copied;
+	} liquidDepth;
 
 	VkImage msaa_image;
 	VkImageView msaa_image_view;
@@ -461,6 +497,13 @@ typedef struct {
 	} screenMap;
 
 	struct {
+		VkDescriptorSet source_descriptor;
+		VkDescriptorSet color_descriptor;
+		VkImage color_image;
+		VkImageView color_image_view;
+	} liquidSnapshot;
+
+	struct {
 		VkImage image;
 		VkImageView image_view;
 	} capture;
@@ -472,6 +515,8 @@ typedef struct {
 		VkFramebuffer gamma[MAX_SWAPCHAIN_IMAGES];
 		VkFramebuffer screenmap;
 		VkFramebuffer capture;
+		VkFramebuffer global_fog;
+		VkFramebuffer liquid_snapshot;
 	} framebuffers;
 
 #ifdef USE_UPLOAD_QUEUE
@@ -536,6 +581,7 @@ typedef struct {
 		VkShaderModule bloom_fs;
 		VkShaderModule blur_fs;
 		VkShaderModule blend_fs;
+		VkShaderModule global_fog_fs;
 
 		VkShaderModule gamma_fs;
 		VkShaderModule gamma_vs;
@@ -546,10 +592,15 @@ typedef struct {
 		VkShaderModule dot_fs;
 		VkShaderModule dot_vs;
 
+		VkShaderModule liquid_fs;
+		VkShaderModule liquid_vs;
+		VkShaderModule liquid_copy_fs;
+
 		VkShaderModule rt_rgen;
 		VkShaderModule rt_rmiss;
 		VkShaderModule rt_rmiss_shadow;
 		VkShaderModule rt_rchit;
+		VkShaderModule rt_rahit;
 	} modules;
 
 	VkPipelineCache pipelineCache;
@@ -605,12 +656,15 @@ typedef struct {
 	uint32_t surface_beam_pipeline;
 	uint32_t surface_axis_pipeline;
 	uint32_t dot_pipeline;
+	uint32_t liquid_pipelines[3][2][2];
 
 	VkPipeline gamma_pipeline;
 	VkPipeline capture_pipeline;
 	VkPipeline bloom_extract_pipeline;
 	VkPipeline blur_pipeline[VK_NUM_BLOOM_PASSES*2]; // horizontal & vertical pairs
 	VkPipeline bloom_blend_pipeline;
+	VkPipeline global_fog_pipeline;
+	VkPipeline liquid_snapshot_pipeline;
 
 	struct {
 		qboolean initialized;
@@ -637,6 +691,7 @@ typedef struct {
 		uint32_t world_vertex_count;
 		uint32_t world_index_count;
 		uint32_t world_material_count;
+		uint32_t world_masked_triangle_count;
 
 		rtxVkRtBuffer_t dynamic_vertex_buffer;
 		rtxVkRtBuffer_t dynamic_index_buffer;
@@ -646,7 +701,8 @@ typedef struct {
 		uint32_t dynamic_material_count;
 		uint32_t dynamic_entity_count;
 		uint32_t dynamic_effect_count;
-		rtxVkRtBuffer_t light_buffer;
+		uint32_t dynamic_masked_triangle_count;
+		rtxVkRtBuffer_t light_buffer[ NUM_COMMAND_BUFFERS ];
 		uint32_t light_count;
 
 		rtxVkRtBuffer_t tlas_instance_buffer;
@@ -703,7 +759,7 @@ typedef struct {
 		float temporal_exposure;
 		float dynamic_centroid_current[3];
 		float dynamic_centroid_prev[3];
-		rtxVkRtBuffer_t temporal_params_buffer;
+		rtxVkRtBuffer_t temporal_params_buffer[ NUM_COMMAND_BUFFERS ];
 
 		VkPhysicalDeviceRayTracingPipelinePropertiesKHR rt_pipeline_props;
 		VkPhysicalDeviceAccelerationStructurePropertiesKHR as_props;
@@ -765,6 +821,8 @@ typedef struct {
 	qboolean fboActive;
 	qboolean blitEnabled;
 	qboolean msaaActive;
+	qboolean globalFogDepthSampleSupported;
+	qboolean liquidDepthSampleSupported;
 
 	qboolean offscreenRender;
 
@@ -784,6 +842,8 @@ typedef struct {
 	uint32_t screenMapWidth;
 	uint32_t screenMapHeight;
 	uint32_t screenMapSamples;
+	uint32_t liquidSnapshotWidth;
+	uint32_t liquidSnapshotHeight;
 
 	uint32_t image_chunk_size;
 

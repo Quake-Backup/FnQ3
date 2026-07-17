@@ -42,7 +42,18 @@ typedef enum
 	IMGFLAG_NOSCALE        = 0x0080,
 	IMGFLAG_RGB            = 0x0100,
 	IMGFLAG_COLORSHIFT     = 0x0200,
+	IMGFLAG_COLORSPACE_SRGB   = 0x0400,
+	IMGFLAG_COLORSPACE_LINEAR = 0x0800,
+	IMGFLAG_COLORSPACE_DATA   = 0x1000,
 } imgFlags_t;
+
+typedef enum
+{
+	IMAGE_COLORSPACE_UNKNOWN = 0,
+	IMAGE_COLORSPACE_SRGB,
+	IMAGE_COLORSPACE_LINEAR,
+	IMAGE_COLORSPACE_DATA,
+} imageColorSpace_t;
 
 typedef enum {
 	CT_FRONT_SIDED = 0,
@@ -118,6 +129,7 @@ void R_LoadBMP( const char *name, byte **pic, int *width, int *height );
 void R_LoadJPG( const char *name, byte **pic, int *width, int *height );
 void R_LoadPCX( const char *name, byte **pic, int *width, int *height );
 void R_LoadPNG( const char *name, byte **pic, int *width, int *height );
+void R_SavePNG( const char *name, int width, int height, const byte *pic, int padlen );
 void R_LoadTGA( const char *name, byte **pic, int *width, int *height );
 
 /*

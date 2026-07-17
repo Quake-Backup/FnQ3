@@ -390,9 +390,9 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			LL( triangle->vertex[1] );
 			LL( triangle->vertex[2] );
 
-			if( triangle->vertex[0] > header->num_vertexes ||
-			    triangle->vertex[1] > header->num_vertexes ||
-			    triangle->vertex[2] > header->num_vertexes ) {
+			if( triangle->vertex[0] >= header->num_vertexes ||
+			    triangle->vertex[1] >= header->num_vertexes ||
+			    triangle->vertex[2] >= header->num_vertexes ) {
 				return qfalse;
 			}
 		}
@@ -1073,24 +1073,29 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	// don't add third_person objects if not in a portal
 	personalModel = (ent->e.renderfx & RF_THIRD_PERSON) && (tr.viewParms.portalView == PV_NONE);
 
-	if ( ent->e.renderfx & RF_WRAP_FRAMES ) {
-		ent->e.frame %= data->num_frames;
-		ent->e.oldframe %= data->num_frames;
-	}
+	if ( data->num_frames > 0 ) {
+		if ( ent->e.renderfx & RF_WRAP_FRAMES ) {
+			ent->e.frame %= data->num_frames;
+			ent->e.oldframe %= data->num_frames;
+		}
 
-	//
-	// Validate the frames so there is no chance of a crash.
-	// This will write directly into the entity structure, so
-	// when the surfaces are rendered, they don't need to be
-	// range checked again.
-	//
-	if ( (ent->e.frame >= data->num_frames) 
-	     || (ent->e.frame < 0)
-	     || (ent->e.oldframe >= data->num_frames)
-	     || (ent->e.oldframe < 0) ) {
-		ri.Printf( PRINT_DEVELOPER, "R_AddIQMSurfaces: no such frame %d to %d for '%s'\n",
-			   ent->e.oldframe, ent->e.frame,
-			   tr.currentModel->name );
+		//
+		// Validate the frames so there is no chance of a crash.
+		// This will write directly into the entity structure, so
+		// when the surfaces are rendered, they don't need to be
+		// range checked again.
+		//
+		if ( (ent->e.frame >= data->num_frames)
+		     || (ent->e.frame < 0)
+		     || (ent->e.oldframe >= data->num_frames)
+		     || (ent->e.oldframe < 0) ) {
+			ri.Printf( PRINT_DEVELOPER, "R_AddIQMSurfaces: no such frame %d to %d for '%s'\n",
+				   ent->e.oldframe, ent->e.frame,
+				   tr.currentModel->name );
+			ent->e.frame = 0;
+			ent->e.oldframe = 0;
+		}
+	} else {
 		ent->e.frame = 0;
 		ent->e.oldframe = 0;
 	}

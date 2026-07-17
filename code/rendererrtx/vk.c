@@ -1,11 +1,8 @@
 #include "tr_local.h"
 #include "vk.h"
 
-#if defined (_DEBUG)
-#if defined (_WIN32)
+#if defined( _DEBUG ) || !defined( NDEBUG )
 #define USE_VK_VALIDATION
-#include <windows.h> // for win32 debug callback
-#endif
 #endif
 
 static int vkSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -14,7 +11,7 @@ static int vkMaxSamples = VK_SAMPLE_COUNT_1_BIT;
 static VkInstance vk_instance = VK_NULL_HANDLE;
 static VkSurfaceKHR vk_surface = VK_NULL_HANDLE;
 
-#ifndef NDEBUG
+#ifdef USE_VK_VALIDATION
 VkDebugReportCallbackEXT vk_debug_callback = VK_NULL_HANDLE;
 #endif
 
@@ -30,6 +27,8 @@ static PFN_vkEnumerateDeviceExtensionProperties			qvkEnumerateDeviceExtensionPro
 static PFN_vkEnumeratePhysicalDevices					qvkEnumeratePhysicalDevices;
 static PFN_vkGetDeviceProcAddr							qvkGetDeviceProcAddr;
 static PFN_vkGetPhysicalDeviceFeatures					qvkGetPhysicalDeviceFeatures;
+static PFN_vkGetPhysicalDeviceFeatures2				qvkGetPhysicalDeviceFeatures2;
+static PFN_vkGetPhysicalDeviceFeatures2KHR				qvkGetPhysicalDeviceFeatures2KHR;
 static PFN_vkGetPhysicalDeviceFormatProperties			qvkGetPhysicalDeviceFormatProperties;
 static PFN_vkGetPhysicalDeviceMemoryProperties			qvkGetPhysicalDeviceMemoryProperties;
 static PFN_vkGetPhysicalDeviceProperties				qvkGetPhysicalDeviceProperties;
@@ -127,6 +126,7 @@ static PFN_vkDestroySwapchainKHR						qvkDestroySwapchainKHR;
 static PFN_vkGetSwapchainImagesKHR						qvkGetSwapchainImagesKHR;
 static PFN_vkQueuePresentKHR							qvkQueuePresentKHR;
 static PFN_vkGetPhysicalDeviceProperties2				qvkGetPhysicalDeviceProperties2;
+static PFN_vkGetPhysicalDeviceProperties2KHR			qvkGetPhysicalDeviceProperties2KHR;
 static PFN_vkCreateQueryPool							qvkCreateQueryPool;
 static PFN_vkDestroyQueryPool							qvkDestroyQueryPool;
 static PFN_vkGetQueryPoolResults						qvkGetQueryPoolResults;
@@ -160,6 +160,36 @@ static VkCommandBuffer begin_command_buffer( void );
 static void end_command_buffer( VkCommandBuffer command_buffer, const char *location );
 static qboolean end_command_buffer_soft( VkCommandBuffer command_buffer, const char *location );
 static void vk_begin_post_bloom_render_pass( void );
+static void vk_begin_global_fog_render_pass( void );
+static void vk_begin_liquid_snapshot_render_pass( void );
+
+static qboolean vk_liquid_requested( void )
+{
+	return ( r_liquid && r_liquid->integer > 0 ) ? qtrue : qfalse;
+}
+
+static qboolean vk_depth_fade_requested( void )
+{
+	return ( r_depthFade && r_depthFade->integer ) ? qtrue : qfalse;
+}
+
+static qboolean vk_scene_depth_snapshot_requested( void )
+{
+	return ( vk_liquid_requested() || vk_depth_fade_requested() ) ?
+		qtrue : qfalse;
+}
+
+static qboolean vk_global_fog_requested( void )
+{
+	return ( r_globalFog && r_globalFog->integer &&
+		vk.globalFogDepthSampleSupported ) ? qtrue : qfalse;
+}
+
+static qboolean vk_global_fog_enabled( void )
+{
+	return ( vk_global_fog_requested() && vk.fboActive &&
+		vkSamples == VK_SAMPLE_COUNT_1_BIT ) ? qtrue : qfalse;
+}
 
 typedef enum {
 	RTX_VK_LIFETIME_UNINITIALIZED = 0,
@@ -246,7 +276,11 @@ typedef enum {
 	RTX_RT_MATFLAG_SKY = 1u << 4,
 	RTX_RT_MATFLAG_DECAL = 1u << 5,
 	RTX_RT_MATFLAG_PARTICLE = 1u << 6,
-	RTX_RT_MATFLAG_EFFECT = 1u << 7
+	RTX_RT_MATFLAG_EFFECT = 1u << 7,
+	RTX_RT_MATFLAG_ALPHA_LT = 1u << 8,
+	RTX_RT_MATFLAG_CULL_FRONT = 1u << 9,
+	RTX_RT_MATFLAG_CULL_BACK = 1u << 10,
+	RTX_RT_MATFLAG_RASTER_OVERLAY = 1u << 11
 } rtxRtMaterialFlags_t;
 
 typedef struct {
@@ -277,7 +311,11 @@ typedef struct {
 	float positionRadius[4];	// xyz + radius
 	float colorType[4];		// rgb + type (0 point, 1 directional)
 	float directionSoftness[4];	// xyz + softness
+	uint32_t metadata[4];		// light policy flags + reserved
 } rtxRtGpuLight_t;
+
+#define RTX_RT_LIGHT_FLAG_CASTS_SHADOWS ( 1u << 0 )
+#define RTX_RT_LIGHT_FLAG_SHADOW_ONLY ( 1u << 1 )
 
 #define RTX_RT_MAX_WORLD_ENTITY_LIGHTS 512
 
@@ -307,6 +345,7 @@ typedef struct {
 	uint32_t sourceTriangleCount;
 	uint32_t degenerateTriangleCount;
 	uint32_t maskedTriangleCount;
+	uint32_t anyHitTriangleCount;
 	uint32_t sourceEntityCount;
 	uint32_t sourceEffectCount;
 } rtxRtCpuGeometry_t;
@@ -344,7 +383,7 @@ typedef struct {
 	float temporalParams0[4];          // alpha, clamp, depthReject, motionReject
 	float denoiseParams[4];            // depthSigma, normalSigma, fireflyThreshold, fireflyStrength
 	float exposureParams[4];           // exposureMin, exposureMax, exposureAdapt, dynamicMotionScale
-	float legacyColorParams[4];        // enabled, intensityScale, overbrightScale, reserved
+	float legacyColorParams[4];        // enabled, intensityScale, RT contribution strength, reserved
 	float readabilityParams[4];        // lift, contrast, saturation, shadowFloor
 	uint32_t modes[4];                 // temporalEnable, spatialEnable, tonemapMode, bitflags
 } rtxRtTemporalParams_t;
@@ -372,7 +411,9 @@ typedef struct {
 #define RTX_RT_TEMPORAL_FLAG_RESET ( 1u << 1 )
 #define RTX_RT_TEMPORAL_FLAG_AUTO_EXPOSURE ( 1u << 2 )
 #define RTX_RT_MODE_FLAG_PARTICLE_VOLUME ( 1u << 3 )
-#define RTX_RT_MODE_FLAG_LEGACY_COLOR_COMPAT ( 1u << 4 )
+#define RTX_RT_MODE_FLAG_RASTER_REFERENCE ( 1u << 4 )
+#define RTX_RT_MODE_FLAG_SCENE_LINEAR_OUTPUT ( 1u << 5 )
+#define RTX_RT_LEGACY_SUN_UNIT_SCALE ( 1.0f / 100.0f )
 
 static void vk_rt_shutdown( void );
 static qboolean vk_rt_trace_available( void );
@@ -399,7 +440,7 @@ static void vk_rt_destroy_as( rtxVkRtAccelerationStructure_t *as );
 static qboolean vk_rt_create_as( VkAccelerationStructureTypeKHR type, VkDeviceSize size, const char *debugName, rtxVkRtAccelerationStructure_t *outAs );
 static qboolean vk_rt_ensure_scratch_buffer( VkDeviceSize minSize );
 static qboolean vk_rt_compact_as( rtxVkRtAccelerationStructure_t *as, VkQueryPool queryPool, uint32_t queryIndex, const char *debugName, uint64_t *savedBytes );
-static qboolean vk_rt_build_triangles_blas( rtxVkRtAccelerationStructure_t *outAs, const rtxVkRtBuffer_t *vertexBuffer, uint32_t vertexCount, VkDeviceSize vertexStride, const rtxVkRtBuffer_t *indexBuffer, uint32_t indexCount, qboolean allowCompaction, const char *debugName );
+static qboolean vk_rt_build_triangles_blas( rtxVkRtAccelerationStructure_t *outAs, const rtxVkRtBuffer_t *vertexBuffer, uint32_t vertexCount, VkDeviceSize vertexStride, const rtxVkRtBuffer_t *indexBuffer, uint32_t indexCount, qboolean opaqueGeometry, qboolean allowCompaction, const char *debugName );
 static qboolean vk_rt_extract_world_geometry( rtxRtCpuGeometry_t *geometry );
 static qboolean vk_rt_extract_dynamic_geometry( rtxRtCpuGeometry_t *geometry );
 static void vk_rt_cpu_geometry_init( rtxRtCpuGeometry_t *geometry );
@@ -409,9 +450,10 @@ static qboolean vk_rt_cpu_geometry_reserve_materials( rtxRtCpuGeometry_t *geomet
 static qboolean vk_rt_cpu_geometry_add_vertex( rtxRtCpuGeometry_t *geometry, const vec3_t xyz, const vec3_t normal, const vec4_t tangent, const vec2_t texCoord, uint32_t color, uint32_t materialIndex, uint32_t *outIndex );
 static qboolean vk_rt_cpu_geometry_add_index( rtxRtCpuGeometry_t *geometry, uint32_t index );
 static qboolean vk_rt_cpu_geometry_find_or_add_material( rtxRtCpuGeometry_t *geometry, const shader_t *shader, uint32_t *outMaterialIndex );
-static qboolean vk_rt_append_surface_face_geometry( rtxRtCpuGeometry_t *geometry, const srfSurfaceFace_t *surface, const shader_t *shader );
-static qboolean vk_rt_append_surface_grid_geometry( rtxRtCpuGeometry_t *geometry, const srfGridMesh_t *surface, const shader_t *shader );
-static qboolean vk_rt_append_surface_triangles_geometry( rtxRtCpuGeometry_t *geometry, const srfTriangles_t *surface, const shader_t *shader );
+static qboolean vk_rt_cpu_geometry_find_or_add_material_ex( rtxRtCpuGeometry_t *geometry, const shader_t *shader, uint32_t extraFlags, uint32_t *outMaterialIndex );
+static qboolean vk_rt_append_surface_face_geometry( rtxRtCpuGeometry_t *geometry, const srfSurfaceFace_t *surface, const shader_t *shader, uint32_t materialFlags );
+static qboolean vk_rt_append_surface_grid_geometry( rtxRtCpuGeometry_t *geometry, const srfGridMesh_t *surface, const shader_t *shader, uint32_t materialFlags );
+static qboolean vk_rt_append_surface_triangles_geometry( rtxRtCpuGeometry_t *geometry, const srfTriangles_t *surface, const shader_t *shader, uint32_t materialFlags );
 static qboolean vk_rt_append_brush_entity_geometry( rtxRtCpuGeometry_t *geometry, const trRefEntity_t *ent, const model_t *model );
 static qboolean vk_rt_append_md3_entity_geometry( rtxRtCpuGeometry_t *geometry, const trRefEntity_t *ent );
 static qboolean vk_rt_append_iqm_entity_geometry( rtxRtCpuGeometry_t *geometry, const trRefEntity_t *ent );
@@ -432,12 +474,16 @@ static qboolean vk_rt_upload_material_buffer( const rtxRtMaterial_t *materials, 
 static qboolean vk_rt_update_light_buffer( void );
 static void vk_rt_reset_world_light_cache( void );
 static void vk_rt_rebuild_world_light_cache( void );
+static qboolean vk_rt_consume_cvar_modified( cvar_t *cvar );
+static void vk_rt_handle_cached_resource_cvar_changes( void );
 static uint32_t vk_rt_append_world_entity_lights( rtxRtGpuLight_t *lights, uint32_t count, uint32_t maxLights );
+static uint32_t vk_rt_surface_light_reservation( uint32_t maxLights, uint32_t usedLights );
+static uint32_t vk_rt_append_surface_lights( rtxRtGpuLight_t *lights, uint32_t count, uint32_t maxLights );
 static qboolean vk_rt_world_has_sky_surface( void );
 static void vk_rt_estimate_world_bounds( vec3_t center, float *radius );
 static void vk_rt_resolve_sun_params( vec3_t outDirection, vec3_t outColor, qboolean *outFallbackFromSky );
 static qboolean vk_rt_build_sbt( void );
-static VkDeviceSize vk_rt_query_triangles_build_bytes( uint32_t vertexCount, uint32_t indexCount, VkBuildAccelerationStructureFlagsKHR buildFlags );
+static VkDeviceSize vk_rt_query_triangles_build_bytes( uint32_t vertexCount, uint32_t indexCount, qboolean opaqueGeometry, VkBuildAccelerationStructureFlagsKHR buildFlags );
 static VkDeviceSize vk_rt_query_tlas_build_bytes( uint32_t instanceCount, VkBuildAccelerationStructureFlagsKHR buildFlags );
 static uint32_t vk_rt_clamped_visualizer_mode( void );
 static uint32_t vk_rt_collect_instances( VkAccelerationStructureInstanceKHR *instances, uint32_t maxInstances, qboolean *throttledByInstanceBudget );
@@ -744,7 +790,9 @@ static qboolean vk_rt_entity_visible_in_current_view( const trRefEntity_t *ent )
 	}
 
 	// Match legacy visibility behavior for first/third-person entities.
-	if ( ( ent->e.renderfx & RF_FIRST_PERSON ) && ( backEnd.viewParms.portalView != PV_NONE ) ) {
+	if ( ( ent->e.renderfx & RF_FIRST_PERSON ) &&
+		( backEnd.viewParms.portalView != PV_NONE ||
+			( backEnd.refdef.rdflags & RDF_NOFIRSTPERSON ) ) ) {
 		return qfalse;
 	}
 	if ( ( ent->e.renderfx & RF_THIRD_PERSON ) && ( backEnd.viewParms.portalView == PV_NONE ) ) {
@@ -861,6 +909,9 @@ static qboolean vk_rt_supports_reconstruction_blit( void )
 	if ( ( srcProps.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT ) == 0 ) {
 		return qfalse;
 	}
+	if ( ( srcProps.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT ) == 0 ) {
+		return qfalse;
+	}
 
 	qvkGetPhysicalDeviceFormatProperties( vk.physical_device, vk.color_format, &dstProps );
 	if ( ( dstProps.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT ) == 0 ) {
@@ -877,6 +928,9 @@ static qboolean vk_rt_ensure_timing_query_pool( void )
 
 	if ( vk_rt_perf_timing_mode() <= 0 ) {
 		if ( vk.rt.timing_query_pool != VK_NULL_HANDLE ) {
+			if ( !vk_rt_wait_for_inflight_frames( "RT timing query disable" ) ) {
+				return qfalse;
+			}
 			qvkDestroyQueryPool( vk.device, vk.rt.timing_query_pool, NULL );
 			vk.rt.timing_query_pool = VK_NULL_HANDLE;
 			vk.rt.timing_query_count = 0;
@@ -1150,6 +1204,24 @@ static int vk_rt_debug_as_stats_level( void )
 	return rtx_rt_debug_as_stats->integer;
 }
 
+static qboolean vk_rt_debug_should_log_skip( int *lastLoggedFrame )
+{
+	const int logIntervalFrames = 128;
+	const int frame = tr.frameCount;
+
+	if ( vk_rt_debug_as_stats_level() < 2 ) {
+		return qfalse;
+	}
+	if ( *lastLoggedFrame >= 0 &&
+		frame >= *lastLoggedFrame &&
+		frame - *lastLoggedFrame < logIntervalFrames ) {
+		return qfalse;
+	}
+
+	*lastLoggedFrame = frame;
+	return qtrue;
+}
+
 static qboolean vk_rt_dynamic_blas_enabled( void )
 {
 	if ( !rtx_rt_dynamic_blas ) {
@@ -1366,25 +1438,27 @@ static qboolean vk_rt_camera_mode_validate_enabled( void )
 	return rtx_rt_camera_mode_validate->integer ? qtrue : qfalse;
 }
 
-static qboolean vk_rt_legacy_color_compat_enabled( void )
+static qboolean vk_rt_raster_reference_enabled( void )
 {
-	if ( !rtx_rt_legacy_color_compat ) {
-		return qtrue;
+	if ( !rtx_rt_raster_reference ) {
+		return qfalse;
 	}
-	return rtx_rt_legacy_color_compat->integer ? qtrue : qfalse;
+	return rtx_rt_raster_reference->integer ? qtrue : qfalse;
 }
 
 static float vk_rt_world_light_scale( void )
 {
 	if ( !rtx_rt_world_light_scale ) {
-		return 0.35f;
+		return 0.0f;
 	}
 	return MAX( 0.0f, rtx_rt_world_light_scale->value );
 }
 
 static float vk_rt_legacy_intensity_scale( void )
 {
-	if ( !r_intensity ) {
+	if ( !rtx_rt_legacy_color_compat ||
+		!rtx_rt_legacy_color_compat->integer ||
+		!r_intensity ) {
 		return 1.0f;
 	}
 	return Com_Clamp( 0.5f, 4.0f, r_intensity->value );
@@ -1956,14 +2030,20 @@ static qboolean vk_rt_parse_entity_light_value( const char *text, float *outValu
 
 static qboolean vk_rt_world_has_sky_surface( void )
 {
+	const bmodel_t *worldModel;
 	int i;
 
-	if ( !tr.world || !tr.world->surfaces || tr.world->numsurfaces <= 0 ) {
+	if ( !tr.world || !tr.world->bmodels ) {
 		return qfalse;
 	}
 
-	for ( i = 0; i < tr.world->numsurfaces; i++ ) {
-		const msurface_t *surf = &tr.world->surfaces[i];
+	worldModel = &tr.world->bmodels[0];
+	if ( !worldModel->firstSurface || worldModel->numSurfaces <= 0 ) {
+		return qfalse;
+	}
+
+	for ( i = 0; i < worldModel->numSurfaces; i++ ) {
+		const msurface_t *surf = &worldModel->firstSurface[i];
 		if ( surf->shader && surf->shader->isSky ) {
 			return qtrue;
 		}
@@ -1996,6 +2076,8 @@ static void vk_rt_resolve_sun_params( vec3_t outDirection, vec3_t outColor, qboo
 {
 	float sunLen;
 	const float minElevation = 0.25f;
+	const qboolean authoredSun =
+		VectorLengthSquared( tr.sunLight ) > 1e-8f ? qtrue : qfalse;
 
 	if ( outFallbackFromSky ) {
 		*outFallbackFromSky = qfalse;
@@ -2008,8 +2090,9 @@ static void vk_rt_resolve_sun_params( vec3_t outDirection, vec3_t outColor, qboo
 		VectorSet( outDirection, 0.45f, 0.30f, 0.90f );
 		VectorNormalize( outDirection );
 	}
-	// Keep fallback sun in a sensible upper-hemisphere band to avoid near-horizon/underground angles.
-	if ( outDirection[2] < minElevation ) {
+	// Keep only synthesized fallback light in a sensible upper-hemisphere band.
+	// Authored low-elevation suns must retain their map-defined direction.
+	if ( !authoredSun && outDirection[2] < minElevation ) {
 		const float targetXYLen = sqrtf( MAX( 0.0f, 1.0f - minElevation * minElevation ) );
 		const float currentXYLen = sqrtf( outDirection[0] * outDirection[0] + outDirection[1] * outDirection[1] );
 		if ( currentXYLen > 1e-5f ) {
@@ -2024,8 +2107,13 @@ static void vk_rt_resolve_sun_params( vec3_t outDirection, vec3_t outColor, qboo
 		VectorNormalize( outDirection );
 	}
 
-	if ( VectorLengthSquared( tr.sunLight ) > 1e-8f ) {
-		VectorCopy( tr.sunLight, outColor );
+	if ( authoredSun ) {
+		/*
+		 * q3map_sun intensity is a compile-era light unit (retail values are
+		 * commonly 25..250), not scene-linear radiance. Normalize it at the
+		 * RT boundary while retaining the authored chroma and map variation.
+		 */
+		VectorScale( tr.sunLight, RTX_RT_LEGACY_SUN_UNIT_SCALE, outColor );
 		return;
 	}
 
@@ -2225,16 +2313,19 @@ static void vk_rt_rebuild_world_light_cache( void )
 		dst->directionSoftness[1] = 0.0f;
 		dst->directionSoftness[2] = 0.0f;
 		dst->directionSoftness[3] = vk_rt_shadow_softness();
+		dst->metadata[0] = RTX_RT_LIGHT_FLAG_CASTS_SHADOWS;
 	}
 
 	s_vkRtWorldLightCache.hasSkySurface = vk_rt_world_has_sky_surface();
 
-	if ( s_vkRtWorldLightCache.count == 0 && !s_vkRtWorldLightCache.warnedEmpty ) {
+	if ( vk_rt_world_light_scale() > 0.0f &&
+		s_vkRtWorldLightCache.count == 0 && !s_vkRtWorldLightCache.warnedEmpty ) {
 		ri.Printf( PRINT_WARNING,
 			"RTX RT: no map light entities detected in '%s'; direct RT lighting relies on sun and dynamic lights only.\n",
 			tr.world ? tr.world->baseName : "unknown" );
 		s_vkRtWorldLightCache.warnedEmpty = qtrue;
-	} else if ( s_vkRtWorldLightCache.count > 0 ) {
+	} else if ( vk_rt_world_light_scale() > 0.0f &&
+		s_vkRtWorldLightCache.count > 0 ) {
 		ri.Printf( PRINT_ALL,
 			"RTX RT: world entity lights active: %u%s\n",
 			s_vkRtWorldLightCache.count,
@@ -2250,6 +2341,9 @@ static uint32_t vk_rt_append_world_entity_lights( rtxRtGpuLight_t *lights, uint3
 	float shadowSoftness;
 
 	if ( !lights || available == 0 ) {
+		return count;
+	}
+	if ( vk_rt_world_light_scale() <= 0.0f ) {
 		return count;
 	}
 
@@ -2317,22 +2411,93 @@ static uint32_t vk_rt_append_world_entity_lights( rtxRtGpuLight_t *lights, uint3
 	return count;
 }
 
+static uint32_t vk_rt_surface_light_reservation( uint32_t maxLights, uint32_t usedLights )
+{
+	uint32_t available;
+	uint32_t reservationCap;
+	uint32_t selectedCount;
+
+	if ( vk_rt_raster_reference_enabled() ||
+		backEnd.refdef.numRtSurfaceLights <= 0 ||
+		usedLights >= maxLights ) {
+		return 0u;
+	}
+
+	selectedCount = (uint32_t)backEnd.refdef.numRtSurfaceLights;
+	available = maxLights - usedLights;
+	reservationCap = maxLights / 4u;
+	if ( reservationCap < 1u ) {
+		reservationCap = 1u;
+	} else if ( reservationCap > 2u ) {
+		reservationCap = 2u;
+	}
+
+	return MIN( selectedCount, MIN( reservationCap, available ) );
+}
+
+static uint32_t vk_rt_append_surface_lights( rtxRtGpuLight_t *lights,
+	uint32_t count, uint32_t maxLights )
+{
+	int i;
+
+	if ( !lights || count >= maxLights || vk_rt_raster_reference_enabled() ) {
+		return count;
+	}
+
+	for ( i = 0; i < backEnd.refdef.numRtSurfaceLights && count < maxLights; i++ ) {
+		const surfaceLightProxy_t *proxy = &backEnd.refdef.rtSurfaceLights[i];
+		rtxRtGpuLight_t *dst;
+
+		if ( proxy->radius <= 0.0f ) {
+			continue;
+		}
+
+		dst = &lights[count++];
+		dst->positionRadius[0] = proxy->origin[0];
+		dst->positionRadius[1] = proxy->origin[1];
+		dst->positionRadius[2] = proxy->origin[2];
+		dst->positionRadius[3] = proxy->radius;
+		dst->colorType[0] = proxy->color[0];
+		dst->colorType[1] = proxy->color[1];
+		dst->colorType[2] = proxy->color[2];
+		dst->colorType[3] =
+			( proxy->projection == SURFACE_LIGHT_PROXY_LINEAR ) ? 2.0f : 0.0f;
+		if ( proxy->projection == SURFACE_LIGHT_PROXY_LINEAR ) {
+			vec3_t end;
+
+			VectorMA( proxy->origin, proxy->radius, proxy->normal, end );
+			dst->directionSoftness[0] = end[0];
+			dst->directionSoftness[1] = end[1];
+			dst->directionSoftness[2] = end[2];
+		}
+		dst->directionSoftness[3] = vk_rt_shadow_softness();
+		dst->metadata[0] = RTX_RT_LIGHT_FLAG_CASTS_SHADOWS;
+	}
+
+	return count;
+}
+
 static qboolean vk_rt_update_light_buffer( void )
 {
 	rtxRtGpuLight_t *lights = NULL;
+	rtxVkRtBuffer_t *lightBuffer;
 	uint32_t maxLights = vk_rt_max_lights();
 	uint32_t count = 0;
+	uint32_t reservedSurfaceLights;
+	uint32_t gameplayLightLimit;
 	uint32_t uploadCount;
+	uint32_t bufferIndex = (uint32_t)( vk.cmd_index % NUM_COMMAND_BUFFERS );
 	size_t uploadBytes;
-	float dlightScale = r_dlightScale ? r_dlightScale->value : 1.0f;
-	float dlightIntensity = r_dlightIntensity ? r_dlightIntensity->value : 1.0f;
 	vec3_t sunDir;
 	vec3_t sunColor;
 	vec3_t sunOrigin;
 	float sunRadius;
 	qboolean fallbackSunFromSky = qfalse;
+	qboolean rasterReference = vk_rt_raster_reference_enabled();
+	qboolean traceLightShadows = vk_rt_shadow_mode() > 0 ? qtrue : qfalse;
 	int i;
 
+	lightBuffer = &vk.rt.light_buffer[bufferIndex];
 	lights = (rtxRtGpuLight_t *)ri.Malloc( maxLights * sizeof( rtxRtGpuLight_t ) );
 	Com_Memset( lights, 0, maxLights * sizeof( rtxRtGpuLight_t ) );
 
@@ -2347,6 +2512,7 @@ static qboolean vk_rt_update_light_buffer( void )
 		sun->directionSoftness[1] = sunDir[1];
 		sun->directionSoftness[2] = sunDir[2];
 		sun->directionSoftness[3] = vk_rt_shadow_softness();
+		sun->metadata[0] = RTX_RT_LIGHT_FLAG_CASTS_SHADOWS;
 
 		if ( fallbackSunFromSky ) {
 			vk_rt_estimate_world_bounds( sunOrigin, &sunRadius );
@@ -2358,12 +2524,24 @@ static qboolean vk_rt_update_light_buffer( void )
 		}
 	}
 
-	for ( i = 0; i < backEnd.refdef.num_dlights && count < maxLights; i++ ) {
+	reservedSurfaceLights = vk_rt_surface_light_reservation( maxLights, count );
+	gameplayLightLimit = maxLights - reservedSurfaceLights;
+
+	/*
+	 * Compatibility composition keeps PMLIGHT authoritative for game and
+	 * promoted sidecar light color. Upload its shadow-casting lights as
+	 * visibility-only inputs so RT can occlude the raster-owned contribution
+	 * without adding it a second time. Experimental full-RT shading uploads
+	 * every light and uses the same castsRtShadows policy for direct lighting.
+	 */
+	for ( i = 0; i < backEnd.refdef.num_dlights && count < gameplayLightLimit; i++ ) {
 		const dlight_t *dl = &backEnd.refdef.dlights[i];
 		rtxRtGpuLight_t *dst;
-		float radius = dl->radius * dlightScale;
+		float radius = dl->radius;
+		qboolean shadowOnly = rasterReference;
 
-		if ( radius <= 0.0f ) {
+		if ( radius <= 0.0f ||
+			( shadowOnly && ( !traceLightShadows || !dl->castsRtShadows ) ) ) {
 			continue;
 		}
 
@@ -2372,28 +2550,32 @@ static qboolean vk_rt_update_light_buffer( void )
 		dst->positionRadius[1] = dl->origin[1];
 		dst->positionRadius[2] = dl->origin[2];
 		dst->positionRadius[3] = radius;
-		dst->colorType[0] = dl->color[0] * dlightIntensity;
-		dst->colorType[1] = dl->color[1] * dlightIntensity;
-		dst->colorType[2] = dl->color[2] * dlightIntensity;
-		dst->colorType[3] = 0.0f;
-		dst->directionSoftness[0] = 0.0f;
-		dst->directionSoftness[1] = 0.0f;
-		dst->directionSoftness[2] = 0.0f;
+		dst->colorType[0] = dl->color[0];
+		dst->colorType[1] = dl->color[1];
+		dst->colorType[2] = dl->color[2];
+		dst->colorType[3] = dl->linear ? 2.0f : 0.0f;
+		dst->directionSoftness[0] = dl->linear ? dl->origin2[0] : 0.0f;
+		dst->directionSoftness[1] = dl->linear ? dl->origin2[1] : 0.0f;
+		dst->directionSoftness[2] = dl->linear ? dl->origin2[2] : 0.0f;
 		dst->directionSoftness[3] = vk_rt_shadow_softness();
+		dst->metadata[0] =
+			( dl->castsRtShadows ? RTX_RT_LIGHT_FLAG_CASTS_SHADOWS : 0u ) |
+			( shadowOnly ? RTX_RT_LIGHT_FLAG_SHADOW_ONLY : 0u );
 	}
 
+	count = vk_rt_append_surface_lights( lights, count, maxLights );
 	count = vk_rt_append_world_entity_lights( lights, count, maxLights );
 
 	uploadCount = MAX( count, 1u );
 	uploadBytes = (size_t)uploadCount * sizeof( rtxRtGpuLight_t );
 
 	if ( !vk_rt_ensure_buffer_capacity(
-		&vk.rt.light_buffer,
+		lightBuffer,
 		(VkDeviceSize)uploadBytes,
 		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 		qfalse,
-		"rt lights" ) ) {
+		va( "rt lights frame %u", bufferIndex ) ) ) {
 		ri.Free( lights );
 		return qfalse;
 	}
@@ -2402,7 +2584,7 @@ static qboolean vk_rt_update_light_buffer( void )
 		Com_Memset( &lights[0], 0, sizeof( lights[0] ) );
 	}
 
-	if ( !vk_rt_upload_buffer_data( &vk.rt.light_buffer, lights, uploadBytes ) ) {
+	if ( !vk_rt_upload_buffer_data( lightBuffer, lights, uploadBytes ) ) {
 		ri.Free( lights );
 		return qfalse;
 	}
@@ -2604,7 +2786,7 @@ static qboolean vk_rt_compact_as( rtxVkRtAccelerationStructure_t *as, VkQueryPoo
 	return qtrue;
 }
 
-static VkDeviceSize vk_rt_query_triangles_build_bytes( uint32_t vertexCount, uint32_t indexCount, VkBuildAccelerationStructureFlagsKHR buildFlags )
+static VkDeviceSize vk_rt_query_triangles_build_bytes( uint32_t vertexCount, uint32_t indexCount, qboolean opaqueGeometry, VkBuildAccelerationStructureFlagsKHR buildFlags )
 {
 	VkAccelerationStructureGeometryTrianglesDataKHR triangles;
 	VkAccelerationStructureGeometryKHR geometry;
@@ -2624,7 +2806,7 @@ static VkDeviceSize vk_rt_query_triangles_build_bytes( uint32_t vertexCount, uin
 	Com_Memset( &geometry, 0, sizeof( geometry ) );
 	geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
 	geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-	geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+	geometry.flags = opaqueGeometry ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
 	geometry.geometry.triangles = triangles;
 
 	Com_Memset( &buildInfo, 0, sizeof( buildInfo ) );
@@ -2827,7 +3009,18 @@ static rtxRtColorSpace_t vk_rt_material_albedo_color_space( const image_t *image
 		return RTX_RT_COLORSPACE_SRGB;
 	}
 
-	if ( image->flags & IMGFLAG_LIGHTMAP ) {
+	/*
+	 * An sRGB image view performs the authored-color decode before the ray
+	 * shader samples it. Material metadata describes the value returned by
+	 * the descriptor, not the source asset, so mark that sampled value linear
+	 * and keep closest-hit from applying the software decode a second time.
+	 */
+	if ( image->srgbDecode ) {
+		return RTX_RT_COLORSPACE_LINEAR;
+	}
+
+	if ( image->colorSpace == IMAGE_COLORSPACE_LINEAR ||
+		image->colorSpace == IMAGE_COLORSPACE_DATA ) {
 		return RTX_RT_COLORSPACE_LINEAR;
 	}
 
@@ -2910,7 +3103,7 @@ static void vk_rt_apply_material_overrides( rtxRtMaterial_t *material )
 		material->emissiveScale = MAX( 0.0f, rtx_rt_material_emissive_override->value );
 	}
 	if ( rtx_rt_masked_mode && rtx_rt_masked_mode->integer == 0 ) {
-		material->flags &= ~RTX_RT_MATFLAG_MASKED;
+		material->flags &= ~( RTX_RT_MATFLAG_MASKED | RTX_RT_MATFLAG_ALPHA_LT );
 		material->alphaCutoff = 0.0f;
 	}
 	if ( rtx_rt_masked_cutoff && rtx_rt_masked_cutoff->value >= 0.0f ) {
@@ -2927,6 +3120,10 @@ static void vk_rt_translate_shader_to_material( const shader_t *shader, rtxRtMat
 	image_t *albedoImage = NULL;
 	image_t *fallbackImage = NULL;
 	float emissiveKeywordBoost = 1.0f;
+
+	if ( shader && shader->remappedShader ) {
+		shader = shader->remappedShader;
+	}
 
 	Com_Memset( material, 0, sizeof( *material ) );
 	Q_strncpyz( material->name, shader ? shader->name : "<null>", sizeof( material->name ) );
@@ -2957,6 +3154,10 @@ static void vk_rt_translate_shader_to_material( const shader_t *shader, rtxRtMat
 
 	if ( shader->cullType == CT_TWO_SIDED ) {
 		material->flags |= RTX_RT_MATFLAG_TWO_SIDED;
+	} else if ( shader->cullType == CT_BACK_SIDED ) {
+		material->flags |= RTX_RT_MATFLAG_CULL_FRONT;
+	} else {
+		material->flags |= RTX_RT_MATFLAG_CULL_BACK;
 	}
 	if ( shader->sort > SS_OPAQUE ) {
 		material->flags |= RTX_RT_MATFLAG_TRANSLUCENT;
@@ -3012,8 +3213,8 @@ static void vk_rt_translate_shader_to_material( const shader_t *shader, rtxRtMat
 
 	for ( i = 0; i < shader->numUnfoggedPasses; i++ ) {
 		const shaderStage_t *stage = shader->stages[i];
-		const textureBundle_t *bundle;
-		const image_t *image;
+		uint32_t bundleCount;
+		uint32_t bundleIndex;
 		unsigned blendBits;
 		float stageCutoff;
 
@@ -3021,21 +3222,15 @@ static void vk_rt_translate_shader_to_material( const shader_t *shader, rtxRtMat
 			continue;
 		}
 
-		bundle = &stage->bundle[0];
-		image = bundle->image[0];
 		material->sourceStageCount++;
-
-		if ( !fallbackImage && image ) {
-			fallbackImage = (image_t *)image;
-		}
-		if ( !albedoImage && image && !( image->flags & IMGFLAG_LIGHTMAP ) ) {
-			albedoImage = (image_t *)image;
-		}
 
 		stageCutoff = vk_rt_material_alpha_cutoff_from_state_bits( stage->stateBits );
 		if ( stageCutoff > 0.0f ) {
 			material->flags |= RTX_RT_MATFLAG_MASKED;
 			material->alphaCutoff = MAX( material->alphaCutoff, stageCutoff );
+			if ( ( stage->stateBits & GLS_ATEST_BITS ) == GLS_ATEST_LT_80 ) {
+				material->flags |= RTX_RT_MATFLAG_ALPHA_LT;
+			}
 		}
 
 		blendBits = stage->stateBits & GLS_BLEND_BITS;
@@ -3044,55 +3239,78 @@ static void vk_rt_translate_shader_to_material( const shader_t *shader, rtxRtMat
 			material->emissiveScale = MAX( material->emissiveScale, 1.5f );
 		}
 
-		if ( bundle->rgbGen == CGEN_CONST ) {
-			material->baseColor[0] = bundle->constantColor.rgba[0] / 255.0f;
-			material->baseColor[1] = bundle->constantColor.rgba[1] / 255.0f;
-			material->baseColor[2] = bundle->constantColor.rgba[2] / 255.0f;
-			material->baseColor[3] = bundle->constantColor.rgba[3] / 255.0f;
+		bundleCount = stage->numTexBundles;
+		if ( bundleCount == 0 ) {
+			bundleCount = 1;
 		}
+		bundleCount = MIN( bundleCount, (uint32_t)NUM_TEXTURE_BUNDLES );
 
-		if ( image && image->imgName ) {
-			if ( vk_rt_material_name_contains_token( image->imgName, "_n" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "normal" ) ) {
-				material->normalColorSpace = vk_rt_material_data_color_space( image );
-				material->roughness = MIN( material->roughness, 0.75f );
+		for ( bundleIndex = 0; bundleIndex < bundleCount; bundleIndex++ ) {
+			const textureBundle_t *bundle = &stage->bundle[bundleIndex];
+			const image_t *image = bundle->image[0];
+			const qboolean lightmap =
+				( bundle->tcGen == TCGEN_LIGHTMAP ||
+					bundle->lightmap != LIGHTMAP_INDEX_NONE ||
+					( image && ( image->flags & IMGFLAG_LIGHTMAP ) ) ) ?
+						qtrue : qfalse;
+
+			if ( !fallbackImage && image ) {
+				fallbackImage = (image_t *)image;
+			}
+			if ( !albedoImage && image && !lightmap ) {
+				albedoImage = (image_t *)image;
 			}
 
-			if ( vk_rt_material_name_contains_token( image->imgName, "metal" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "_m" ) ) {
-				material->metallic = MAX( material->metallic, 0.9f );
+			if ( !lightmap && bundle->rgbGen == CGEN_CONST ) {
+				material->baseColor[0] = bundle->constantColor.rgba[0] / 255.0f;
+				material->baseColor[1] = bundle->constantColor.rgba[1] / 255.0f;
+				material->baseColor[2] = bundle->constantColor.rgba[2] / 255.0f;
+				material->baseColor[3] = bundle->constantColor.rgba[3] / 255.0f;
 			}
 
-			if ( vk_rt_material_name_contains_token( image->imgName, "rough" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "gloss" ) ) {
-				material->roughness = MIN( material->roughness, 0.6f );
-			}
+			if ( !lightmap && image && image->imgName ) {
+				if ( vk_rt_material_name_contains_token( image->imgName, "_n" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "normal" ) ) {
+					material->normalColorSpace = vk_rt_material_data_color_space( image );
+					material->roughness = MIN( material->roughness, 0.75f );
+				}
 
-			if ( vk_rt_material_name_contains_token( image->imgName, "glow" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "emissive" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "light" ) ) {
-				material->flags |= RTX_RT_MATFLAG_EMISSIVE;
-				material->emissiveColor[0] = MAX( material->emissiveColor[0], 1.0f );
-				material->emissiveColor[1] = MAX( material->emissiveColor[1], 1.0f );
-				material->emissiveColor[2] = MAX( material->emissiveColor[2], 1.0f );
-				material->emissiveColorSpace = vk_rt_material_albedo_color_space( image );
-				material->emissiveScale = MAX( material->emissiveScale, emissiveKeywordBoost );
-			}
+				if ( vk_rt_material_name_contains_token( image->imgName, "metal" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "_m" ) ) {
+					material->metallic = MAX( material->metallic, 0.9f );
+				}
 
-			if ( vk_rt_material_name_contains_token( image->imgName, "decal" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "mark" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "scorch" ) ) {
-				material->flags |= RTX_RT_MATFLAG_DECAL;
-			}
+				if ( vk_rt_material_name_contains_token( image->imgName, "rough" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "gloss" ) ) {
+					material->roughness = MIN( material->roughness, 0.6f );
+				}
 
-			if ( vk_rt_material_name_contains_token( image->imgName, "particle" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "smoke" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "spark" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "muzzle" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "trail" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "flare" ) ||
-				vk_rt_material_name_contains_token( image->imgName, "rail" ) ) {
-				material->flags |= RTX_RT_MATFLAG_PARTICLE | RTX_RT_MATFLAG_EFFECT | RTX_RT_MATFLAG_TRANSLUCENT;
+				if ( vk_rt_material_name_contains_token( image->imgName, "glow" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "emissive" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "light" ) ) {
+					material->flags |= RTX_RT_MATFLAG_EMISSIVE;
+					material->emissiveColor[0] = MAX( material->emissiveColor[0], 1.0f );
+					material->emissiveColor[1] = MAX( material->emissiveColor[1], 1.0f );
+					material->emissiveColor[2] = MAX( material->emissiveColor[2], 1.0f );
+					material->emissiveColorSpace = vk_rt_material_albedo_color_space( image );
+					material->emissiveScale = MAX( material->emissiveScale, emissiveKeywordBoost );
+				}
+
+				if ( vk_rt_material_name_contains_token( image->imgName, "decal" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "mark" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "scorch" ) ) {
+					material->flags |= RTX_RT_MATFLAG_DECAL;
+				}
+
+				if ( vk_rt_material_name_contains_token( image->imgName, "particle" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "smoke" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "spark" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "muzzle" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "trail" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "flare" ) ||
+					vk_rt_material_name_contains_token( image->imgName, "rail" ) ) {
+					material->flags |= RTX_RT_MATFLAG_PARTICLE | RTX_RT_MATFLAG_EFFECT | RTX_RT_MATFLAG_TRANSLUCENT;
+				}
 			}
 		}
 	}
@@ -3125,13 +3343,16 @@ static void vk_rt_translate_shader_to_material( const shader_t *shader, rtxRtMat
 	vk_rt_apply_material_overrides( material );
 }
 
-static qboolean vk_rt_cpu_geometry_find_or_add_material( rtxRtCpuGeometry_t *geometry, const shader_t *shader, uint32_t *outMaterialIndex )
+static qboolean vk_rt_cpu_geometry_find_or_add_material_ex( rtxRtCpuGeometry_t *geometry, const shader_t *shader, uint32_t extraFlags, uint32_t *outMaterialIndex )
 {
 	uint32_t i;
 	rtxRtMaterial_t material;
+	const uint32_t ownershipFlags = RTX_RT_MATFLAG_RASTER_OVERLAY;
 
 	for ( i = 0; i < geometry->numMaterials; i++ ) {
-		if ( geometry->materialShaders[i] == shader ) {
+		if ( geometry->materialShaders[i] == shader &&
+			( geometry->materials[i].flags & ownershipFlags ) ==
+				( extraFlags & ownershipFlags ) ) {
 			if ( outMaterialIndex ) {
 				*outMaterialIndex = i;
 			}
@@ -3144,6 +3365,7 @@ static qboolean vk_rt_cpu_geometry_find_or_add_material( rtxRtCpuGeometry_t *geo
 	}
 
 	vk_rt_translate_shader_to_material( shader, &material );
+	material.flags |= extraFlags;
 	geometry->materials[ geometry->numMaterials ] = material;
 	geometry->materialShaders[ geometry->numMaterials ] = shader;
 
@@ -3153,6 +3375,64 @@ static qboolean vk_rt_cpu_geometry_find_or_add_material( rtxRtCpuGeometry_t *geo
 
 	geometry->numMaterials++;
 	return qtrue;
+}
+
+static qboolean vk_rt_consume_cvar_modified( cvar_t *cvar )
+{
+	if ( !cvar || !cvar->modified ) {
+		return qfalse;
+	}
+
+	cvar->modified = qfalse;
+	return qtrue;
+}
+
+static void vk_rt_handle_cached_resource_cvar_changes( void )
+{
+	qboolean materialChanged = qfalse;
+	qboolean lightChanged;
+
+	lightChanged = vk_rt_consume_cvar_modified( rtx_rt_world_light_scale );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_masked_mode );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_masked_cutoff );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_material_override );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_material_roughness_override );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_material_metallic_override );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_material_emissive_override );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_emissive_scale );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_emissive_keyword_boost );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_effect_radius_scale );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_effect_emissive_boost );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_marks_enable );
+	materialChanged |= vk_rt_consume_cvar_modified( rtx_rt_dynamic_effects );
+
+	if ( lightChanged ) {
+		vk_rt_reset_world_light_cache();
+		vk_rt_reset_temporal_history( "world light scale changed" );
+	}
+
+	if ( !materialChanged ) {
+		return;
+	}
+
+	if ( vk.rt.worldGeometryReady ||
+		vk.rt.world_blas.valid ||
+		vk.rt.dynamic_blas.valid ||
+		vk.rt.world_material_buffer.buffer != VK_NULL_HANDLE ||
+		vk.rt.dynamic_material_buffer.buffer != VK_NULL_HANDLE ) {
+		vk_rt_invalidate( "RT material/geometry configuration changed" );
+	} else {
+		vk_rt_reset_temporal_history( "RT material/geometry configuration changed" );
+	}
+}
+
+static qboolean vk_rt_cpu_geometry_find_or_add_material( rtxRtCpuGeometry_t *geometry, const shader_t *shader, uint32_t *outMaterialIndex )
+{
+	return vk_rt_cpu_geometry_find_or_add_material_ex(
+		geometry,
+		shader,
+		RTX_RT_MATFLAG_NONE,
+		outMaterialIndex );
 }
 
 static qboolean vk_rt_cpu_geometry_add_vertex( rtxRtCpuGeometry_t *geometry, const vec3_t xyz, const vec3_t normal, const vec4_t tangent, const vec2_t texCoord, uint32_t color, uint32_t materialIndex, uint32_t *outIndex )
@@ -3243,19 +3523,20 @@ static qboolean vk_rt_cpu_geometry_sanitize_indices( rtxRtCpuGeometry_t *geometr
 	return qtrue;
 }
 
-static qboolean vk_rt_append_surface_face_geometry( rtxRtCpuGeometry_t *geometry, const srfSurfaceFace_t *surface, const shader_t *shader )
+static qboolean vk_rt_append_surface_face_geometry( rtxRtCpuGeometry_t *geometry, const srfSurfaceFace_t *surface, const shader_t *shader, uint32_t materialFlags )
 {
 	const int *indices;
 	vec4_t tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
 	uint32_t baseVertex;
 	uint32_t materialIndex = 0;
+	uint32_t triangleCount;
 	int i;
 
 	if ( !surface || surface->numPoints < 3 || surface->numIndices < 3 ) {
 		return qtrue;
 	}
 
-	if ( !vk_rt_cpu_geometry_find_or_add_material( geometry, shader, &materialIndex ) ) {
+	if ( !vk_rt_cpu_geometry_find_or_add_material_ex( geometry, shader, materialFlags, &materialIndex ) ) {
 		return qfalse;
 	}
 
@@ -3297,15 +3578,23 @@ static qboolean vk_rt_append_surface_face_geometry( rtxRtCpuGeometry_t *geometry
 		}
 	}
 
-	geometry->sourceTriangleCount += (uint32_t)( surface->numIndices / 3 );
+	triangleCount = (uint32_t)( surface->numIndices / 3 );
+	geometry->sourceTriangleCount += triangleCount;
 	if ( geometry->materials[ materialIndex ].flags & RTX_RT_MATFLAG_MASKED ) {
-		geometry->maskedTriangleCount += (uint32_t)( surface->numIndices / 3 );
+		geometry->maskedTriangleCount += triangleCount;
+	}
+	if ( geometry->materials[ materialIndex ].flags &
+		( RTX_RT_MATFLAG_MASKED |
+			RTX_RT_MATFLAG_CULL_FRONT |
+			RTX_RT_MATFLAG_CULL_BACK |
+			RTX_RT_MATFLAG_RASTER_OVERLAY ) ) {
+		geometry->anyHitTriangleCount += triangleCount;
 	}
 
 	return qtrue;
 }
 
-static qboolean vk_rt_append_surface_grid_geometry( rtxRtCpuGeometry_t *geometry, const srfGridMesh_t *surface, const shader_t *shader )
+static qboolean vk_rt_append_surface_grid_geometry( rtxRtCpuGeometry_t *geometry, const srfGridMesh_t *surface, const shader_t *shader, uint32_t materialFlags )
 {
 	int row;
 	int col;
@@ -3318,7 +3607,7 @@ static qboolean vk_rt_append_surface_grid_geometry( rtxRtCpuGeometry_t *geometry
 		return qtrue;
 	}
 
-	if ( !vk_rt_cpu_geometry_find_or_add_material( geometry, shader, &materialIndex ) ) {
+	if ( !vk_rt_cpu_geometry_find_or_add_material_ex( geometry, shader, materialFlags, &materialIndex ) ) {
 		return qfalse;
 	}
 
@@ -3362,14 +3651,22 @@ static qboolean vk_rt_append_surface_grid_geometry( rtxRtCpuGeometry_t *geometry
 	if ( geometry->materials[ materialIndex ].flags & RTX_RT_MATFLAG_MASKED ) {
 		geometry->maskedTriangleCount += triCount;
 	}
+	if ( geometry->materials[ materialIndex ].flags &
+		( RTX_RT_MATFLAG_MASKED |
+			RTX_RT_MATFLAG_CULL_FRONT |
+			RTX_RT_MATFLAG_CULL_BACK |
+			RTX_RT_MATFLAG_RASTER_OVERLAY ) ) {
+		geometry->anyHitTriangleCount += triCount;
+	}
 
 	return qtrue;
 }
 
-static qboolean vk_rt_append_surface_triangles_geometry( rtxRtCpuGeometry_t *geometry, const srfTriangles_t *surface, const shader_t *shader )
+static qboolean vk_rt_append_surface_triangles_geometry( rtxRtCpuGeometry_t *geometry, const srfTriangles_t *surface, const shader_t *shader, uint32_t materialFlags )
 {
 	uint32_t baseVertex;
 	uint32_t materialIndex = 0;
+	uint32_t triangleCount;
 	vec4_t tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
 	int i;
 
@@ -3377,7 +3674,7 @@ static qboolean vk_rt_append_surface_triangles_geometry( rtxRtCpuGeometry_t *geo
 		return qtrue;
 	}
 
-	if ( !vk_rt_cpu_geometry_find_or_add_material( geometry, shader, &materialIndex ) ) {
+	if ( !vk_rt_cpu_geometry_find_or_add_material_ex( geometry, shader, materialFlags, &materialIndex ) ) {
 		return qfalse;
 	}
 
@@ -3402,9 +3699,17 @@ static qboolean vk_rt_append_surface_triangles_geometry( rtxRtCpuGeometry_t *geo
 		}
 	}
 
-	geometry->sourceTriangleCount += (uint32_t)( surface->numIndexes / 3 );
+	triangleCount = (uint32_t)( surface->numIndexes / 3 );
+	geometry->sourceTriangleCount += triangleCount;
 	if ( geometry->materials[ materialIndex ].flags & RTX_RT_MATFLAG_MASKED ) {
-		geometry->maskedTriangleCount += (uint32_t)( surface->numIndexes / 3 );
+		geometry->maskedTriangleCount += triangleCount;
+	}
+	if ( geometry->materials[ materialIndex ].flags &
+		( RTX_RT_MATFLAG_MASKED |
+			RTX_RT_MATFLAG_CULL_FRONT |
+			RTX_RT_MATFLAG_CULL_BACK |
+			RTX_RT_MATFLAG_RASTER_OVERLAY ) ) {
+		geometry->anyHitTriangleCount += triangleCount;
 	}
 
 	return qtrue;
@@ -3562,23 +3867,33 @@ static qboolean vk_rt_generate_tangents( rtxRtCpuGeometry_t *geometry )
 
 static qboolean vk_rt_extract_world_geometry( rtxRtCpuGeometry_t *geometry )
 {
+	const bmodel_t *worldModel;
 	int i;
 	uint32_t faceCount = 0;
 	uint32_t gridCount = 0;
 	uint32_t triCount = 0;
 	uint32_t skySkipCount = 0;
+	uint32_t rasterOverlayOccluderCount = 0;
+	uint32_t fogOverlayOccluderCount = 0;
+	uint32_t nonOccludingOverlaySkipCount = 0;
 	uint32_t referenceTriangleCount = 0;
 	uint32_t shaderFallbacks = 0;
 
 	vk_rt_cpu_geometry_init( geometry );
 
-	if ( !tr.world || !tr.worldMapLoaded ) {
+	if ( !tr.world || !tr.worldMapLoaded || !tr.world->bmodels ) {
 		return qfalse;
 	}
 
-	for ( i = 0; i < tr.world->numsurfaces; i++ ) {
-		const msurface_t *surface = &tr.world->surfaces[i];
+	worldModel = &tr.world->bmodels[0];
+	if ( !worldModel->firstSurface || worldModel->numSurfaces <= 0 ) {
+		return qfalse;
+	}
+
+	for ( i = 0; i < worldModel->numSurfaces; i++ ) {
+		const msurface_t *surface = &worldModel->firstSurface[i];
 		const shader_t *shader = surface->shader ? surface->shader : tr.defaultShader;
+		uint32_t materialFlags = RTX_RT_MATFLAG_NONE;
 
 		if ( !surface->shader ) {
 			shaderFallbacks++;
@@ -3587,12 +3902,30 @@ static qboolean vk_rt_extract_world_geometry( rtxRtCpuGeometry_t *geometry )
 			skySkipCount++;
 			continue;
 		}
+		if ( shader && shader->sort != SS_OPAQUE && shader->sort != SS_SEE_THROUGH ) {
+			/*
+			 * Portals, decals, banners and translucent effects remain entirely
+			 * authored.  Opaque and alpha-tested structural surfaces below
+			 * stay in the BLAS even when raster owns their final color.
+			 */
+			nonOccludingOverlaySkipCount++;
+			continue;
+		}
+
+		if ( surface->fogIndex != 0 || !R_RtShaderNativeSupported( shader ) ) {
+			materialFlags |= RTX_RT_MATFLAG_RASTER_OVERLAY;
+			if ( surface->fogIndex != 0 ) {
+				fogOverlayOccluderCount++;
+			} else {
+				rasterOverlayOccluderCount++;
+			}
+		}
 
 		switch ( *surface->data ) {
 		case SF_FACE:
 		{
 			const srfSurfaceFace_t *face = (const srfSurfaceFace_t *)surface->data;
-			if ( !vk_rt_append_surface_face_geometry( geometry, (const srfSurfaceFace_t *)surface->data, shader ) ) {
+			if ( !vk_rt_append_surface_face_geometry( geometry, (const srfSurfaceFace_t *)surface->data, shader, materialFlags ) ) {
 				vk_rt_cpu_geometry_free( geometry );
 				return qfalse;
 			}
@@ -3603,7 +3936,7 @@ static qboolean vk_rt_extract_world_geometry( rtxRtCpuGeometry_t *geometry )
 		case SF_GRID:
 		{
 			const srfGridMesh_t *grid = (const srfGridMesh_t *)surface->data;
-			if ( !vk_rt_append_surface_grid_geometry( geometry, (const srfGridMesh_t *)surface->data, shader ) ) {
+			if ( !vk_rt_append_surface_grid_geometry( geometry, (const srfGridMesh_t *)surface->data, shader, materialFlags ) ) {
 				vk_rt_cpu_geometry_free( geometry );
 				return qfalse;
 			}
@@ -3616,7 +3949,7 @@ static qboolean vk_rt_extract_world_geometry( rtxRtCpuGeometry_t *geometry )
 		case SF_TRIANGLES:
 		{
 			const srfTriangles_t *tris = (const srfTriangles_t *)surface->data;
-			if ( !vk_rt_append_surface_triangles_geometry( geometry, (const srfTriangles_t *)surface->data, shader ) ) {
+			if ( !vk_rt_append_surface_triangles_geometry( geometry, (const srfTriangles_t *)surface->data, shader, materialFlags ) ) {
 				vk_rt_cpu_geometry_free( geometry );
 				return qfalse;
 			}
@@ -3635,7 +3968,10 @@ static qboolean vk_rt_extract_world_geometry( rtxRtCpuGeometry_t *geometry )
 	}
 
 	vk.rt.stats.world_triangles = geometry->sourceTriangleCount;
-	vk.rt.stats.masked_triangles = geometry->maskedTriangleCount;
+	vk.rt.world_masked_triangle_count = geometry->maskedTriangleCount;
+	vk.rt.stats.masked_triangles =
+		vk.rt.world_masked_triangle_count +
+		vk.rt.dynamic_masked_triangle_count;
 
 	if ( geometry->sourceTriangleCount != referenceTriangleCount ) {
 		ri.Printf( PRINT_WARNING,
@@ -3646,7 +3982,7 @@ static qboolean vk_rt_extract_world_geometry( rtxRtCpuGeometry_t *geometry )
 
 	if ( vk_rt_debug_as_stats_level() >= 1 ) {
 		ri.Printf( PRINT_DEVELOPER,
-			"RTX RT: world extraction complete (faces=%u, grids=%u, triangles=%u, trianglesRef=%u, vertices=%u, indices=%u, materials=%u, maskedTriangles=%u, degenerate=%u, shaderFallbacks=%u)\n",
+			"RTX RT: world extraction complete (faces=%u, grids=%u, triangles=%u, trianglesRef=%u, vertices=%u, indices=%u, materials=%u, maskedTriangles=%u, anyHitTriangles=%u, degenerate=%u, shaderFallbacks=%u)\n",
 			faceCount,
 			gridCount,
 			triCount,
@@ -3655,10 +3991,26 @@ static qboolean vk_rt_extract_world_geometry( rtxRtCpuGeometry_t *geometry )
 			geometry->numIndices,
 			geometry->numMaterials,
 			geometry->maskedTriangleCount,
+			geometry->anyHitTriangleCount,
 			geometry->degenerateTriangleCount,
 			shaderFallbacks );
 		if ( skySkipCount > 0 ) {
 			ri.Printf( PRINT_DEVELOPER, "RTX RT: skipped %u sky surfaces from RT BLAS (sky handled via miss/environment)\n", skySkipCount );
+		}
+		if ( rasterOverlayOccluderCount > 0 ) {
+			ri.Printf( PRINT_DEVELOPER,
+				"RTX RT: retained %u authored-overlay structural surfaces as shadow/visibility occluders\n",
+				rasterOverlayOccluderCount );
+		}
+		if ( fogOverlayOccluderCount > 0 ) {
+			ri.Printf( PRINT_DEVELOPER,
+				"RTX RT: retained %u fogged structural surfaces as shadow/visibility occluders while raster owns fog color\n",
+				fogOverlayOccluderCount );
+		}
+		if ( nonOccludingOverlaySkipCount > 0 ) {
+			ri.Printf( PRINT_DEVELOPER,
+				"RTX RT: skipped %u non-structural authored overlay surfaces from RT BLAS\n",
+				nonOccludingOverlaySkipCount );
 		}
 	}
 
@@ -3696,7 +4048,7 @@ static qboolean vk_rt_extract_world_geometry( rtxRtCpuGeometry_t *geometry )
 	return ( geometry->numVertices >= 3 && geometry->numIndices >= 3 ) ? qtrue : qfalse;
 }
 
-static qboolean vk_rt_build_triangles_blas( rtxVkRtAccelerationStructure_t *outAs, const rtxVkRtBuffer_t *vertexBuffer, uint32_t vertexCount, VkDeviceSize vertexStride, const rtxVkRtBuffer_t *indexBuffer, uint32_t indexCount, qboolean allowCompaction, const char *debugName )
+static qboolean vk_rt_build_triangles_blas( rtxVkRtAccelerationStructure_t *outAs, const rtxVkRtBuffer_t *vertexBuffer, uint32_t vertexCount, VkDeviceSize vertexStride, const rtxVkRtBuffer_t *indexBuffer, uint32_t indexCount, qboolean opaqueGeometry, qboolean allowCompaction, const char *debugName )
 {
 	VkAccelerationStructureGeometryTrianglesDataKHR triangles;
 	VkAccelerationStructureGeometryKHR geometry;
@@ -3737,7 +4089,7 @@ static qboolean vk_rt_build_triangles_blas( rtxVkRtAccelerationStructure_t *outA
 	Com_Memset( &geometry, 0, sizeof( geometry ) );
 	geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
 	geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-	geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+	geometry.flags = opaqueGeometry ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
 	geometry.geometry.triangles = triangles;
 
 	Com_Memset( &buildInfo, 0, sizeof( buildInfo ) );
@@ -3803,6 +4155,9 @@ static qboolean vk_rt_build_triangles_blas( rtxVkRtAccelerationStructure_t *outA
 	}
 
 	cmd = begin_command_buffer();
+	if ( queryPool != VK_NULL_HANDLE ) {
+		qvkCmdResetQueryPool( cmd, queryPool, 0, 1 );
+	}
 	qvkCmdBuildAccelerationStructuresKHR( cmd, 1, &buildInfo, (const VkAccelerationStructureBuildRangeInfoKHR *const *)rangeInfos );
 
 	if ( queryPool != VK_NULL_HANDLE ) {
@@ -3959,17 +4314,29 @@ static qboolean vk_rt_append_brush_entity_geometry( rtxRtCpuGeometry_t *geometry
 
 		switch ( *surface->data ) {
 		case SF_FACE:
-			if ( !vk_rt_append_surface_face_geometry( geometry, (const srfSurfaceFace_t *)surface->data, shader ) ) {
+			if ( !vk_rt_append_surface_face_geometry(
+				geometry,
+				(const srfSurfaceFace_t *)surface->data,
+				shader,
+				RTX_RT_MATFLAG_RASTER_OVERLAY ) ) {
 				return qfalse;
 			}
 			break;
 		case SF_GRID:
-			if ( !vk_rt_append_surface_grid_geometry( geometry, (const srfGridMesh_t *)surface->data, shader ) ) {
+			if ( !vk_rt_append_surface_grid_geometry(
+				geometry,
+				(const srfGridMesh_t *)surface->data,
+				shader,
+				RTX_RT_MATFLAG_RASTER_OVERLAY ) ) {
 				return qfalse;
 			}
 			break;
 		case SF_TRIANGLES:
-			if ( !vk_rt_append_surface_triangles_geometry( geometry, (const srfTriangles_t *)surface->data, shader ) ) {
+			if ( !vk_rt_append_surface_triangles_geometry(
+				geometry,
+				(const srfTriangles_t *)surface->data,
+				shader,
+				RTX_RT_MATFLAG_RASTER_OVERLAY ) ) {
 				return qfalse;
 			}
 			break;
@@ -5059,6 +5426,16 @@ static qboolean vk_rt_extract_dynamic_geometry( rtxRtCpuGeometry_t *geometry )
 	geometry->sourceEntityCount = modelCount;
 	geometry->sourceEffectCount = effectCount;
 
+	/*
+	 * Dynamic entities remain authored raster overlays.  Their RT geometry is
+	 * retained for shadow/visibility rays, while the any-hit shader rejects it
+	 * from primary camera rays so it cannot replace animated raster shading.
+	 */
+	for ( i = 0; i < (int)geometry->numMaterials; i++ ) {
+		geometry->materials[i].flags |= RTX_RT_MATFLAG_RASTER_OVERLAY;
+	}
+	geometry->anyHitTriangleCount = geometry->sourceTriangleCount;
+
 	if ( geometry->numVertices >= 3 && geometry->numIndices >= 3 ) {
 		if ( !vk_rt_generate_tangents( geometry ) ) {
 			vk_rt_cpu_geometry_free( geometry );
@@ -5134,7 +5511,9 @@ static qboolean vk_rt_build_dynamic_scene_blas( VkDeviceSize *frameBudgetBytesUs
 		vk.rt.dynamic_material_count = 0;
 		vk.rt.dynamic_entity_count = geometry.sourceEntityCount;
 		vk.rt.dynamic_effect_count = geometry.sourceEffectCount;
+		vk.rt.dynamic_masked_triangle_count = 0;
 		vk.rt.stats.dynamic_triangles = 0;
+		vk.rt.stats.masked_triangles = vk.rt.world_masked_triangle_count;
 		vk.rt.needsRebuild = qtrue;
 		vk_rt_cpu_geometry_free( &geometry );
 		return qtrue;
@@ -5142,11 +5521,26 @@ static qboolean vk_rt_build_dynamic_scene_blas( VkDeviceSize *frameBudgetBytesUs
 
 	// Dynamic BLAS is rebuilt frequently; skip compaction to avoid query/copy overhead and instability.
 	flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-	buildBytes = vk_rt_query_triangles_build_bytes( geometry.numVertices, geometry.numIndices, flags );
+	buildBytes = vk_rt_query_triangles_build_bytes(
+		geometry.numVertices,
+		geometry.numIndices,
+		geometry.anyHitTriangleCount == 0u ? qtrue : qfalse,
+		flags );
 	if ( outBuildBytes ) {
 		*outBuildBytes = buildBytes;
 	}
 	if ( !vk_rt_budget_allows( buildBytes, frameBudgetBytesUsed, frameBudgetBytes ) ) {
+		vk_rt_cpu_geometry_free( &geometry );
+		return qfalse;
+	}
+
+	/*
+	 * The dynamic buffers are host-visible and may still be consumed by an
+	 * in-flight frame.  Wait before writing them, not merely before replacing
+	 * the old BLAS after the upload has already happened.
+	 */
+	if ( vk.rt.dynamic_blas.valid &&
+		!vk_rt_wait_for_inflight_frames( "dynamic geometry upload" ) ) {
 		vk_rt_cpu_geometry_free( &geometry );
 		return qfalse;
 	}
@@ -5199,8 +5593,11 @@ static qboolean vk_rt_build_dynamic_scene_blas( VkDeviceSize *frameBudgetBytesUs
 	vk.rt.dynamic_index_count = geometry.numIndices;
 	vk.rt.dynamic_entity_count = geometry.sourceEntityCount;
 	vk.rt.dynamic_effect_count = geometry.sourceEffectCount;
+	vk.rt.dynamic_masked_triangle_count = geometry.maskedTriangleCount;
 	vk.rt.stats.dynamic_triangles = geometry.sourceTriangleCount;
-	vk.rt.stats.masked_triangles = vk.rt.stats.world_triangles + geometry.maskedTriangleCount;
+	vk.rt.stats.masked_triangles =
+		vk.rt.world_masked_triangle_count +
+		vk.rt.dynamic_masked_triangle_count;
 
 	if ( !vk_rt_build_triangles_blas(
 		&vk.rt.dynamic_blas,
@@ -5209,6 +5606,7 @@ static qboolean vk_rt_build_dynamic_scene_blas( VkDeviceSize *frameBudgetBytesUs
 		sizeof( rtxRtPackedVertex_t ),
 		&vk.rt.dynamic_index_buffer,
 		vk.rt.dynamic_index_count,
+		geometry.anyHitTriangleCount == 0u ? qtrue : qfalse,
 		qfalse,
 		"rt dynamic scene blas" ) ) {
 		vk_rt_cpu_geometry_free( &geometry );
@@ -5220,7 +5618,7 @@ static qboolean vk_rt_build_dynamic_scene_blas( VkDeviceSize *frameBudgetBytesUs
 
 	if ( vk_rt_debug_as_stats_level() >= 1 ) {
 		ri.Printf( PRINT_DEVELOPER,
-			"RTX RT: dynamic extraction complete (entities=%u, effects=%u, vertices=%u, indices=%u, triangles=%u, materials=%u, maskedTriangles=%u, degenerate=%u)\n",
+			"RTX RT: dynamic extraction complete (entities=%u, effects=%u, vertices=%u, indices=%u, triangles=%u, materials=%u, maskedTriangles=%u, anyHitTriangles=%u, degenerate=%u)\n",
 			geometry.sourceEntityCount,
 			geometry.sourceEffectCount,
 			geometry.numVertices,
@@ -5228,6 +5626,7 @@ static qboolean vk_rt_build_dynamic_scene_blas( VkDeviceSize *frameBudgetBytesUs
 			geometry.sourceTriangleCount,
 			geometry.numMaterials,
 			geometry.maskedTriangleCount,
+			geometry.anyHitTriangleCount,
 			geometry.degenerateTriangleCount );
 	}
 
@@ -5323,27 +5722,27 @@ static qboolean vk_rt_ensure_descriptor_resources( void )
 	bindings[2].binding = RTX_RT_DESC_BINDING_WORLD_VERTICES;
 	bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[2].descriptorCount = 1;
-	bindings[2].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+	bindings[2].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 	bindings[3].binding = RTX_RT_DESC_BINDING_WORLD_INDICES;
 	bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[3].descriptorCount = 1;
-	bindings[3].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+	bindings[3].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 	bindings[4].binding = RTX_RT_DESC_BINDING_WORLD_MATERIALS;
 	bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[4].descriptorCount = 1;
-	bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+	bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 	bindings[5].binding = RTX_RT_DESC_BINDING_DYNAMIC_VERTICES;
 	bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[5].descriptorCount = 1;
-	bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+	bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 	bindings[6].binding = RTX_RT_DESC_BINDING_DYNAMIC_INDICES;
 	bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[6].descriptorCount = 1;
-	bindings[6].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+	bindings[6].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 	bindings[7].binding = RTX_RT_DESC_BINDING_DYNAMIC_MATERIALS;
 	bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[7].descriptorCount = 1;
-	bindings[7].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+	bindings[7].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 	bindings[8].binding = RTX_RT_DESC_BINDING_LIGHTS;
 	bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[8].descriptorCount = 1;
@@ -5367,7 +5766,7 @@ static qboolean vk_rt_ensure_descriptor_resources( void )
 	bindings[13].binding = RTX_RT_DESC_BINDING_SCENE_TEXTURES;
 	bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	bindings[13].descriptorCount = RTX_RT_MAX_SCENE_TEXTURES;
-	bindings[13].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+	bindings[13].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
 	Com_Memset( &layoutInfo, 0, sizeof( layoutInfo ) );
 	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -5510,6 +5909,14 @@ static qboolean vk_rt_ensure_output_image( void )
 		vk.rt.output_width == width &&
 		vk.rt.output_height == height ) {
 		return qtrue;
+	}
+
+	if ( vk.rt.output_image != VK_NULL_HANDLE ||
+		vk.rt.history_image[0] != VK_NULL_HANDLE ||
+		vk.rt.history_image[1] != VK_NULL_HANDLE ) {
+		if ( !vk_rt_wait_for_inflight_frames( "RT output resize" ) ) {
+			return qfalse;
+		}
 	}
 
 	vk_rt_destroy_output_image();
@@ -5712,7 +6119,7 @@ static qboolean vk_rt_build_sbt( void )
 
 static qboolean vk_rt_ensure_pipeline( void )
 {
-	VkPipelineShaderStageCreateInfo stages[4];
+	VkPipelineShaderStageCreateInfo stages[5];
 	VkRayTracingShaderGroupCreateInfoKHR groups[4];
 	VkRayTracingPipelineCreateInfoKHR pipelineInfo;
 	VkResult result;
@@ -5725,7 +6132,9 @@ static qboolean vk_rt_ensure_pipeline( void )
 		return qfalse;
 	}
 
-	if ( vk.modules.rt_rgen == VK_NULL_HANDLE || vk.modules.rt_rmiss == VK_NULL_HANDLE || vk.modules.rt_rmiss_shadow == VK_NULL_HANDLE || vk.modules.rt_rchit == VK_NULL_HANDLE ) {
+	if ( vk.modules.rt_rgen == VK_NULL_HANDLE || vk.modules.rt_rmiss == VK_NULL_HANDLE ||
+		vk.modules.rt_rmiss_shadow == VK_NULL_HANDLE || vk.modules.rt_rchit == VK_NULL_HANDLE ||
+		vk.modules.rt_rahit == VK_NULL_HANDLE ) {
 		ri.Printf( PRINT_ERROR, "RTX RT: ray tracing shader modules are missing\n" );
 		return qfalse;
 	}
@@ -5753,6 +6162,10 @@ static qboolean vk_rt_ensure_pipeline( void )
 	stages[3].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 	stages[3].module = vk.modules.rt_rchit;
 	stages[3].pName = "main";
+	stages[4].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	stages[4].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+	stages[4].module = vk.modules.rt_rahit;
+	stages[4].pName = "main";
 
 	Com_Memset( groups, 0, sizeof( groups ) );
 	groups[0].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
@@ -5780,7 +6193,7 @@ static qboolean vk_rt_ensure_pipeline( void )
 	groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
 	groups[3].generalShader = VK_SHADER_UNUSED_KHR;
 	groups[3].closestHitShader = 3;
-	groups[3].anyHitShader = VK_SHADER_UNUSED_KHR;
+	groups[3].anyHitShader = 4;
 	groups[3].intersectionShader = VK_SHADER_UNUSED_KHR;
 
 	Com_Memset( &pipelineInfo, 0, sizeof( pipelineInfo ) );
@@ -5820,6 +6233,8 @@ static qboolean vk_rt_update_descriptor_set( void )
 	const rtxVkRtBuffer_t *dynamicVertices;
 	const rtxVkRtBuffer_t *dynamicIndices;
 	const rtxVkRtBuffer_t *dynamicMaterials;
+	const rtxVkRtBuffer_t *lightBuffer;
+	const rtxVkRtBuffer_t *temporalBuffer;
 	uint32_t i;
 	uint32_t historyReadIndex = vk.rt.history_read_index & 1u;
 	uint32_t historyWriteIndex = historyReadIndex ^ 1u;
@@ -5832,7 +6247,9 @@ static qboolean vk_rt_update_descriptor_set( void )
 	if ( vk.rt.history_view[historyReadIndex] == VK_NULL_HANDLE || vk.rt.history_view[historyWriteIndex] == VK_NULL_HANDLE ) {
 		return qfalse;
 	}
-	if ( vk.rt.temporal_params_buffer.buffer == VK_NULL_HANDLE ) {
+	lightBuffer = &vk.rt.light_buffer[descriptorIndex];
+	temporalBuffer = &vk.rt.temporal_params_buffer[descriptorIndex];
+	if ( temporalBuffer->buffer == VK_NULL_HANDLE ) {
 		return qfalse;
 	}
 	if ( vk.color_image_view == VK_NULL_HANDLE ) {
@@ -5845,7 +6262,7 @@ static qboolean vk_rt_update_descriptor_set( void )
 		return qfalse;
 	}
 
-	if ( !vk_rt_update_light_buffer() || vk.rt.light_buffer.buffer == VK_NULL_HANDLE ) {
+	if ( !vk_rt_update_light_buffer() || lightBuffer->buffer == VK_NULL_HANDLE ) {
 		return qfalse;
 	}
 
@@ -5923,10 +6340,10 @@ static qboolean vk_rt_update_descriptor_set( void )
 	bufferInfos[5].buffer = dynamicMaterials->buffer;
 	bufferInfos[5].offset = 0;
 	bufferInfos[5].range = VK_WHOLE_SIZE;
-	bufferInfos[6].buffer = vk.rt.light_buffer.buffer;
+	bufferInfos[6].buffer = lightBuffer->buffer;
 	bufferInfos[6].offset = 0;
 	bufferInfos[6].range = VK_WHOLE_SIZE;
-	bufferInfos[7].buffer = vk.rt.temporal_params_buffer.buffer;
+	bufferInfos[7].buffer = temporalBuffer->buffer;
 	bufferInfos[7].offset = 0;
 	bufferInfos[7].range = VK_WHOLE_SIZE;
 
@@ -6077,7 +6494,9 @@ static qboolean vk_rt_ensure_dynamic_blas( VkDeviceSize *frameBudgetBytesUsed, V
 		vk.rt.dynamic_material_count = 0;
 		vk.rt.dynamic_entity_count = 0;
 		vk.rt.dynamic_effect_count = 0;
+		vk.rt.dynamic_masked_triangle_count = 0;
 		vk.rt.stats.dynamic_triangles = 0;
+		vk.rt.stats.masked_triangles = vk.rt.world_masked_triangle_count;
 		vk.rt.dynamic_scene_signature = 0u;
 		vk.rt.dynamic_last_rebuild_frame = tr.frameCount;
 		VectorCopy( vk.rt.dynamic_centroid_prev, vk.rt.dynamic_centroid_current );
@@ -6100,7 +6519,9 @@ static qboolean vk_rt_ensure_dynamic_blas( VkDeviceSize *frameBudgetBytesUsed, V
 	if ( !hadDynamicResources && estimatedModelCount == 0u && estimatedEffectCount == 0u && backEnd.refdef.numPolys == 0 ) {
 		vk.rt.dynamic_scene_signature = estimatedSignature;
 		vk.rt.dynamic_last_rebuild_frame = tr.frameCount;
+		vk.rt.dynamic_masked_triangle_count = 0;
 		vk.rt.stats.dynamic_triangles = 0;
+		vk.rt.stats.masked_triangles = vk.rt.world_masked_triangle_count;
 		return qtrue;
 	}
 
@@ -6177,7 +6598,11 @@ static qboolean vk_rt_ensure_world_blas( VkDeviceSize *frameBudgetBytesUsed, VkD
 
 	flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
 		( vk_rt_as_compaction_enabled() ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0 );
-	buildBytes = vk_rt_query_triangles_build_bytes( geometry.numVertices, geometry.numIndices, flags );
+	buildBytes = vk_rt_query_triangles_build_bytes(
+		geometry.numVertices,
+		geometry.numIndices,
+		geometry.anyHitTriangleCount == 0u ? qtrue : qfalse,
+		flags );
 	if ( !vk_rt_budget_allows( buildBytes, frameBudgetBytesUsed, frameBudgetBytes ) ) {
 		vk_rt_cpu_geometry_free( &geometry );
 		return qfalse;
@@ -6237,6 +6662,7 @@ static qboolean vk_rt_ensure_world_blas( VkDeviceSize *frameBudgetBytesUsed, VkD
 		sizeof( rtxRtPackedVertex_t ),
 		&vk.rt.world_index_buffer,
 		vk.rt.world_index_count,
+		geometry.anyHitTriangleCount == 0u ? qtrue : qfalse,
 		vk_rt_as_compaction_enabled(),
 		"rt world blas" ) ) {
 		vk_rt_cpu_geometry_free( &geometry );
@@ -6271,7 +6697,9 @@ static uint32_t vk_rt_collect_instances( VkAccelerationStructureInstanceKHR *ins
 		worldInstance->instanceCustomIndex = 0;
 		worldInstance->mask = 0xFF;
 		worldInstance->instanceShaderBindingTableRecordOffset = 0;
-		worldInstance->flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+		worldInstance->flags =
+			VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
+			VK_GEOMETRY_INSTANCE_TRIANGLE_FLIP_FACING_BIT_KHR;
 		worldInstance->accelerationStructureReference = vk.rt.world_blas.deviceAddress;
 	}
 
@@ -6295,7 +6723,9 @@ static uint32_t vk_rt_collect_instances( VkAccelerationStructureInstanceKHR *ins
 		dynamicInstance->instanceCustomIndex = 1;
 		dynamicInstance->mask = 0xFF;
 		dynamicInstance->instanceShaderBindingTableRecordOffset = 0;
-		dynamicInstance->flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+		dynamicInstance->flags =
+			VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
+			VK_GEOMETRY_INSTANCE_TRIANGLE_FLIP_FACING_BIT_KHR;
 		dynamicInstance->accelerationStructureReference = vk.rt.dynamic_blas.deviceAddress;
 	}
 
@@ -6451,7 +6881,10 @@ static qboolean vk_rt_build_tlas( VkDeviceSize *frameBudgetBytesUsed, VkDeviceSi
 
 static qboolean vk_rt_ensure_temporal_params_buffer( void )
 {
-	if ( vk.rt.temporal_params_buffer.buffer != VK_NULL_HANDLE ) {
+	const uint32_t bufferIndex = (uint32_t)( vk.cmd_index % NUM_COMMAND_BUFFERS );
+	rtxVkRtBuffer_t *temporalBuffer = &vk.rt.temporal_params_buffer[bufferIndex];
+
+	if ( temporalBuffer->buffer != VK_NULL_HANDLE ) {
 		return qtrue;
 	}
 	return vk_rt_create_buffer(
@@ -6459,8 +6892,8 @@ static qboolean vk_rt_ensure_temporal_params_buffer( void )
 		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 		qfalse,
-		"rt temporal params",
-		&vk.rt.temporal_params_buffer );
+		va( "rt temporal params frame %u", bufferIndex ),
+		temporalBuffer );
 }
 
 static void vk_rt_reset_temporal_history( const char *reason )
@@ -6617,6 +7050,11 @@ static qboolean vk_rt_update_temporal_state( void )
 		temporalReset = qtrue;
 		logReset = qtrue;
 	}
+	if ( rtx_rt_raster_reference && rtx_rt_raster_reference->modified ) {
+		rtx_rt_raster_reference->modified = qfalse;
+		temporalReset = qtrue;
+		logReset = qtrue;
+	}
 	if ( rtx_rt_readability_lift && rtx_rt_readability_lift->modified ) {
 		rtx_rt_readability_lift->modified = qfalse;
 		temporalReset = qtrue;
@@ -6653,9 +7091,15 @@ static qboolean vk_rt_update_temporal_state( void )
 		vk.rt.temporal_exposure = vk_rt_exposure_manual();
 	}
 
+	/*
+	 * This SDR-only compatibility exposure is deliberately stable. Raw light
+	 * count is not an energy estimate: maps with many tiny compile lights
+	 * otherwise collapse to the minimum exposure even when their total
+	 * contribution is modest. Keep the empirically calibrated sun control
+	 * until a measured GPU luminance reduction replaces this heuristic.
+	 */
 	sceneLumaEstimate = 0.20f +
-		( 0.35f * vk_rt_sun_intensity() ) +
-		( 0.01f * (float)MIN( vk.rt.light_count, 128u ) );
+		( 0.35f * vk_rt_sun_intensity() * RTX_RT_LEGACY_SUN_UNIT_SCALE );
 	sceneLumaEstimate = MAX( 0.03f, sceneLumaEstimate );
 
 	if ( vk_rt_auto_exposure_enabled() ) {
@@ -6725,9 +7169,14 @@ static qboolean vk_rt_update_temporal_state( void )
 	params.exposureParams[2] = exposureAdapt;
 	params.exposureParams[3] = vk_rt_motion_dynamic_scale();
 
-	params.legacyColorParams[0] = vk_rt_legacy_color_compat_enabled() ? 1.0f : 0.0f;
+	params.legacyColorParams[0] = vk_rt_raster_reference_enabled() ? 1.0f : 0.0f;
 	params.legacyColorParams[1] = vk_rt_legacy_intensity_scale();
-	params.legacyColorParams[2] = 1.0f;
+	/*
+	 * Preserve the authored raster base and bound RT shadow/specular cues.
+	 * The compact RT material representation does not yet express the full
+	 * lightmap and multi-stage shader language.
+	 */
+	params.legacyColorParams[2] = 0.35f;
 	params.legacyColorParams[3] = 0.0f;
 
 	params.readabilityParams[0] = vk_rt_readability_lift();
@@ -6751,12 +7200,18 @@ static qboolean vk_rt_update_temporal_state( void )
 	if ( vk_rt_particle_volume_enabled() ) {
 		flags |= RTX_RT_MODE_FLAG_PARTICLE_VOLUME;
 	}
-	if ( vk_rt_legacy_color_compat_enabled() ) {
-		flags |= RTX_RT_MODE_FLAG_LEGACY_COLOR_COMPAT;
+	if ( vk_rt_raster_reference_enabled() ) {
+		flags |= RTX_RT_MODE_FLAG_RASTER_REFERENCE;
+	}
+	if ( vk_scene_linear_enabled() ) {
+		flags |= RTX_RT_MODE_FLAG_SCENE_LINEAR_OUTPUT;
 	}
 	params.modes[3] = flags;
 
-	if ( !vk_rt_upload_buffer_data( &vk.rt.temporal_params_buffer, &params, sizeof( params ) ) ) {
+	if ( !vk_rt_upload_buffer_data(
+		&vk.rt.temporal_params_buffer[ vk.cmd_index % NUM_COMMAND_BUFFERS ],
+		&params,
+		sizeof( params ) ) ) {
 		return qfalse;
 	}
 
@@ -6862,8 +7317,9 @@ static qboolean vk_rt_init( void )
 	vk.rt.as_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
 	vk.rt.as_props.pNext = NULL;
 
-	if ( !qvkGetPhysicalDeviceProperties2 ) {
-		ri.Printf( PRINT_ERROR, "RTX RT: vkGetPhysicalDeviceProperties2 is unavailable\n" );
+	if ( !qvkGetPhysicalDeviceProperties2 && !qvkGetPhysicalDeviceProperties2KHR ) {
+		ri.Printf( PRINT_ERROR,
+			"RTX RT: vkGetPhysicalDeviceProperties2/core-or-KHR is unavailable\n" );
 		return qfalse;
 	}
 
@@ -6872,7 +7328,11 @@ static qboolean vk_rt_init( void )
 		Com_Memset( &props2, 0, sizeof( props2 ) );
 		props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
 		props2.pNext = &vk.rt.rt_pipeline_props;
-		qvkGetPhysicalDeviceProperties2( vk.physical_device, &props2 );
+		if ( qvkGetPhysicalDeviceProperties2 ) {
+			qvkGetPhysicalDeviceProperties2( vk.physical_device, &props2 );
+		} else {
+			qvkGetPhysicalDeviceProperties2KHR( vk.physical_device, &props2 );
+		}
 		vk.rt.gpu_timestamp_period_ns = ( props2.properties.limits.timestampPeriod > 0.0f ) ?
 			props2.properties.limits.timestampPeriod : 1.0f;
 	}
@@ -6885,12 +7345,18 @@ static qboolean vk_rt_init( void )
 
 void vk_rt_invalidate( const char *reason )
 {
+	int i;
+
 	if ( !vk.rt.initialized ) {
 		return;
 	}
 
 	if ( vk_rt_debug_as_stats_level() >= 1 ) {
 		ri.Printf( PRINT_DEVELOPER, "RTX RT: invalidating RT state (%s)\n", reason ? reason : "unspecified" );
+	}
+
+	if ( !vk_rt_wait_for_inflight_frames( reason ? reason : "RT state invalidation" ) ) {
+		return;
 	}
 
 	vk_rt_destroy_as( &vk.rt.world_blas );
@@ -6903,19 +7369,27 @@ void vk_rt_invalidate( const char *reason )
 	vk_rt_destroy_buffer( &vk.rt.dynamic_material_buffer );
 	vk_rt_destroy_as( &vk.rt.tlas );
 	vk_rt_destroy_buffer( &vk.rt.tlas_instance_buffer );
-	vk_rt_destroy_buffer( &vk.rt.light_buffer );
+	for ( i = 0; i < NUM_COMMAND_BUFFERS; i++ ) {
+		vk_rt_destroy_buffer( &vk.rt.light_buffer[i] );
+	}
 
 	vk.rt.world_vertex_count = 0;
 	vk.rt.world_index_count = 0;
 	vk.rt.world_material_count = 0;
+	vk.rt.world_masked_triangle_count = 0;
 	vk.rt.dynamic_vertex_count = 0;
 	vk.rt.dynamic_index_count = 0;
 	vk.rt.dynamic_material_count = 0;
 	vk.rt.dynamic_entity_count = 0;
 	vk.rt.dynamic_effect_count = 0;
+	vk.rt.dynamic_masked_triangle_count = 0;
 	vk.rt.light_count = 0;
 	vk.rt.tlas_instance_count = 0;
 	vk.rt.tlas_instance_capacity = 0;
+	vk.rt.stats.world_triangles = 0;
+	vk.rt.stats.dynamic_triangles = 0;
+	vk.rt.stats.masked_triangles = 0;
+	vk.rt.stats.active_lights = 0;
 	vk.rt.worldGeometryReady = qfalse;
 	vk.rt.tlasValid = qfalse;
 	vk.rt.dispatchValid = qfalse;
@@ -6931,10 +7405,13 @@ void vk_rt_invalidate( const char *reason )
 	VectorClear( vk.rt.dynamic_centroid_current );
 	VectorClear( vk.rt.dynamic_centroid_prev );
 	VectorClear( vk.rt.dynamic_last_rebuild_centroid );
+	vk_rt_reset_world_light_cache();
 }
 
 static void vk_rt_shutdown( void )
 {
+	int i;
+
 	if ( !vk.rt.initialized ) {
 		return;
 	}
@@ -6951,9 +7428,11 @@ static void vk_rt_shutdown( void )
 	vk_rt_destroy_buffer( &vk.rt.world_vertex_buffer );
 	vk_rt_destroy_buffer( &vk.rt.world_index_buffer );
 	vk_rt_destroy_buffer( &vk.rt.world_material_buffer );
-	vk_rt_destroy_buffer( &vk.rt.light_buffer );
 	vk_rt_destroy_buffer( &vk.rt.scratch_buffer );
-	vk_rt_destroy_buffer( &vk.rt.temporal_params_buffer );
+	for ( i = 0; i < NUM_COMMAND_BUFFERS; i++ ) {
+		vk_rt_destroy_buffer( &vk.rt.light_buffer[i] );
+		vk_rt_destroy_buffer( &vk.rt.temporal_params_buffer[i] );
+	}
 
 	if ( vk.rt.pipeline != VK_NULL_HANDLE ) {
 		qvkDestroyPipeline( vk.device, vk.rt.pipeline, NULL );
@@ -6983,11 +7462,34 @@ static void vk_rt_shutdown( void )
 	vk_rt_reset_state();
 }
 
-void vk_rt_trace_frame( void )
+qboolean vk_rt_primary_view_eligible( void )
 {
+	return ( vk.caps.activeRtMode == 2 &&
+		vk.fboActive &&
+		!( backEnd.refdef.rdflags & ( RDF_NOWORLDMODEL | RDF_HYPERSPACE ) ) &&
+		vk.renderPassIndex == RENDER_PASS_MAIN &&
+		backEnd.viewParms.portalView == PV_NONE &&
+		backEnd.viewParms.stereoFrame == STEREO_CENTER &&
+		!glConfig.stereoEnabled &&
+		backEnd.viewParms.viewportX == 0 &&
+		backEnd.viewParms.viewportY == 0 &&
+		backEnd.viewParms.viewportWidth == glConfig.vidWidth &&
+		backEnd.viewParms.viewportHeight == glConfig.vidHeight &&
+		!( vk.rt.dispatchValid &&
+			vk.rt.lastFrameBuilt == (uint32_t)tr.frameCount ) ) ?
+			qtrue : qfalse;
+}
+
+qboolean vk_rt_trace_frame( void )
+{
+	static int lastFboSkipFrame = -1;
+	static int lastUiSkipFrame = -1;
+	static int lastHyperspaceSkipFrame = -1;
+	static int lastNonPrimarySkipFrame = -1;
 	VkDeviceSize budgetBytes = 0;
 	VkDeviceSize frameBuildBytesUsed = 0;
-	VkImageMemoryBarrier outputBarrier;
+	VkImageMemoryBarrier sceneColorBarrier;
+	VkImageMemoryBarrier traceBarriers[3];
 	rtxRtPushConstants_t push;
 	int budgetMb;
 	int64_t cpuFrameStartUs = 0;
@@ -6999,40 +7501,71 @@ void vk_rt_trace_frame( void )
 	qboolean copiedToColor = qfalse;
 
 	if ( !vk_rt_trace_available() ) {
-		return;
+		return qfalse;
 	}
 
 	if ( !vk.active || !vk.cmd || vk.cmd->command_buffer == VK_NULL_HANDLE ) {
-		return;
+		return qfalse;
 	}
 
 	if ( !vk.rt.initialized && !vk_rt_init() ) {
-		return;
+		return qfalse;
 	}
 
 	if ( !tr.worldMapLoaded || !tr.world ) {
 		vk.rt.stats.skipped_dispatches++;
-		return;
+		return qfalse;
 	}
 
 	if ( !vk.fboActive ) {
 		vk.rt.stats.skipped_dispatches++;
-		if ( vk_rt_debug_as_stats_level() >= 2 ) {
+		if ( vk_rt_debug_should_log_skip( &lastFboSkipFrame ) ) {
 			ri.Printf( PRINT_DEVELOPER, "RTX RT: skipping dispatch because r_fbo is disabled\n" );
 		}
-		return;
+		return qfalse;
 	}
 
 	if ( vk_rt_ui_passthrough_enabled() && ( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
 		vk.rt.stats.skipped_dispatches++;
-		if ( vk_rt_debug_as_stats_level() >= 2 ) {
+		if ( vk_rt_debug_should_log_skip( &lastUiSkipFrame ) ) {
 			ri.Printf( PRINT_DEVELOPER, "RTX RT: skipping dispatch for RDF_NOWORLDMODEL UI/console composition view\n" );
 		}
-		return;
+		return qfalse;
+	}
+	if ( backEnd.refdef.rdflags & RDF_HYPERSPACE ) {
+		vk.rt.stats.skipped_dispatches++;
+		if ( vk_rt_debug_should_log_skip( &lastHyperspaceSkipFrame ) ) {
+			ri.Printf( PRINT_DEVELOPER, "RTX RT: skipping dispatch for RDF_HYPERSPACE view\n" );
+		}
+		return qfalse;
+	}
+
+	/*
+	 * Portal/mirror views and screen-map capture commands render into
+	 * sub-views of the frame.  The RT output is a full-size image, so tracing
+	 * them here would overwrite unrelated pixels and invalidate resources
+	 * referenced by earlier commands.  Their raster result is composited by
+	 * the primary view's portal shader instead.
+	 */
+	if ( !vk_rt_primary_view_eligible() ) {
+		vk.rt.stats.skipped_dispatches++;
+		if ( vk_rt_debug_should_log_skip( &lastNonPrimarySkipFrame ) ) {
+			ri.Printf( PRINT_DEVELOPER,
+				"RTX RT: skipping non-primary/duplicate view (renderPass=%d portalView=%d stereo=%d viewport=%d,%d %dx%d)\n",
+				(int)vk.renderPassIndex,
+				(int)backEnd.viewParms.portalView,
+				(int)backEnd.viewParms.stereoFrame,
+				backEnd.viewParms.viewportX,
+				backEnd.viewParms.viewportY,
+				backEnd.viewParms.viewportWidth,
+				backEnd.viewParms.viewportHeight );
+		}
+		return qfalse;
 	}
 
 	vk_rt_read_timing_query_results();
 	vk_rt_update_scalability_controller();
+	vk_rt_handle_cached_resource_cvar_changes();
 
 	needCpuTiming = ( vk_rt_perf_timing_mode() > 0 || vk_rt_adaptive_budget_enabled() || vk_rt_dynamic_resolution_enabled() ) ? qtrue : qfalse;
 	if ( needCpuTiming ) {
@@ -7054,7 +7587,7 @@ void vk_rt_trace_frame( void )
 
 	if ( !vk_rt_ensure_pipeline() || !vk_rt_ensure_output_image() ) {
 		vk.rt.stats.skipped_dispatches++;
-		return;
+		return qfalse;
 	}
 
 	if ( needCpuTiming ) {
@@ -7062,7 +7595,7 @@ void vk_rt_trace_frame( void )
 	}
 	if ( !vk_rt_ensure_dynamic_blas( &frameBuildBytesUsed, budgetBytes ) ) {
 		vk.rt.stats.skipped_dispatches++;
-		return;
+		return qfalse;
 	}
 	if ( needCpuTiming ) {
 		cpuNowUs = vk_rt_now_microseconds();
@@ -7074,7 +7607,7 @@ void vk_rt_trace_frame( void )
 	}
 	if ( !vk_rt_ensure_world_blas( &frameBuildBytesUsed, budgetBytes ) ) {
 		vk.rt.stats.skipped_dispatches++;
-		return;
+		return qfalse;
 	}
 	if ( needCpuTiming ) {
 		cpuNowUs = vk_rt_now_microseconds();
@@ -7086,7 +7619,7 @@ void vk_rt_trace_frame( void )
 	}
 	if ( !vk_rt_build_tlas( &frameBuildBytesUsed, budgetBytes ) ) {
 		vk.rt.stats.skipped_dispatches++;
-		return;
+		return qfalse;
 	}
 	if ( needCpuTiming ) {
 		cpuNowUs = vk_rt_now_microseconds();
@@ -7098,7 +7631,7 @@ void vk_rt_trace_frame( void )
 	}
 	if ( !vk_rt_update_temporal_state() ) {
 		vk.rt.stats.skipped_dispatches++;
-		return;
+		return qfalse;
 	}
 	if ( needCpuTiming ) {
 		cpuNowUs = vk_rt_now_microseconds();
@@ -7107,10 +7640,36 @@ void vk_rt_trace_frame( void )
 
 	if ( !vk_rt_update_descriptor_set() || !vk.rt.sbtValid ) {
 		vk.rt.stats.skipped_dispatches++;
-		return;
+		return qfalse;
 	}
 
 	vk_end_render_pass();
+
+	/*
+	 * The raster reference is sampled directly by raygen.  Keep this barrier
+	 * local to the active RT path so raster-only devices never see an RT stage
+	 * in their render-pass dependencies.
+	 */
+	Com_Memset( &sceneColorBarrier, 0, sizeof( sceneColorBarrier ) );
+	sceneColorBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	sceneColorBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	sceneColorBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	sceneColorBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	sceneColorBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	sceneColorBarrier.image = vk.color_image;
+	sceneColorBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	sceneColorBarrier.subresourceRange.levelCount = 1;
+	sceneColorBarrier.subresourceRange.layerCount = 1;
+	sceneColorBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+	sceneColorBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	qvkCmdPipelineBarrier(
+		vk.cmd->command_buffer,
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+		0,
+		0, NULL,
+		0, NULL,
+		1, &sceneColorBarrier );
 
 	if ( vk_rt_ensure_timing_query_pool() &&
 		vk.rt.timing_query_pool != VK_NULL_HANDLE &&
@@ -7131,20 +7690,33 @@ void vk_rt_trace_frame( void )
 		cpuStageStartUs = vk_rt_now_microseconds();
 	}
 
-	Com_Memset( &outputBarrier, 0, sizeof( outputBarrier ) );
-	outputBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	outputBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-	outputBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-	outputBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	outputBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	outputBarrier.image = vk.rt.output_image;
-	outputBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	outputBarrier.subresourceRange.baseMipLevel = 0;
-	outputBarrier.subresourceRange.levelCount = 1;
-	outputBarrier.subresourceRange.baseArrayLayer = 0;
-	outputBarrier.subresourceRange.layerCount = 1;
-	outputBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-	outputBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	Com_Memset( traceBarriers, 0, sizeof( traceBarriers ) );
+	{
+		const uint32_t historyReadIndex = vk.rt.history_read_index & 1u;
+		const uint32_t historyWriteIndex = historyReadIndex ^ 1u;
+		int barrierIndex;
+
+		for ( barrierIndex = 0; barrierIndex < ARRAY_LEN( traceBarriers ); barrierIndex++ ) {
+			traceBarriers[barrierIndex].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+			traceBarriers[barrierIndex].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+			traceBarriers[barrierIndex].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+			traceBarriers[barrierIndex].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			traceBarriers[barrierIndex].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			traceBarriers[barrierIndex].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			traceBarriers[barrierIndex].subresourceRange.baseMipLevel = 0;
+			traceBarriers[barrierIndex].subresourceRange.levelCount = 1;
+			traceBarriers[barrierIndex].subresourceRange.baseArrayLayer = 0;
+			traceBarriers[barrierIndex].subresourceRange.layerCount = 1;
+			traceBarriers[barrierIndex].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		}
+
+		traceBarriers[0].image = vk.rt.output_image;
+		traceBarriers[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		traceBarriers[1].image = vk.rt.history_image[historyReadIndex];
+		traceBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		traceBarriers[2].image = vk.rt.history_image[historyWriteIndex];
+		traceBarriers[2].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	}
 	qvkCmdPipelineBarrier(
 		vk.cmd->command_buffer,
 		VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
@@ -7152,7 +7724,7 @@ void vk_rt_trace_frame( void )
 		0,
 		0, NULL,
 		0, NULL,
-		1, &outputBarrier );
+		ARRAY_LEN( traceBarriers ), traceBarriers );
 
 	qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, vk.rt.pipeline );
 	qvkCmdBindDescriptorSets(
@@ -7273,30 +7845,28 @@ void vk_rt_trace_frame( void )
 				&blitRegion,
 				VK_FILTER_LINEAR );
 			copiedToColor = qtrue;
+		} else if ( !needsBlit ) {
+			copyRegion.extent.width = vk.rt.output_width;
+			copyRegion.extent.height = vk.rt.output_height;
+
+			qvkCmdCopyImage(
+				vk.cmd->command_buffer,
+				vk.rt.output_image,
+				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				vk.color_image,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				1,
+				&copyRegion );
+			copiedToColor = qtrue;
 		} else {
 			if ( needsBlit && !canReconstructionBlit && !s_vkRtDynResBlitWarned ) {
 				ri.Printf( PRINT_WARNING,
-					"RTX RT: output blit path unavailable for output/color formats (%s -> %s)%s%s\n",
+					"RTX RT: output blit path unavailable for output/color formats (%s -> %s)%s%s; preserving the complete raster frame\n",
 					vk_format_string( vk.rt.output_format ),
 					vk_format_string( vk.color_format ),
 					needsReconstruction ? ", reconstruction requested" : "",
 					needsFormatConversion ? ", format conversion required" : "" );
 				s_vkRtDynResBlitWarned = qtrue;
-			}
-
-			if ( !needsFormatConversion ) {
-				copyRegion.extent.width = needsReconstruction ? MIN( vk.rt.output_width, (uint32_t)glConfig.vidWidth ) : vk.rt.output_width;
-				copyRegion.extent.height = needsReconstruction ? MIN( vk.rt.output_height, (uint32_t)glConfig.vidHeight ) : vk.rt.output_height;
-
-				qvkCmdCopyImage(
-					vk.cmd->command_buffer,
-					vk.rt.output_image,
-					VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-					vk.color_image,
-					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-					1,
-					&copyRegion );
-				copiedToColor = qtrue;
 			}
 		}
 
@@ -7308,12 +7878,16 @@ void vk_rt_trace_frame( void )
 		copyBarriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 		copyBarriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		copyBarriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		copyBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		copyBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
 		qvkCmdPipelineBarrier(
 			vk.cmd->command_buffer,
 			VK_PIPELINE_STAGE_TRANSFER_BIT,
-			VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+			VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 			0,
 			0, NULL,
 			0, NULL,
@@ -7350,9 +7924,12 @@ void vk_rt_trace_frame( void )
 	}
 	vk_rt_log_perf_summary();
 
-	if ( vk_rt_post_validate_enabled() && !vk.rt.post_validation_logged ) {
+	if ( copiedToColor && vk_rt_post_validate_enabled() && !vk.rt.post_validation_logged ) {
 		ri.Printf( PRINT_ALL,
 			"RTX RT post stack validation: trace->copy->post_bloom->gamma ordering active (HUD/UI/cinematics remain in post-bloom/main composition path)\n" );
+		ri.Printf( PRINT_ALL,
+			"RTX RT primary dispatch validation: vkCmdTraceRaysKHR output copied to scene color; shading=%s; raster_role=depth_fallback_overlay\n",
+			vk_rt_raster_reference_enabled() ? "raster_reference_compat" : "native_rt" );
 		vk.rt.post_validation_logged = qtrue;
 	}
 
@@ -7376,6 +7953,8 @@ void vk_rt_trace_frame( void )
 			vk.rt.dynamic_effect_count,
 			(unsigned long long)vk.rt.stats.active_lights );
 	}
+
+	return copiedToColor;
 }
 
 static const char *vk_capability_value( qboolean supported )
@@ -7767,6 +8346,7 @@ const char *vk_format_string( VkFormat format )
 		CASE_STR( VK_FORMAT_B4G4R4A4_UNORM_PACK16 );
 		CASE_STR( VK_FORMAT_R4G4B4A4_UNORM_PACK16 );
 		CASE_STR( VK_FORMAT_R16G16B16A16_UNORM );
+		CASE_STR( VK_FORMAT_R16G16B16A16_SFLOAT );
 		CASE_STR( VK_FORMAT_A2B10G10R10_UNORM_PACK32 );
 		CASE_STR( VK_FORMAT_A2R10G10B10_UNORM_PACK32 );
 		CASE_STR( VK_FORMAT_B10G11R11_UFLOAT_PACK32 );
@@ -7890,7 +8470,7 @@ static VkCommandBuffer begin_command_buffer( void )
 static qboolean end_command_buffer_internal( VkCommandBuffer command_buffer, const char *location, qboolean fatalOnError )
 {
 #ifdef USE_UPLOAD_QUEUE
-	const VkPipelineStageFlags wait_dst_stage_mask = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+	const VkPipelineStageFlags wait_dst_stage_mask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 	VkSemaphore waits;
 #endif
 	VkSubmitInfo submit_info;
@@ -7972,6 +8552,17 @@ static void record_image_layout_transition( VkCommandBuffer command_buffer, VkIm
 	VkImageMemoryBarrier barrier;
 	uint32_t src_stage, dst_stage;
 
+	/*
+	 * The renderer does not enable separateDepthStencilLayouts.  A barrier
+	 * covering either of our depth/stencil images must therefore transition
+	 * both aspects, even when the image view and copy region intentionally
+	 * address only the depth aspect.
+	 */
+	if ( glConfig.stencilBits > 0 &&
+		( image == vk.depth_image || image == vk.liquidDepth.image ) ) {
+		image_aspect_flags |= VK_IMAGE_ASPECT_STENCIL_BIT;
+	}
+
 	switch ( old_layout ) {
 		case VK_IMAGE_LAYOUT_UNDEFINED:
 			if ( src_stage_override != 0 )
@@ -7992,6 +8583,16 @@ static void record_image_layout_transition( VkCommandBuffer command_buffer, VkIm
 			src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 			barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
 			break;
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+			src_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+				VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+			barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+				VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+			break;
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+			src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+			break;
 		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
 			src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 			barrier.srcAccessMask = VK_ACCESS_NONE;
@@ -8009,8 +8610,11 @@ static void record_image_layout_transition( VkCommandBuffer command_buffer, VkIm
 			barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 			break;
 		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-			dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-			barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+			dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+				VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+			barrier.dstAccessMask =
+				VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+				VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 			break;
 		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
 			dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
@@ -8027,6 +8631,10 @@ static void record_image_layout_transition( VkCommandBuffer command_buffer, VkIm
 		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
 			dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+			break;
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+			dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 			break;
 		default:
 			ri.Error( ERR_DROP, "unsupported new layout %i", new_layout);
@@ -8126,6 +8734,12 @@ static void vk_debug_render_pass_label( VkRenderPass renderPass, char *markerNam
 	if ( renderPass == vk.render_pass.post_bloom ) {
 		Q_strncpyz( markerName, "RTX Pass: post_bloom", markerNameSize );
 		color[0] = 0.18f; color[1] = 0.62f; color[2] = 0.92f; color[3] = 1.0f;
+		return;
+	}
+
+	if ( renderPass == vk.render_pass.global_fog ) {
+		Q_strncpyz( markerName, "RTX Pass: global_fog", markerNameSize );
+		color[0] = 0.55f; color[1] = 0.59f; color[2] = 0.61f; color[3] = 1.0f;
 		return;
 	}
 
@@ -8367,11 +8981,19 @@ static void vk_create_render_passes( void )
 	VkAttachmentReference depthRef0;
 	VkSubpassDescription subpass;
 	VkSubpassDependency deps[3];
+	VkSubpassDependency fogDeps[2];
 	VkRenderPassCreateInfo desc;
 	VkFormat depth_format;
 	VkDevice device;
 	const qboolean bloomEnabled = ( r_bloom && r_bloom->integer ) ? qtrue : qfalse;
-	const qboolean needsPostMainPass = ( bloomEnabled || vk_rt_trace_available() ) ? qtrue : qfalse;
+	const qboolean globalFogEnabled = vk_global_fog_enabled();
+	const qboolean depthFadeActive = vk_depth_fade_supported();
+	const qboolean liquidCaptureActive =
+		( vk.fboActive && vk_liquid_requested() ) ? qtrue : qfalse;
+	const qboolean needsPostMainPass =
+		( bloomEnabled || globalFogEnabled || depthFadeActive ||
+			liquidCaptureActive ||
+			vk_rt_trace_available() ) ? qtrue : qfalse;
 	uint32_t i;
 
 	depth_format = vk.depth_format;
@@ -8514,18 +9136,38 @@ static void vk_create_render_passes( void )
 
 	deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
 	deps[0].dstSubpass = 0;
-	deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;			// What pipeline stage must have completed for the dependency
-	deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;	// What pipeline stage is waiting on the dependency
-	deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;						// What access scopes are influence the dependency
-	deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; // What access scopes are waiting on the dependency
+	deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+		VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+		VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+		VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+		VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+		VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+		VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 	deps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;					// Only need the current fragment (or tile) synchronized, not the whole framebuffer
 
 	deps[1].srcSubpass = 0;
 	deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-	deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;	// Fragment data has been written
-	deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;			// Don't start shading until data is available
-	deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;			// Waiting for color data to be written
-	deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;						// Don't read things from the shader before ready
+	deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+		VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+		VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+		VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+		VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+		VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+		VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 	deps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;					// Only need the current fragment (or tile) synchronized, not the whole framebuffer
 
 	VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.main ) );
@@ -8538,9 +9180,16 @@ static void vk_create_render_passes( void )
 		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // load from previous pass
 		 // depth buffer
 		attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-		attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachments[1].storeOp =
+			( globalFogEnabled || depthFadeActive ||
+			  liquidCaptureActive ) ?
+			VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-		attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachments[1].stencilStoreOp =
+			( ( globalFogEnabled || depthFadeActive ||
+				liquidCaptureActive ) &&
+			  glConfig.stencilBits ) ?
+				VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		if ( vk.msaaActive ) {
 			// msaa render target
 			attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -8548,6 +9197,65 @@ static void vk_create_render_passes( void )
 		}
 		VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.post_bloom ) );
 		SET_OBJECT_NAME( vk.render_pass.post_bloom, "render pass - post_bloom", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
+	}
+
+	if ( globalFogEnabled ) {
+		/*
+		 * Global fog samples the completed scene depth, so it uses a
+		 * color-only load pass between two depth-owning main/post passes.
+		 */
+		Com_Memset( &attachments[0], 0, sizeof( attachments[0] ) );
+		attachments[0].format = vk.color_format;
+		attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachments[0].initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		colorRef0.attachment = 0;
+		colorRef0.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		Com_Memset( &subpass, 0, sizeof( subpass ) );
+		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorRef0;
+
+		Com_Memset( fogDeps, 0, sizeof( fogDeps ) );
+		fogDeps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+		fogDeps[0].dstSubpass = 0;
+		fogDeps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		fogDeps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		fogDeps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		fogDeps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		fogDeps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+		fogDeps[1].srcSubpass = 0;
+		fogDeps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+		fogDeps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		fogDeps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		fogDeps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		fogDeps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		fogDeps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+		Com_Memset( &desc, 0, sizeof( desc ) );
+		desc.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		desc.attachmentCount = 1;
+		desc.pAttachments = attachments;
+		desc.subpassCount = 1;
+		desc.pSubpasses = &subpass;
+		desc.dependencyCount = 2;
+		desc.pDependencies = fogDeps;
+
+		VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.global_fog ) );
+		SET_OBJECT_NAME( vk.render_pass.global_fog, "render pass - global fog", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
 	}
 
 	if ( bloomEnabled ) {
@@ -8729,6 +9437,61 @@ static void vk_create_render_passes( void )
 	VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.screenmap ) );
 
 	SET_OBJECT_NAME( vk.render_pass.screenmap, "render pass - screenmap", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
+
+	if ( liquidCaptureActive ) {
+		VkAttachmentDescription liquidAttachment;
+		VkAttachmentReference liquidColorRef;
+		VkSubpassDescription liquidSubpass;
+		VkSubpassDependency liquidDeps[2];
+		VkRenderPassCreateInfo liquidDesc;
+
+		Com_Memset( &liquidAttachment, 0, sizeof( liquidAttachment ) );
+		liquidAttachment.format = vk.color_format;
+		liquidAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		liquidAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		liquidAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		liquidAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		liquidAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		liquidAttachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		liquidAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		liquidColorRef.attachment = 0;
+		liquidColorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		Com_Memset( &liquidSubpass, 0, sizeof( liquidSubpass ) );
+		liquidSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		liquidSubpass.colorAttachmentCount = 1;
+		liquidSubpass.pColorAttachments = &liquidColorRef;
+
+		Com_Memset( liquidDeps, 0, sizeof( liquidDeps ) );
+		liquidDeps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+		liquidDeps[0].dstSubpass = 0;
+		liquidDeps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		liquidDeps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		liquidDeps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		liquidDeps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		liquidDeps[1].srcSubpass = 0;
+		liquidDeps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+		liquidDeps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		liquidDeps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		liquidDeps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		liquidDeps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+		Com_Memset( &liquidDesc, 0, sizeof( liquidDesc ) );
+		liquidDesc.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		liquidDesc.attachmentCount = 1;
+		liquidDesc.pAttachments = &liquidAttachment;
+		liquidDesc.subpassCount = 1;
+		liquidDesc.pSubpasses = &liquidSubpass;
+		liquidDesc.dependencyCount = ARRAY_LEN( liquidDeps );
+		liquidDesc.pDependencies = liquidDeps;
+
+		VK_CHECK( qvkCreateRenderPass( device, &liquidDesc, NULL,
+			&vk.render_pass.liquid_snapshot ) );
+		SET_OBJECT_NAME( vk.render_pass.liquid_snapshot,
+			"render pass - liquid snapshot",
+			VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
+	}
 	vk_lifetime_mark_create( RTX_VK_RESOURCE_RENDER_PASSES, __func__ );
 }
 
@@ -8829,7 +9592,7 @@ static void vk_wait_staging_buffer( void )
 
 static void vk_submit_staging_buffer( qboolean final )
 {
-	const VkPipelineStageFlags wait_dst_stage_mask = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+	const VkPipelineStageFlags wait_dst_stage_mask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 	VkQueue submitQueue = ( vk.async_queue_available && vk_rt_async_overlap_enabled() ) ? vk.async_queue : vk.queue;
 	VkSemaphore waits;
 	VkSubmitInfo submit_info;
@@ -8971,12 +9734,6 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(VkDebugReportFlagsEXT flags
 			( layer_prefix && layer_prefix[0] ) ? layer_prefix : "unknown",
 			message );
 	}
-#ifdef _WIN32
-	MessageBoxA( 0, message, layer_prefix, MB_ICONWARNING );
-	OutputDebugString(message);
-	OutputDebugString("\n");
-	DebugBreak();
-#endif
 	return VK_FALSE;
 }
 #endif
@@ -9193,18 +9950,81 @@ static qboolean vk_blit_enabled( VkPhysicalDevice physical_device, const VkForma
 }
 
 
-static VkFormat get_hdr_format( VkFormat base_format )
+static qboolean vk_hdr_scene_format_supported( VkPhysicalDevice physical_device,
+	VkFormat format )
 {
+	VkFormatProperties properties;
+	/*
+	 * The scene target is sampled by post/capture and may receive the RT
+	 * reconstruction blit. Final SDR capture no longer blits from it, so
+	 * requiring BLIT_SRC would reject otherwise valid RGBA16F devices.
+	 */
+	const VkFormatFeatureFlags requiredFeatures =
+		VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+		VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT |
+		VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+		VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+		VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+		VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+		VK_FORMAT_FEATURE_BLIT_DST_BIT;
+
+	qvkGetPhysicalDeviceFormatProperties( physical_device, format, &properties );
+	return ( properties.optimalTilingFeatures & requiredFeatures ) ==
+		requiredFeatures ? qtrue : qfalse;
+}
+
+
+static VkFormat get_hdr_format( VkPhysicalDevice physical_device,
+	VkFormat base_format )
+{
+	static qboolean warnedUnsupportedHdrFormat = qfalse;
+	int precision;
+
 	if ( r_fbo->integer == 0 ) {
 		return base_format;
 	}
 
-	switch ( r_hdr->integer ) {
-		case -1: return VK_FORMAT_B4G4R4A4_UNORM_PACK16;
-		case 1: return VK_FORMAT_R16G16B16A16_UNORM;
-		default: return base_format;
+	if ( r_hdr && r_hdr->integer > 0 ) {
+		const VkFormat hdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+		if ( vk_hdr_scene_format_supported( physical_device, hdrFormat ) ) {
+			return hdrFormat;
+		}
+		if ( !warnedUnsupportedHdrFormat ) {
+			ri.Printf( PRINT_WARNING,
+				"RTX: scene-linear HDR requested but %s lacks the required color, sampling, transfer, and blit features; using %s SDR storage\n",
+				vk_format_string( hdrFormat ), vk_format_string( base_format ) );
+			warnedUnsupportedHdrFormat = qtrue;
+		}
+		return base_format;
 	}
+
+	precision = r_hdrPrecision ? r_hdrPrecision->integer : 0;
+	switch ( precision ) {
+	case -1:
+		return VK_FORMAT_B4G4R4A4_UNORM_PACK16;
+	case 8:
+		return base_format;
+	case 16:
+		return VK_FORMAT_R16G16B16A16_UNORM;
+	default:
+		break;
+	}
+
+	if ( r_hdr && r_hdr->integer < 0 ) {
+		return VK_FORMAT_B4G4R4A4_UNORM_PACK16;
+	}
+	return base_format;
 }
+
+
+qboolean vk_scene_linear_enabled( void )
+{
+	return ( r_fbo && r_fbo->integer &&
+		r_hdr && r_hdr->integer > 0 &&
+		vk.color_format == VK_FORMAT_R16G16B16A16_SFLOAT ) ? qtrue : qfalse;
+}
+
 
 typedef struct {
 	int bits;
@@ -9315,19 +10135,52 @@ static qboolean vk_select_surface_format( VkPhysicalDevice physical_device, VkSu
 
 static void setup_surface_formats( VkPhysicalDevice physical_device )
 {
-	vk.depth_format = get_depth_format( physical_device );
+	VkFormatProperties depthFormatProperties;
 
-	vk.color_format = get_hdr_format( vk.base_format.format );
+	vk.depth_format = get_depth_format( physical_device );
+	qvkGetPhysicalDeviceFormatProperties( physical_device, vk.depth_format, &depthFormatProperties );
+	vk.globalFogDepthSampleSupported =
+		( depthFormatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT ) != 0
+			? qtrue : qfalse;
+	vk.liquidDepthSampleSupported = vk.globalFogDepthSampleSupported;
+
+	vk.color_format = get_hdr_format( physical_device, vk.base_format.format );
 
 	vk.capture_format = VK_FORMAT_R8G8B8A8_UNORM;
 
-	vk.bloom_format = vk.base_format.format;
+	vk.bloom_format = vk_scene_linear_enabled() ?
+		VK_FORMAT_R16G16B16A16_SFLOAT : vk.base_format.format;
 
-	vk.blitEnabled = vk_blit_enabled( physical_device, vk.color_format, vk.capture_format );
+	if ( r_fbo->integer ) {
+		vk.blitEnabled = vk_blit_enabled( physical_device,
+			vk.capture_format, vk.capture_format );
+	} else {
+		vk.blitEnabled = vk_blit_enabled( physical_device,
+			vk.present_format.format, vk.capture_format );
+		if ( !vk.blitEnabled ) {
+			/*
+			 * vkCmdCopyImage requires matching formats. Preserve the
+			 * swapchain channel order for direct non-FBO readback when a
+			 * present-to-RGBA blit is unavailable.
+			 */
+			vk.capture_format = vk.present_format.format;
+		}
+	}
 
-	if ( !vk.blitEnabled )
-	{
-		vk.capture_format = vk.color_format;
+	if ( r_globalFog && r_globalFog->integer && !vk.globalFogDepthSampleSupported ) {
+		ri.Printf( PRINT_WARNING,
+			"RTX: depth format %s cannot be sampled; per-map global fog will be disabled on this device\n",
+			vk_format_string( vk.depth_format ) );
+	}
+	if ( vk_depth_fade_requested() && !vk.liquidDepthSampleSupported ) {
+		ri.Printf( PRINT_WARNING,
+			"RTX: depth format %s cannot be sampled; soft-particle depth fade will use authored blending only\n",
+			vk_format_string( vk.depth_format ) );
+	}
+	if ( vk_liquid_requested() && !vk.liquidDepthSampleSupported ) {
+		ri.Printf( PRINT_WARNING,
+			"RTX: depth format %s cannot be sampled; enhanced liquids will keep refraction/reflection but disable foreground depth rejection\n",
+			vk_format_string( vk.depth_format ) );
 	}
 }
 
@@ -9348,6 +10201,88 @@ static const char *renderer_name( const VkPhysicalDeviceProperties *props ) {
 		device_type, props->deviceName, props->deviceID );
 
 	return buf;
+}
+
+
+static qboolean vk_query_rt_device_features(
+	VkPhysicalDevice physical_device,
+	qboolean queryBufferDeviceAddress,
+	qboolean queryDescriptorIndexing,
+	qboolean queryAccelerationStructure,
+	qboolean queryRayQuery,
+	qboolean queryRayTracingPipeline,
+	qboolean *bufferDeviceAddress,
+	qboolean *descriptorIndexing,
+	qboolean *accelerationStructure,
+	qboolean *rayQuery,
+	qboolean *rayTracingPipeline )
+{
+	VkPhysicalDeviceFeatures2 features2;
+	VkPhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures;
+	VkPhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures;
+	VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures;
+	VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures;
+	VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures;
+	void **pNextPtr;
+
+	*bufferDeviceAddress = qfalse;
+	*descriptorIndexing = qfalse;
+	*accelerationStructure = qfalse;
+	*rayQuery = qfalse;
+	*rayTracingPipeline = qfalse;
+
+	if ( qvkGetPhysicalDeviceFeatures2 == NULL &&
+		qvkGetPhysicalDeviceFeatures2KHR == NULL ) {
+		return qfalse;
+	}
+
+	Com_Memset( &features2, 0, sizeof( features2 ) );
+	Com_Memset( &bufferDeviceAddressFeatures, 0, sizeof( bufferDeviceAddressFeatures ) );
+	Com_Memset( &descriptorIndexingFeatures, 0, sizeof( descriptorIndexingFeatures ) );
+	Com_Memset( &accelerationStructureFeatures, 0, sizeof( accelerationStructureFeatures ) );
+	Com_Memset( &rayQueryFeatures, 0, sizeof( rayQueryFeatures ) );
+	Com_Memset( &rayTracingPipelineFeatures, 0, sizeof( rayTracingPipelineFeatures ) );
+
+	features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+	pNextPtr = (void **)&features2.pNext;
+
+	if ( queryBufferDeviceAddress ) {
+		bufferDeviceAddressFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+		*pNextPtr = &bufferDeviceAddressFeatures;
+		pNextPtr = (void **)&bufferDeviceAddressFeatures.pNext;
+	}
+	if ( queryDescriptorIndexing ) {
+		descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+		*pNextPtr = &descriptorIndexingFeatures;
+		pNextPtr = (void **)&descriptorIndexingFeatures.pNext;
+	}
+	if ( queryAccelerationStructure ) {
+		accelerationStructureFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+		*pNextPtr = &accelerationStructureFeatures;
+		pNextPtr = (void **)&accelerationStructureFeatures.pNext;
+	}
+	if ( queryRayQuery ) {
+		rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+		*pNextPtr = &rayQueryFeatures;
+		pNextPtr = (void **)&rayQueryFeatures.pNext;
+	}
+	if ( queryRayTracingPipeline ) {
+		rayTracingPipelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+		*pNextPtr = &rayTracingPipelineFeatures;
+	}
+
+	if ( qvkGetPhysicalDeviceFeatures2 != NULL ) {
+		qvkGetPhysicalDeviceFeatures2( physical_device, &features2 );
+	} else {
+		qvkGetPhysicalDeviceFeatures2KHR( physical_device, &features2 );
+	}
+
+	*bufferDeviceAddress = bufferDeviceAddressFeatures.bufferDeviceAddress ? qtrue : qfalse;
+	*descriptorIndexing = descriptorIndexingFeatures.shaderSampledImageArrayNonUniformIndexing ? qtrue : qfalse;
+	*accelerationStructure = accelerationStructureFeatures.accelerationStructure ? qtrue : qfalse;
+	*rayQuery = rayQueryFeatures.rayQuery ? qtrue : qfalse;
+	*rayTracingPipeline = rayTracingPipelineFeatures.rayTracingPipeline ? qtrue : qfalse;
+	return qtrue;
 }
 
 
@@ -9435,6 +10370,18 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 		qboolean spirv14 = qfalse;
 		qboolean shaderFloatControls = qfalse;
 		qboolean enableBufferDeviceAddress = qfalse;
+		qboolean featureQueryAvailable = qfalse;
+		qboolean bufferDeviceAddressFeature = qfalse;
+		qboolean descriptorIndexingFeature = qfalse;
+		qboolean accelerationStructureFeature = qfalse;
+		qboolean rayQueryFeature = qfalse;
+		qboolean rayTracingPipelineFeature = qfalse;
+		VkPhysicalDeviceProperties physicalDeviceProperties;
+		VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProperties;
+		VkPhysicalDeviceAccelerationStructurePropertiesKHR accelerationStructureProperties;
+		VkFormatProperties rtOutputFormatProperties;
+		qboolean rtOutputFormatSupported = qfalse;
+		qboolean rtPropertiesAvailable = qfalse;
 		const int markerMode = vk_debug_markers_mode();
 		const void **pNextPtr;
 #ifdef _DEBUG
@@ -9499,6 +10446,57 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 
 		ri.Free( extension_properties );
 
+		featureQueryAvailable = vk_query_rt_device_features(
+			physical_device,
+			devAddrFeat,
+			descriptorIndexing,
+			accelerationStructure,
+			rayQuery,
+			rayTracingPipeline,
+			&bufferDeviceAddressFeature,
+			&descriptorIndexingFeature,
+			&accelerationStructureFeature,
+			&rayQueryFeature,
+			&rayTracingPipelineFeature );
+
+		devAddrFeat = ( devAddrFeat && bufferDeviceAddressFeature ) ? qtrue : qfalse;
+		descriptorIndexing = ( descriptorIndexing && descriptorIndexingFeature ) ? qtrue : qfalse;
+		accelerationStructure = ( accelerationStructure && accelerationStructureFeature ) ? qtrue : qfalse;
+		rayQuery = ( rayQuery && rayQueryFeature ) ? qtrue : qfalse;
+		rayTracingPipeline = ( rayTracingPipeline && rayTracingPipelineFeature ) ? qtrue : qfalse;
+		qvkGetPhysicalDeviceProperties( physical_device, &physicalDeviceProperties );
+		Com_Memset( &rtPipelineProperties, 0, sizeof( rtPipelineProperties ) );
+		Com_Memset( &accelerationStructureProperties, 0, sizeof( accelerationStructureProperties ) );
+		if ( ( qvkGetPhysicalDeviceProperties2 || qvkGetPhysicalDeviceProperties2KHR ) &&
+			rayTracingPipeline ) {
+			VkPhysicalDeviceProperties2 properties2;
+
+			Com_Memset( &properties2, 0, sizeof( properties2 ) );
+			properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+			rtPipelineProperties.sType =
+				VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+			rtPipelineProperties.pNext = &accelerationStructureProperties;
+			accelerationStructureProperties.sType =
+				VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+			properties2.pNext = &rtPipelineProperties;
+			if ( qvkGetPhysicalDeviceProperties2 ) {
+				qvkGetPhysicalDeviceProperties2( physical_device, &properties2 );
+			} else {
+				qvkGetPhysicalDeviceProperties2KHR( physical_device, &properties2 );
+			}
+			rtPropertiesAvailable = qtrue;
+		}
+		qvkGetPhysicalDeviceFormatProperties(
+			physical_device,
+			VK_FORMAT_R16G16B16A16_SFLOAT,
+			&rtOutputFormatProperties );
+		rtOutputFormatSupported =
+			( rtOutputFormatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT ) != 0 &&
+			( rtOutputFormatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT ) != 0 &&
+			( rtOutputFormatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT ) != 0 &&
+			( rtOutputFormatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT ) != 0
+				? qtrue : qfalse;
+
 		device_extension_count = 0;
 
 		if ( !swapchainSupported ) {
@@ -9537,7 +10535,11 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 			missingCaps[0] = '\0';
 
 			if ( requestedRtMode == RTX_RT_MODE_RAY_QUERY || requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE ) {
+				if ( !featureQueryAvailable ) {
+					Q_strcat( missingCaps, sizeof( missingCaps ), "vkGetPhysicalDeviceFeatures2" );
+				}
 				if ( !accelerationStructure ) {
+					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
 					Q_strcat( missingCaps, sizeof( missingCaps ), VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME );
 				}
 				if ( !descriptorIndexing ) {
@@ -9567,6 +10569,61 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 				if ( requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE && !shaderFloatControls ) {
 					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
 					Q_strcat( missingCaps, sizeof( missingCaps ), VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME );
+				}
+				if ( requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE &&
+					physicalDeviceProperties.limits.maxPushConstantsSize < sizeof( rtxRtPushConstants_t ) ) {
+					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
+					Q_strcat( missingCaps, sizeof( missingCaps ), "maxPushConstantsSize" );
+				}
+				if ( requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE &&
+					( physicalDeviceProperties.limits.maxPerStageDescriptorStorageBuffers < 8 ||
+						physicalDeviceProperties.limits.maxDescriptorSetStorageBuffers < 8 ) ) {
+					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
+					Q_strcat( missingCaps, sizeof( missingCaps ), "storage-buffer descriptor limits" );
+				}
+				if ( requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE &&
+					( physicalDeviceProperties.limits.maxPerStageDescriptorStorageImages < 3 ||
+						physicalDeviceProperties.limits.maxDescriptorSetStorageImages < 3 ) ) {
+					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
+					Q_strcat( missingCaps, sizeof( missingCaps ), "storage-image descriptor limits" );
+				}
+				if ( requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE &&
+					( physicalDeviceProperties.limits.maxPerStageDescriptorSampledImages < RTX_RT_MAX_SCENE_TEXTURES + 1 ||
+						physicalDeviceProperties.limits.maxDescriptorSetSampledImages < RTX_RT_MAX_SCENE_TEXTURES + 1 ||
+						physicalDeviceProperties.limits.maxPerStageDescriptorSamplers < RTX_RT_MAX_SCENE_TEXTURES + 1 ||
+						physicalDeviceProperties.limits.maxDescriptorSetSamplers < RTX_RT_MAX_SCENE_TEXTURES + 1 ) ) {
+					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
+					Q_strcat( missingCaps, sizeof( missingCaps ), "sampled-image descriptor limits" );
+				}
+				if ( requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE &&
+					physicalDeviceProperties.limits.maxPerStageResources <
+						RTX_RT_MAX_SCENE_TEXTURES + 9 ) {
+					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
+					Q_strcat( missingCaps, sizeof( missingCaps ), "maxPerStageResources" );
+				}
+				if ( requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE &&
+					( !rtPropertiesAvailable ||
+						rtPipelineProperties.maxRayRecursionDepth < 2 ||
+						rtPipelineProperties.shaderGroupHandleSize == 0 ||
+						rtPipelineProperties.shaderGroupHandleAlignment == 0 ||
+						rtPipelineProperties.shaderGroupBaseAlignment == 0 ||
+						rtPipelineProperties.maxShaderGroupStride <
+							( ( rtPipelineProperties.shaderGroupHandleSize +
+								rtPipelineProperties.shaderGroupHandleAlignment - 1 ) &
+								~( rtPipelineProperties.shaderGroupHandleAlignment - 1 ) ) ) ) {
+					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
+					Q_strcat( missingCaps, sizeof( missingCaps ), "ray-tracing pipeline limits" );
+				}
+				if ( requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE &&
+					( !rtPropertiesAvailable ||
+						accelerationStructureProperties.maxPerStageDescriptorAccelerationStructures < 1 ||
+						accelerationStructureProperties.maxDescriptorSetAccelerationStructures < 1 ) ) {
+					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
+					Q_strcat( missingCaps, sizeof( missingCaps ), "acceleration-structure descriptor limits" );
+				}
+				if ( requestedRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE && !rtOutputFormatSupported ) {
+					if ( missingCaps[0] ) Q_strcat( missingCaps, sizeof( missingCaps ), ", " );
+					Q_strcat( missingCaps, sizeof( missingCaps ), "rgba16f storage/blit format support" );
 				}
 			}
 
@@ -9694,6 +10751,7 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 		pNextPtr = (const void **)&device_desc.pNext;
 
 		if ( enableBufferDeviceAddress ) {
+			Com_Memset( &devaddr_features, 0, sizeof( devaddr_features ) );
 			*pNextPtr = &devaddr_features;
 			devaddr_features.pNext = NULL;
 			devaddr_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
@@ -9711,6 +10769,7 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 			descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
 			pNextPtr = (const void **)&descriptor_indexing_features.pNext;
 
+			Com_Memset( &accel_struct_features, 0, sizeof( accel_struct_features ) );
 			*pNextPtr = &accel_struct_features;
 			accel_struct_features.pNext = NULL;
 			accel_struct_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
@@ -9723,6 +10782,7 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 		}
 
 		if ( vk.caps.activeRtMode == RTX_RT_MODE_RAY_QUERY ) {
+			Com_Memset( &ray_query_features, 0, sizeof( ray_query_features ) );
 			*pNextPtr = &ray_query_features;
 			ray_query_features.pNext = NULL;
 			ray_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
@@ -9731,6 +10791,7 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 		}
 
 		if ( vk.caps.activeRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE ) {
+			Com_Memset( &rt_pipeline_features, 0, sizeof( rt_pipeline_features ) );
 			*pNextPtr = &rt_pipeline_features;
 			rt_pipeline_features.pNext = NULL;
 			rt_pipeline_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
@@ -9738,7 +10799,7 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 			rt_pipeline_features.rayTracingPipelineShaderGroupHandleCaptureReplay = VK_FALSE;
 			rt_pipeline_features.rayTracingPipelineShaderGroupHandleCaptureReplayMixed = VK_FALSE;
 			rt_pipeline_features.rayTracingPipelineTraceRaysIndirect = VK_FALSE;
-			rt_pipeline_features.rayTraversalPrimitiveCulling = VK_TRUE;
+			rt_pipeline_features.rayTraversalPrimitiveCulling = VK_FALSE;
 			pNextPtr = (const void **)&rt_pipeline_features.pNext;
 		}
 
@@ -9866,10 +10927,13 @@ static void init_vulkan_library( void )
 		INIT_INSTANCE_FUNCTION( vkEnumeratePhysicalDevices )
 		INIT_INSTANCE_FUNCTION( vkGetDeviceProcAddr )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceFeatures )
+		INIT_INSTANCE_FUNCTION_EXT( vkGetPhysicalDeviceFeatures2 )
+		INIT_INSTANCE_FUNCTION_EXT( vkGetPhysicalDeviceFeatures2KHR )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceFormatProperties )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceMemoryProperties )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceProperties )
 		INIT_INSTANCE_FUNCTION_EXT( vkGetPhysicalDeviceProperties2 )
+		INIT_INSTANCE_FUNCTION_EXT( vkGetPhysicalDeviceProperties2KHR )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceQueueFamilyProperties )
 		INIT_INSTANCE_FUNCTION( vkDestroySurfaceKHR )
 		INIT_INSTANCE_FUNCTION( vkGetPhysicalDeviceSurfaceCapabilitiesKHR )
@@ -10104,10 +11168,13 @@ static void deinit_instance_functions( void )
 	qvkEnumeratePhysicalDevices = NULL;
 	qvkGetDeviceProcAddr = NULL;
 	qvkGetPhysicalDeviceFeatures = NULL;
+	qvkGetPhysicalDeviceFeatures2 = NULL;
+	qvkGetPhysicalDeviceFeatures2KHR = NULL;
 	qvkGetPhysicalDeviceFormatProperties = NULL;
 	qvkGetPhysicalDeviceMemoryProperties = NULL;
 	qvkGetPhysicalDeviceProperties = NULL;
 	qvkGetPhysicalDeviceProperties2 = NULL;
+	qvkGetPhysicalDeviceProperties2KHR = NULL;
 	qvkGetPhysicalDeviceQueueFamilyProperties = NULL;
 	qvkDestroySurfaceKHR = NULL;
 	qvkGetPhysicalDeviceSurfaceCapabilitiesKHR = NULL;
@@ -10441,8 +11508,8 @@ static void vk_create_pipeline_layout_registry( void )
 		RTX_VK_PIPELINE_LAYOUT_POST_PROCESS,
 		postProcessDescriptorLayouts,
 		ARRAY_LEN( postProcessDescriptorLayouts ),
-		0,
-		0,
+		VK_SHADER_STAGE_FRAGMENT_BIT,
+		12 * sizeof( float ),
 		"pipeline layout - post-processing" );
 
 	vk_create_pipeline_layout_from_registry(
@@ -10640,10 +11707,36 @@ static void vk_update_attachment_descriptors( void ) {
 
 		qvkUpdateDescriptorSets( vk.device, 1, &desc, 0, NULL );
 
+		if ( vk.liquidSnapshot.source_descriptor &&
+			vk.liquidSnapshot.color_descriptor ) {
+			info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			info.imageView = vk.color_image_view;
+			desc.dstSet = vk.liquidSnapshot.source_descriptor;
+			qvkUpdateDescriptorSets( vk.device, 1, &desc, 0, NULL );
+
+			info.imageView = vk.liquidSnapshot.color_image_view;
+			desc.dstSet = vk.liquidSnapshot.color_descriptor;
+			qvkUpdateDescriptorSets( vk.device, 1, &desc, 0, NULL );
+		}
+
+		if ( vk.depth_sample_image_view && vk.depth_sample_descriptor ) {
+			sd.gl_mag_filter = sd.gl_min_filter = GL_NEAREST;
+			sd.max_lod_1_0 = qtrue;
+			sd.noAnisotropy = qtrue;
+
+			info.sampler = vk_find_sampler( &sd );
+			info.imageView = vk.depth_sample_image_view;
+			info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+			desc.dstSet = vk.depth_sample_descriptor;
+
+			qvkUpdateDescriptorSets( vk.device, 1, &desc, 0, NULL );
+		}
+
 		// bloom images
 		if ( r_bloom->integer )
 		{
 			uint32_t i;
+			info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 			for ( i = 0; i < ARRAY_LEN( vk.bloom_image_descriptor ); i++ )
 			{
 				info.imageView = vk.bloom_image_view[i];
@@ -10652,6 +11745,33 @@ static void vk_update_attachment_descriptors( void ) {
 				qvkUpdateDescriptorSets( vk.device, 1, &desc, 0, NULL );
 			}
 		}
+	}
+
+	if ( vk.liquidDepth.image_view && vk.liquidDepth.descriptor ) {
+		VkDescriptorImageInfo info;
+		VkWriteDescriptorSet desc;
+		Vk_Sampler_Def sd;
+
+		Com_Memset( &sd, 0, sizeof( sd ) );
+		sd.gl_mag_filter = sd.gl_min_filter = GL_NEAREST;
+		sd.address_mode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sd.max_lod_1_0 = qtrue;
+		sd.noAnisotropy = qtrue;
+
+		info.sampler = vk_find_sampler( &sd );
+		info.imageView = vk.liquidDepth.image_view;
+		info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		Com_Memset( &desc, 0, sizeof( desc ) );
+		desc.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		desc.dstSet = vk.liquidDepth.descriptor;
+		desc.dstBinding = 0;
+		desc.descriptorCount = 1;
+		desc.descriptorType =
+			VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		desc.pImageInfo = &info;
+
+		qvkUpdateDescriptorSets( vk.device, 1, &desc, 0, NULL );
 	}
 }
 
@@ -10714,6 +11834,11 @@ void vk_init_descriptors( void )
 
 		VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.color_descriptor ) );
 
+		if ( vk.depth_sample_image_view ) {
+			VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.depth_sample_descriptor ) );
+			SET_OBJECT_NAME( vk.depth_sample_descriptor, "global fog depth descriptor", VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
+		}
+
 		if ( r_bloom->integer )
 		{
 			for ( i = 0; i < ARRAY_LEN( vk.bloom_image_descriptor ); i++ )
@@ -10724,6 +11849,26 @@ void vk_init_descriptors( void )
 
 		alloc.descriptorSetCount = 1;
 		VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.screenMap.color_descriptor ) ); // screenmap
+
+		if ( vk.liquidSnapshot.color_image_view ) {
+			VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc,
+				&vk.liquidSnapshot.source_descriptor ) );
+			VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc,
+				&vk.liquidSnapshot.color_descriptor ) );
+			SET_OBJECT_NAME( vk.liquidSnapshot.source_descriptor,
+				"liquid snapshot source descriptor",
+				VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
+			SET_OBJECT_NAME( vk.liquidSnapshot.color_descriptor,
+				"liquid snapshot descriptor",
+				VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
+		}
+		if ( vk.liquidDepth.image_view ) {
+			VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc,
+				&vk.liquidDepth.descriptor ) );
+			SET_OBJECT_NAME( vk.liquidDepth.descriptor,
+				"liquid depth descriptor",
+				VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
+		}
 
 		vk_update_attachment_descriptors();
 	}
@@ -11152,13 +12297,31 @@ static void vk_create_shader_modules( void )
 	SET_OBJECT_NAME( vk.modules.dot_vs, "dot vertex module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.dot_fs, "dot fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 
+	if ( vk_liquid_requested() ) {
+		vk.modules.liquid_vs = SHADER_MODULE( liquid_vert_spv );
+		vk.modules.liquid_fs = SHADER_MODULE( liquid_frag_spv );
+		vk.modules.liquid_copy_fs = SHADER_MODULE( liquid_copy_frag_spv );
+
+		SET_OBJECT_NAME( vk.modules.liquid_vs,
+			"liquid effect vertex module",
+			VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+		SET_OBJECT_NAME( vk.modules.liquid_fs,
+			"liquid effect fragment module",
+			VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+		SET_OBJECT_NAME( vk.modules.liquid_copy_fs,
+			"liquid scene-copy fragment module",
+			VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+	}
+
 	vk.modules.bloom_fs = SHADER_MODULE( bloom_frag_spv );
 	vk.modules.blur_fs = SHADER_MODULE( blur_frag_spv );
 	vk.modules.blend_fs = SHADER_MODULE( blend_frag_spv );
+	vk.modules.global_fog_fs = SHADER_MODULE( global_fog_frag_spv );
 
 	SET_OBJECT_NAME( vk.modules.bloom_fs, "bloom extraction fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.blur_fs, "gaussian blur fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.blend_fs, "final bloom blend fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+	SET_OBJECT_NAME( vk.modules.global_fog_fs, "global fog fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 
 	vk.modules.gamma_fs = SHADER_MODULE( gamma_frag_spv );
 	vk.modules.gamma_vs = SHADER_MODULE( gamma_vert_spv );
@@ -11171,11 +12334,13 @@ static void vk_create_shader_modules( void )
 		vk.modules.rt_rmiss = SHADER_MODULE( rt_main_rmiss_spv );
 		vk.modules.rt_rmiss_shadow = SHADER_MODULE( rt_shadow_rmiss_spv );
 		vk.modules.rt_rchit = SHADER_MODULE( rt_main_rchit_spv );
+		vk.modules.rt_rahit = SHADER_MODULE( rt_main_rahit_spv );
 
 		SET_OBJECT_NAME( vk.modules.rt_rgen, "rt raygen module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 		SET_OBJECT_NAME( vk.modules.rt_rmiss, "rt miss module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 		SET_OBJECT_NAME( vk.modules.rt_rmiss_shadow, "rt shadow miss module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 		SET_OBJECT_NAME( vk.modules.rt_rchit, "rt closest-hit module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+		SET_OBJECT_NAME( vk.modules.rt_rahit, "rt any-hit module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	}
 }
 
@@ -11299,6 +12464,26 @@ static void vk_alloc_persistent_pipelines( void )
 			}
 		}
 #endif // USE_PMLIGHT
+	}
+
+	if ( vk_liquid_requested() ) {
+		int i, j, k;
+
+		Com_Memset( &def, 0, sizeof( def ) );
+		def.shader_type = TYPE_LIQUID;
+		def.state_bits = GLS_SRCBLEND_SRC_ALPHA |
+			GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA;
+		for ( i = 0; i < 3; i++ ) {
+			def.face_culling = i;
+			for ( j = 0; j < 2; j++ ) {
+				def.polygon_offset = j ? qtrue : qfalse;
+				for ( k = 0; k < 2; k++ ) {
+					def.mirror = k ? qtrue : qfalse;
+					vk.liquid_pipelines[i][j][k] =
+						vk_find_pipeline_ext( 0, &def, qfalse );
+				}
+			}
+		}
 	}
 
 	// RT_BEAM surface
@@ -11427,6 +12612,13 @@ void vk_update_post_process_pipelines( void )
 		if ( vk.capture.image ) {
 			// update capture pipeline
 			vk_create_post_process_pipeline( 3, gls.captureWidth, gls.captureHeight );
+		}
+		if ( vk.render_pass.global_fog != VK_NULL_HANDLE ) {
+			vk_create_post_process_pipeline( 4, glConfig.vidWidth, glConfig.vidHeight );
+		}
+		if ( vk.render_pass.liquid_snapshot != VK_NULL_HANDLE ) {
+			vk_create_post_process_pipeline( 5,
+				vk.liquidSnapshotWidth, vk.liquidSnapshotHeight );
 		}
 		if ( r_bloom->integer ) {
 			// update bloom shaders
@@ -11668,7 +12860,8 @@ static void create_color_attachment( uint32_t width, uint32_t height, VkSampleCo
 }
 
 
-static void create_depth_attachment( uint32_t width, uint32_t height, VkSampleCountFlagBits samples, VkImage *image, VkImageView *image_view, qboolean allowTransient )
+static void create_depth_attachment( uint32_t width, uint32_t height, VkSampleCountFlagBits samples,
+	VkImage *image, VkImageView *image_view, qboolean allowTransient, qboolean sampled )
 {
 	VkImageCreateInfo create_desc;
 	VkMemoryRequirements memory_requirements;
@@ -11688,7 +12881,15 @@ static void create_depth_attachment( uint32_t width, uint32_t height, VkSampleCo
 	create_desc.samples = samples;
 	create_desc.tiling = VK_IMAGE_TILING_OPTIMAL;
 	create_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-	if ( allowTransient ) {
+	if ( image == &vk.depth_image && vk.fboActive &&
+		vk_scene_depth_snapshot_requested() &&
+		samples == VK_SAMPLE_COUNT_1_BIT &&
+		vk.liquidDepthSampleSupported ) {
+		create_desc.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	}
+	if ( sampled ) {
+		create_desc.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+	} else if ( allowTransient ) {
 		create_desc.usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
 	}
 	create_desc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -11705,6 +12906,65 @@ static void create_depth_attachment( uint32_t width, uint32_t height, VkSampleCo
 	vk_get_image_memory_erquirements( *image, &memory_requirements );
 
 	vk_add_attachment_desc( *image, image_view, create_desc.usage, &memory_requirements, vk.depth_format, image_aspect_flags, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL );
+}
+
+static void create_liquid_depth_attachment( uint32_t width, uint32_t height )
+{
+	VkImageCreateInfo create_desc;
+	VkMemoryRequirements memory_requirements;
+
+	Com_Memset( &create_desc, 0, sizeof( create_desc ) );
+	create_desc.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	create_desc.imageType = VK_IMAGE_TYPE_2D;
+	create_desc.format = vk.depth_format;
+	create_desc.extent.width = width;
+	create_desc.extent.height = height;
+	create_desc.extent.depth = 1;
+	create_desc.mipLevels = 1;
+	create_desc.arrayLayers = 1;
+	create_desc.samples = VK_SAMPLE_COUNT_1_BIT;
+	create_desc.tiling = VK_IMAGE_TILING_OPTIMAL;
+	create_desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+		VK_IMAGE_USAGE_SAMPLED_BIT;
+	create_desc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	create_desc.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+	VK_CHECK( qvkCreateImage( vk.device, &create_desc, NULL,
+		&vk.liquidDepth.image ) );
+	vk_get_image_memory_erquirements( vk.liquidDepth.image,
+		&memory_requirements );
+	vk_add_attachment_desc( vk.liquidDepth.image,
+		&vk.liquidDepth.image_view, create_desc.usage,
+		&memory_requirements, vk.depth_format,
+		VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL );
+}
+
+static void vk_create_depth_sample_view( void )
+{
+	VkImageViewCreateInfo view;
+
+	if ( !vk_global_fog_enabled() || vk.depth_image == VK_NULL_HANDLE ) {
+		return;
+	}
+
+	Com_Memset( &view, 0, sizeof( view ) );
+	view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	view.image = vk.depth_image;
+	view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	view.format = vk.depth_format;
+	view.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+	view.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+	view.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+	view.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+	view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+	view.subresourceRange.baseMipLevel = 0;
+	view.subresourceRange.levelCount = 1;
+	view.subresourceRange.baseArrayLayer = 0;
+	view.subresourceRange.layerCount = 1;
+
+	VK_CHECK( qvkCreateImageView( vk.device, &view, NULL, &vk.depth_sample_image_view ) );
+	SET_OBJECT_NAME( vk.depth_sample_image_view, "global fog depth sample view", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
 }
 
 
@@ -11748,6 +13008,16 @@ static void vk_create_attachments( void )
 			usage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
 			&vk.color_image, &vk.color_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, qfalse );
 
+		if ( vk_liquid_requested() &&
+			vk.liquidSnapshotWidth > 0 && vk.liquidSnapshotHeight > 0 ) {
+			create_color_attachment( vk.liquidSnapshotWidth,
+				vk.liquidSnapshotHeight, VK_SAMPLE_COUNT_1_BIT,
+				vk.color_format, usage,
+				&vk.liquidSnapshot.color_image,
+				&vk.liquidSnapshot.color_image_view,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, qfalse );
+		}
+
 		// screenmap-msaa
 		if ( vk.screenMapSamples > VK_SAMPLE_COUNT_1_BIT ) {
 			create_color_attachment( vk.screenMapWidth, vk.screenMapHeight, vk.screenMapSamples, vk.color_format,
@@ -11759,27 +13029,40 @@ static void vk_create_attachments( void )
 			usage, &vk.screenMap.color_image, &vk.screenMap.color_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, qfalse );
 
 		// screenmap depth
-		create_depth_attachment( vk.screenMapWidth, vk.screenMapHeight, vk.screenMapSamples, &vk.screenMap.depth_image, &vk.screenMap.depth_image_view, qtrue );
+		create_depth_attachment( vk.screenMapWidth, vk.screenMapHeight, vk.screenMapSamples,
+			&vk.screenMap.depth_image, &vk.screenMap.depth_image_view, qtrue, qfalse );
 
 		if ( vk.msaaActive ) {
 			create_color_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples, vk.color_format,
 				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &vk.msaa_image, &vk.msaa_image_view, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, qtrue );
 		}
 
-		if ( r_ext_supersample->integer ) {
-			// capture buffer
-			usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-			create_color_attachment( gls.captureWidth, gls.captureHeight, VK_SAMPLE_COUNT_1_BIT, vk.capture_format,
-				usage, &vk.capture.image, &vk.capture.image_view, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, qfalse );
-		}
+		/*
+		 * Always retain an SDR capture target so screenshots, levelshots, and
+		 * video frames observe the same final gamma/exposure/tone transform as
+		 * presentation, including when supersampling is disabled.
+		 */
+		usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		create_color_attachment( gls.captureWidth, gls.captureHeight, VK_SAMPLE_COUNT_1_BIT, vk.capture_format,
+			usage, &vk.capture.image, &vk.capture.image_view, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, qfalse );
 	} // if ( vk.fboActive )
 
 	//vk_alloc_attachments();
 
-	create_depth_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples, &vk.depth_image, &vk.depth_image_view,
-		(vk.fboActive && r_bloom->integer) ? qfalse : qtrue );
+	create_depth_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples,
+		&vk.depth_image, &vk.depth_image_view,
+		( vk.fboActive && ( r_bloom->integer || vk_global_fog_enabled() ||
+			vk_scene_depth_snapshot_requested() ) ) ? qfalse : qtrue,
+		vk_global_fog_enabled() );
+	if ( vk.fboActive && vk_scene_depth_snapshot_requested() &&
+		vkSamples == VK_SAMPLE_COUNT_1_BIT &&
+		vk.liquidDepthSampleSupported ) {
+		create_liquid_depth_attachment( glConfig.vidWidth,
+			glConfig.vidHeight );
+	}
 
 	vk_alloc_attachments();
+	vk_create_depth_sample_view();
 
 	for ( i = 0; i < vk.image_memory_count; i++ )
 	{
@@ -11791,6 +13074,10 @@ static void vk_create_attachments( void )
 
 	SET_OBJECT_NAME( vk.color_image, "color attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT );
 	SET_OBJECT_NAME( vk.color_image_view, "color attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
+	SET_OBJECT_NAME( vk.liquidSnapshot.color_image, "liquid snapshot attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT );
+	SET_OBJECT_NAME( vk.liquidSnapshot.color_image_view, "liquid snapshot attachment", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
+	SET_OBJECT_NAME( vk.liquidDepth.image, "liquid depth snapshot", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT );
+	SET_OBJECT_NAME( vk.liquidDepth.image_view, "liquid depth snapshot", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
 
 	SET_OBJECT_NAME( vk.capture.image, "capture image", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
 	SET_OBJECT_NAME( vk.capture.image_view, "capture image view", VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_VIEW_EXT );
@@ -11867,6 +13154,30 @@ static void vk_create_framebuffers( void )
 
 	if ( vk.fboActive )
 	{
+		if ( vk.render_pass.global_fog != VK_NULL_HANDLE ) {
+			desc.renderPass = vk.render_pass.global_fog;
+			desc.attachmentCount = 1;
+			desc.width = glConfig.vidWidth;
+			desc.height = glConfig.vidHeight;
+			attachments[0] = vk.color_image_view;
+			VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.global_fog ) );
+			SET_OBJECT_NAME( vk.framebuffers.global_fog, "framebuffer - global fog", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
+		}
+
+		if ( vk.render_pass.liquid_snapshot != VK_NULL_HANDLE &&
+			vk.liquidSnapshot.color_image_view != VK_NULL_HANDLE ) {
+			desc.renderPass = vk.render_pass.liquid_snapshot;
+			desc.attachmentCount = 1;
+			desc.width = vk.liquidSnapshotWidth;
+			desc.height = vk.liquidSnapshotHeight;
+			attachments[0] = vk.liquidSnapshot.color_image_view;
+			VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL,
+				&vk.framebuffers.liquid_snapshot ) );
+			SET_OBJECT_NAME( vk.framebuffers.liquid_snapshot,
+				"framebuffer - liquid snapshot",
+				VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
+		}
+
 		// screenmap
 		desc.renderPass = vk.render_pass.screenmap;
 		desc.attachmentCount = 2;
@@ -12056,6 +13367,16 @@ static void vk_destroy_framebuffers( void ) {
 	if ( vk.framebuffers.capture != VK_NULL_HANDLE ) {
 		qvkDestroyFramebuffer( vk.device, vk.framebuffers.capture, NULL );
 		vk.framebuffers.capture = VK_NULL_HANDLE;
+	}
+
+	if ( vk.framebuffers.global_fog != VK_NULL_HANDLE ) {
+		qvkDestroyFramebuffer( vk.device, vk.framebuffers.global_fog, NULL );
+		vk.framebuffers.global_fog = VK_NULL_HANDLE;
+	}
+	if ( vk.framebuffers.liquid_snapshot != VK_NULL_HANDLE ) {
+		qvkDestroyFramebuffer( vk.device,
+			vk.framebuffers.liquid_snapshot, NULL );
+		vk.framebuffers.liquid_snapshot = VK_NULL_HANDLE;
 	}
 
 	for ( n = 0; n < ARRAY_LEN( vk.framebuffers.blur ); n++ ) {
@@ -12253,9 +13574,29 @@ void vk_initialize( void )
 	vk_set_render_scale();
 
 	if ( r_fbo->integer ) {
+		const qboolean rtSingleSampleComposition =
+			( vk.caps.activeRtMode == RTX_RT_MODE_RAY_TRACING_PIPELINE ) ?
+				qtrue : qfalse;
+		const qboolean depthFadeSingleSampleComposition =
+			( vk_depth_fade_requested() &&
+			  vk.liquidDepthSampleSupported &&
+			  props.limits.maxBoundDescriptorSets > VK_DESC_DEPTH_FADE ) ?
+				qtrue : qfalse;
+		const qboolean singleSampleComposition =
+			( rtSingleSampleComposition ||
+			  depthFadeSingleSampleComposition ) ? qtrue : qfalse;
+
 		vk.fboActive = qtrue;
-		if ( r_ext_multisample->integer ) {
+		if ( r_ext_multisample->integer && !singleSampleComposition ) {
 			vk.msaaActive = qtrue;
+		} else if ( r_ext_multisample->integer && singleSampleComposition ) {
+			if ( rtSingleSampleComposition ) {
+				ri.Printf( PRINT_WARNING,
+					"RTX RT: disabling raster MSAA; temporal/spatial RT reconstruction supplies antialiasing and the post-RT overlay is single-sample\n" );
+			} else {
+				ri.Printf( PRINT_WARNING,
+					"RTX: disabling raster MSAA so soft-particle depth fade can sample the active scene depth; set r_depthFade 0 and vid_restart to retain MSAA\n" );
+			}
 		}
 	} else {
 		vk.fboActive = qfalse;
@@ -12275,6 +13616,20 @@ void vk_initialize( void )
 		vkSamples = VK_SAMPLE_COUNT_1_BIT;
 	}
 
+	if ( vk_global_fog_requested() && vkSamples != VK_SAMPLE_COUNT_1_BIT ) {
+		ri.Printf( PRINT_WARNING,
+			"RTX: per-map global fog is unavailable with raster MSAA enabled; disable r_ext_multisample or use RT pipeline mode 2\n" );
+	}
+	if ( vk_depth_fade_requested() &&
+		vkSamples != VK_SAMPLE_COUNT_1_BIT ) {
+		ri.Printf( PRINT_WARNING,
+			"RTX: soft-particle depth fade is unavailable with raster MSAA enabled; authored particle blending remains active\n" );
+	}
+	if ( vk_liquid_requested() && vkSamples != VK_SAMPLE_COUNT_1_BIT ) {
+		ri.Printf( PRINT_WARNING,
+			"RTX: enhanced liquids keep color refraction/reflection with raster MSAA, but foreground depth rejection requires single-sample composition (or RT pipeline mode 2)\n" );
+	}
+
 	vk.screenMapSamples = MIN( vkMaxSamples, VK_SAMPLE_COUNT_4_BIT );
 
 	vk.screenMapWidth = (float) glConfig.vidWidth / 16.0;
@@ -12284,6 +13639,17 @@ void vk_initialize( void )
 	vk.screenMapHeight = (float) glConfig.vidHeight / 16.0;
 	if ( vk.screenMapHeight < 4 )
 		vk.screenMapHeight = 4;
+
+	vk.liquidSnapshotWidth = vk.liquidSnapshotHeight = 0;
+	if ( vk_liquid_requested() ) {
+		const float scale = Com_Clamp( 0.25f, 1.0f,
+			r_liquidResolution ? r_liquidResolution->value : 1.0f );
+
+		vk.liquidSnapshotWidth =
+			MAX( 64, (uint32_t)( glConfig.vidWidth * scale + 0.5f ) );
+		vk.liquidSnapshotHeight =
+			MAX( 64, (uint32_t)( glConfig.vidHeight * scale + 0.5f ) );
+	}
 
 	// fill glConfig information
 
@@ -12437,7 +13803,9 @@ void vk_initialize( void )
 		uint32_t i, maxSets;
 
 		pool_size[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		pool_size[0].descriptorCount = MAX_DRAWIMAGES + 1 + 1 + 1 + VK_NUM_BLOOM_PASSES * 2; // color, screenmap, bloom descriptors
+		pool_size[0].descriptorCount =
+			MAX_DRAWIMAGES + 1 + 1 + 1 + 1 + 3 +
+			VK_NUM_BLOOM_PASSES * 2; // color, screenmap, fog depth, liquid source/color/depth, bloom
 
 		pool_size[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
 		pool_size[1].descriptorCount = NUM_COMMAND_BUFFERS;
@@ -12543,8 +13911,28 @@ static void vk_destroy_attachments( void )
 		vk.msaa_image_view = VK_NULL_HANDLE;
 	}
 
-	qvkDestroyImage( vk.device, vk.depth_image, NULL );
+	if ( vk.depth_sample_image_view != VK_NULL_HANDLE ) {
+		qvkDestroyImageView( vk.device, vk.depth_sample_image_view, NULL );
+		vk.depth_sample_image_view = VK_NULL_HANDLE;
+	}
+	if ( vk.liquidSnapshot.color_image ) {
+		qvkDestroyImageView( vk.device,
+			vk.liquidSnapshot.color_image_view, NULL );
+		qvkDestroyImage( vk.device,
+			vk.liquidSnapshot.color_image, NULL );
+		vk.liquidSnapshot.color_image = VK_NULL_HANDLE;
+		vk.liquidSnapshot.color_image_view = VK_NULL_HANDLE;
+	}
+	if ( vk.liquidDepth.image ) {
+		qvkDestroyImageView( vk.device,
+			vk.liquidDepth.image_view, NULL );
+		qvkDestroyImage( vk.device, vk.liquidDepth.image, NULL );
+		vk.liquidDepth.image = VK_NULL_HANDLE;
+		vk.liquidDepth.image_view = VK_NULL_HANDLE;
+		vk.liquidDepth.copied = qfalse;
+	}
 	qvkDestroyImageView( vk.device, vk.depth_image_view, NULL );
+	qvkDestroyImage( vk.device, vk.depth_image, NULL );
 	vk.depth_image = VK_NULL_HANDLE;
 	vk.depth_image_view = VK_NULL_HANDLE;
 
@@ -12611,6 +13999,16 @@ static void vk_destroy_render_passes( void )
 		vk.render_pass.post_bloom = VK_NULL_HANDLE;
 	}
 
+	if ( vk.render_pass.global_fog != VK_NULL_HANDLE ) {
+		qvkDestroyRenderPass( vk.device, vk.render_pass.global_fog, NULL );
+		vk.render_pass.global_fog = VK_NULL_HANDLE;
+	}
+	if ( vk.render_pass.liquid_snapshot != VK_NULL_HANDLE ) {
+		qvkDestroyRenderPass( vk.device,
+			vk.render_pass.liquid_snapshot, NULL );
+		vk.render_pass.liquid_snapshot = VK_NULL_HANDLE;
+	}
+
 	if ( vk.render_pass.screenmap != VK_NULL_HANDLE ) {
 		qvkDestroyRenderPass( vk.device, vk.render_pass.screenmap, NULL );
 		vk.render_pass.screenmap = VK_NULL_HANDLE;
@@ -12667,6 +14065,16 @@ static void vk_destroy_pipelines( qboolean resetCounter )
 	if ( vk.bloom_blend_pipeline != VK_NULL_HANDLE ) {
 		qvkDestroyPipeline( vk.device, vk.bloom_blend_pipeline, NULL );
 		vk.bloom_blend_pipeline = VK_NULL_HANDLE;
+	}
+
+	if ( vk.global_fog_pipeline != VK_NULL_HANDLE ) {
+		qvkDestroyPipeline( vk.device, vk.global_fog_pipeline, NULL );
+		vk.global_fog_pipeline = VK_NULL_HANDLE;
+	}
+	if ( vk.liquid_snapshot_pipeline != VK_NULL_HANDLE ) {
+		qvkDestroyPipeline( vk.device,
+			vk.liquid_snapshot_pipeline, NULL );
+		vk.liquid_snapshot_pipeline = VK_NULL_HANDLE;
 	}
 
 	for ( i = 0; i < ARRAY_LEN( vk.blur_pipeline ); i++ ) {
@@ -12794,10 +14202,18 @@ void vk_shutdown( refShutdownCode_t code )
 
 	qvkDestroyShaderModule(vk.device, vk.modules.dot_vs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.dot_fs, NULL);
+	qvkDestroyShaderModule(vk.device, vk.modules.liquid_vs, NULL);
+	qvkDestroyShaderModule(vk.device, vk.modules.liquid_fs, NULL);
+	qvkDestroyShaderModule(vk.device, vk.modules.liquid_copy_fs, NULL);
+	vk.modules.liquid_vs = VK_NULL_HANDLE;
+	vk.modules.liquid_fs = VK_NULL_HANDLE;
+	vk.modules.liquid_copy_fs = VK_NULL_HANDLE;
 
 	qvkDestroyShaderModule(vk.device, vk.modules.bloom_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.blur_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.blend_fs, NULL);
+	qvkDestroyShaderModule(vk.device, vk.modules.global_fog_fs, NULL);
+	vk.modules.global_fog_fs = VK_NULL_HANDLE;
 
 	qvkDestroyShaderModule(vk.device, vk.modules.gamma_vs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.gamma_fs, NULL);
@@ -12817,6 +14233,10 @@ void vk_shutdown( refShutdownCode_t code )
 	if ( vk.modules.rt_rchit != VK_NULL_HANDLE ) {
 		qvkDestroyShaderModule( vk.device, vk.modules.rt_rchit, NULL );
 		vk.modules.rt_rchit = VK_NULL_HANDLE;
+	}
+	if ( vk.modules.rt_rahit != VK_NULL_HANDLE ) {
+		qvkDestroyShaderModule( vk.device, vk.modules.rt_rahit, NULL );
+		vk.modules.rt_rahit = VK_NULL_HANDLE;
 	}
 
 __cleanup:
@@ -12849,10 +14269,25 @@ void vk_queue_wait_idle( void )
 }
 
 
-void vk_release_resources( void ) {
+void vk_release_resources( refShutdownCode_t code ) {
 	int i, j;
 
 	vk_wait_idle();
+#ifdef USE_UPLOAD_QUEUE
+	if ( code == REF_KEEP_CONTEXT ) {
+		/*
+		 * A registration restart can happen after a final staging submit but
+		 * before a frame consumes its binary upload semaphore. Device idle
+		 * completes that submit but does not return binary semaphores to the
+		 * unsignaled state. Reset the reusable staging command buffer and
+		 * rebuild the upload/frame sync chain before the retained device is
+		 * used for the next registration.
+		 */
+		vk_wait_staging_buffer();
+		VK_CHECK( qvkResetCommandBuffer( vk.staging_command_buffer, 0 ) );
+		vk_destroy_sync_primitives();
+	}
+#endif
 	vk_rt_shutdown();
 
 	for (i = 0; i < vk_world.num_image_chunks; i++)
@@ -12899,6 +14334,12 @@ void vk_release_resources( void ) {
 	Com_Memset( vk.cmd->vbo_offset, 0, sizeof( vk.cmd->vbo_offset ) );
 
 	Com_Memset( &vk.stats, 0, sizeof( vk.stats ) );
+
+#ifdef USE_UPLOAD_QUEUE
+	if ( code == REF_KEEP_CONTEXT ) {
+		vk_create_sync_primitives();
+	}
+#endif
 }
 
 #if 0
@@ -13304,7 +14745,7 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	VkGraphicsPipelineCreateInfo create_info;
 	VkViewport viewport;
 	VkRect2D scissor;
-	VkSpecializationMapEntry spec_entries[11];
+	VkSpecializationMapEntry spec_entries[15];
 	VkSpecializationInfo frag_spec_info;
 	VkPipeline *pipeline;
 	VkShaderModule fsmodule;
@@ -13326,6 +14767,10 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 		int depth_r;
 		int depth_g;
 		int depth_b;
+		int tonemap_mode;
+		float tonemap_exposure;
+		float bloom_soft_knee;
+		int scene_linear_mode;
 	} frag_spec_data;
 
 	switch ( program_index ) {
@@ -13354,6 +14799,25 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 			layout = vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_POST_PROCESS );
 			samples = VK_SAMPLE_COUNT_1_BIT;
 			pipeline_name = "capture buffer pipeline";
+			blend = qfalse;
+			break;
+		case 4: // depth-aware global fog overlay
+			pipeline = &vk.global_fog_pipeline;
+			fsmodule = vk.modules.global_fog_fs;
+			renderpass = vk.render_pass.global_fog;
+			layout = vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_POST_PROCESS );
+			samples = VK_SAMPLE_COUNT_1_BIT;
+			pipeline_name = "global fog overlay pipeline";
+			blend = qtrue;
+			break;
+		case 5: // stable pre-fog liquid scene snapshot
+			pipeline = &vk.liquid_snapshot_pipeline;
+			fsmodule = vk.modules.liquid_copy_fs;
+			renderpass = vk.render_pass.liquid_snapshot;
+			layout = vk_pipeline_layout_handle(
+				RTX_VK_PIPELINE_LAYOUT_POST_PROCESS );
+			samples = VK_SAMPLE_COUNT_1_BIT;
+			pipeline_name = "liquid scene snapshot pipeline";
 			blend = qfalse;
 			break;
 		default: // gamma correction
@@ -13393,6 +14857,14 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	frag_spec_data.bloom_threshold_mode = r_bloom_threshold_mode->integer;
 	frag_spec_data.bloom_modulate = r_bloom_modulate->integer;
 	frag_spec_data.dither = r_dither->integer;
+	frag_spec_data.scene_linear_mode = vk_scene_linear_enabled() ? 1 : 0;
+	frag_spec_data.tonemap_mode = ( frag_spec_data.scene_linear_mode &&
+		( program_index == 0 || program_index == 1 || program_index == 3 ) ) ?
+		r_tonemap->integer : 0;
+	frag_spec_data.tonemap_exposure =
+		Com_Clamp( 0.1f, 8.0f, r_tonemapExposure->value );
+	frag_spec_data.bloom_soft_knee =
+		Com_Clamp( 0.0f, 1.0f, r_bloom_soft_knee->value );
 
 	if ( !vk_surface_format_color_depth( vk.present_format.format, &frag_spec_data.depth_r, &frag_spec_data.depth_g, &frag_spec_data.depth_b ) )
 		ri.Printf( PRINT_ALL, "Format %s not recognized, dither to assume 8bpc\n", vk_format_string( vk.base_format.format ) );
@@ -13441,12 +14913,30 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	spec_entries[10].offset = offsetof(struct FragSpecData, depth_b);
 	spec_entries[10].size = sizeof(frag_spec_data.depth_b);
 
-	frag_spec_info.mapEntryCount = 11;
+	spec_entries[11].constantID = 14;
+	spec_entries[11].offset = offsetof( struct FragSpecData, tonemap_mode );
+	spec_entries[11].size = sizeof( frag_spec_data.tonemap_mode );
+
+	spec_entries[12].constantID = 15;
+	spec_entries[12].offset = offsetof( struct FragSpecData, tonemap_exposure );
+	spec_entries[12].size = sizeof( frag_spec_data.tonemap_exposure );
+
+	spec_entries[13].constantID = 16;
+	spec_entries[13].offset = offsetof( struct FragSpecData, bloom_soft_knee );
+	spec_entries[13].size = sizeof( frag_spec_data.bloom_soft_knee );
+
+	spec_entries[14].constantID = 17;
+	spec_entries[14].offset = offsetof( struct FragSpecData, scene_linear_mode );
+	spec_entries[14].size = sizeof( frag_spec_data.scene_linear_mode );
+
+	frag_spec_info.mapEntryCount = ARRAY_LEN( spec_entries );
 	frag_spec_info.pMapEntries = spec_entries;
 	frag_spec_info.dataSize = sizeof( frag_spec_data );
 	frag_spec_info.pData = &frag_spec_data;
 
-	shader_stages[1].pSpecializationInfo = &frag_spec_info;
+	shader_stages[1].pSpecializationInfo =
+		( program_index == 4 || program_index == 5 ) ?
+			NULL : &frag_spec_info;
 
 	//
 	// Primitive assembly.
@@ -13522,8 +15012,17 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	attachment_blend_state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 	if ( blend ) {
 		attachment_blend_state.blendEnable = VK_TRUE;
-		attachment_blend_state.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-		attachment_blend_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		if ( program_index == 4 ) {
+			attachment_blend_state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+			attachment_blend_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+			attachment_blend_state.colorBlendOp = VK_BLEND_OP_ADD;
+			attachment_blend_state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+			attachment_blend_state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+			attachment_blend_state.alphaBlendOp = VK_BLEND_OP_ADD;
+		} else {
+			attachment_blend_state.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+			attachment_blend_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		}
 	} else {
 		attachment_blend_state.blendEnable = VK_FALSE;
 	}
@@ -13776,8 +15275,8 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	VkShaderModule *vs_module = NULL;
 	VkShaderModule *fs_module = NULL;
 	//int32_t vert_spec_data[1]; // clippping
-	floatint_t frag_spec_data[11]; // 0:alpha-test-func, 1:alpha-test-value, 2:depth-fragment, 3:alpha-to-coverage, 4:color_mode, 5:abs_light, 6:multitexture mode, 7:discard mode, 8: ident.color, 9 - ident.alpha, 10 - acff
-	VkSpecializationMapEntry spec_entries[12];
+	floatint_t frag_spec_data[12]; // 0:alpha-test-func, 1:alpha-test-value, 2:depth-fragment, 3:alpha-to-coverage, 4:color_mode, 5:abs_light, 6:multitexture mode, 7:discard mode, 8: ident.color, 9 - ident.alpha, 10 - acff, 11 - depth fade
+	VkSpecializationMapEntry spec_entries[13];
 	//VkSpecializationInfo vert_spec_info;
 	VkSpecializationInfo frag_spec_info;
 	VkPipelineVertexInputStateCreateInfo vertex_input_state;
@@ -13969,6 +15468,11 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 			fs_module = &vk.modules.dot_fs;
 			break;
 
+		case TYPE_LIQUID:
+			vs_module = &vk.modules.liquid_vs;
+			fs_module = &vk.modules.liquid_fs;
+			break;
+
 		default:
 			ri.Error(ERR_DROP, "create_pipeline: unknown shader type %i\n", def->shader_type);
 			return 0;
@@ -13978,6 +15482,7 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 		switch ( def->shader_type ) {
 			case TYPE_FOG_ONLY:
 			case TYPE_DOT:
+			case TYPE_LIQUID:
 			case TYPE_SIGNLE_TEXTURE_DF:
 			case TYPE_COLOR_BLACK:
 			case TYPE_COLOR_WHITE:
@@ -14134,6 +15639,7 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	} else {
 		frag_spec_data[10].i = 0;
 	}
+	frag_spec_data[11].i = def->depth_fade;
 
 	//
 	// vertex module specialization data
@@ -14199,17 +15705,29 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	spec_entries[11].offset = 10 * sizeof( int32_t );
 	spec_entries[11].size = sizeof( int32_t );
 
-	frag_spec_info.mapEntryCount = 11;
+	spec_entries[12].constantID = 11; // depth fade
+	spec_entries[12].offset = 11 * sizeof( int32_t );
+	spec_entries[12].size = sizeof( int32_t );
+
+	frag_spec_info.mapEntryCount = 12;
 	frag_spec_info.pMapEntries = spec_entries + 1;
-	frag_spec_info.dataSize = sizeof( int32_t ) * 11;
+	frag_spec_info.dataSize = sizeof( int32_t ) * 12;
 	frag_spec_info.pData = &frag_spec_data[0];
-	shader_stages[1].pSpecializationInfo = &frag_spec_info;
+	shader_stages[1].pSpecializationInfo =
+		def->shader_type == TYPE_LIQUID ? NULL : &frag_spec_info;
 
 	//
 	// Vertex input
 	//
 	num_binds = num_attrs = 0;
 	switch ( def->shader_type ) {
+
+		case TYPE_LIQUID:
+			push_bind( 0, sizeof( vec4_t ) );
+			push_bind( 5, sizeof( vec4_t ) );
+			push_attr( 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT );
+			push_attr( 5, 5, VK_FORMAT_R32G32B32A32_SFLOAT );
+			break;
 
 		case TYPE_FOG_ONLY:
 		case TYPE_DOT:
@@ -14597,6 +16115,11 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 
 	if (def->shadow_phase == SHADOW_EDGES || def->shader_type == TYPE_SIGNLE_TEXTURE_DF)
 		attachment_blend_state.colorWriteMask = 0;
+	else if ( def->shader_type == TYPE_LIQUID )
+		attachment_blend_state.colorWriteMask =
+			VK_COLOR_COMPONENT_R_BIT |
+			VK_COLOR_COMPONENT_G_BIT |
+			VK_COLOR_COMPONENT_B_BIT;
 	else
 		attachment_blend_state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
@@ -14922,6 +16445,11 @@ static void get_mvp_transform( float *mvp )
 	}
 }
 
+void vk_get_liquid_mvp( float *mvp )
+{
+	get_mvp_transform( mvp );
+}
+
 
 void vk_clear_color( const vec4_t color ) {
 
@@ -14953,6 +16481,14 @@ void vk_clear_depth( qboolean clear_stencil ) {
 
 	if ( !vk.active )
 		return;
+
+	/*
+	 * Depth can be cleared more than once in one command buffer (portals,
+	 * stereo eyes, and later primary views).  A prior scene-depth snapshot is
+	 * no longer valid even when this clear is elided for an already-clean
+	 * attachment.
+	 */
+	vk.liquidDepth.copied = qfalse;
 
 	if ( vk_world.dirty_depth_attachment == 0 )
 		return;
@@ -15250,6 +16786,18 @@ void vk_bind_descriptor_sets( void )
 
 	end = vk.cmd->descriptor_set.end;
 
+	/*
+	 * Single-texture generic fragment variants declare the depth-fade sampler
+	 * at set 2.  Vulkan treats that descriptor as statically used even when
+	 * the specialization constant disables sampling, so the ordinary
+	 * set-0/set-1 draw path must still bind a valid fallback set 2.
+	 */
+	if ( start <= VK_DESC_DEPTH_FADE &&
+		end < VK_DESC_DEPTH_FADE &&
+		vk.maxBoundDescriptorSets > VK_DESC_DEPTH_FADE ) {
+		end = VK_DESC_DEPTH_FADE;
+	}
+
 	offset_count = 0;
 	if ( /*start == VK_DESC_STORAGE || */ start == VK_DESC_UNIFORM ) { // uniform offset or storage offset
 		offsets[ offset_count++ ] = vk.cmd->descriptor_set.offset[ start ];
@@ -15257,10 +16805,23 @@ void vk_bind_descriptor_sets( void )
 
 	count = end - start + 1;
 
-	// fill NULL descriptor gaps
-	for ( i = start + 1; i < end; i++ ) {
+	/*
+	 * Post-process passes invalidate main-layout bindings and can request a
+	 * full-range restore before any raster overlay has pushed a uniform.
+	 * Set zero is dynamic-uniform, so it needs its own descriptor and offset;
+	 * sampler gaps use the ordinary white-image fallback.
+	 */
+	for ( i = start; i <= end; i++ ) {
 		if ( vk.cmd->descriptor_set.current[i] == VK_NULL_HANDLE ) {
-			vk.cmd->descriptor_set.current[i] = tr.whiteImage->descriptor;
+			if ( i == VK_DESC_UNIFORM ) {
+				vk.cmd->descriptor_set.current[i] =
+					vk.cmd->uniform_descriptor;
+				vk.cmd->descriptor_set.offset[i] =
+					vk.cmd->uniform_read_offset;
+			} else {
+				vk.cmd->descriptor_set.current[i] =
+					tr.whiteImage->descriptor;
+			}
 		}
 	}
 
@@ -15399,6 +16960,7 @@ void vk_begin_main_render_pass( void )
 	VkFramebuffer frameBuffer = vk.framebuffers.main[ vk.cmd->swapchain_image_index ];
 
 	vk.renderPassIndex = RENDER_PASS_MAIN;
+	vk.liquidDepth.copied = qfalse;
 
 	vk.renderWidth = glConfig.vidWidth;
 	vk.renderHeight = glConfig.vidHeight;
@@ -15425,6 +16987,31 @@ void vk_begin_post_bloom_render_pass( void )
 	vk.renderScaleX = vk.renderScaleY = 1.0f;
 
 	vk_begin_render_pass( vk.render_pass.post_bloom, frameBuffer, qfalse, vk.renderWidth, vk.renderHeight );
+}
+
+static void vk_begin_global_fog_render_pass( void )
+{
+	vk.renderWidth = glConfig.vidWidth;
+	vk.renderHeight = glConfig.vidHeight;
+	vk.renderScaleX = vk.renderScaleY = 1.0f;
+
+	vk_begin_render_pass( vk.render_pass.global_fog, vk.framebuffers.global_fog,
+		qfalse, vk.renderWidth, vk.renderHeight );
+}
+
+static void vk_begin_liquid_snapshot_render_pass( void )
+{
+	vk.renderPassIndex = RENDER_PASS_LIQUID_SNAPSHOT;
+	vk.renderWidth = vk.liquidSnapshotWidth;
+	vk.renderHeight = vk.liquidSnapshotHeight;
+	vk.renderScaleX =
+		(float)vk.renderWidth / (float)glConfig.vidWidth;
+	vk.renderScaleY =
+		(float)vk.renderHeight / (float)glConfig.vidHeight;
+
+	vk_begin_render_pass( vk.render_pass.liquid_snapshot,
+		vk.framebuffers.liquid_snapshot, qfalse,
+		vk.renderWidth, vk.renderHeight );
 }
 
 
@@ -15484,6 +17071,311 @@ void vk_end_render_pass( void )
 	qvkCmdEndRenderPass( vk.cmd->command_buffer );
 
 //	vk.renderPassIndex = RENDER_PASS_MAIN;
+}
+
+static qboolean vk_scene_depth_snapshot_available( void )
+{
+	return ( vk.liquidDepth.image != VK_NULL_HANDLE &&
+		vk.liquidDepth.image_view != VK_NULL_HANDLE &&
+		vk.liquidDepth.descriptor != VK_NULL_HANDLE ) ? qtrue : qfalse;
+}
+
+qboolean vk_depth_fade_supported( void )
+{
+	return ( vk_depth_fade_requested() &&
+		vk.fboActive &&
+		vkSamples == VK_SAMPLE_COUNT_1_BIT &&
+		vk.liquidDepthSampleSupported &&
+		vk.maxBoundDescriptorSets > VK_DESC_DEPTH_FADE ) ?
+			qtrue : qfalse;
+}
+
+qboolean vk_depth_fade_available( void )
+{
+	return ( vk_depth_fade_supported() &&
+		vk_scene_depth_snapshot_available() ) ? qtrue : qfalse;
+}
+
+qboolean vk_depth_fade_ready( void )
+{
+	return ( vk_depth_fade_available() && vk.liquidDepth.copied ) ?
+		qtrue : qfalse;
+}
+
+qboolean vk_liquid_depth_ready( void )
+{
+	return ( vk_scene_depth_snapshot_available() &&
+		vk.liquidDepth.copied ) ? qtrue : qfalse;
+}
+
+void vk_copy_depth_fade( void )
+{
+	VkImageCopy region;
+
+	if ( !vk_depth_fade_available() || vk_depth_fade_ready() ||
+		vk.render_pass.post_bloom == VK_NULL_HANDLE ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		backEnd.viewParms.portalView != PV_NONE ||
+		backEnd.viewParms.stereoFrame != STEREO_CENTER ||
+		backEnd.viewParms.viewportX != 0 ||
+		backEnd.viewParms.viewportY != 0 ||
+		backEnd.viewParms.viewportWidth != glConfig.vidWidth ||
+		backEnd.viewParms.viewportHeight != glConfig.vidHeight ||
+		( vk.renderPassIndex != RENDER_PASS_MAIN &&
+		  vk.renderPassIndex != RENDER_PASS_POST_BLOOM ) ) {
+		return;
+	}
+
+	vk_end_render_pass();
+
+	record_image_layout_transition( vk.cmd->command_buffer,
+		vk.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, 0 );
+	record_image_layout_transition( vk.cmd->command_buffer,
+		vk.liquidDepth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, 0 );
+
+	Com_Memset( &region, 0, sizeof( region ) );
+	region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+	region.srcSubresource.layerCount = 1;
+	region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+	region.dstSubresource.layerCount = 1;
+	region.extent.width = glConfig.vidWidth;
+	region.extent.height = glConfig.vidHeight;
+	region.extent.depth = 1;
+
+	qvkCmdCopyImage( vk.cmd->command_buffer,
+		vk.depth_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		vk.liquidDepth.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		1, &region );
+
+	record_image_layout_transition( vk.cmd->command_buffer,
+		vk.liquidDepth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, 0 );
+	record_image_layout_transition( vk.cmd->command_buffer,
+		vk.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0, 0 );
+
+	vk.liquidDepth.copied = qtrue;
+	vk_begin_post_bloom_render_pass();
+
+	vk.cmd->last_pipeline = VK_NULL_HANDLE;
+	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
+	vk.cmd->descriptor_set.start = 0;
+	vk.cmd->descriptor_set.end =
+		MIN( VK_DESC_COUNT, vk.maxBoundDescriptorSets ) - 1;
+	Com_Memset( &vk.cmd->scissor_rect, 0xff,
+		sizeof( vk.cmd->scissor_rect ) );
+}
+
+qboolean vk_capture_liquid_scene( void )
+{
+	VkMemoryBarrier barrier;
+
+	if ( backEnd.liquidScreenMapDone ) {
+		return qtrue;
+	}
+	if ( !vk_liquid_requested() || !vk.fboActive ||
+		vk.liquid_snapshot_pipeline == VK_NULL_HANDLE ||
+		vk.liquidSnapshot.source_descriptor == VK_NULL_HANDLE ||
+		vk.liquidSnapshot.color_descriptor == VK_NULL_HANDLE ||
+		vk.render_pass.liquid_snapshot == VK_NULL_HANDLE ||
+		vk.render_pass.post_bloom == VK_NULL_HANDLE ||
+		vk.framebuffers.liquid_snapshot == VK_NULL_HANDLE ||
+		( vk.renderPassIndex != RENDER_PASS_MAIN &&
+		  vk.renderPassIndex != RENDER_PASS_POST_BLOOM ) ) {
+		return qfalse;
+	}
+
+	/*
+	 * The active color target cannot be sampled in-place. End composition,
+	 * copy optional single-sample depth, render the scaled immutable color
+	 * snapshot, then resume the scene through the existing load pass.
+	 */
+	vk_end_render_pass();
+
+	if ( !vk.liquidDepth.copied &&
+		vk.liquidDepth.image != VK_NULL_HANDLE &&
+		vkSamples == VK_SAMPLE_COUNT_1_BIT ) {
+		VkImageCopy region;
+
+		record_image_layout_transition( vk.cmd->command_buffer,
+			vk.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, 0 );
+		record_image_layout_transition( vk.cmd->command_buffer,
+			vk.liquidDepth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, 0 );
+
+		Com_Memset( &region, 0, sizeof( region ) );
+		region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+		region.srcSubresource.layerCount = 1;
+		region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+		region.dstSubresource.layerCount = 1;
+		region.extent.width = glConfig.vidWidth;
+		region.extent.height = glConfig.vidHeight;
+		region.extent.depth = 1;
+
+		qvkCmdCopyImage( vk.cmd->command_buffer,
+			vk.depth_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			vk.liquidDepth.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			1, &region );
+
+		record_image_layout_transition( vk.cmd->command_buffer,
+			vk.liquidDepth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, 0 );
+		record_image_layout_transition( vk.cmd->command_buffer,
+			vk.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0, 0 );
+		vk.liquidDepth.copied = qtrue;
+	}
+
+	Com_Memset( &barrier, 0, sizeof( barrier ) );
+	barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+	barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+		VK_ACCESS_TRANSFER_WRITE_BIT;
+	barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+		VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+		VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	qvkCmdPipelineBarrier( vk.cmd->command_buffer,
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+			VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+			VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+			VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+			VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+		0, 1, &barrier, 0, NULL, 0, NULL );
+
+	vk_begin_liquid_snapshot_render_pass();
+	qvkCmdBindPipeline( vk.cmd->command_buffer,
+		VK_PIPELINE_BIND_POINT_GRAPHICS,
+		vk.liquid_snapshot_pipeline );
+	qvkCmdBindDescriptorSets( vk.cmd->command_buffer,
+		VK_PIPELINE_BIND_POINT_GRAPHICS,
+		vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_POST_PROCESS ),
+		0, 1, &vk.liquidSnapshot.source_descriptor, 0, NULL );
+	qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
+	vk_end_render_pass();
+	vk_begin_post_bloom_render_pass();
+
+	vk.cmd->last_pipeline = VK_NULL_HANDLE;
+	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
+	vk.cmd->descriptor_set.start = 0;
+	vk.cmd->descriptor_set.end =
+		MIN( VK_DESC_COUNT, vk.maxBoundDescriptorSets ) - 1;
+	Com_Memset( &vk.cmd->scissor_rect, 0xff,
+		sizeof( vk.cmd->scissor_rect ) );
+	backEnd.liquidScreenMapDone = qtrue;
+	return qtrue;
+}
+
+void vk_draw_global_fog( void )
+{
+	static int lastFogFrame = -1;
+	const globalFog_t *fog = tr.world ? &tr.world->globalFog : NULL;
+	VkImageAspectFlags depthAspects = VK_IMAGE_ASPECT_DEPTH_BIT;
+	float constants[12];
+	float opacity;
+	float zNear;
+	float zFar;
+
+	if ( !vk_global_fog_enabled() || !fog || !fog->loaded ||
+		vk.global_fog_pipeline == VK_NULL_HANDLE ||
+		vk.render_pass.global_fog == VK_NULL_HANDLE ||
+		vk.framebuffers.global_fog == VK_NULL_HANDLE ||
+		vk.depth_sample_descriptor == VK_NULL_HANDLE ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		backEnd.viewParms.portalView != PV_NONE ||
+		backEnd.viewParms.stereoFrame != STEREO_CENTER ||
+		backEnd.viewParms.viewportX != 0 ||
+		backEnd.viewParms.viewportY != 0 ||
+		backEnd.viewParms.viewportWidth != glConfig.vidWidth ||
+		backEnd.viewParms.viewportHeight != glConfig.vidHeight ||
+		( vk.renderPassIndex != RENDER_PASS_MAIN &&
+			vk.renderPassIndex != RENDER_PASS_POST_BLOOM ) ||
+		lastFogFrame == tr.frameCount ) {
+		return;
+	}
+
+	opacity = Com_Clamp( 0.0f, 1.0f,
+		fog->opacity * ( r_globalFogStrength ? r_globalFogStrength->value : 1.0f ) );
+	zNear = r_znear ? r_znear->value : 4.0f;
+	zFar = backEnd.viewParms.zFar;
+	if ( opacity <= 0.0f || fog->density <= 0.0f ||
+		zNear <= 0.0f || zFar <= zNear ) {
+		return;
+	}
+
+	constants[0] = fog->color[0];
+	constants[1] = fog->color[1];
+	constants[2] = fog->color[2];
+	constants[3] = opacity;
+	constants[4] = fog->start;
+	constants[5] = fog->end;
+	constants[6] = fog->density;
+	constants[7] = (float)fog->mode;
+	constants[8] = zNear;
+	constants[9] = zFar;
+	constants[10] = fog->sky ? 1.0f : 0.0f;
+#ifdef USE_REVERSED_DEPTH
+	constants[11] = 1.0f;
+#else
+	constants[11] = 0.0f;
+#endif
+
+	if ( glConfig.stencilBits > 0 ) {
+		depthAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+	}
+
+	vk_end_render_pass();
+	record_image_layout_transition( vk.cmd->command_buffer, vk.depth_image,
+		depthAspects,
+		VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+		VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, 0, 0 );
+
+	vk_begin_global_fog_render_pass();
+	qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		vk.global_fog_pipeline );
+	qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_POST_PROCESS ),
+		0, 1, &vk.depth_sample_descriptor, 0, NULL );
+	qvkCmdPushConstants( vk.cmd->command_buffer,
+		vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_POST_PROCESS ),
+		VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof( constants ), constants );
+	qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
+	vk_end_render_pass();
+
+	record_image_layout_transition( vk.cmd->command_buffer, vk.depth_image,
+		depthAspects,
+		VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+		VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0, 0 );
+	vk_begin_post_bloom_render_pass();
+
+	/*
+	 * The fog pass binds the private post-process pipeline layout. Force the
+	 * resumed material path to restore every main-layout descriptor and all
+	 * dynamic viewport/scissor state before HUD or console draws.
+	 */
+	vk.cmd->last_pipeline = VK_NULL_HANDLE;
+	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
+	vk.cmd->descriptor_set.start = 0;
+	vk.cmd->descriptor_set.end =
+		MIN( VK_DESC_COUNT, vk.maxBoundDescriptorSets ) - 1;
+	Com_Memset( &vk.cmd->scissor_rect, 0xff, sizeof( vk.cmd->scissor_rect ) );
+
+	lastFogFrame = tr.frameCount;
 }
 
 
@@ -15666,7 +17558,10 @@ void vk_end_frame( void )
 {
 #ifdef USE_UPLOAD_QUEUE
 	VkSemaphore waits[2], signals[2];
-	const VkPipelineStageFlags wait_dst_stage_mask[2] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+	const VkPipelineStageFlags wait_dst_stage_mask[2] = {
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+	};
 #else
 	const VkPipelineStageFlags wait_dst_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 #endif
@@ -15695,7 +17590,7 @@ void vk_end_frame( void )
 			vk_bloom();
 		}
 
-		if ( backEnd.screenshotMask && vk.capture.image )
+		if ( ( backEnd.screenshotMask || backEnd.levelshotPending ) && vk.capture.image )
 		{
 			vk_end_render_pass();
 
@@ -16169,29 +18064,18 @@ qboolean vk_bloom( void )
 		qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
 	}
 
-	// invalidate pipeline state cache
-	//vk.cmd->last_pipeline = VK_NULL_HANDLE;
-
-	if ( vk.cmd->last_pipeline != VK_NULL_HANDLE )
-	{
-		// restore last pipeline
-		qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.cmd->last_pipeline );
-
-		vk_update_mvp( NULL );
-
-		// force depth range and viewport/scissor updates
-		vk.cmd->depth_range = DEPTH_RANGE_COUNT;
-
-		// restore clobbered descriptor sets
-		for ( i = 0; i < VK_NUM_BLOOM_PASSES; i++ ) {
-			if ( vk.cmd->descriptor_set.current[i] != VK_NULL_HANDLE ) {
-				if ( i == VK_DESC_UNIFORM /*|| i == VK_DESC_STORAGE*/ )
-					qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_MAIN ), i, 1, &vk.cmd->descriptor_set.current[i], 1, &vk.cmd->descriptor_set.offset[i] );
-				else
-					qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_MAIN ), i, 1, &vk.cmd->descriptor_set.current[i], 0, NULL );
-			}
-		}
-	}
+	/*
+	 * Bloom binds private pipeline layouts after the render-pass helper has
+	 * already invalidated last_pipeline.  Force the next material/HUD draw to
+	 * rebind every main-layout descriptor instead of attempting a partial,
+	 * stale restoration here.
+	 */
+	vk.cmd->last_pipeline = VK_NULL_HANDLE;
+	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
+	vk.cmd->descriptor_set.start = 0;
+	vk.cmd->descriptor_set.end =
+		MIN( VK_DESC_COUNT, vk.maxBoundDescriptorSets ) - 1;
+	Com_Memset( &vk.cmd->scissor_rect, 0xff, sizeof( vk.cmd->scissor_rect ) );
 
 	backEnd.doneBloom = qtrue;
 

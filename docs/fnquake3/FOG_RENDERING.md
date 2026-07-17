@@ -16,7 +16,8 @@ The canonical density function is the original curve:
 5. take the square root.
 
 `code/renderercommon/tr_fog_math.h` owns the CPU reference implementation.
-The GLx and Vulkan GLSL helpers intentionally use the same constants.
+The GLx, Vulkan, and RTX programmable helpers intentionally use the same
+constants.
 
 ## Runtime Mode
 
@@ -34,21 +35,23 @@ copy of the analytic curve.
 
 ## Optional Global Map Fog
 
-Global fog is a separate, opt-in visual layer. It does not replace retail BSP
-fog and it does not alter fog assignment, shader data, collision, visibility,
-demo playback, protocol, VM behavior, or game state. The layer is disabled by
-default with the archived, latched `r_globalFog 0` cvar. It needs the modern
-framebuffer/depth path, so users enable it with `r_fbo 1`, `r_globalFog 1`, and
-`vid_restart`. `r_globalFogStrength` is archived, ranges from `0.0` to `1.0`,
-and multiplies the sidecar opacity live.
+Global fog is a separate, optional per-map visual layer. It does not replace
+retail BSP fog and it does not alter fog assignment, shader data, collision,
+visibility, demo playback, protocol, VM behavior, or game state. The archived,
+latched cvar defaults to `r_globalFog 1`, but missing sidecars have no effect;
+the active game must provide `maps/<map>.fog` for a layer to appear. It needs
+the modern framebuffer/depth path, so changing `r_fbo` or `r_globalFog`
+requires `vid_restart`. `r_globalFogStrength` is archived, ranges from `0.0`
+to `1.0`, and multiplies the sidecar opacity live.
 
-At world load, both raster backends resolve `maps/<world-basename>.fog` through
-the normal virtual filesystem. Thus `q3dm17.bsp` uses `maps/q3dm17.fog`, and a
-mod may provide an override in its pk3 without modifying the BSP. Missing
-files have no effect. A sidecar larger than 16 KiB or one with invalid input is
-rejected and reported as a warning; the level proceeds without the layer. The
-root FnQuake3 package permits only `maps/*.fog` (and existing `.azb` audio
-sidecars), keeping the package-file allowlist narrow.
+At world load, GLx, Vulkan, and RTX resolve
+`maps/<world-basename>.fog` through the normal virtual filesystem. Thus
+`q3dm17.bsp` uses `maps/q3dm17.fog`, and a mod may provide an override in its
+pk3 without modifying the BSP. Missing files have no effect. A sidecar larger
+than 16 KiB or one with invalid input is rejected and reported as a warning;
+the level proceeds without the layer. The root FnQuake3 package permits only
+`maps/*.fog` (and existing `.azb` audio sidecars), keeping the package-file
+allowlist narrow.
 
 The format is ASCII, whitespace-delimited, and accepts `//` comments. Each
 directive may appear once:
@@ -77,9 +80,11 @@ OpenGL/GLx composites the layer into the framebuffer after opaque and
 translucent scene rendering, including the existing BSP fog, and before final
 bloom/gamma. Vulkan keeps a resolved copy of the completed world depth and
 blends the same formula into the main scene render pass before optional motion
-blur, bloom, and later HUD/console draws. HUD and console draws are excluded
-in both cases. This is intentionally a depth-aware
-atmospheric grade, not a BSP fog replacement or a protocol-visible feature.
+blur, bloom, and later HUD/console draws. RTX uses the same depth-aware
+world-layer contract after hybrid RT/raster scene composition and before
+world bloom and later HUD/console draws. HUD and console draws are excluded in
+all three cases. This is intentionally a depth-aware atmospheric grade, not a
+BSP fog replacement or a protocol-visible feature.
 
 ## Analytic Programmable Path
 
@@ -88,16 +93,14 @@ texture. Every fogged fragment then performed a dependent lookup. The alpha
 channel limited density to 256 stored values, with additional approximation
 from the distance/depth grid and bilinear filtering.
 
-With `r_fogMode 1`, GLx and Vulkan evaluate the same curve in floating point.
-This has two
-practical benefits:
+With `r_fogMode 1`, GLx, Vulkan, and RTX evaluate the same curve in floating
+point. This has two practical benefits:
 
 - continuous fog density removes lookup-grid banding, especially on shallow
   gradients and large `depthForOpaque` values;
 - fog-only, collapsed-material, and dynamic-light fragments no longer perform
-  a fog texture fetch. Vulkan retains the legacy descriptor in its dual-mode
-  shader layout so the cvar can switch live, but the analytic uniform branch
-  does not sample it.
+  a fog texture fetch. Vulkan and RTX retain the legacy resource/layout path
+  needed for mode `0`, but the analytic branch does not sample the lookup.
 
 The GLx streamed fog overlay goes further. Its vertex shader derives fog
 coordinates from object position and uniform fog vectors, and its fragment
@@ -139,16 +142,20 @@ the checked-in SPIR-V is refreshed.
 Recommended local checks:
 
 ```powershell
-meson compile -C meson/build
-meson test -C meson/build fnq3_glx_logic fnq3_glx_header_boundary fnq3_global_fog_source --print-errorlogs
+meson compile -C .tmp/build
+meson test -C .tmp/build fnq3_glx_logic fnq3_glx_header_boundary fnq3_global_fog_source --print-errorlogs
 python tests/global_fog_source_tests.py
+python tests/rtx_fog_dlight_source_tests.py
+python tests/rtx_raster_overlay_parity_source_tests.py
 python tests/glx/glx_runtime_sweep_tests.py
 python tests/vulkan/vk_runtime_sweep_tests.py
 ```
 
 Runtime screenshot review should include `q3dm15` plus a fog-plane crossing
 view, a translucent particle/model inside fog, and a fogged dynamic light.
-Capture each camera with `r_fogMode 0` and `r_fogMode 1` in both GLx and
-Vulkan. Mode `0` is the pixel-parity reference; mode `1` is expected to differ
-at lookup quantization boundaries while preserving fog-plane clipping and
-opaque distance.
+Capture each camera with `r_fogMode 0` and `r_fogMode 1` in GLx, Vulkan, and
+RTX. Mode `0` is the lookup reference; mode `1` is expected to differ at
+quantization boundaries while preserving fog-plane clipping and opaque
+distance. RTX review must also confirm that fogged surfaces remain in the
+raster overlay, the depth-aware global layer affects the completed world, and
+later HUD/console draws remain unfogged.

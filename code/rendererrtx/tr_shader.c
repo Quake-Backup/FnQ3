@@ -34,6 +34,18 @@ static	shaderStage_t	stages[MAX_SHADER_STAGES];
 static	shader_t		shader;
 static	texModInfo_t	texMods[MAX_SHADER_STAGES][TR_MAX_TEXMODS+1]; // reserve one additional texmod for lightmap atlas correction
 
+static void ParseDepthFade( const char **text );
+static void ProcessDepthFade( void );
+
+const byte r_depthFadeScaleAndBias[DFT_COUNT] = {
+	0x00, // DFT_NONE
+	0x07, // DFT_BLEND: keep rgb, fade alpha to zero
+	0x08, // DFT_ADD: fade rgba to zero
+	0x78, // DFT_MULT: fade rgb to white, alpha to zero
+	0x00, // DFT_PMA
+	0x00  // DFT_TBD
+};
+
 #define FILE_HASH_SIZE		1024
 static	shader_t*		hashTable[FILE_HASH_SIZE];
 
@@ -50,6 +62,55 @@ return a hash value for the filename
 #endif
 
 #define generateHashValue Com_GenerateHashValue
+
+#define PICMIP_FILTER_TEXTURES 0x01
+#define PICMIP_FILTER_MODELS   0x02
+#define PICMIP_FILTER_SPRITES  0x04
+#define PICMIP_FILTER_2D       0x08
+
+static qboolean R_ShaderPathStartsWith( const char *name, const char *dir ) {
+	int len = strlen( dir );
+
+	return !Q_stricmpn( name, dir, len ) && ( name[len] == '/' || name[len] == '\\' );
+}
+
+static qboolean R_ShaderPicMipAllowed( const char *name ) {
+	int filter;
+
+	if ( !r_picmipFilter ) {
+		return qtrue;
+	}
+
+	filter = r_picmipFilter->integer;
+	if ( filter <= 0 ) {
+		return qtrue;
+	}
+
+	if ( ( filter & PICMIP_FILTER_TEXTURES ) && R_ShaderPathStartsWith( name, "textures" ) ) {
+		return qtrue;
+	}
+	if ( ( filter & PICMIP_FILTER_MODELS ) && R_ShaderPathStartsWith( name, "models" ) ) {
+		return qtrue;
+	}
+	if ( ( filter & PICMIP_FILTER_SPRITES ) && R_ShaderPathStartsWith( name, "sprites" ) ) {
+		return qtrue;
+	}
+	if ( filter & PICMIP_FILTER_2D ) {
+		if ( R_ShaderPathStartsWith( name, "gfx" ) || R_ShaderPathStartsWith( name, "icons" ) ||
+				R_ShaderPathStartsWith( name, "menu" ) || R_ShaderPathStartsWith( name, "ui" ) ||
+				R_ShaderPathStartsWith( name, "fonts" ) ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static void R_ApplyShaderPicMipFilter( void ) {
+	if ( !R_ShaderPicMipAllowed( shader.name ) ) {
+		shader.noPicMip = qtrue;
+	}
+}
 
 void RE_RemapShader(const char *shaderName, const char *newShaderName, const char *timeOffset) {
 	char		strippedName[MAX_QPATH];
@@ -95,6 +156,15 @@ void RE_RemapShader(const char *shaderName, const char *newShaderName, const cha
 	if ( timeOffset ) {
 		sh2->timeOffset = Q_atof( timeOffset );
 	}
+
+#ifdef USE_VULKAN
+	/*
+	 * Static BLAS material ownership and translation are cached.  A live
+	 * shader remap must rebuild them so native/overlay classification follows
+	 * the same authored shader that the raster path will draw.
+	 */
+	vk_rt_invalidate( "shader remap" );
+#endif
 }
 
 
@@ -1333,7 +1403,11 @@ static void ParseSkyParms( const char **text ) {
 	static const char	*suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
 	char		pathname[MAX_QPATH];
 	int			i;
-	imgFlags_t imgFlags = IMGFLAG_MIPMAP | IMGFLAG_PICMIP;
+	imgFlags_t imgFlags = IMGFLAG_MIPMAP;
+
+	if ( !shader.noPicMip ) {
+		imgFlags |= IMGFLAG_PICMIP;
+	}
 
 	if ( r_neatsky->integer ) {
 		imgFlags = IMGFLAG_NONE;
@@ -1766,6 +1840,155 @@ static void FinishStage( shaderStage_t *stage )
 }
 
 
+static qboolean ParseSkySunParms( const char **text, vec3_t sunColor,
+	vec3_t sunDirection, vec3_t sunLight, float *sunIntensity )
+{
+	const char *token;
+	vec3_t color;
+	float intensity;
+	float yaw;
+	float elevation;
+	float yawRadians;
+	float elevationRadians;
+	float maxColor;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	color[0] = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	color[1] = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	color[2] = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	intensity = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	yaw = Q_atof( token );
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return qfalse;
+	}
+	elevation = Q_atof( token );
+
+	maxColor = MAX( color[0], MAX( color[1], color[2] ) );
+	if ( maxColor <= 0.0f || intensity <= 0.0f ) {
+		return qfalse;
+	}
+	VectorScale( color, 1.0f / maxColor, color );
+	color[0] = Com_Clamp( 0.0f, 1.0f, color[0] );
+	color[1] = Com_Clamp( 0.0f, 1.0f, color[1] );
+	color[2] = Com_Clamp( 0.0f, 1.0f, color[2] );
+
+	VectorCopy( color, sunColor );
+	*sunIntensity = intensity;
+	VectorScale( color, intensity, sunLight );
+
+	yawRadians = yaw / 180.0f * M_PI;
+	elevationRadians = elevation / 180.0f * M_PI;
+	sunDirection[0] = cos( yawRadians ) * cos( elevationRadians );
+	sunDirection[1] = sin( yawRadians ) * cos( elevationRadians );
+	sunDirection[2] = sin( elevationRadians );
+	VectorNormalize( sunDirection );
+	return qtrue;
+}
+
+static void ParseQ3MapSurfaceLight( const char **text )
+{
+	const char *token;
+	float value;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return;
+	}
+
+	value = Q_atof( token );
+	if ( value > 0.0f ) {
+		shader.surfaceLightValid = qtrue;
+		shader.surfaceLight = value;
+	}
+}
+
+static void ParseQ3MapLightSubdivide( const char **text )
+{
+	const char *token;
+	float value;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return;
+	}
+
+	value = Q_atof( token );
+	if ( value > 0.0f ) {
+		shader.surfaceLightSubdivide = value;
+	}
+}
+
+static void ParseQ3MapLightRGB( const char **text )
+{
+	vec3_t color;
+	float maxColor;
+
+	if ( !ParseVector( text, 3, color ) ) {
+		return;
+	}
+
+	maxColor = MAX( color[0], MAX( color[1], color[2] ) );
+	if ( maxColor <= 0.0f ) {
+		return;
+	}
+	if ( maxColor > 1.0f ) {
+		VectorScale( color, 1.0f / maxColor, color );
+	}
+
+	shader.surfaceLightColor[0] = Com_Clamp( 0.0f, 1.0f, color[0] );
+	shader.surfaceLightColor[1] = Com_Clamp( 0.0f, 1.0f, color[1] );
+	shader.surfaceLightColor[2] = Com_Clamp( 0.0f, 1.0f, color[2] );
+	shader.surfaceLightColorValid = qtrue;
+}
+
+static void ParseQ3MapLightImage( const char **text )
+{
+	const char *token;
+	vec3_t color;
+	float maxColor;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		return;
+	}
+
+	if ( !R_ImageAverageColor( token, color ) ) {
+		ri.Printf( PRINT_DEVELOPER,
+			"WARNING: q3map_lightImage '%s' could not be loaded in shader '%s'\n",
+			token, shader.name );
+		return;
+	}
+
+	maxColor = MAX( color[0], MAX( color[1], color[2] ) );
+	if ( maxColor <= 0.0f ) {
+		return;
+	}
+
+	VectorCopy( color, shader.surfaceLightImageColor );
+	shader.surfaceLightImageColorValid = qtrue;
+}
+
+
 /*
 =================
 ParseShader
@@ -1781,8 +2004,15 @@ static qboolean ParseShader( const char **text )
 	branchType branch;
 	const char *token;
 	int numStages;
+	qboolean skySunValid;
+	vec3_t skySunColor = { 0.0f, 0.0f, 0.0f };
+	vec3_t skySunDirection = { 0.0f, 0.0f, 0.0f };
+	vec3_t skySunLight = { 0.0f, 0.0f, 0.0f };
+	float skySunIntensity;
 
 	numStages = 0;
+	skySunValid = qfalse;
+	skySunIntensity = 0.0f;
 
 	s_extendedShader = (*text >= s_extensionOffset);
 
@@ -1832,34 +2062,13 @@ static qboolean ParseShader( const char **text )
 			continue;
 		}
 		// sun parms
-		else if ( !Q_stricmp( token, "q3map_sun" ) || !Q_stricmp( token, "q3map_sunExt" ) ) {
-			float	a, b;
-
-			token = COM_ParseExt( text, qfalse );
-			tr.sunLight[0] = Q_atof( token );
-			token = COM_ParseExt( text, qfalse );
-			tr.sunLight[1] = Q_atof( token );
-			token = COM_ParseExt( text, qfalse );
-			tr.sunLight[2] = Q_atof( token );
-
-			VectorNormalize( tr.sunLight );
-
-			token = COM_ParseExt( text, qfalse );
-			a = Q_atof( token );
-			VectorScale( tr.sunLight, a, tr.sunLight );
-
-			token = COM_ParseExt( text, qfalse );
-			a = Q_atof( token );
-			a = a / 180 * M_PI;
-
-			token = COM_ParseExt( text, qfalse );
-			b = Q_atof( token );
-			b = b / 180 * M_PI;
-
-			tr.sunDirection[0] = cos( a ) * cos( b );
-			tr.sunDirection[1] = sin( a ) * cos( b );
-			tr.sunDirection[2] = sin( b );
-
+		else if ( !Q_stricmp( token, "q3map_sun" ) ||
+			!Q_stricmp( token, "q3map_sunExt" ) ||
+			!Q_stricmp( token, "q3map_sunExt2" ) ) {
+			if ( ParseSkySunParms( text, skySunColor,
+				skySunDirection, skySunLight, &skySunIntensity ) ) {
+				skySunValid = qtrue;
+			}
 			SkipRestOfLine( text );
 			continue;
 		}
@@ -1876,6 +2085,31 @@ static qboolean ParseShader( const char **text )
 			if ( token[0] ) {
 				shader.clampTime = Q_atof( token );
 			}
+		}
+		else if ( !Q_stricmp( token, "q3map_depthFade" ) ) {
+			ParseDepthFade( text );
+			continue;
+		}
+		else if ( !Q_stricmp( token, "q3map_surfaceLight" ) ) {
+			ParseQ3MapSurfaceLight( text );
+			SkipRestOfLine( text );
+			continue;
+		}
+		else if ( !Q_stricmp( token, "q3map_lightSubdivide" ) ) {
+			ParseQ3MapLightSubdivide( text );
+			SkipRestOfLine( text );
+			continue;
+		}
+		else if ( !Q_stricmp( token, "q3map_lightRGB" ) ||
+			!Q_stricmp( token, "q3map_lightColor" ) ) {
+			ParseQ3MapLightRGB( text );
+			SkipRestOfLine( text );
+			continue;
+		}
+		else if ( !Q_stricmp( token, "q3map_lightImage" ) ) {
+			ParseQ3MapLightImage( text );
+			SkipRestOfLine( text );
+			continue;
 		}
 		// skip stuff that only the q3map needs
 		else if ( !Q_stricmpn( token, "q3map", 5 ) ) {
@@ -2053,6 +2287,14 @@ static qboolean ParseShader( const char **text )
 	}
 
 	shader.explicitlyDefined = qtrue;
+
+	if ( shader.isSky && skySunValid ) {
+		shader.skySunValid = qtrue;
+		VectorCopy( skySunColor, shader.skySunColor );
+		VectorCopy( skySunDirection, shader.skySunDirection );
+		VectorCopy( skySunLight, shader.skySunLight );
+		shader.skySunIntensity = skySunIntensity;
+	}
 
 	return qtrue;
 }
@@ -2915,6 +3157,9 @@ static void InitShader( const char *name, int lightmapIndex ) {
 
 	Q_strncpyz( shader.name, name, sizeof( shader.name ) );
 	shader.lightmapIndex = lightmapIndex;
+	VectorSet( shader.surfaceLightColor, 1.0f, 1.0f, 1.0f );
+	VectorSet( shader.surfaceLightImageColor, 1.0f, 1.0f, 1.0f );
+	R_ApplyShaderPicMipFilter();
 
 	// we need to know original (unmodified) lightmap index
 	// because shader search functions expects this
@@ -2982,6 +3227,176 @@ static void DetectNeeds( void )
 			shader.needsNormal = qtrue;
 		}
 	}
+}
+
+static void ParseDepthFade( const char **text )
+{
+	const char *token;
+	float scale, bias;
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		ri.Printf( PRINT_WARNING, "WARNING: missing scale for q3map_depthFade in shader '%s'\n", shader.name );
+		SkipRestOfLine( text );
+		return;
+	}
+	scale = Q_atof( token );
+
+	token = COM_ParseExt( text, qfalse );
+	if ( !token[0] ) {
+		ri.Printf( PRINT_WARNING, "WARNING: missing bias for q3map_depthFade in shader '%s'\n", shader.name );
+		SkipRestOfLine( text );
+		return;
+	}
+	bias = Q_atof( token );
+
+	SkipRestOfLine( text );
+
+	if ( scale <= 0.0f ) {
+		ri.Printf( PRINT_WARNING, "WARNING: q3map_depthFade scale must be greater than zero in shader '%s'\n", shader.name );
+		return;
+	}
+
+	shader.dfType = DFT_TBD;
+	shader.dfInvDist = 1.0f / scale;
+	shader.dfBias = bias;
+}
+
+static qboolean IsDepthFadeWritable( const shaderStage_t *stage )
+{
+	return ( stage->stateBits & GLS_DEPTHMASK_TRUE ) ? qfalse : qtrue;
+}
+
+static qboolean IsAdditiveBlendDepthFade( void )
+{
+	int i;
+
+	for ( i = 0; i < shader.numUnfoggedPasses; i++ ) {
+		const unsigned blend = stages[i].stateBits & GLS_BLEND_BITS;
+		if ( !stages[i].active || !IsDepthFadeWritable( &stages[i] ) )
+			return qfalse;
+		if ( ( blend & GLS_DSTBLEND_BITS ) != GLS_DSTBLEND_ONE )
+			return qfalse;
+		switch ( blend & GLS_SRCBLEND_BITS ) {
+		case GLS_SRCBLEND_ONE:
+		case GLS_SRCBLEND_SRC_ALPHA:
+		case GLS_SRCBLEND_ONE_MINUS_SRC_ALPHA:
+			break;
+		default:
+			return qfalse;
+		}
+	}
+
+	return qtrue;
+}
+
+static qboolean IsNormalBlendDepthFade( void )
+{
+	int i;
+
+	for ( i = 0; i < shader.numUnfoggedPasses; i++ ) {
+		const unsigned blend = stages[i].stateBits & GLS_BLEND_BITS;
+		if ( !stages[i].active || !IsDepthFadeWritable( &stages[i] ) )
+			return qfalse;
+		if ( blend != ( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA ) )
+			return qfalse;
+	}
+
+	return qtrue;
+}
+
+static qboolean IsMultiplicativeBlendDepthFade( void )
+{
+	int i;
+
+	for ( i = 0; i < shader.numUnfoggedPasses; i++ ) {
+		const unsigned blend = stages[i].stateBits & GLS_BLEND_BITS;
+		if ( !stages[i].active || !IsDepthFadeWritable( &stages[i] ) )
+			return qfalse;
+		if ( blend != ( GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO ) &&
+			 blend != ( GLS_SRCBLEND_ZERO | GLS_DSTBLEND_SRC_COLOR ) )
+			return qfalse;
+	}
+
+	return qtrue;
+}
+
+static qboolean IsPremultipliedAlphaBlendDepthFade( void )
+{
+	int i;
+
+	for ( i = 0; i < shader.numUnfoggedPasses; i++ ) {
+		const unsigned blend = stages[i].stateBits & GLS_BLEND_BITS;
+		if ( !stages[i].active || !IsDepthFadeWritable( &stages[i] ) )
+			return qfalse;
+		if ( blend != ( GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA ) )
+			return qfalse;
+	}
+
+	return qtrue;
+}
+
+static void ProcessDepthFade( void )
+{
+	static const struct {
+		const char *name;
+		float distance;
+		float bias;
+	} defaultDepthFade[] = {
+		{ "rocketExplosion", 24.0f, 0.0f },
+		{ "rocketExplosionNPM", 24.0f, 0.0f },
+		{ "grenadeExplosion", 24.0f, 0.0f },
+		{ "grenadeExplosionNPM", 24.0f, 0.0f },
+		{ "grenadeCPMA_NPM", 24.0f, 0.0f },
+		{ "grenadeCPMA", 24.0f, 0.0f },
+		{ "bloodTrail", 24.0f, 0.0f },
+		{ "sprites/particleSmoke", 24.0f, 0.0f },
+		{ "plasmaExplosion", 8.0f, 4.0f },
+		{ "plasmaExplosionNPM", 8.0f, 4.0f },
+		{ "plasmanewExplosion", 8.0f, 4.0f },
+		{ "plasmanewExplosionNPM", 8.0f, 4.0f },
+		{ "bulletExplosion", 8.0f, 4.0f },
+		{ "bulletExplosionNPM", 8.0f, 4.0f },
+		{ "railExplosion", 8.0f, 0.0f },
+		{ "railExplosionNPM", 8.0f, 0.0f },
+		{ "bfgExplosion", 8.0f, 0.0f },
+		{ "bfgExplosionNPM", 8.0f, 0.0f },
+		{ "bloodExplosion", 8.0f, 0.0f },
+		{ "bloodExplosionNPM", 8.0f, 0.0f },
+		{ "smokePuff", 8.0f, 0.0f },
+		{ "smokePuffNPM", 8.0f, 0.0f },
+		{ "shotgunSmokePuff", 8.0f, 0.0f },
+		{ "shotgunSmokePuffNPM", 8.0f, 0.0f }
+	};
+	int i;
+
+	if ( shader.dfType == DFT_NONE ) {
+		for ( i = 0; i < ARRAY_LEN( defaultDepthFade ); i++ ) {
+			if ( !Q_stricmp( shader.name, defaultDepthFade[i].name ) ) {
+				shader.dfType = DFT_TBD;
+				shader.dfInvDist = 1.0f / defaultDepthFade[i].distance;
+				shader.dfBias = defaultDepthFade[i].bias;
+				break;
+			}
+		}
+	}
+
+	if ( shader.dfType != DFT_TBD )
+		return;
+
+	shader.dfType = DFT_NONE;
+
+	if ( !r_depthFade->integer || shader.sort <= SS_OPAQUE || shader.numUnfoggedPasses <= 0 )
+		return;
+
+	if ( IsAdditiveBlendDepthFade() )
+		shader.dfType = DFT_ADD;
+	else if ( IsNormalBlendDepthFade() )
+		shader.dfType = DFT_BLEND;
+	else if ( IsMultiplicativeBlendDepthFade() )
+		shader.dfType = DFT_MULT;
+	else if ( IsPremultipliedAlphaBlendDepthFade() )
+		shader.dfType = DFT_PMA;
 }
 
 
@@ -3214,6 +3629,8 @@ static shader_t *FinishShader( void ) {
 		shader.fogPass = FP_LE;
 	}
 
+	ProcessDepthFade();
+
 #ifdef USE_VULKAN
 
 #ifdef USE_FOG_COLLAPSE
@@ -3287,6 +3704,12 @@ static shader_t *FinishShader( void ) {
 			int env_mask;
 			shaderStage_t *pStage = &stages[i];
 			def.state_bits = pStage->stateBits;
+			def.depth_fade =
+				( vk_depth_fade_supported() &&
+				  shader.dfType > DFT_NONE &&
+				  shader.dfType < DFT_TBD &&
+				  pStage->bundle[1].image[0] == NULL &&
+				  !pStage->depthFragment ) ? 1 : 0;
 
 			if ( pStage->mtEnv3 ) {
 				switch ( pStage->mtEnv3 ) {
@@ -3601,6 +4024,127 @@ static const char *FindShaderInShaderText( const char *shadername ) {
 	return NULL;
 }
 
+qboolean R_LiquidShaderSupported( const shader_t *shader )
+{
+	int i;
+
+	if ( !shader || shader->numUnfoggedPasses <= 0 ) {
+		return qfalse;
+	}
+	for ( i = 0; i < shader->numUnfoggedPasses; i++ ) {
+		const shaderStage_t *stage = shader->stages[i];
+
+		/*
+		 * The synthetic pass has ordinary geometry coverage and LEQUAL depth.
+		 * Leave masked, depth-fragment, or otherwise unusual materials
+		 * entirely authored instead of filling pixels their stages reject.
+		 */
+		if ( !stage || stage->depthFragment ||
+			( stage->stateBits & ( GLS_ATEST_BITS | GLS_DEPTHTEST_DISABLE |
+				GLS_DEPTHFUNC_EQUAL | GLS_POLYMODE_LINE ) ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+qboolean R_RtShaderNativeSupported( const shader_t *shader )
+{
+#ifdef USE_VULKAN
+	const shaderStage_t *stage;
+	int baseBundleCount = 0;
+	int lightmapBundleCount = 0;
+	uint32_t bundleCount;
+	uint32_t i;
+
+	/*
+	 * Native closest-hit shading intentionally owns only the static subset of
+	 * the Quake shader language that it can reproduce without silently
+	 * dropping authored animation, coordinate generation, blending, or
+	 * deformation.  Everything else remains a raster overlay while its
+	 * opaque geometry can still participate in RT visibility.
+	 */
+	if ( !shader ||
+		shader->remappedShader ||
+		shader->sort != SS_OPAQUE ||
+		shader->isSky ||
+		( shader->surfaceFlags & SURF_SKY ) ||
+		shader->polygonOffset ||
+		shader->numDeforms != 0 ||
+		shader->hasScreenMap ||
+		shader->numUnfoggedPasses != 1 ) {
+		return qfalse;
+	}
+
+	stage = shader->stages[0];
+	if ( !stage ||
+		!stage->active ||
+		stage->depthFragment ||
+		!( stage->stateBits & GLS_DEPTHMASK_TRUE ) ||
+		( stage->stateBits & ( GLS_BLEND_BITS | GLS_ATEST_BITS |
+			GLS_DEPTHTEST_DISABLE | GLS_DEPTHFUNC_EQUAL |
+			GLS_POLYMODE_LINE ) ) ) {
+		return qfalse;
+	}
+
+	bundleCount = stage->numTexBundles;
+	if ( bundleCount < 1 || bundleCount > 2 ||
+		( bundleCount == 1 && ( stage->mtEnv || stage->mtEnv3 ) ) ||
+		( bundleCount == 2 &&
+			( stage->mtEnv != GL_MODULATE || stage->mtEnv3 ) ) ) {
+		return qfalse;
+	}
+
+	for ( i = 0; i < bundleCount; i++ ) {
+		const textureBundle_t *bundle = &stage->bundle[i];
+		const image_t *image = bundle->image[0];
+		const qboolean lightmap =
+			( bundle->tcGen == TCGEN_LIGHTMAP ||
+				bundle->lightmap != LIGHTMAP_INDEX_NONE ||
+				( image && ( image->flags & IMGFLAG_LIGHTMAP ) ) ) ?
+				qtrue : qfalse;
+
+		if ( !image ||
+			bundle->numImageAnimations > 1 ||
+			bundle->numTexMods != 0 ||
+			bundle->isVideoMap ||
+			bundle->isScreenMap ) {
+			return qfalse;
+		}
+
+		if ( lightmap ) {
+			if ( bundle->tcGen != TCGEN_LIGHTMAP ||
+				( bundle->rgbGen != CGEN_IDENTITY &&
+				  bundle->rgbGen != CGEN_IDENTITY_LIGHTING ) ||
+				( bundle->alphaGen != AGEN_SKIP &&
+				  bundle->alphaGen != AGEN_IDENTITY ) ) {
+				return qfalse;
+			}
+			lightmapBundleCount++;
+			continue;
+		}
+
+		if ( bundle->tcGen != TCGEN_TEXTURE ||
+			( bundle->rgbGen != CGEN_IDENTITY &&
+			  bundle->rgbGen != CGEN_IDENTITY_LIGHTING &&
+			  bundle->rgbGen != CGEN_CONST ) ||
+			( bundle->alphaGen != AGEN_SKIP &&
+			  bundle->alphaGen != AGEN_IDENTITY &&
+			  !( bundle->alphaGen == AGEN_CONST &&
+				bundle->constantColor.rgba[3] == 255 ) ) ) {
+			return qfalse;
+		}
+		baseBundleCount++;
+	}
+
+	return ( baseBundleCount == 1 && lightmapBundleCount <= 1 ) ?
+		qtrue : qfalse;
+#else
+	(void)shader;
+	return qfalse;
+#endif
+}
+
 
 /*
 ==================
@@ -3802,7 +4346,9 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 
 		if (mipRawImage)
 		{
-			flags |= IMGFLAG_MIPMAP | IMGFLAG_PICMIP;
+			flags |= IMGFLAG_MIPMAP;
+			if ( !shader.noPicMip )
+				flags |= IMGFLAG_PICMIP;
 		}
 		else
 		{

@@ -6,13 +6,16 @@ layout(set = 0, binding = 0) uniform UBO {
 	vec4 lightPos;				// vertex: light origin
 	vec4 lightColor;			// fragment: rgb + 1/(r*r)
 	vec4 lightVector;			// fragment: linear dynamic light
-#ifdef USE_FOG
 	// fog parameters:
 	vec4 fogDistanceVector;		// vertex
 	vec4 fogDepthVector;		// vertex
 	vec4 fogEyeT;				// vertex
 	vec4 fogColor;				// fragment
-#endif
+	vec4 texFactors;			// fragment
+	vec4 depthFadeInfo;			// fragment
+	vec4 depthFadeScale;		// fragment
+	vec4 depthFadeBias;			// fragment
+	vec4 dlightFactors;			// fragment
 };
 
 layout(set = 1, binding = 0) uniform sampler2D texture0;
@@ -37,6 +40,21 @@ layout (constant_id = 3) const int alpha_to_coverage = 0;
 //layout (constant_id = 4) const int color_mode = 0;
 layout (constant_id = 5) const int abs_light = 0;
 
+#ifdef USE_FOG
+float FogFactor(vec2 fogCoord)
+{
+	if (fogEyeT.z < 0.5)
+		return texture(fogtexture, fogCoord).a;
+
+	float fogDistance = fogCoord.x - 0.001953125;
+	if (fogDistance <= 0.0 || fogCoord.y < 0.03125)
+		return 0.0;
+	if (fogCoord.y < 0.96875)
+		fogDistance *= (fogCoord.y - 0.03125) / 0.9375;
+	return sqrt(clamp(fogDistance * 8.0, 0.0, 1.0));
+}
+#endif
+
 float CorrectAlpha(float threshold, float alpha, vec2 tc)
 {
 	ivec2 ts = textureSize(texture0, 0);
@@ -50,9 +68,10 @@ float CorrectAlpha(float threshold, float alpha, vec2 tc)
 
 void main() {
 #ifdef USE_FOG
-	vec4 fog = texture(fogtexture, fog_tex_coord);
+	float fogFactor = FogFactor(fog_tex_coord);
 #endif
 	vec4 base = texture(texture0, frag_tex_coord);
+	base.rgb *= texFactors.x;
 
 	if ( alpha_to_coverage != 0 ) {
 		if (alpha_test_func == 1) {
@@ -94,31 +113,41 @@ void main() {
 
 	if (intensFactor <= 0.0)
 		discard;
+	float smoothFactor = intensFactor * intensFactor * (3.0 - 2.0 * intensFactor);
+	intensFactor = mix(intensFactor, smoothFactor, clamp(dlightFactors.x, 0.0, 1.0));
 	vec3 intens = lightColorRadius.rgb * intensFactor;
 
 #ifdef USE_FOG
 	// modulate base by inverted fog alpha
-	base.xyz = base.xyz * ( 1.0 - fog.a );
+	base.xyz = base.xyz * ( 1.0 - fogFactor );
 #endif
 
+	vec3 nN = normalize(N);
+
 	// Lambertian diffuse reflection term (N.L)
-	float diffuse = dot(N, nL);
+	float diffuse = dot(nN, nL);
 
 	// specular reflection term (N.H)
-	float specFactor = dot(N, normalize(nL + nV));
+	float specFactor = dot(nN, normalize(nL + nV));
 
 	if ( abs_light != 0 )
 	{
 		// make sure that light and eye vectors are on the same plane side
-		if ( diffuse * dot(N, nV) <= 0 )
+		if ( diffuse * dot(nN, nV) <= 0 )
 			discard;
 
 		diffuse = abs( diffuse );
 		specFactor = abs( specFactor );
+	} else {
+		diffuse = max( diffuse, 0.0 );
+		specFactor = max( specFactor, 0.0 );
 	}
 
-	//float spec = pow(specFactor, 8.0) * 0.25;
-	vec4 spec = vec4(pow(specFactor, 10.0)*0.25) * base * 0.8;
+	diffuse = min( diffuse, 1.0 );
+	specFactor = min( specFactor, 1.0 );
+
+	vec4 specBase = base * texFactors.z + vec4(texFactors.w);
+	vec4 spec = vec4(pow(specFactor, max(texFactors.y, 1.0))) * specBase;
 
 	out_color = (base * vec4(diffuse) + spec) * vec4(intens, 1.0);
 }

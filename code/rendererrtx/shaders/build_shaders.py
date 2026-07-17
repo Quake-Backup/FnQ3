@@ -451,7 +451,7 @@ def extract_reflection(module: SpirvModule) -> Dict[str, object]:
 def discover_direct_variants(shader_dir: Path) -> List[ShaderVariant]:
 	variants: List[ShaderVariant] = []
 
-	direct_stages = ("vert", "frag", "rgen", "rmiss", "rchit")
+	direct_stages = ("vert", "frag", "rgen", "rmiss", "rchit", "rahit")
 
 	for stage in direct_stages:
 		for shader_path in sorted(shader_dir.glob(f"*.{stage}"), key=lambda path: path.name.lower()):
@@ -598,7 +598,7 @@ def compile_variant(glslang: Path, shader_dir: Path, temp_spv: Path, variant: Sh
 		str(temp_spv),
 		variant.source,
 	]
-	if variant.stage in {"rgen", "rmiss", "rchit"}:
+	if variant.stage in {"rgen", "rmiss", "rchit", "rahit"}:
 		command.extend(["--target-env", "spirv1.4"])
 	command.extend(f"-D{macro}" for macro in variant.defines)
 

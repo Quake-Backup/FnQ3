@@ -43,6 +43,67 @@ refimport_t	ri;
 // point at this for their sorting surface
 static surfaceType_t entitySurface = SF_ENTITY;
 
+#define R_BASE_VIEWPORT_ASPECT ( 4.0f / 3.0f )
+
+static qboolean R_FovCorrectionUsePhysicalAspect( void )
+{
+#ifdef USE_VULKAN
+	if ( r_fbo && r_fbo->integer && r_renderScale && r_renderScale->integer > 0 ) {
+		const int scaleMode = r_renderScale->integer - 1;
+		// Preserve-aspect blits display the render target without stretching its projection.
+		if ( ( scaleMode & 1 ) &&
+			( gls.windowWidth != glConfig.vidWidth || gls.windowHeight != glConfig.vidHeight ) ) {
+			return qfalse;
+		}
+	}
+#endif
+
+	return qtrue;
+}
+
+void R_ApplyViewportFovCorrection( int viewportWidth, int viewportHeight, qboolean usePhysicalAspect, float *fovX, float *fovY )
+{
+	float viewportAspect;
+	float renderAspect;
+	float tanHalfBaseFovY;
+
+	if ( fovX == NULL || fovY == NULL ) {
+		return;
+	}
+
+	if ( viewportWidth <= 0 || viewportHeight <= 0 ) {
+		return;
+	}
+
+	if ( r_fovCorrection == NULL || r_fovCorrection->integer == 0 ) {
+		return;
+	}
+
+	if ( *fovX <= 0.0f || *fovX >= 179.0f ) {
+		return;
+	}
+
+	viewportAspect = (float)viewportWidth / (float)viewportHeight;
+
+	if ( usePhysicalAspect && R_FovCorrectionUsePhysicalAspect() &&
+		glConfig.vidWidth > 0 && glConfig.vidHeight > 0 && glConfig.windowAspect > 0.0f ) {
+		renderAspect = (float)glConfig.vidWidth / (float)glConfig.vidHeight;
+		if ( renderAspect > 0.0f ) {
+			viewportAspect *= glConfig.windowAspect / renderAspect;
+		}
+	}
+
+	if ( fabsf( viewportAspect - R_BASE_VIEWPORT_ASPECT ) < 0.001f ) {
+		return;
+	}
+
+	// Preserve the authored 4:3 vertical framing and fit horizontal FOV to the viewport.
+	tanHalfBaseFovY = tanf( *fovX * M_PI / 360.0f ) / R_BASE_VIEWPORT_ASPECT;
+
+	*fovX = atanf( tanHalfBaseFovY * viewportAspect ) * 360.0f / M_PI;
+	*fovY = atanf( tanHalfBaseFovY ) * 360.0f / M_PI;
+}
+
 /*
 =================
 R_CullLocalBox
@@ -1604,7 +1665,8 @@ static void R_AddEntitySurfaces( void ) {
 		// we don't want the hacked first person weapon position showing in 
 		// mirrors, because the true body position will already be drawn
 		//
-		if ( (ent->e.renderfx & RF_FIRST_PERSON) && (tr.viewParms.portalView != PV_NONE) ) {
+		if ( (ent->e.renderfx & RF_FIRST_PERSON) &&
+			( tr.viewParms.portalView != PV_NONE || ( tr.refdef.rdflags & RDF_NOFIRSTPERSON ) ) ) {
 			continue;
 		}
 

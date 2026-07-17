@@ -744,16 +744,116 @@ static void RB_BeginDrawingView( void ) {
 	backEnd.skyRenderedThisView = qfalse;
 }
 
-#ifdef USE_PMLIGHT
-static void RB_LightingPass( void );
-#endif
-
 /*
 ==================
 RB_RenderDrawSurfList
 ==================
 */
-static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+typedef enum {
+	RB_DRAWSURFS_ALL,
+	RB_DRAWSURFS_RT_BASE,
+	RB_DRAWSURFS_RT_OVERLAY
+} rbDrawSurfsMode_t;
+
+#ifdef USE_PMLIGHT
+static void RB_LightingPass( rbDrawSurfsMode_t mode, qboolean finish );
+#endif
+
+static qboolean RB_DrawSurfIncluded( int entityNum, const shader_t *shader, int fogNum, rbDrawSurfsMode_t mode )
+{
+	const qboolean rtBaseSurface =
+		( entityNum == REFENTITYNUM_WORLD &&
+			R_RtShaderNativeSupported( shader ) &&
+			fogNum == 0 ) ? qtrue : qfalse;
+
+	if ( mode == RB_DRAWSURFS_ALL ) {
+		return qtrue;
+	}
+	if ( mode == RB_DRAWSURFS_RT_BASE ) {
+		return rtBaseSurface;
+	}
+
+	/*
+	 * The pre-trace raster pass contains only static world materials whose
+	 * coverage and base texture semantics are faithfully represented by
+	 * closest-hit shading. Draw every other surface exactly once after the
+	 * trace: entities, remaps, animated/deformed/multi-stage materials,
+	 * portals, sky, decals, alpha/translucency, fogged world, particles,
+	 * effects and stencil shadow volumes.
+	 */
+	return rtBaseSurface ? qfalse : qtrue;
+}
+
+#ifdef USE_VULKAN
+static qboolean RB_IsPrimaryFullView( void )
+{
+	return ( ( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) == 0 &&
+		backEnd.viewParms.portalView == PV_NONE &&
+		backEnd.viewParms.stereoFrame == STEREO_CENTER &&
+		backEnd.viewParms.viewportX == 0 &&
+		backEnd.viewParms.viewportY == 0 &&
+		backEnd.viewParms.viewportWidth == glConfig.vidWidth &&
+		backEnd.viewParms.viewportHeight == glConfig.vidHeight ) ?
+			qtrue : qfalse;
+}
+
+static qboolean RB_ShaderNeedsLiquidSnapshot( const shader_t *shader )
+{
+	const shader_t *state;
+
+	if ( !shader || shader->sort < SS_FOG ) {
+		return qfalse;
+	}
+	state = shader->remappedShader ? shader->remappedShader : shader;
+	if ( !R_LiquidShaderSupported( state ) ||
+		!r_liquid || r_liquid->integer <= 0 ||
+		( ( !r_liquidRefraction || r_liquidRefraction->value <= 0.0f ) &&
+		  ( !r_liquidReflection || r_liquidReflection->value <= 0.0f ) ) ||
+		!R_LiquidContentsEnabled( shader->contentFlags | state->contentFlags,
+			r_liquid->integer ) ) {
+		return qfalse;
+	}
+	if ( !vk.fboActive || backEnd.liquidScreenMapDone ||
+		( vk.renderPassIndex != RENDER_PASS_MAIN &&
+		  vk.renderPassIndex != RENDER_PASS_POST_BLOOM ) ||
+		!RB_IsPrimaryFullView() ||
+		glConfig.stereoEnabled ) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static qboolean RB_DrawSurfListNeedsLiquidSnapshot( drawSurf_t *drawSurfs,
+	int numDrawSurfs, rbDrawSurfsMode_t mode )
+{
+	int i;
+
+	if ( !drawSurfs || numDrawSurfs <= 0 || !r_liquid ||
+		r_liquid->integer <= 0 ||
+		( ( !r_liquidRefraction || r_liquidRefraction->value <= 0.0f ) &&
+		  ( !r_liquidReflection || r_liquidReflection->value <= 0.0f ) ) ||
+		!vk.fboActive ||
+		vk.liquidSnapshot.color_descriptor == VK_NULL_HANDLE ) {
+		return qfalse;
+	}
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		shader_t *shader;
+		int entityNum, fogNum, dlighted;
+
+		R_DecomposeSort( drawSurfs[i].sort, &entityNum, &shader,
+			&fogNum, &dlighted );
+		if ( !RB_DrawSurfIncluded( entityNum, shader, fogNum, mode ) ) {
+			continue;
+		}
+		if ( RB_ShaderNeedsLiquidSnapshot( shader ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+#endif
+
+static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs, rbDrawSurfsMode_t mode ) {
 	shader_t		*shader, *oldShader;
 	int				fogNum;
 	int				entityNum, oldEntityNum;
@@ -765,8 +865,13 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	int				i;
 	drawSurf_t		*drawSurf;
 	unsigned int	oldSort;
+	qboolean		sortDecomposed;
 #ifdef USE_PMLIGHT
 	float			oldShaderSort;
+#endif
+#ifdef USE_VULKAN
+	qboolean		depthFadeSnapshot;
+	qboolean		liquidSnapshotPending;
 #endif
 	double			originalTime; // -EC-
 
@@ -785,49 +890,102 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #ifdef USE_PMLIGHT
 	oldShaderSort = -1;
 #endif
+#ifdef USE_VULKAN
+	depthFadeSnapshot = vk_depth_fade_ready();
+	liquidSnapshotPending = RB_DrawSurfListNeedsLiquidSnapshot(
+		drawSurfs, numDrawSurfs, mode );
+#endif
 	depthRange = qfalse;
 
-	backEnd.pc.c_surfaces += numDrawSurfs;
+	if ( mode != RB_DRAWSURFS_RT_OVERLAY ) {
+		backEnd.pc.c_surfaces += numDrawSurfs;
+	}
 
 	for (i = 0, drawSurf = drawSurfs ; i < numDrawSurfs ; i++, drawSurf++) {
+		sortDecomposed = qfalse;
+		if ( mode != RB_DRAWSURFS_ALL ) {
+			R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+			sortDecomposed = qtrue;
+			if ( !RB_DrawSurfIncluded( entityNum, shader, fogNum, mode ) ) {
+				continue;
+			}
+		}
+
 		if ( drawSurf->sort == oldSort ) {
 			// fast path, same as previous sort
 			rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
 			continue;
 		}
 
-		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+		if ( !sortDecomposed ) {
+			R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
+		}
 #ifdef USE_VULKAN
 		if ( vk.renderPassIndex == RENDER_PASS_SCREENMAP && entityNum != REFENTITYNUM_WORLD && backEnd.refdef.entities[ entityNum ].e.renderfx & RF_DEPTHHACK ) {
 			continue;
+		}
+		if ( !depthFadeSnapshot && shader &&
+			shader->sort > SS_OPAQUE &&
+			RB_IsPrimaryFullView() &&
+			( vk.renderPassIndex == RENDER_PASS_MAIN ||
+			  vk.renderPassIndex == RENDER_PASS_POST_BLOOM ) &&
+			vk_depth_fade_available() ) {
+			RB_EndSurface();
+			vk_copy_depth_fade();
+			depthFadeSnapshot = vk_depth_fade_ready();
+			if ( depthFadeSnapshot ) {
+				oldShader = NULL;
+				oldSort = MAX_UINT;
+				oldEntityNum = -1;
+			}
 		}
 #endif
 		//
 		// change the tess parameters if needed
 		// a "entityMergable" shader is a shader that can have surfaces from separate
 		// entities merged into a single batch, like smoke and blood puff sprites
-		if ( ( (oldSort ^ drawSurfs->sort ) & ~QSORT_REFENTITYNUM_MASK ) || !shader->entityMergable ) {
+		if ( ( (oldSort ^ drawSurf->sort ) & ~QSORT_REFENTITYNUM_MASK ) || !shader->entityMergable ) {
 			//if ( oldShader != NULL ) {
 				RB_EndSurface();
 			//}
 #ifdef USE_PMLIGHT
 			#define INSERT_POINT SS_FOG
-			if ( backEnd.refdef.numLitSurfs && oldShaderSort < INSERT_POINT && shader->sort >= INSERT_POINT ) {
+			if ( mode != RB_DRAWSURFS_RT_BASE &&
+				backEnd.refdef.numLitSurfs && oldShaderSort < INSERT_POINT && shader->sort >= INSERT_POINT ) {
 				//RB_BeginDrawingLitSurfs(); // no need, already setup in RB_BeginDrawingView()
 #ifdef USE_VULKAN
-				RB_LightingPass();
+				RB_LightingPass( mode, qtrue );
 #else
 				if ( depthRange ) {
 					qglDepthRange( 0, 1 );
-					RB_LightingPass();
+					RB_LightingPass( mode, qtrue );
 					qglDepthRange( 0, 0.3 );
 				} else {
-					RB_LightingPass();
+					RB_LightingPass( mode, qtrue );
 				}
 #endif
 				oldEntityNum = -1; // force matrix setup
 			}
 			oldShaderSort = shader->sort;
+#endif
+#ifdef USE_VULKAN
+			/*
+			 * Snapshot only after opaque raster/PMLIGHT work, and before the
+			 * first fog/liquid/translucent batch. In RT composition this runs
+			 * in the overlay list, after the trace has produced the base.
+			 */
+			if ( liquidSnapshotPending && shader->sort >= SS_FOG ) {
+				if ( !vk_depth_fade_ready() &&
+					vk_depth_fade_available() ) {
+					vk_copy_depth_fade();
+				}
+				if ( vk_capture_liquid_scene() ) {
+					oldSort = MAX_UINT;
+					oldEntityNum = -1;
+					oldShader = NULL;
+				}
+				liquidSnapshotPending = qfalse;
+			}
 #endif
 			RB_BeginSurface( shader, fogNum );
 			oldShader = shader;
@@ -999,7 +1157,7 @@ static void RB_BeginDrawingLitSurfs( void )
 RB_RenderLitSurfList
 ==================
 */
-static void RB_RenderLitSurfList( dlight_t* dl ) {
+static void RB_RenderLitSurfList( dlight_t* dl, rbDrawSurfsMode_t mode ) {
 	shader_t		*shader, *oldShader;
 	int				fogNum;
 	int				entityNum, oldEntityNum;
@@ -1009,6 +1167,7 @@ static void RB_RenderLitSurfList( dlight_t* dl ) {
 	qboolean		depthRange, isCrosshair;
 	const litSurf_t	*litSurf;
 	unsigned int	oldSort;
+	qboolean		sortDecomposed;
 	double			originalTime; // -EC-
 
 	// save original time for entity shader offsets
@@ -1028,6 +1187,15 @@ static void RB_RenderLitSurfList( dlight_t* dl ) {
 	tess.dlightUpdateParams = qtrue;
 
 	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
+		sortDecomposed = qfalse;
+		if ( mode != RB_DRAWSURFS_ALL ) {
+			R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
+			sortDecomposed = qtrue;
+			if ( !RB_DrawSurfIncluded( entityNum, shader, fogNum, mode ) ) {
+				continue;
+			}
+		}
+
 		//if ( litSurf->sort == sort ) {
 		if ( litSurf->sort == oldSort ) {
 			// fast path, same as previous sort
@@ -1035,7 +1203,9 @@ static void RB_RenderLitSurfList( dlight_t* dl ) {
 			continue;
 		}
 
-		R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
+		if ( !sortDecomposed ) {
+			R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
+		}
 #ifdef USE_VULKAN
 		if ( vk.renderPassIndex == RENDER_PASS_SCREENMAP && entityNum != REFENTITYNUM_WORLD && backEnd.refdef.entities[ entityNum ].e.renderfx & RF_DEPTHHACK ) {
 			continue;
@@ -1378,7 +1548,7 @@ static const void *RB_StretchPic( const void *data ) {
 
 
 #ifdef USE_PMLIGHT
-static void RB_LightingPass( void )
+static void RB_LightingPass( rbDrawSurfsMode_t mode, qboolean finish )
 {
 	dlight_t	*dl;
 	int	i;
@@ -1396,13 +1566,15 @@ static void RB_LightingPass( void )
 		if ( dl->head )
 		{
 			tess.light = dl;
-			RB_RenderLitSurfList( dl );
+			RB_RenderLitSurfList( dl, mode );
 		}
 	}
 
 	tess.dlightPass = qfalse;
 
-	backEnd.viewParms.num_dlights = 0;
+	if ( finish ) {
+		backEnd.viewParms.num_dlights = 0;
+	}
 }
 #endif
 
@@ -1540,15 +1712,40 @@ static void RB_DebugGraphics( void ) {
 RB_DrawSurfs
 =============
 */
+#ifdef USE_VULKAN
+static void RB_PreparePostProcessForHud3D( const trRefdef_t *refdef )
+{
+	if ( !backEnd.doneSurfaces ||
+		!r_hudExcludePostProcess ||
+		!r_hudExcludePostProcess->integer ||
+		!( refdef->rdflags & RDF_NOWORLDMODEL ) ) {
+		return;
+	}
+
+	if ( r_bloom && r_bloom->integer && !backEnd.doneBloom ) {
+		vk_bloom();
+	}
+}
+#endif
+
 static const void *RB_DrawSurfs( const void *data ) {
 	const drawSurfsCommand_t *cmd;
+#ifdef USE_VULKAN
+	qboolean rtComposition;
+	qboolean rtTraceCompleted = qfalse;
+	qboolean requiredPrimaryTrace = qfalse;
+#endif
 
 	RB_FrameGraph_NotePass( RTX_FRAME_PASS_DRAW_SURFS );
+
+	cmd = (const drawSurfsCommand_t *)data;
 
 	// finish any 2D drawing if needed
 	RB_EndSurface();
 
-	cmd = (const drawSurfsCommand_t *)data;
+#ifdef USE_VULKAN
+	RB_PreparePostProcessForHud3D( &cmd->refdef );
+#endif
 
 	backEnd.refdef = cmd->refdef;
 	backEnd.viewParms = cmd->viewParms;
@@ -1560,10 +1757,76 @@ static const void *RB_DrawSurfs( const void *data ) {
 	// clear the z buffer, set the modelview, etc
 	RB_BeginDrawingView();
 
-	RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
+#ifdef USE_VULKAN
+	rtComposition = vk_rt_primary_view_eligible();
+	if ( RB_IsPrimaryFullView() &&
+		!glConfig.stereoEnabled ) {
+		backEnd.liquidScreenMapDone = qfalse;
+	}
+	RB_RenderDrawSurfList(
+		cmd->drawSurfs,
+		cmd->numDrawSurfs,
+		rtComposition ? RB_DRAWSURFS_RT_BASE : RB_DRAWSURFS_ALL );
+#else
+	RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs, RB_DRAWSURFS_ALL );
+#endif
 
 #ifdef USE_VBO
 	VBO_UnBind();
+#endif
+
+#ifdef USE_VULKAN
+	if ( rtComposition ) {
+#ifdef USE_PMLIGHT
+		const qboolean rasterOwnsRtBaseLights =
+			( rtx_rt_raster_reference &&
+				rtx_rt_raster_reference->integer ) ? qtrue : qfalse;
+
+		/*
+		 * Compatibility composition samples the raster base in raygen.
+		 * Put base-surface PMLIGHT into that reference before tracing so
+		 * visibility-only RT lights can occlude the contribution they own.
+		 * Overlay surfaces remain lit later at their original composition
+		 * point. Full-RT mode still owns base lighting itself.
+		 */
+		if ( rasterOwnsRtBaseLights &&
+			backEnd.refdef.numLitSurfs && backEnd.viewParms.num_dlights ) {
+			RB_BeginDrawingLitSurfs();
+			RB_LightingPass( RB_DRAWSURFS_RT_BASE, qfalse );
+		}
+#endif
+
+		requiredPrimaryTrace =
+			( rtx_rt_require && rtx_rt_require->integer &&
+				rtComposition ) ?
+				qtrue : qfalse;
+		RB_FrameGraph_NotePass( RTX_FRAME_PASS_RT_TRACE );
+		rtTraceCompleted = vk_rt_trace_frame();
+		if ( requiredPrimaryTrace && !rtTraceCompleted ) {
+			ri.Error( ERR_FATAL,
+				"RTX RT: rtx_rt_require 1 primary-view dispatch or scene-color copy failed; refusing silent raster fallback" );
+		}
+
+#ifdef USE_PMLIGHT
+		/*
+		 * Experimental full-RT shading owns base lights when tracing succeeds.
+		 * A skipped/failed trace recovers that raster contribution here.
+		 */
+		if ( !rasterOwnsRtBaseLights && !rtTraceCompleted &&
+			backEnd.refdef.numLitSurfs && backEnd.viewParms.num_dlights ) {
+			RB_BeginDrawingLitSurfs();
+			RB_LightingPass( RB_DRAWSURFS_RT_BASE, qfalse );
+		}
+#endif
+
+		/*
+		 * A successful trace leaves the post-bloom pass active; a skipped or
+		 * failed trace leaves the original raster pass active.  In both cases
+		 * the overlay completes the frame exactly once and therefore also
+		 * provides the complete raster fallback.
+		 */
+		RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs, RB_DRAWSURFS_RT_OVERLAY );
+	}
 #endif
 
 	if ( r_drawSun->integer ) {
@@ -1577,9 +1840,15 @@ static const void *RB_DrawSurfs( const void *data ) {
 	RB_RenderFlares();
 
 #ifdef USE_PMLIGHT
-	if ( backEnd.refdef.numLitSurfs ) {
+	if ( backEnd.refdef.numLitSurfs && backEnd.viewParms.num_dlights ) {
 		RB_BeginDrawingLitSurfs();
-		RB_LightingPass();
+#ifdef USE_VULKAN
+		RB_LightingPass(
+			rtComposition ? RB_DRAWSURFS_RT_OVERLAY : RB_DRAWSURFS_ALL,
+			qtrue );
+#else
+		RB_LightingPass( RB_DRAWSURFS_ALL, qtrue );
+#endif
 	}
 #endif
 
@@ -1587,10 +1856,7 @@ static const void *RB_DrawSurfs( const void *data ) {
 	RB_DebugGraphics();
 
 #ifdef USE_VULKAN
-	if ( vk.caps.activeRtMode == 2 ) {
-		RB_FrameGraph_NotePass( RTX_FRAME_PASS_RT_TRACE );
-		vk_rt_trace_frame();
-	}
+	vk_draw_global_fog();
 
 	if ( cmd->refdef.switchRenderPass ) {
 		vk_end_render_pass();
@@ -1914,10 +2180,16 @@ static const void *RB_SwapBuffers( const void *data ) {
 #endif
 
 #ifdef USE_VULKAN
-	if ( backEnd.screenshotMask && vk.cmd->waitForFence ) {
+	if ( ( backEnd.screenshotMask || backEnd.levelshotPending ) && vk.cmd->waitForFence ) {
 #else
-	if ( backEnd.screenshotMask && tr.frameCount > 1 ) {
+	if ( ( backEnd.screenshotMask || backEnd.levelshotPending ) && tr.frameCount > 1 ) {
 #endif
+		if ( backEnd.screenshotMask & SCREENSHOT_PNG && backEnd.screenshotPNG[0] ) {
+			RB_TakeScreenshotPNG( 0, 0, gls.captureWidth, gls.captureHeight, backEnd.screenshotPNG );
+			if ( !backEnd.screenShotPNGsilent ) {
+				ri.Printf( PRINT_ALL, "Wrote %s\n", backEnd.screenshotPNG );
+			}
+		}
 		if ( backEnd.screenshotMask & SCREENSHOT_TGA && backEnd.screenshotTGA[0] ) {
 			RB_TakeScreenshot( 0, 0, gls.captureWidth, gls.captureHeight, backEnd.screenshotTGA );
 			if ( !backEnd.screenShotTGAsilent ) {
@@ -1939,11 +2211,20 @@ static const void *RB_SwapBuffers( const void *data ) {
 		if ( backEnd.screenshotMask & SCREENSHOT_AVI ) {
 			RB_TakeVideoFrameCmd( &backEnd.vcmd );
 		}
+		if ( backEnd.levelshotPending ) {
+			RB_TakeLevelShot();
+			backEnd.levelshotPending = qfalse;
+		}
 
+		backEnd.screenshotPNG[0] = '\0';
 		backEnd.screenshotJPG[0] = '\0';
 		backEnd.screenshotTGA[0] = '\0';
 		backEnd.screenshotBMP[0] = '\0';
 		backEnd.screenshotMask = 0;
+
+		if ( !backEnd.levelshotPending ) {
+			ri.Cvar_Set( "cl_captureActive", "0" );
+		}
 	}
 
 #ifdef USE_VULKAN

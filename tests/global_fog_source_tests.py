@@ -78,8 +78,8 @@ class GlobalFogSourceTests(unittest.TestCase):
         self.assertIn("GLOBAL_FOG_EXP2", header)
         self.assertIn("GLOBAL_FOG_LINEAR", header)
 
-    def test_both_raster_backends_load_the_current_map_sidecar(self) -> None:
-        for renderer in ("renderer", "renderervk"):
+    def test_all_raster_capable_backends_load_the_current_map_sidecar(self) -> None:
+        for renderer in ("renderer", "renderervk", "rendererrtx"):
             bsp = (ROOT / "code" / renderer / "tr_bsp.c").read_text(encoding="utf-8")
             self.assertIn('"maps/%s.fog"', bsp)
             self.assertIn("R_GlobalFogParse", bsp)
@@ -104,6 +104,22 @@ class GlobalFogSourceTests(unittest.TestCase):
         self.assertIn("vk_draw_global_fog", vk)
         self.assertIn("vk_depth_fade_requested", vk)
         self.assertIn("r_globalFog", vk)
+
+        rtx_global_fog = (
+            ROOT / "code/rendererrtx/shaders/global_fog.frag"
+        ).read_text(encoding="utf-8")
+        rtx_vk = (ROOT / "code/rendererrtx/vk.c").read_text(encoding="utf-8")
+        rtx_backend = (ROOT / "code/rendererrtx/tr_backend.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("depth_texture", rtx_global_fog)
+        self.assertIn("scene_distance", rtx_global_fog)
+        self.assertIn("global_fog_pipeline", rtx_vk)
+        self.assertIn("vk_draw_global_fog", rtx_vk)
+        self.assertIn("vk_global_fog_enabled", rtx_vk)
+        self.assertIn("depth_sample_descriptor", rtx_vk)
+        self.assertIn("vk.cmd->descriptor_set.start = 0", rtx_vk)
+        self.assertIn("vk_draw_global_fog();", rtx_backend)
 
     def test_package_root_permits_only_the_new_map_sidecar_extension(self) -> None:
         files = (ROOT / "code/qcommon/files.c").read_text(encoding="utf-8")

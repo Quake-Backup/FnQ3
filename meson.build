@@ -950,6 +950,9 @@ if get_option('glx-tests')
   test('fnq3_surface_light_proxy_source', python,
     args: files('tests/surface_light_proxy_source_tests.py'),
   )
+  test('fnq3_rtx_surface_light_source', python,
+    args: files('tests/rtx_surface_light_source_tests.py'),
+  )
   test('fnq3_csm_shadow_cache_source', python,
     args: files('tests/csm_shadow_cache_source_tests.py'),
   )

@@ -46,6 +46,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qfiles.h"
 #include "../qcommon/qcommon.h"
 #include "../renderercommon/tr_public.h"
+#include "../renderercommon/tr_global_fog.h"
+#include "../renderercommon/tr_liquid.h"
 #include "tr_common.h"
 #include "iqm.h"
 
@@ -113,6 +115,7 @@ typedef struct dlight_s {
 	vec3_t	transformed2;		// origin2 in local coordinate system
 	int		additive;			// texture detail is lost tho when the lightmap is dark
 	qboolean linear;
+	qboolean castsRtShadows;	// RT visibility policy; raster lighting remains unchanged
 #ifdef USE_PMLIGHT
 	struct litSurf_s	*head;
 	struct litSurf_s	*tail;
@@ -409,6 +412,18 @@ typedef enum {
 	FP_LE			// surface is translucent, but still needs a fog pass (fog surface)
 } fogPass_t;
 
+typedef enum {
+	DFT_NONE,
+	DFT_BLEND,
+	DFT_ADD,
+	DFT_MULT,
+	DFT_PMA,
+	DFT_TBD,
+	DFT_COUNT
+} depthFadeType_t;
+
+extern const byte r_depthFadeScaleAndBias[DFT_COUNT];
+
 typedef struct {
 	float		cloudHeight;
 	image_t		*outerbox[6], *innerbox[6];
@@ -444,6 +459,18 @@ typedef struct shader_s {
 
 	qboolean	isSky;
 	skyParms_t	sky;
+	qboolean	skySunValid;
+	vec3_t		skySunColor;
+	vec3_t		skySunDirection;
+	vec3_t		skySunLight;
+	float		skySunIntensity;
+	qboolean	surfaceLightValid;
+	float		surfaceLight;
+	float		surfaceLightSubdivide;
+	qboolean	surfaceLightColorValid;
+	vec3_t		surfaceLightColor;
+	qboolean	surfaceLightImageColorValid;
+	vec3_t		surfaceLightImageColor;
 	fogParms_t	fogParms;
 
 	float		portalRange;			// distance to fog out at
@@ -460,6 +487,9 @@ typedef struct shader_s {
 	unsigned	noVLcollapse:1;			// ignore vertexlight mode
 
 	fogPass_t	fogPass;				// draw a blended pass, possibly with depth test equals
+	depthFadeType_t dfType;				// soft intersection fade for translucent surfaces
+	float		dfInvDist;
+	float		dfBias;
 
 	qboolean	needsNormal;			// not all shaders will need all data to be gathered
 	//qboolean	needsST1;
@@ -505,6 +535,29 @@ typedef struct shader_s {
 	struct	shader_s	*next;
 } shader_t;
 
+#define MAX_SURFACELIGHT_PROXIES 256
+#define MAX_RT_SURFACELIGHT_LIGHTS 16
+
+typedef enum {
+	SURFACE_LIGHT_PROXY_POINT,
+	SURFACE_LIGHT_PROXY_LINEAR
+} surfaceLightProxyProjection_t;
+
+typedef struct {
+	int			sourceSurface;
+	char		shaderName[MAX_QPATH];
+	surfaceLightProxyProjection_t projection;
+	vec3_t		origin;
+	vec3_t		normal;
+	vec3_t		color;
+	int			leafCluster;
+	int			leafArea;
+	float		intensity;
+	float		radius;
+	float		area;
+	float		designerPriority;
+} surfaceLightProxy_t;
+
 
 // trRefdef_t holds everything that comes in refdef_t,
 // as well as the locally generated scene information
@@ -534,6 +587,12 @@ typedef struct {
 	unsigned int num_dlights;
 	struct dlight_s	*dlights;
 
+	int			numRtSurfaceLights;
+	surfaceLightProxy_t rtSurfaceLights[MAX_RT_SURFACELIGHT_LIGHTS];
+
+	int			numLiquidInteractions;
+	liquidInteraction_t liquidInteractions[LIQUID_MAX_ACTIVE_IMPULSES];
+
 	int			numPolys;
 	struct srfPoly_s	*polys;
 
@@ -558,6 +617,8 @@ typedef struct image_s {
 	int			uploadWidth;		// after power of two and picmip but not including clamp to MAX_TEXTURE_SIZE
 	int			uploadHeight;
 	imgFlags_t	flags;
+	imageColorSpace_t colorSpace;
+	qboolean	srgbDecode;
 	int			frameUsed;			// for texture usage in frame statistics
 
 #ifdef USE_VULKAN
@@ -932,6 +993,7 @@ typedef struct {
 
 	int			numfogs;
 	fog_t		*fogs;
+	globalFog_t	globalFog;
 
 	vec3_t		lightGridOrigin;
 	vec3_t		lightGridSize;
@@ -949,6 +1011,71 @@ typedef struct {
 	char		*entityString;
 	const char	*entityParsePoint;
 } world_t;
+
+#define MAX_STATIC_MAP_LIGHTS 128
+
+typedef enum {
+	MAP_LIGHT_POINT,
+	MAP_LIGHT_SPOT
+} mapLightType_t;
+
+typedef struct {
+	char		name[64];
+	mapLightType_t type;
+	vec3_t		origin;
+	vec3_t		direction;
+	vec3_t		color;
+	int			leafCluster;
+	int			leafArea;
+	float		intensity;
+	float		radius;
+	float		innerAngle;
+	float		outerAngle;
+	int			resolution;
+	int			style;
+	qboolean	castsShadows;
+	float		designerPriority;
+} mapLightDef_t;
+
+typedef struct {
+	qboolean	loaded;
+	qboolean	parseFailed;
+	char		filename[MAX_QPATH];
+	int			version;
+	int			count;
+	int			pointCount;
+	int			spotCount;
+	int			spatialized;
+	int			spatialFallback;
+	int			skippedUnsupported;
+	int			skippedInvalid;
+	int			skippedOverflow;
+	int			promotedThisFrame;
+	int			skippedDisabledThisFrame;
+	int			skippedPVSThisFrame;
+	int			skippedBudgetThisFrame;
+	mapLightDef_t lights[MAX_STATIC_MAP_LIGHTS];
+} staticMapLights_t;
+
+typedef struct {
+	qboolean	built;
+	int			count;
+	int			sourceSurfaces;
+	int			pointProjectionCount;
+	int			linearProjectionCount;
+	int			subdividedSurfaces;
+	int			subdivisionProxies;
+	int			spatialized;
+	int			spatialFallback;
+	int			skippedSky;
+	int			skippedInvalid;
+	int			skippedOverflow;
+	int			selectedThisFrame;
+	int			skippedDisabledThisFrame;
+	int			skippedPVSThisFrame;
+	int			skippedBudgetThisFrame;
+	surfaceLightProxy_t proxies[MAX_SURFACELIGHT_PROXIES];
+} surfaceLightProxies_t;
 
 //======================================================================
 
@@ -1107,11 +1234,12 @@ typedef struct videoFrameCommand_s {
 } videoFrameCommand_t;
 
 enum {
-	SCREENSHOT_TGA = 1<<0,
-	SCREENSHOT_JPG = 1<<1,
-	SCREENSHOT_BMP = 1<<2,
-	SCREENSHOT_BMP_CLIPBOARD = 1<<3,
-	SCREENSHOT_AVI = 1<<4 // take video frame
+	SCREENSHOT_PNG = 1<<0,
+	SCREENSHOT_TGA = 1<<1,
+	SCREENSHOT_JPG = 1<<2,
+	SCREENSHOT_BMP = 1<<3,
+	SCREENSHOT_BMP_CLIPBOARD = 1<<4,
+	SCREENSHOT_AVI = 1<<5 // take video frame
 };
 
 // all state modified by the back end is separated
@@ -1128,12 +1256,16 @@ typedef struct {
 	qboolean	projection2D;	// if qtrue, drawstretchpic doesn't need to change modes
 	color4ub_t	color2D;
 	qboolean	doneSurfaces;   // done any 3d surfaces already
+	qboolean	liquidScreenMapDone; // stable pre-fog snapshot is ready for liquid refraction
 	trRefEntity_t	entity2D;	// currentEntity will point at this when doing 2D rendering
 
-	int		screenshotMask;		// tga | jpg | bmp
+	int		screenshotMask;		// png | tga | jpg | bmp
+	char	screenshotPNG[ MAX_OSPATH ];
 	char	screenshotTGA[ MAX_OSPATH ];
 	char	screenshotJPG[ MAX_OSPATH ];
 	char	screenshotBMP[ MAX_OSPATH ];
+	qboolean screenShotPNGsilent;
+	qboolean levelshotPending;
 	qboolean screenShotTGAsilent;
 	qboolean screenShotJPGsilent;
 	qboolean screenShotBMPsilent;
@@ -1226,6 +1358,8 @@ typedef struct {
 #endif
 	vec3_t					sunLight;			// from the sky shader for this level
 	vec3_t					sunDirection;
+	staticMapLights_t		staticMapLights;
+	surfaceLightProxies_t	surfaceLightProxies;
 
 	frontEndCounters_t		pc;
 	int						frontEndMsec;		// not in pc due to clearing issue
@@ -1300,6 +1434,7 @@ extern cvar_t	*r_railSegmentLength;
 
 extern cvar_t	*r_znear;				// near Z clip plane
 extern cvar_t	*r_zproj;				// z distance of projection plane
+extern cvar_t	*r_fovCorrection;		// auto-correct 4:3-authored scene FOV for viewport aspect
 extern cvar_t	*r_stereoSeparation;			// separation of cameras for stereo rendering
 
 extern cvar_t	*r_lodbias;				// push/pull LOD transitions
@@ -1311,15 +1446,25 @@ extern cvar_t	*r_fastsky;				// controls whether sky should be cleared or drawn
 extern cvar_t	*r_neatsky;				// nomip and nopicmip for skyboxes, cnq3 like look
 extern cvar_t	*r_drawSun;				// controls drawing of sun quad
 extern cvar_t	*r_dynamiclight;		// dynamic lights enabled/disabled
+extern cvar_t	*r_depthFade;			// soft-particle depth fade enabled/disabled
+extern cvar_t	*r_fogMode;			// 0 - legacy lookup, 1 - analytic
 extern cvar_t	*r_mergeLightmaps;
 #ifdef USE_PMLIGHT
 extern cvar_t	*r_dlightMode;			// 0 - vq3, 1 - pmlight
-//extern cvar_t	*r_dlightSpecPower;		// 1 - 32
-//extern cvar_t	*r_dlightSpecColor;		// -1.0 - 1.0
+extern cvar_t	*r_dlightSpecPower;		// 1 - 32
+extern cvar_t	*r_dlightSpecColor;		// -1.0 - 1.0
+extern cvar_t	*r_dlightFalloff;		// 0.0 - 1.0
 extern cvar_t	*r_dlightScale;			// 0.1 - 1.0
 extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
 extern cvar_t	*r_dlightSaturation;	// 0.0 - 1.0
+extern cvar_t	*r_dlightOverbrightGamut;	// 0.0 - 1.0
+extern cvar_t	*r_staticLights;			// 0 - 1
+extern cvar_t	*r_staticLightMaxLights;	// 0 - MAX_DLIGHTS
+extern cvar_t	*r_staticLightDebug;			// 0 - 1
+extern cvar_t	*r_surfaceLightProxies;		// 0 - 1
+extern cvar_t	*r_surfaceLightProxyMaxLights;	// 0 - MAX_RT_SURFACELIGHT_LIGHTS
+extern cvar_t	*r_surfaceLightProxyDebug;	// 0 - 1
 #ifdef USE_VULKAN
 extern cvar_t	*r_device;
 #ifdef USE_VBO
@@ -1327,11 +1472,23 @@ extern cvar_t	*r_vbo;
 #endif
 extern cvar_t	*r_fbo;
 extern cvar_t	*r_hdr;
+extern cvar_t	*r_hdrPrecision;
+extern cvar_t	*r_srgbTextures;
+extern cvar_t	*r_tonemap;
+extern cvar_t	*r_tonemapExposure;
+extern cvar_t	*r_hudExcludePostProcess;
 extern cvar_t	*r_bloom;
 extern cvar_t	*r_bloom_threshold;
 extern cvar_t	*r_bloom_intensity;
 extern cvar_t	*r_bloom_threshold_mode;
 extern cvar_t	*r_bloom_modulate;
+extern cvar_t	*r_bloom_soft_knee;
+extern cvar_t	*r_liquid;
+extern cvar_t	*r_liquidResolution;
+extern cvar_t	*r_liquidRefraction;
+extern cvar_t	*r_liquidWarpScale;
+extern cvar_t	*r_liquidReflection;
+extern cvar_t	*r_liquidRipples;
 extern cvar_t	*r_ext_multisample;
 extern cvar_t	*r_ext_supersample;
 //extern cvar_t	*r_ext_alpha_to_coverage;
@@ -1360,6 +1517,7 @@ extern	cvar_t	*r_singleShader;				// make most world faces use default shader
 extern	cvar_t	*r_roundImagesDown;
 extern	cvar_t	*r_colorMipLevels;				// development aid to see texture mip usage
 extern	cvar_t	*r_picmip;						// controls picmip values
+extern	cvar_t	*r_picmipFilter;				// filters shader paths allowed to picmip
 extern	cvar_t	*r_nomip;						// apply picmip only on worldspawn textures
 extern	cvar_t	*r_finish;
 extern	cvar_t	*r_textureMode;
@@ -1391,6 +1549,8 @@ extern	cvar_t	*r_skipBackEnd;
 extern	cvar_t	*r_greyscale;
 extern	cvar_t	*r_dither;
 extern	cvar_t	*r_presentBits;
+extern	cvar_t	*r_globalFog;
+extern	cvar_t	*r_globalFogStrength;
 
 extern	cvar_t	*r_ignoreGLErrors;
 
@@ -1462,6 +1622,7 @@ extern	cvar_t	*rtx_rt_particle_volume;
 extern	cvar_t	*rtx_rt_ui_passthrough;
 extern	cvar_t	*rtx_rt_camera_mode_validate;
 extern	cvar_t	*rtx_rt_legacy_color_compat;
+extern	cvar_t	*rtx_rt_raster_reference;
 extern	cvar_t	*rtx_rt_readability_lift;
 extern	cvar_t	*rtx_rt_readability_contrast;
 extern	cvar_t	*rtx_rt_readability_saturation;
@@ -1528,6 +1689,7 @@ int R_CullLocalPointAndRadius( const vec3_t origin, float radius );
 int R_CullDlight( const dlight_t *dl );
 
 void R_SetupProjection( viewParms_t *dest, float zProj, qboolean computeFrustum );
+void R_ApplyViewportFovCorrection( int viewportWidth, int viewportHeight, qboolean usePhysicalAspect, float *fovX, float *fovY );
 void R_RotateForEntity( const trRefEntity_t *ent, const viewParms_t *viewParms, orientationr_t *or );
 
 /*
@@ -1625,6 +1787,7 @@ int R_ComputeLOD( trRefEntity_t *ent );
 const void *RB_TakeVideoFrameCmd( const void *data );
 
 float R_ClampDenorm( float v );
+qboolean R_ImageAverageColor( const char *name, vec3_t color );
 
 //
 // tr_shader.c
@@ -1633,6 +1796,7 @@ shader_t	*R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 shader_t	*R_GetShaderByHandle( qhandle_t hShader );
 shader_t	*R_GetShaderByState( int index, long *cycleTime );
 shader_t	*R_FindShaderByName( const char *name );
+qboolean	R_RtShaderNativeSupported( const shader_t *shader );
 void		R_InitShaders( void );
 void		R_ShaderList_f( void );
 void		RE_RemapShader(const char *oldShader, const char *newShader, const char *timeOffset);
@@ -1683,6 +1847,8 @@ typedef struct shaderCommands_s
 #endif
 
 	shader_t	*shader;
+	int			liquidContentFlags;	// original and remapped shader contents
+	float		liquidSort;			// original shader sort used for safe snapshot ordering
 	double		shaderTime;	// -EC- set to double for frameloss fix
 	int			fogNum;
 #ifdef USE_LEGACY_DLIGHTS
@@ -1742,6 +1908,9 @@ WORLD MAP
 void R_AddBrushModelSurfaces( trRefEntity_t *e );
 void R_AddWorldSurfaces( void );
 qboolean R_inPVS( const vec3_t p1, const vec3_t p2 );
+qboolean R_PointLeafClusterArea( const vec3_t point, int *cluster, int *area );
+qboolean R_LeafClusterInCurrentPVS( const vec3_t vieworg, int cluster, int area );
+qboolean R_PointInCurrentPVS( const vec3_t vieworg, const vec3_t point );
 
 
 /*
@@ -1801,6 +1970,7 @@ SKIES
 
 void R_InitSkyTexCoords( float cloudLayerHeight );
 void R_DrawSkyBox( const shaderCommands_t *shader );
+qboolean R_LiquidShaderSupported( const shader_t *shader );
 void RB_DrawSun( float scale, shader_t *shader );
 
 /*
@@ -1847,6 +2017,8 @@ void RE_AddPolyToScene( qhandle_t hShader , int numVerts, const polyVert_t *vert
 void RE_AddLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float intensity, float r, float g, float b );
+void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction );
+void R_StaticMapLightsReload_f( void );
 
 void RE_RenderScene( const refdef_t *fd );
 
@@ -2047,8 +2219,10 @@ extern	backEndData_t	*backEndData;
 
 void RB_ExecuteRenderCommands( const void *data );
 void RB_TakeScreenshot( int x, int y, int width, int height, const char *fileName );
+void RB_TakeScreenshotPNG( int x, int y, int width, int height, const char *fileName );
 void RB_TakeScreenshotJPEG( int x, int y, int width, int height, const char *fileName );
 void RB_TakeScreenshotBMP( int x, int y, int width, int height, const char *fileName, int clipboard );
+void RB_TakeLevelShot( void );
 
 void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs );
 
@@ -2061,6 +2235,7 @@ void RE_TakeVideoFrame( int width, int height,
 		byte *captureBuffer, byte *encodeBuffer, qboolean motionJpeg );
 
 void RE_FinishBloom( void );
+void RE_DrawMenuDepthOfField( float amount );
 void RE_ThrottleBackend( void );
 qboolean RE_CanMinimize( void );
 const glconfig_t *RE_GetConfig( void );

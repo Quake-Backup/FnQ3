@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 // tr_image.c
 #include "tr_local.h"
+#include "../renderercommon/tr_fog_math.h"
 
 static byte			 s_intensitytable[256];
 static unsigned char s_gammatable[256];
@@ -182,6 +183,10 @@ void R_ImageList_f( void ) {
 				format = "RGBA ";
 				estSize *= 4;
 				break;
+			case VK_FORMAT_R8G8B8A8_SRGB:
+				format = "sRGBA";
+				estSize *= 4;
+				break;
 			case VK_FORMAT_R8G8B8_UNORM:
 				format = "RGB  ";
 				estSize *= 3;
@@ -334,60 +339,26 @@ static void R_LightScaleTexture( byte *in, int inwidth, int inheight, qboolean o
 {
 	if ( in == NULL )
 		return;
+	int		i, c;
+	byte	*p;
 
-	if ( only_gamma )
-	{
-#ifdef USE_VULKAN
-		if ( !glConfig.deviceSupportsGamma && !vk.fboActive )
-#else
-		if ( !glConfig.deviceSupportsGamma )
-#endif
-		{
-			int		i, c;
-			byte	*p;
-
-			p = (byte *)in;
-
-			c = inwidth*inheight;
-			for (i=0 ; i<c ; i++, p+=4)
-			{
-				p[0] = s_gammatable[p[0]];
-				p[1] = s_gammatable[p[1]];
-				p[2] = s_gammatable[p[2]];
-			}
-		}
-	}
-	else
-	{
-		int		i, c;
-		byte	*p;
-
-		p = (byte *)in;
-
-		c = inwidth*inheight;
+	(void)only_gamma;
 
 #ifdef USE_VULKAN
-		if ( glConfig.deviceSupportsGamma || vk.fboActive )
+	if ( glConfig.deviceSupportsGamma || vk.fboActive )
 #else
-		if ( glConfig.deviceSupportsGamma )
+	if ( glConfig.deviceSupportsGamma )
 #endif
-		{
-			for (i=0 ; i<c ; i++, p+=4)
-			{
-				p[0] = s_intensitytable[p[0]];
-				p[1] = s_intensitytable[p[1]];
-				p[2] = s_intensitytable[p[2]];
-			}
-		}
-		else
-		{
-			for (i=0 ; i<c ; i++, p+=4)
-			{
-				p[0] = s_gammatable[s_intensitytable[p[0]]];
-				p[1] = s_gammatable[s_intensitytable[p[1]]];
-				p[2] = s_gammatable[s_intensitytable[p[2]]];
-			}
-		}
+		return;
+
+	p = (byte *)in;
+	c = inwidth * inheight;
+
+	for ( i = 0; i < c; i++, p += 4 )
+	{
+		p[0] = s_gammatable[p[0]];
+		p[1] = s_gammatable[p[1]];
+		p[2] = s_gammatable[p[2]];
 	}
 }
 
@@ -564,6 +535,45 @@ static qboolean RawImage_HasAlpha( const byte *scan, const int numPixels )
 	}
 
 	return qfalse;
+}
+
+static imageColorSpace_t R_ImageColorSpaceForFlags( const char *name, imgFlags_t flags )
+{
+	if ( flags & IMGFLAG_COLORSPACE_DATA ) {
+		return IMAGE_COLORSPACE_DATA;
+	}
+	if ( flags & IMGFLAG_COLORSPACE_LINEAR ) {
+		return IMAGE_COLORSPACE_LINEAR;
+	}
+	if ( flags & IMGFLAG_COLORSPACE_SRGB ) {
+		return IMAGE_COLORSPACE_SRGB;
+	}
+	if ( flags & IMGFLAG_LIGHTMAP ) {
+		return IMAGE_COLORSPACE_LINEAR;
+	}
+	if ( name ) {
+		if ( !Q_stricmpn( name, "*dlight", 7 ) ||
+			!Q_stricmpn( name, "*identityLight", 14 ) ) {
+			return IMAGE_COLORSPACE_LINEAR;
+		}
+		if ( !Q_stricmpn( name, "*fog", 4 ) ||
+			!Q_stricmpn( name, "*white", 6 ) ||
+			!Q_stricmpn( name, "*black", 6 ) ) {
+			return IMAGE_COLORSPACE_DATA;
+		}
+	}
+	return IMAGE_COLORSPACE_SRGB;
+}
+
+static qboolean R_ImageWantsSrgbDecode( imageColorSpace_t colorSpace )
+{
+#ifdef USE_VULKAN
+	return ( colorSpace == IMAGE_COLORSPACE_SRGB &&
+		r_srgbTextures && r_srgbTextures->integer &&
+		vk_scene_linear_enabled() ) ? qtrue : qfalse;
+#else
+	return qfalse;
+#endif
 }
 
 #ifdef USE_VULKAN
@@ -753,7 +763,9 @@ static void upload_vk_image( image_t *image, byte *pic ) {
 	w = upload_data.base_level_width;
 	h = upload_data.base_level_height;
 
-	if ( r_texturebits->integer > 16 || r_texturebits->integer == 0 || ( image->flags & IMGFLAG_LIGHTMAP ) ) {
+	if ( image->srgbDecode ) {
+		image->internalFormat = VK_FORMAT_R8G8B8A8_SRGB;
+	} else if ( r_texturebits->integer > 16 || r_texturebits->integer == 0 || ( image->flags & IMGFLAG_LIGHTMAP ) ) {
 		image->internalFormat = VK_FORMAT_R8G8B8A8_UNORM;
 		//image->internalFormat = VK_FORMAT_B8G8R8A8_UNORM;
 	} else {
@@ -1048,12 +1060,15 @@ image_t *R_CreateImage( const char *name, const char *name2, byte *pic, int widt
 	image->flags = flags;
 	image->width = width;
 	image->height = height;
+	image->colorSpace = R_ImageColorSpaceForFlags( image->imgName, image->flags );
 
 	if ( namelen > 6 && Q_stristr( image->imgName, "maps/" ) == image->imgName && Q_stristr( image->imgName + 6, "/lm_" ) != NULL ) {
 		// external lightmap atlases stored in maps/<mapname>/lm_XXXX textures
 		// image->flags = IMGFLAG_NOLIGHTSCALE | IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE | IMGFLAG_COLORSHIFT;
-		image->flags |= IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE;
+		image->flags |= IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE | IMGFLAG_COLORSPACE_LINEAR;
+		image->colorSpace = IMAGE_COLORSPACE_LINEAR;
 	}
+	image->srgbDecode = R_ImageWantsSrgbDecode( image->colorSpace );
 
 #ifdef USE_VULKAN
 	if ( flags & IMGFLAG_CLAMPTOBORDER )
@@ -1237,6 +1252,66 @@ static const char *R_LoadImage( const char *name, byte **pic, int *width, int *h
 	return localName;
 }
 
+qboolean R_ImageAverageColor( const char *name, vec3_t color )
+{
+	byte *pic;
+	const byte *pixel;
+	double rgbSum[3];
+	double alphaRgbSum[3];
+	double alphaSum;
+	int width;
+	int height;
+	int pixels;
+	int i;
+
+	VectorClear( color );
+	if ( !name || !name[0] ) {
+		return qfalse;
+	}
+
+	R_LoadImage( name, &pic, &width, &height );
+	if ( !pic || width <= 0 || height <= 0 ) {
+		if ( pic ) {
+			ri.Free( pic );
+		}
+		return qfalse;
+	}
+
+	rgbSum[0] = rgbSum[1] = rgbSum[2] = 0.0;
+	alphaRgbSum[0] = alphaRgbSum[1] = alphaRgbSum[2] = 0.0;
+	alphaSum = 0.0;
+	pixels = width * height;
+	pixel = pic;
+	for ( i = 0; i < pixels; i++, pixel += 4 ) {
+		double alpha;
+
+		alpha = pixel[3] / 255.0;
+		rgbSum[0] += pixel[0];
+		rgbSum[1] += pixel[1];
+		rgbSum[2] += pixel[2];
+		alphaRgbSum[0] += pixel[0] * alpha;
+		alphaRgbSum[1] += pixel[1] * alpha;
+		alphaRgbSum[2] += pixel[2] * alpha;
+		alphaSum += alpha;
+	}
+
+	if ( alphaSum > 0.001 ) {
+		color[0] = (float)( alphaRgbSum[0] / ( alphaSum * 255.0 ) );
+		color[1] = (float)( alphaRgbSum[1] / ( alphaSum * 255.0 ) );
+		color[2] = (float)( alphaRgbSum[2] / ( alphaSum * 255.0 ) );
+	} else {
+		color[0] = (float)( rgbSum[0] / ( pixels * 255.0 ) );
+		color[1] = (float)( rgbSum[1] / ( pixels * 255.0 ) );
+		color[2] = (float)( rgbSum[2] / ( pixels * 255.0 ) );
+	}
+
+	color[0] = Com_Clamp( 0.0f, 1.0f, color[0] );
+	color[1] = Com_Clamp( 0.0f, 1.0f, color[1] );
+	color[2] = Com_Clamp( 0.0f, 1.0f, color[2] );
+	ri.Free( pic );
+	return qtrue;
+}
+
 
 /*
 ===============
@@ -1363,16 +1438,10 @@ R_InitFogTable
 =================
 */
 void R_InitFogTable( void ) {
-	int		i;
-	float	d;
-	float	exp;
+	int i;
 
-	exp = 0.5;
-
-	for ( i = 0 ; i < FOG_TABLE_SIZE ; i++ ) {
-		d = powf( (float)i/(FOG_TABLE_SIZE-1), exp );
-
-		tr.fogTable[i] = d;
+	for ( i = 0; i < FOG_TABLE_SIZE; i++ ) {
+		tr.fogTable[i] = powf( (float)i / ( FOG_TABLE_SIZE - 1 ), 0.5f );
 	}
 }
 
@@ -1382,34 +1451,15 @@ void R_InitFogTable( void ) {
 R_FogFactor
 
 Returns a 0.0 to 1.0 fog density value
-This is called for each texel of the fog texture on startup
-and for each vertex of transparent shaders in fog dynamically
+This follows r_fogMode for transparent shader vertices. The compatibility
+fog texture is always generated from the legacy lookup below.
 ================
 */
 float R_FogFactor( float s, float t ) {
-	float	d;
-
-	s -= 1.0/512;
-	if ( s < 0 ) {
-		return 0;
+	if ( r_fogMode && r_fogMode->integer ) {
+		return R_AnalyticFogFactor( s, t );
 	}
-	if ( t < 1.0/32 ) {
-		return 0;
-	}
-	if ( t < 31.0/32 ) {
-		s *= (t - 1.0f/32.0f) / (30.0f/32.0f);
-	}
-
-	// we need to leave a lot of clamp range
-	s *= 8;
-
-	if ( s > 1.0 ) {
-		s = 1.0;
-	}
-
-	d = tr.fogTable[ (uint32_t)(s * (FOG_TABLE_SIZE-1)) ];
-
-	return d;
+	return R_LegacyFogFactor( s, t, tr.fogTable, FOG_TABLE_SIZE );
 }
 
 
@@ -1430,7 +1480,8 @@ static void R_CreateFogImage( void ) {
 	// S is distance, T is depth
 	for (x=0 ; x<FOG_S ; x++) {
 		for (y=0 ; y<FOG_T ; y++) {
-			d = R_FogFactor( ( x + 0.5f ) / FOG_S, ( y + 0.5f ) / FOG_T );
+			d = R_LegacyFogFactor( ( x + 0.5f ) / FOG_S,
+				( y + 0.5f ) / FOG_T, tr.fogTable, FOG_TABLE_SIZE );
 
 			data[(y*FOG_S+x)*4+0] = 
 			data[(y*FOG_S+x)*4+1] = 

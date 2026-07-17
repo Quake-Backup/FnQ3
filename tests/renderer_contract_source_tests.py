@@ -92,6 +92,29 @@ class RendererContractSourceTests(unittest.TestCase):
         self.assertLess(shared_start, query)
         self.assertLess(query, opengl_guard)
 
+    def test_win32_display_output_query_is_shared_by_static_vulkan_family_renderers(
+        self,
+    ) -> None:
+        win_glimp = (ROOT / "code" / "win32" / "win_glimp.cpp").read_text(
+            encoding="utf-8"
+        )
+        query = win_glimp.index("void GLimp_QueryDisplayOutput")
+        opengl_loader_guard = win_glimp.index(
+            "#ifdef USE_OPENGL_API\n/*\n** GLW_LoadOpenGL"
+        )
+        self.assertLess(query, opengl_loader_guard)
+
+        meson = (ROOT / "meson.build").read_text(encoding="utf-8")
+        self.assertIn(
+            "use_vulkan_api = renderer_default in ['vk', 'rtx']",
+            meson,
+        )
+        static_start = meson.index("static_renderer_objects = []")
+        static_end = meson.index("client_c_args = common_c_args", static_start)
+        static_renderers = meson[static_start:static_end]
+        self.assertIn("static_library('renderer_static_vk'", static_renderers)
+        self.assertIn("static_library('renderer_static_rtx'", static_renderers)
+
     def test_rtx_sources_follow_project_gplv2_license(self) -> None:
         license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("GNU GENERAL PUBLIC LICENSE", license_text)

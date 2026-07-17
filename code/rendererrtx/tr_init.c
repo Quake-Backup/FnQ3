@@ -53,6 +53,7 @@ cvar_t	*r_detailTextures;
 
 cvar_t	*r_znear;
 cvar_t	*r_zproj;
+cvar_t	*r_fovCorrection;
 cvar_t	*r_stereoSeparation;
 
 cvar_t	*r_skipBackEnd;
@@ -62,6 +63,8 @@ cvar_t	*r_skipBackEnd;
 cvar_t	*r_greyscale;
 cvar_t	*r_dither;
 cvar_t	*r_presentBits;
+cvar_t	*r_globalFog;
+cvar_t	*r_globalFogStrength;
 
 static cvar_t *r_ignorehwgamma;
 
@@ -71,13 +74,25 @@ cvar_t	*r_fastsky;
 cvar_t	*r_neatsky;
 cvar_t	*r_drawSun;
 cvar_t	*r_dynamiclight;
+cvar_t	*r_depthFade;
+cvar_t	*r_fogMode;
 cvar_t  *r_mergeLightmaps;
 #ifdef USE_PMLIGHT
 cvar_t	*r_dlightMode;
+cvar_t	*r_dlightSpecPower;
+cvar_t	*r_dlightSpecColor;
+cvar_t	*r_dlightFalloff;
 cvar_t	*r_dlightScale;
 cvar_t	*r_dlightIntensity;
 #endif
 cvar_t	*r_dlightSaturation;
+cvar_t	*r_dlightOverbrightGamut;
+cvar_t	*r_staticLights;
+cvar_t	*r_staticLightMaxLights;
+cvar_t	*r_staticLightDebug;
+cvar_t	*r_surfaceLightProxies;
+cvar_t	*r_surfaceLightProxyMaxLights;
+cvar_t	*r_surfaceLightProxyDebug;
 #ifdef USE_VULKAN
 cvar_t	*r_device;
 #ifdef USE_VBO
@@ -85,11 +100,23 @@ cvar_t	*r_vbo;
 #endif
 cvar_t	*r_fbo;
 cvar_t	*r_hdr;
+cvar_t	*r_hdrPrecision;
+cvar_t	*r_srgbTextures;
+cvar_t	*r_tonemap;
+cvar_t	*r_tonemapExposure;
+cvar_t	*r_hudExcludePostProcess;
 cvar_t	*r_bloom;
 cvar_t	*r_bloom_threshold;
 cvar_t	*r_bloom_intensity;
 cvar_t	*r_bloom_threshold_mode;
 cvar_t	*r_bloom_modulate;
+cvar_t	*r_bloom_soft_knee;
+cvar_t	*r_liquid;
+cvar_t	*r_liquidResolution;
+cvar_t	*r_liquidRefraction;
+cvar_t	*r_liquidWarpScale;
+cvar_t	*r_liquidReflection;
+cvar_t	*r_liquidRipples;
 cvar_t	*r_renderWidth;
 cvar_t	*r_renderHeight;
 cvar_t	*r_renderScale;
@@ -138,6 +165,7 @@ cvar_t	*r_singleShader;
 cvar_t	*r_roundImagesDown;
 cvar_t	*r_colorMipLevels;
 cvar_t	*r_picmip;
+cvar_t	*r_picmipFilter;
 cvar_t	*r_nomip;
 cvar_t	*r_showtris;
 cvar_t	*r_showsky;
@@ -230,6 +258,7 @@ cvar_t	*rtx_rt_particle_volume;
 cvar_t	*rtx_rt_ui_passthrough;
 cvar_t	*rtx_rt_camera_mode_validate;
 cvar_t	*rtx_rt_legacy_color_compat;
+cvar_t	*rtx_rt_raster_reference;
 cvar_t	*rtx_rt_readability_lift;
 cvar_t	*rtx_rt_readability_contrast;
 cvar_t	*rtx_rt_readability_saturation;
@@ -262,6 +291,9 @@ cvar_t	*r_marksOnTriangleMeshes;
 
 cvar_t	*r_aviMotionJpegQuality;
 cvar_t	*r_screenshotJpegQuality;
+cvar_t	*r_levelshotSize;
+cvar_t	*r_levelshotDownscale;
+cvar_t	*r_levelshotSourceAspect;
 
 static cvar_t *r_maxpolys;
 static cvar_t* r_maxpolyverts;
@@ -838,6 +870,26 @@ static byte *RB_ReadPixels(int x, int y, int width, int height, size_t *offset, 
 
 /*
 ==================
+RB_TakeScreenshotPNG
+==================
+*/
+void RB_TakeScreenshotPNG( int x, int y, int width, int height, const char *fileName )
+{
+	byte *buffer;
+	size_t offset = 0, memcount;
+	int padlen;
+
+	buffer = RB_ReadPixels( x, y, width, height, &offset, &padlen, 0 );
+	memcount = ( width * 3 + padlen ) * height;
+
+	R_GammaCorrect( buffer + offset, memcount );
+	R_SavePNG( fileName, width, height, buffer + offset, padlen );
+	ri.Hunk_FreeTempMemory( buffer );
+}
+
+
+/*
+==================
 RB_TakeScreenshot
 ==================
 */
@@ -1067,69 +1119,308 @@ static void R_ScreenshotFilename( char *fileName, const char *fileExt ) {
 }
 
 
+typedef struct {
+	int sourceX;
+	int sourceY;
+	int sourceWidth;
+	int sourceHeight;
+	int outputWidth;
+	int outputHeight;
+} levelshotParams_t;
+
+static qboolean R_LevelshotValueIsDisabled( const char *value )
+{
+	return !value || !value[0] || !Q_stricmp( value, "0" ) || !Q_stricmp( value, "none" ) ||
+		!Q_stricmp( value, "source" ) || !Q_stricmp( value, "viewport" ) || !Q_stricmp( value, "default" );
+}
+
+static const char *R_LevelshotFindSeparator( const char *value )
+{
+	const char *sep;
+
+	sep = strchr( value, 'x' );
+	if ( !sep ) {
+		sep = strchr( value, 'X' );
+	}
+	if ( !sep ) {
+		sep = strchr( value, ':' );
+	}
+	if ( !sep ) {
+		sep = strchr( value, '/' );
+	}
+
+	return sep;
+}
+
+static qboolean R_ParseLevelshotSize( const char *value, int *width, int *height )
+{
+	const char *sep;
+
+	if ( R_LevelshotValueIsDisabled( value ) ) {
+		return qfalse;
+	}
+
+	sep = R_LevelshotFindSeparator( value );
+	if ( sep ) {
+		char left[32];
+		char right[32];
+		int leftLen = sep - value;
+		int rightLen = strlen( sep + 1 );
+
+		if ( leftLen <= 0 || leftLen >= (int)sizeof( left ) || rightLen <= 0 || rightLen >= (int)sizeof( right ) ) {
+			return qfalse;
+		}
+
+		Q_strncpyz( left, value, leftLen + 1 );
+		Q_strncpyz( right, sep + 1, rightLen + 1 );
+
+		*width = atoi( left );
+		*height = atoi( right );
+		return *width > 0 && *height > 0;
+	}
+
+	*width = atoi( value );
+	*height = *width;
+	return *width > 0;
+}
+
+static qboolean R_ParseLevelshotAspect( const char *value, float *aspect )
+{
+	const char *sep;
+
+	if ( R_LevelshotValueIsDisabled( value ) ) {
+		return qfalse;
+	}
+
+	sep = R_LevelshotFindSeparator( value );
+	if ( sep ) {
+		char left[32];
+		char right[32];
+		float leftValue;
+		float rightValue;
+		int leftLen = sep - value;
+		int rightLen = strlen( sep + 1 );
+
+		if ( leftLen <= 0 || leftLen >= (int)sizeof( left ) || rightLen <= 0 || rightLen >= (int)sizeof( right ) ) {
+			return qfalse;
+		}
+
+		Q_strncpyz( left, value, leftLen + 1 );
+		Q_strncpyz( right, sep + 1, rightLen + 1 );
+
+		leftValue = Q_atof( left );
+		rightValue = Q_atof( right );
+		if ( leftValue <= 0.0f || rightValue <= 0.0f ) {
+			return qfalse;
+		}
+
+		*aspect = leftValue / rightValue;
+		return qtrue;
+	}
+
+	*aspect = Q_atof( value );
+	return *aspect > 0.0f;
+}
+
+static void R_GetLevelshotCenteredRect( int width, int height, float aspect, int *x, int *y, int *outWidth, int *outHeight )
+{
+	float viewportAspect = (float)width / (float)height;
+
+	if ( viewportAspect > aspect ) {
+		*outHeight = height;
+		*outWidth = (int)( height * aspect + 0.5f );
+	} else {
+		*outWidth = width;
+		*outHeight = (int)( width / aspect + 0.5f );
+	}
+
+	*outWidth = MAX( 1, MIN( width, *outWidth ) );
+	*outHeight = MAX( 1, MIN( height, *outHeight ) );
+	*x = ( width - *outWidth ) / 2;
+	*y = ( height - *outHeight ) / 2;
+}
+
+static void R_ResolveLevelshotParams( int viewportWidth, int viewportHeight, levelshotParams_t *params )
+{
+	float sourceAspect;
+	int outputWidth, outputHeight;
+
+	params->sourceX = 0;
+	params->sourceY = 0;
+	params->sourceWidth = viewportWidth;
+	params->sourceHeight = viewportHeight;
+
+	if ( r_levelshotSourceAspect && R_ParseLevelshotAspect( r_levelshotSourceAspect->string, &sourceAspect ) ) {
+		R_GetLevelshotCenteredRect( viewportWidth, viewportHeight, sourceAspect,
+			&params->sourceX, &params->sourceY, &params->sourceWidth, &params->sourceHeight );
+	} else if ( r_levelshotSourceAspect && !R_LevelshotValueIsDisabled( r_levelshotSourceAspect->string ) ) {
+		ri.Printf( PRINT_WARNING, "WARNING: invalid r_levelshotSourceAspect '%s', using full viewport.\n",
+			r_levelshotSourceAspect->string );
+	}
+
+	if ( r_levelshotSize && R_ParseLevelshotSize( r_levelshotSize->string, &outputWidth, &outputHeight ) ) {
+		params->outputWidth = outputWidth;
+		params->outputHeight = outputHeight;
+		return;
+	}
+
+	if ( r_levelshotSize && !R_LevelshotValueIsDisabled( r_levelshotSize->string ) ) {
+		ri.Printf( PRINT_WARNING, "WARNING: invalid r_levelshotSize '%s', using source size/downscale.\n",
+			r_levelshotSize->string );
+	}
+
+	if ( r_levelshotDownscale && r_levelshotDownscale->value > 1.0f ) {
+		params->outputWidth = MAX( 1, (int)( params->sourceWidth / r_levelshotDownscale->value + 0.5f ) );
+		params->outputHeight = MAX( 1, (int)( params->sourceHeight / r_levelshotDownscale->value + 0.5f ) );
+	} else {
+		params->outputWidth = params->sourceWidth;
+		params->outputHeight = params->sourceHeight;
+	}
+}
+
+static void R_ResampleLevelshot( const byte *source, int sourceWidth, int padlen, const levelshotParams_t *params, byte *out )
+{
+	int stride = sourceWidth * 3 + padlen;
+	int y;
+
+	if ( params->outputWidth == params->sourceWidth && params->outputHeight == params->sourceHeight ) {
+		for ( y = 0; y < params->outputHeight; y++ ) {
+			const byte *src = source + ( params->sourceY + y ) * stride + params->sourceX * 3;
+			byte *dst = out + y * params->outputWidth * 3;
+
+			Com_Memcpy( dst, src, params->outputWidth * 3 );
+		}
+		return;
+	}
+
+	for ( y = 0; y < params->outputHeight; y++ ) {
+		int srcY0 = params->sourceY + ( y * params->sourceHeight ) / params->outputHeight;
+		int srcY1 = params->sourceY + ( ( y + 1 ) * params->sourceHeight + params->outputHeight - 1 ) / params->outputHeight;
+		int x;
+
+		if ( srcY1 <= srcY0 ) {
+			srcY1 = srcY0 + 1;
+		}
+		if ( srcY1 > params->sourceY + params->sourceHeight ) {
+			srcY1 = params->sourceY + params->sourceHeight;
+		}
+
+		for ( x = 0; x < params->outputWidth; x++ ) {
+			int srcX0 = params->sourceX + ( x * params->sourceWidth ) / params->outputWidth;
+			int srcX1 = params->sourceX + ( ( x + 1 ) * params->sourceWidth + params->outputWidth - 1 ) / params->outputWidth;
+			unsigned long long red = 0;
+			unsigned long long green = 0;
+			unsigned long long blue = 0;
+			int count = 0;
+			int sampleY;
+			byte *dst = out + ( y * params->outputWidth + x ) * 3;
+
+			if ( srcX1 <= srcX0 ) {
+				srcX1 = srcX0 + 1;
+			}
+			if ( srcX1 > params->sourceX + params->sourceWidth ) {
+				srcX1 = params->sourceX + params->sourceWidth;
+			}
+
+			for ( sampleY = srcY0; sampleY < srcY1; sampleY++ ) {
+				const byte *row = source + sampleY * stride;
+				int sampleX;
+
+				for ( sampleX = srcX0; sampleX < srcX1; sampleX++ ) {
+					const byte *pixel = row + sampleX * 3;
+
+					red += pixel[0];
+					green += pixel[1];
+					blue += pixel[2];
+					count++;
+				}
+			}
+
+			dst[0] = (byte)( red / count );
+			dst[1] = (byte)( green / count );
+			dst[2] = (byte)( blue / count );
+		}
+	}
+}
+
+
 /*
 ====================
 R_LevelShot
 
-levelshots are specialized 128*128 thumbnails for
-the menu system, sampled down from full screen distorted images
+levelshots write map preview images under levelshots/ and can
+retain the viewport size, crop from a centered aspect block, or
+resample to an explicit output size
 ====================
 */
-static void R_LevelShot( void ) {
+static void R_SetCaptureActive( qboolean active )
+{
+	ri.Cvar_Set( "cl_captureActive", active ? "1" : "0" );
+}
+
+void RB_TakeLevelShot( void ) {
 	char		checkname[MAX_OSPATH];
 	byte		*buffer;
+	byte		*rgb;
 	byte		*source, *allsource;
-	byte		*src, *dst;
 	size_t		offset = 0;
 	int			padlen;
 	int			x, y;
-	int			r, g, b;
-	float		xScale, yScale;
-	int			xx, yy;
+	levelshotParams_t params;
 
 	Com_sprintf(checkname, sizeof(checkname), "levelshots/%s.tga", tr.world->baseName);
 
 	allsource = RB_ReadPixels(0, 0, gls.captureWidth, gls.captureHeight, &offset, &padlen, 0 );
 	source = allsource + offset;
+	R_ResolveLevelshotParams( gls.captureWidth, gls.captureHeight, &params );
 
-	buffer = ri.Hunk_AllocateTempMemory(128 * 128*3 + 18);
+	rgb = ri.Hunk_AllocateTempMemory( params.outputWidth * params.outputHeight * 3 );
+	R_ResampleLevelshot( source, gls.captureWidth, padlen, &params, rgb );
+
+	R_GammaCorrect( rgb, params.outputWidth * params.outputHeight * 3 );
+
+	buffer = ri.Hunk_AllocateTempMemory( params.outputWidth * params.outputHeight * 3 + 18 );
 	Com_Memset (buffer, 0, 18);
 	buffer[2] = 2;		// uncompressed type
-	buffer[12] = 128;
-	buffer[14] = 128;
+	buffer[12] = params.outputWidth & 255;
+	buffer[13] = params.outputWidth >> 8;
+	buffer[14] = params.outputHeight & 255;
+	buffer[15] = params.outputHeight >> 8;
 	buffer[16] = 24;	// pixel size
 
-	// resample from source
-	xScale = glConfig.vidWidth / 512.0f;
-	yScale = glConfig.vidHeight / 384.0f;
-	for ( y = 0 ; y < 128 ; y++ ) {
-		for ( x = 0 ; x < 128 ; x++ ) {
-			r = g = b = 0;
-			for ( yy = 0 ; yy < 3 ; yy++ ) {
-				for ( xx = 0 ; xx < 4 ; xx++ ) {
-					src = source + (3 * glConfig.vidWidth + padlen) * (int)((y*3 + yy) * yScale) +
-						3 * (int) ((x*4 + xx) * xScale);
-					r += src[0];
-					g += src[1];
-					b += src[2];
-				}
-			}
-			dst = buffer + 18 + 3 * ( y * 128 + x );
-			dst[0] = b / 12;
-			dst[1] = g / 12;
-			dst[2] = r / 12;
+	for ( y = 0; y < params.outputHeight; y++ ) {
+		for ( x = 0; x < params.outputWidth; x++ ) {
+			const byte *src = rgb + ( y * params.outputWidth + x ) * 3;
+			byte *dst = buffer + 18 + ( y * params.outputWidth + x ) * 3;
+
+			dst[0] = src[2];
+			dst[1] = src[1];
+			dst[2] = src[0];
 		}
 	}
 
-	// gamma correction
-	R_GammaCorrect( buffer + 18, 128 * 128 * 3 );
+	ri.FS_WriteFile( checkname, buffer, params.outputWidth * params.outputHeight * 3 + 18 );
 
-	ri.FS_WriteFile( checkname, buffer, 128 * 128*3 + 18 );
-
+	ri.Hunk_FreeTempMemory(rgb);
 	ri.Hunk_FreeTempMemory(buffer);
 	ri.Hunk_FreeTempMemory(allsource);
 
-	ri.Printf( PRINT_ALL, "Wrote %s\n", checkname );
+	ri.Printf( PRINT_ALL, "Wrote %s (%dx%d)\n", checkname, params.outputWidth, params.outputHeight );
+}
+
+static void R_ScheduleLevelShot( void )
+{
+	if ( !tr.world ) {
+		ri.Printf( PRINT_WARNING, "WARNING: screenshot levelshot requires an active world.\n" );
+		return;
+	}
+
+	if ( backEnd.levelshotPending ) {
+		return;
+	}
+
+	backEnd.levelshotPending = qtrue;
+	R_SetCaptureActive( qtrue );
 }
 
 
@@ -1150,14 +1441,29 @@ static void R_ScreenShot_f( void ) {
 	qboolean	silent;
 	int			typeMask;
 	const char	*ext;
+	int			argc = ri.Cmd_Argc();
+
+	if ( ( r_skipBackEnd && r_skipBackEnd->integer ) || ( r_norefresh && r_norefresh->integer ) ) {
+		ri.Printf( PRINT_WARNING, "WARNING: screenshots are unavailable while rendering is disabled.\n" );
+		return;
+	}
 
 	if ( ri.CL_IsMinimized() && !RE_CanMinimize() ) {
 		ri.Printf( PRINT_WARNING, "WARNING: unable to take screenshot when minimized because FBO is not available/enabled.\n" );
 		return;
 	}
 
-	if ( !strcmp( ri.Cmd_Argv(1), "levelshot" ) ) {
-		R_LevelShot();
+	if ( !Q_stricmp( ri.Cmd_Argv( 1 ), "levelshot" ) ) {
+		if ( argc != 2 ) {
+			ri.Printf( PRINT_ALL, "usage: %s levelshot\n", ri.Cmd_Argv( 0 ) );
+			return;
+		}
+		R_ScheduleLevelShot();
+		return;
+	}
+
+	if ( argc > 2 ) {
+		ri.Printf( PRINT_ALL, "usage: %s [silent|levelshot|filename]\n", ri.Cmd_Argv( 0 ) );
 		return;
 	}
 
@@ -1167,9 +1473,12 @@ static void R_ScreenShot_f( void ) {
 	} else if ( Q_stricmp( ri.Cmd_Argv(0), "screenshotBMP" ) == 0 ) {
 		typeMask = SCREENSHOT_BMP;
 		ext = "bmp";
-	} else {
+	} else if ( Q_stricmp( ri.Cmd_Argv(0), "screenshotTGA" ) == 0 ) {
 		typeMask = SCREENSHOT_TGA;
 		ext = "tga";
+	} else {
+		typeMask = SCREENSHOT_PNG;
+		ext = "png";
 	}
 
 	// check if already scheduled
@@ -1200,7 +1509,10 @@ static void R_ScreenShot_f( void ) {
 
 	// we will make screenshot right at the end of RE_EndFrame()
 	backEnd.screenshotMask |= typeMask;
-	if ( typeMask == SCREENSHOT_JPG ) {
+	if ( typeMask == SCREENSHOT_PNG ) {
+		backEnd.screenShotPNGsilent = silent;
+		Q_strncpyz( backEnd.screenshotPNG, checkname, sizeof( backEnd.screenshotPNG ) );
+	} else if ( typeMask == SCREENSHOT_JPG ) {
 		backEnd.screenShotJPGsilent = silent;
 		Q_strncpyz( backEnd.screenshotJPG, checkname, sizeof( backEnd.screenshotJPG ) );
 	} else if ( typeMask == SCREENSHOT_BMP ) {
@@ -1499,9 +1811,20 @@ static void VarInfo( void )
 
 	ri.Printf( PRINT_ALL, "texturemode: %s\n", r_textureMode->string );
 	ri.Printf( PRINT_ALL, "texture bits: %d\n", r_texturebits->integer ? r_texturebits->integer : 32 );
-	ri.Printf( PRINT_ALL, "picmip: %d%s\n", r_picmip->integer, r_nomip->integer ? ", worldspawn only" : "" );
+	ri.Printf( PRINT_ALL, "picmip: %d%s, filter: %d\n", r_picmip->integer, r_nomip->integer ? ", worldspawn only" : "", r_picmipFilter->integer );
 
 #ifdef USE_VULKAN
+	ri.Printf( PRINT_ALL, "tone map: %s, exposure %.2f\n",
+		r_tonemap->integer == 2 ? "ACES" : ( r_tonemap->integer == 1 ? "Reinhard" : "legacy" ),
+		r_tonemapExposure->value );
+	ri.Printf( PRINT_ALL, "post gamma: domain %s, shader %s, r_gamma %.2f, exponent %.3f, overbright scale %.2f\n",
+		vk_scene_linear_enabled() ? "scene-linear" : "display-referred-sdr",
+		vk.fboActive ? "enabled" : "inactive",
+		r_gamma ? r_gamma->value : 1.0f,
+		( r_gamma && r_gamma->value != 0.0f ) ? 1.0f / r_gamma->value : 1.0f,
+		(float)( 1 << tr.overbrightBits ) );
+	ri.Printf( PRINT_ALL, "bloom: threshold %.2f, soft knee %.2f, intensity %.2f\n",
+		r_bloom_threshold->value, r_bloom_soft_knee->value, r_bloom_intensity->value );
 	if ( r_vertexLight->integer ) {
 		ri.Printf( PRINT_ALL, "HACK: using vertex lightmap approximation\n" );
 	}
@@ -1594,9 +1917,12 @@ static void R_Register( void )
 	ri.Cmd_AddCommand( "skinlist", R_SkinList_f );
 	ri.Cmd_AddCommand( "modellist", R_Modellist_f );
 	ri.Cmd_AddCommand( "screenshot", R_ScreenShot_f );
+	ri.Cmd_AddCommand( "screenshotPNG", R_ScreenShot_f );
+	ri.Cmd_AddCommand( "screenshotTGA", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "screenshotJPEG", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "screenshotBMP", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "gfxinfo", GfxInfo_f );
+	ri.Cmd_AddCommand( "r_staticLightReload", R_StaticMapLightsReload_f );
 #ifdef USE_VULKAN
 	ri.Cmd_AddCommand( "vkinfo", VkInfo_f );
 #endif
@@ -1613,7 +1939,7 @@ static void R_Register( void )
 	r_mapOverBrightCap = ri.Cvar_Get( "r_mapOverBrightCap", "255", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_mapOverBrightCap, "0", "255", CV_INTEGER );
 	ri.Cvar_SetDescription( r_mapOverBrightCap, "Caps normalized baked map lighting after overbright adjustment. Lower values preserve RGB ratios while limiting peak brightness." );
-	r_intensity = ri.Cvar_Get( "r_intensity", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_intensity = ri.Cvar_Get( "r_intensity", "1.25", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_intensity, "1", "255", CV_FLOAT );
 	ri.Cvar_SetDescription( r_intensity, "Global texture lighting scale." );
 	r_singleShader = ri.Cvar_Get( "r_singleShader", "0", CVAR_CHEAT | CVAR_LATCH );
@@ -1629,6 +1955,10 @@ static void R_Register( void )
 	r_picmip = ri.Cvar_Get( "r_picmip", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_picmip, "0", "16", CV_INTEGER );
 	ri.Cvar_SetDescription( r_picmip, "Set texture quality, lower is better." );
+
+	r_picmipFilter = ri.Cvar_Get( "r_picmipFilter", "1", CVAR_ARCHIVE | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_picmipFilter, "0", "15", CV_INTEGER );
+	ri.Cvar_SetDescription( r_picmipFilter, "Filter shader paths allowed to use \\r_picmip:\n 0: off (legacy, all picmip-capable images)\n 1: textures/*\n 2: models/*\n 4: sprites/*\n 8: gfx/*, icons/*, menu/*, ui/*, fonts/*\n Add values to combine categories." );
 
 	r_nomip = ri.Cvar_Get( "r_nomip", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_nomip, "0", "1", CV_INTEGER );
@@ -1656,6 +1986,15 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_mapGreyScale, "-1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription(r_mapGreyScale, "Desaturate world map textures only, works independently from \\r_greyscale, negative values only desaturate lightmaps.");
 
+	r_globalFog = ri.Cvar_Get( "r_globalFog", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_globalFog, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_globalFog, "Enable optional per-map depth-aware global fog from maps/<map>.fog. Requires \\r_fbo 1 and vid_restart; never changes BSP visibility or gameplay." );
+	ri.Cvar_SetGroup( r_globalFog, CVG_RENDERER );
+	r_globalFogStrength = ri.Cvar_Get( "r_globalFogStrength", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_globalFogStrength, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_globalFogStrength, "Opacity multiplier for maps/<map>.fog global fog. Zero keeps the sidecar loaded but visually disabled." );
+	ri.Cvar_SetGroup( r_globalFogStrength, CVG_RENDERER );
+
 	r_subdivisions = ri.Cvar_Get( "r_subdivisions", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription(r_subdivisions, "Distance to subdivide bezier curved surfaces. Higher values mean less subdivision and less geometric complexity.");
 
@@ -1679,6 +2018,9 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_znear, "Viewport distance from view origin (how close objects can be to the player before they're clipped out of the scene)." );
 	r_zproj = ri.Cvar_Get( "r_zproj", "64", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_zproj, "Projected viewport frustum." );
+	r_fovCorrection = ri.Cvar_Get( "r_fovCorrection", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_fovCorrection, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_fovCorrection, "Auto-correct 4:3-authored scene FOV for the current viewport aspect. Disable this if game code already supplies aspect-correct FOV values." );
 	r_stereoSeparation = ri.Cvar_Get( "r_stereoSeparation", "64", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_stereoSeparation, "Control eye separation. Resulting separation is \\r_zproj divided by this value in standard units." );
 	r_ignoreGLErrors = ri.Cvar_Get( "r_ignoreGLErrors", "1", CVAR_ARCHIVE_ND );
@@ -1691,6 +2033,14 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_drawSun, "Draw sun shader in skies." );
 	r_dynamiclight = ri.Cvar_Get( "r_dynamiclight", "1", CVAR_ARCHIVE );
 	ri.Cvar_SetDescription( r_dynamiclight, "Enables dynamic lighting." );
+	r_depthFade = ri.Cvar_Get( "r_depthFade", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_depthFade, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_depthFade, "Softens intersections between translucent particles and world geometry. Requires \\r_fbo 1 and vid_restart." );
+	ri.Cvar_SetGroup( r_depthFade, CVG_RENDERER );
+	r_fogMode = ri.Cvar_Get( "r_fogMode", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_fogMode, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_fogMode, "Fog evaluation mode: 0 legacy 256x32 lookup, 1 full-precision analytic. Applies immediately." );
+	ri.Cvar_SetGroup( r_fogMode, CVG_RENDERER );
 #ifdef USE_PMLIGHT
 #if arm32 || arm64 // RPi4 Vulkan driver have very poor GLSL shaders performance...
 	r_dlightMode = ri.Cvar_Get( "r_dlightMode", "0", CVAR_ARCHIVE );
@@ -1702,13 +2052,56 @@ static void R_Register( void )
 	r_dlightScale = ri.Cvar_Get( "r_dlightScale", "0.5", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightScale, "0.1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightScale, "Scales dynamic light radius." );
+	r_dlightSpecPower = ri.Cvar_Get( "r_dlightSpecPower", "10", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightSpecPower, "1", "32", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightSpecPower, "Factors specularity effect from dynamic lights on surfaces." );
+	ri.Cvar_SetGroup( r_dlightSpecPower, CVG_RENDERER );
+	r_dlightSpecColor = ri.Cvar_Get( "r_dlightSpecColor", "-0.2", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightSpecColor, "-1", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightSpecColor, "Color base for specular component:\n <= 0: use current texture and modulate by abs(r_dlightSpecColor)\n > 0: use constant color with RGB components set to \\r_dlightSpecColor" );
+	ri.Cvar_SetGroup( r_dlightSpecColor, CVG_RENDERER );
+	r_dlightFalloff = ri.Cvar_Get( "r_dlightFalloff", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightFalloff, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightFalloff, "Blends PMLIGHT dynamic light attenuation from the original curve at 0 to a smooth edge falloff at 1." );
+	ri.Cvar_SetGroup( r_dlightFalloff, CVG_RENDERER );
 	r_dlightIntensity = ri.Cvar_Get( "r_dlightIntensity", "1.0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightIntensity, "0.1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightIntensity, "Adjusts dynamic light intensity but not radius." );
 #endif // USE_PMLIGHT
 
-	r_dlightSaturation = ri.Cvar_Get( "r_dlightSaturation", "1", CVAR_ARCHIVE_ND );
+	r_dlightSaturation = ri.Cvar_Get( "r_dlightSaturation", "0.8", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightSaturation, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightSaturation, "Adjusts dynamic light color saturation in linear light before rendering." );
+	ri.Cvar_SetGroup( r_dlightSaturation, CVG_RENDERER );
+	r_dlightOverbrightGamut = ri.Cvar_Get( "r_dlightOverbrightGamut", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightOverbrightGamut, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_dlightOverbrightGamut, "Compresses overbright dynamic light chroma toward linear luminance; 0 preserves raw mod-provided colors." );
+	ri.Cvar_SetGroup( r_dlightOverbrightGamut, CVG_RENDERER );
+	r_staticLights = ri.Cvar_Get( "r_staticLights", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_staticLights, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_staticLights, "Enables renderer-only static map lights loaded from maps/<mapname>.lights.json sidecar files." );
+	ri.Cvar_SetGroup( r_staticLights, CVG_RENDERER );
+	r_staticLightMaxLights = ri.Cvar_Get( "r_staticLightMaxLights", "8", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_staticLightMaxLights, "0", va( "%i", MAX_DLIGHTS ), CV_INTEGER );
+	ri.Cvar_SetDescription( r_staticLightMaxLights, "Maximum number of static sidecar lights promoted into a scene." );
+	ri.Cvar_SetGroup( r_staticLightMaxLights, CVG_RENDERER );
+	r_staticLightDebug = ri.Cvar_Get( "r_staticLightDebug", "0", CVAR_CHEAT );
+	ri.Cvar_CheckRange( r_staticLightDebug, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_staticLightDebug, "Prints static sidecar light loading and promotion counters." );
+	ri.Cvar_SetGroup( r_staticLightDebug, CVG_RENDERER );
+	r_surfaceLightProxies = ri.Cvar_Get( "r_surfaceLightProxies", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_surfaceLightProxies, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_surfaceLightProxies, "Enables bounded q3map_surfaceLight proxies as native RTX analytic lights with ray-traced visibility." );
+	ri.Cvar_SetGroup( r_surfaceLightProxies, CVG_RENDERER );
+	r_surfaceLightProxyMaxLights = ri.Cvar_Get( "r_surfaceLightProxyMaxLights", "16", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_surfaceLightProxyMaxLights, "0",
+		va( "%i", MAX_RT_SURFACELIGHT_LIGHTS ), CV_INTEGER );
+	ri.Cvar_SetDescription( r_surfaceLightProxyMaxLights, "Maximum number of PVS-visible q3map_surfaceLight proxies selected for native RTX lighting." );
+	ri.Cvar_SetGroup( r_surfaceLightProxyMaxLights, CVG_RENDERER );
+	r_surfaceLightProxyDebug = ri.Cvar_Get( "r_surfaceLightProxyDebug", "0", CVAR_CHEAT );
+	ri.Cvar_CheckRange( r_surfaceLightProxyDebug, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_surfaceLightProxyDebug, "Prints native RTX surfacelight proxy build and selection counters." );
+	ri.Cvar_SetGroup( r_surfaceLightProxyDebug, CVG_RENDERER );
 
 	r_dlightBacks = ri.Cvar_Get( "r_dlightBacks", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_dlightBacks, "Whether or not dynamic lights should light up back-face culled geometry, affects only VQ3 dynamic lights." );
@@ -1780,9 +2173,9 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( rtx_caps_report, "0", "2", CV_INTEGER );
 	ri.Cvar_SetDescription( rtx_caps_report, "rendererrtx device capability report verbosity:\n 0: disabled\n 1: compact startup capability summary\n 2: verbose startup summary + vkinfo detail" );
 	ri.Cvar_SetGroup( rtx_caps_report, CVG_RENDERER );
-	rtx_rt_mode = ri.Cvar_Get( "rtx_rt_mode", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	rtx_rt_mode = ri.Cvar_Get( "rtx_rt_mode", "2", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( rtx_rt_mode, "0", "2", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_mode, "Requested rendererrtx ray tracing capability mode (requires vid_restart):\n 0: disabled\n 1: request ray-query capability set\n 2: request ray-tracing-pipeline capability set" );
+	ri.Cvar_SetDescription( rtx_rt_mode, "Requested rendererrtx ray tracing capability mode (requires vid_restart):\n 0: raster fallback\n 1: request ray-query capabilities while retaining raster output\n 2: request the ray-tracing pipeline (default; safely falls back when rtx_rt_require is 0)" );
 	ri.Cvar_SetGroup( rtx_rt_mode, CVG_RENDERER );
 	rtx_rt_require = ri.Cvar_Get( "rtx_rt_require", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( rtx_rt_require, "0", "1", CV_INTEGER );
@@ -1806,7 +2199,7 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( rtx_rt_as_compaction, CVG_RENDERER );
 	rtx_rt_debug_as_stats = ri.Cvar_Get( "rtx_rt_debug_as_stats", "0", CVAR_TEMP );
 	ri.Cvar_CheckRange( rtx_rt_debug_as_stats, "0", "2", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_debug_as_stats, "RT AS stats verbosity:\n 0: disabled\n 1: startup and rebuild summaries\n 2: per-frame TLAS/build and dispatch stats" );
+	ri.Cvar_SetDescription( rtx_rt_debug_as_stats, "RT AS stats verbosity:\n 0: disabled\n 1: startup and rebuild summaries\n 2: periodic TLAS/build, dispatch and throttled skip diagnostics" );
 	ri.Cvar_SetGroup( rtx_rt_debug_as_stats, CVG_RENDERER );
 	rtx_rt_temporal_enable = ri.Cvar_Get( "rtx_rt_temporal_enable", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_temporal_enable, "0", "1", CV_INTEGER );
@@ -1832,9 +2225,9 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( rtx_rt_temporal_camera_cut, "0", "8192", CV_FLOAT );
 	ri.Cvar_SetDescription( rtx_rt_temporal_camera_cut, "Camera position delta threshold (world units) that forces temporal history reset." );
 	ri.Cvar_SetGroup( rtx_rt_temporal_camera_cut, CVG_RENDERER );
-	rtx_rt_spatial_denoise = ri.Cvar_Get( "rtx_rt_spatial_denoise", "1", CVAR_ARCHIVE_ND );
+	rtx_rt_spatial_denoise = ri.Cvar_Get( "rtx_rt_spatial_denoise", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_spatial_denoise, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_spatial_denoise, "Enable lightweight RT spatial denoise pass (cross-bilateral neighborhood blend)." );
+	ri.Cvar_SetDescription( rtx_rt_spatial_denoise, "Enable the experimental four-neighbour cross-bilateral RT filter (adds four radiance traces per pixel; disabled by default)." );
 	ri.Cvar_SetGroup( rtx_rt_spatial_denoise, CVG_RENDERER );
 	rtx_rt_spatial_sigma_depth = ri.Cvar_Get( "rtx_rt_spatial_sigma_depth", "2.5", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_spatial_sigma_depth, "0", "64", CV_FLOAT );
@@ -1854,15 +2247,15 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( rtx_rt_firefly_strength, CVG_RENDERER );
 	rtx_rt_tonemap_mode = ri.Cvar_Get( "rtx_rt_tonemap_mode", "2", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_tonemap_mode, "0", "2", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_tonemap_mode, "RT tone mapping operator:\n 0: disabled\n 1: Reinhard\n 2: ACES fitted" );
+	ri.Cvar_SetDescription( rtx_rt_tonemap_mode, "RT-local tone mapping operator for the effective SDR compatibility path. When the scene-linear target is active, the shared final pass uses r_tonemap instead:\n 0: disabled\n 1: Reinhard\n 2: ACES fitted" );
 	ri.Cvar_SetGroup( rtx_rt_tonemap_mode, CVG_RENDERER );
 	rtx_rt_exposure = ri.Cvar_Get( "rtx_rt_exposure", "1.0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_exposure, "0.01", "32", CV_FLOAT );
-	ri.Cvar_SetDescription( rtx_rt_exposure, "Manual RT exposure multiplier used when auto exposure is disabled." );
+	ri.Cvar_SetDescription( rtx_rt_exposure, "Manual RT-local exposure used by the effective SDR compatibility path when auto exposure is disabled. An active scene-linear target uses r_tonemapExposure in the shared final pass." );
 	ri.Cvar_SetGroup( rtx_rt_exposure, CVG_RENDERER );
 	rtx_rt_auto_exposure = ri.Cvar_Get( "rtx_rt_auto_exposure", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_auto_exposure, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_auto_exposure, "Enable exposure adaptation from running scene luminance estimate." );
+	ri.Cvar_SetDescription( rtx_rt_auto_exposure, "Enable RT-local exposure adaptation for the effective SDR compatibility path. The active scene-linear final pass remains controlled by r_tonemapExposure." );
 	ri.Cvar_SetGroup( rtx_rt_auto_exposure, CVG_RENDERER );
 	rtx_rt_exposure_speed = ri.Cvar_Get( "rtx_rt_exposure_speed", "0.08", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_exposure_speed, "0", "1", CV_FLOAT );
@@ -1912,9 +2305,9 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( rtx_rt_budget_max_scale, "1.0", "2.0", CV_FLOAT );
 	ri.Cvar_SetDescription( rtx_rt_budget_max_scale, "Upper clamp for adaptive RT quality scaling." );
 	ri.Cvar_SetGroup( rtx_rt_budget_max_scale, CVG_RENDERER );
-	rtx_rt_dynamic_resolution = ri.Cvar_Get( "rtx_rt_dynamic_resolution", "1", CVAR_ARCHIVE_ND );
+	rtx_rt_dynamic_resolution = ri.Cvar_Get( "rtx_rt_dynamic_resolution", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_dynamic_resolution, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_dynamic_resolution, "Enable adaptive RT internal resolution scaling with reconstruction blit." );
+	ri.Cvar_SetDescription( rtx_rt_dynamic_resolution, "Enable experimental adaptive RT internal resolution scaling; disabled by default until reconstruction support is proven for the active formats." );
 	ri.Cvar_SetGroup( rtx_rt_dynamic_resolution, CVG_RENDERER );
 	rtx_rt_dynamic_resolution_min = ri.Cvar_Get( "rtx_rt_dynamic_resolution_min", "0.60", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_dynamic_resolution_min, "0.25", "1.0", CV_FLOAT );
@@ -1986,27 +2379,31 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( rtx_rt_camera_mode_validate, CVG_RENDERER );
 	rtx_rt_legacy_color_compat = ri.Cvar_Get( "rtx_rt_legacy_color_compat", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_legacy_color_compat, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_legacy_color_compat, "Apply legacy brightness/intensity compatibility shaping before final gamma pass." );
+	ri.Cvar_SetDescription( rtx_rt_legacy_color_compat, "Apply legacy r_intensity brightness compatibility shaping to native RT output before the shared final pass." );
 	ri.Cvar_SetGroup( rtx_rt_legacy_color_compat, CVG_RENDERER );
-	rtx_rt_readability_lift = ri.Cvar_Get( "rtx_rt_readability_lift", "0.06", CVAR_ARCHIVE_ND );
+	rtx_rt_raster_reference = ri.Cvar_Get( "rtx_rt_raster_reference", "0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( rtx_rt_raster_reference, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( rtx_rt_raster_reference, "RT primary-world shading policy:\n 0: native closest-hit RT lighting/material result (default)\n 1: use authored raster scene color/lightmaps as a compatibility reference with bounded RT visibility and ray-visible analytic-environment specular cues" );
+	ri.Cvar_SetGroup( rtx_rt_raster_reference, CVG_RENDERER );
+	rtx_rt_readability_lift = ri.Cvar_Get( "rtx_rt_readability_lift", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_readability_lift, "-1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( rtx_rt_readability_lift, "Gameplay readability lift applied after RT tone mapping." );
 	ri.Cvar_SetGroup( rtx_rt_readability_lift, CVG_RENDERER );
-	rtx_rt_readability_contrast = ri.Cvar_Get( "rtx_rt_readability_contrast", "1.05", CVAR_ARCHIVE_ND );
+	rtx_rt_readability_contrast = ri.Cvar_Get( "rtx_rt_readability_contrast", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_readability_contrast, "0.2", "3", CV_FLOAT );
 	ri.Cvar_SetDescription( rtx_rt_readability_contrast, "Gameplay readability contrast multiplier in RT resolve." );
 	ri.Cvar_SetGroup( rtx_rt_readability_contrast, CVG_RENDERER );
-	rtx_rt_readability_saturation = ri.Cvar_Get( "rtx_rt_readability_saturation", "1.08", CVAR_ARCHIVE_ND );
+	rtx_rt_readability_saturation = ri.Cvar_Get( "rtx_rt_readability_saturation", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_readability_saturation, "0", "3", CV_FLOAT );
 	ri.Cvar_SetDescription( rtx_rt_readability_saturation, "Gameplay readability saturation multiplier in RT resolve." );
 	ri.Cvar_SetGroup( rtx_rt_readability_saturation, CVG_RENDERER );
-	rtx_rt_readability_shadow_floor = ri.Cvar_Get( "rtx_rt_readability_shadow_floor", "0.05", CVAR_ARCHIVE_ND );
+	rtx_rt_readability_shadow_floor = ri.Cvar_Get( "rtx_rt_readability_shadow_floor", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_readability_shadow_floor, "0", "0.5", CV_FLOAT );
 	ri.Cvar_SetDescription( rtx_rt_readability_shadow_floor, "Minimum shadow luminance floor to preserve combat readability in dark regions." );
 	ri.Cvar_SetGroup( rtx_rt_readability_shadow_floor, CVG_RENDERER );
-	rtx_rt_dynamic_blas = ri.Cvar_Get( "rtx_rt_dynamic_blas", "1", CVAR_ARCHIVE_ND );
+	rtx_rt_dynamic_blas = ri.Cvar_Get( "rtx_rt_dynamic_blas", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_dynamic_blas, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_dynamic_blas, "Enable dynamic scene BLAS ingestion/build path:\n 0: disabled (world-only TLAS for stability)\n 1: enabled (dynamic entities/effects included in RT AS)" );
+	ri.Cvar_SetDescription( rtx_rt_dynamic_blas, "Enable the experimental dynamic-scene BLAS visibility/shadow proxy:\n 0: disabled (default; raster overlay preserves all entities/effects)\n 1: enabled (entities/effects can occlude RT shadow/visibility rays while raster remains authoritative for their primary color)" );
 	ri.Cvar_SetGroup( rtx_rt_dynamic_blas, CVG_RENDERER );
 	rtx_rt_dynamic_effects = ri.Cvar_Get( "rtx_rt_dynamic_effects", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_dynamic_effects, "0", "2", CV_INTEGER );
@@ -2060,21 +2457,21 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( rtx_rt_shadow_softness, "0", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( rtx_rt_shadow_softness, "Soft shadow cone width scalar used by RT shadow queries." );
 	ri.Cvar_SetGroup( rtx_rt_shadow_softness, CVG_RENDERER );
-	rtx_rt_indirect_bounce = ri.Cvar_Get( "rtx_rt_indirect_bounce", "1", CVAR_ARCHIVE_ND );
+	rtx_rt_indirect_bounce = ri.Cvar_Get( "rtx_rt_indirect_bounce", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_indirect_bounce, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_indirect_bounce, "Enable one-bounce indirect diffuse sample in RT shading path." );
+	ri.Cvar_SetDescription( rtx_rt_indirect_bounce, "Enable one experimental hemisphere visibility ray that occlusion-refines the bounded analytic environment diffuse term; this is not a secondary-radiance bounce." );
 	ri.Cvar_SetGroup( rtx_rt_indirect_bounce, CVG_RENDERER );
 	rtx_rt_indirect_strength = ri.Cvar_Get( "rtx_rt_indirect_strength", "0.35", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_indirect_strength, "0", NULL, CV_FLOAT );
-	ri.Cvar_SetDescription( rtx_rt_indirect_strength, "Scale factor for one-bounce indirect diffuse contribution." );
+	ri.Cvar_SetDescription( rtx_rt_indirect_strength, "Scale for the always-on albedo-tinted analytic environment diffuse term used by native closest-hit shading." );
 	ri.Cvar_SetGroup( rtx_rt_indirect_strength, CVG_RENDERER );
 	rtx_rt_reflection_strength = ri.Cvar_Get( "rtx_rt_reflection_strength", "1.0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_reflection_strength, "0", NULL, CV_FLOAT );
-	ri.Cvar_SetDescription( rtx_rt_reflection_strength, "Scale factor for RT specular reflection contribution." );
+	ri.Cvar_SetDescription( rtx_rt_reflection_strength, "Scale for analytic-environment specular when a glossy visibility ray escapes scene geometry; scene-radiance reflection rays are not traced." );
 	ri.Cvar_SetGroup( rtx_rt_reflection_strength, CVG_RENDERER );
 	rtx_rt_sky_intensity = ri.Cvar_Get( "rtx_rt_sky_intensity", "1.0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_sky_intensity, "0", NULL, CV_FLOAT );
-	ri.Cvar_SetDescription( rtx_rt_sky_intensity, "Environment sky lighting intensity for RT miss shading." );
+	ri.Cvar_SetDescription( rtx_rt_sky_intensity, "Environment sky intensity for RT miss shading and analytic diffuse/specular evaluation." );
 	ri.Cvar_SetGroup( rtx_rt_sky_intensity, CVG_RENDERER );
 	rtx_rt_sun_intensity = ri.Cvar_Get( "rtx_rt_sun_intensity", "2.5", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_sun_intensity, "0", NULL, CV_FLOAT );
@@ -2082,11 +2479,13 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( rtx_rt_sun_intensity, CVG_RENDERER );
 	rtx_rt_world_light_scale = ri.Cvar_Get( "rtx_rt_world_light_scale", "0.35", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_world_light_scale, "0", NULL, CV_FLOAT );
-	ri.Cvar_SetDescription( rtx_rt_world_light_scale, "Scale factor for BSP world entity light contribution in RT shading." );
+	ri.Cvar_SetDescription( rtx_rt_world_light_scale,
+		"Scale for promoting BSP compile-time light entities into live RT direct lights. "
+		"Native RT uses these lights instead of baked lightmap energy; zero leaves only sun, sidecar, and dynamic lights." );
 	ri.Cvar_SetGroup( rtx_rt_world_light_scale, CVG_RENDERER );
 	rtx_rt_refractive_mode = ri.Cvar_Get( "rtx_rt_refractive_mode", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_refractive_mode, "0", "2", CV_INTEGER );
-	ri.Cvar_SetDescription( rtx_rt_refractive_mode, "Translucent material strategy in RT shading:\n 0: treat as opaque\n 1: transmission blend (no refraction)\n 2: refractive rays (IOR-based)" );
+	ri.Cvar_SetDescription( rtx_rt_refractive_mode, "Experimental translucent proxy strategy:\n 0: treat as opaque\n 1: analytic-environment transmission blend\n 2: IOR-directed analytic-environment transmission (not a scene-radiance refractive ray)" );
 	ri.Cvar_SetGroup( rtx_rt_refractive_mode, CVG_RENDERER );
 	rtx_rt_refractive_ior = ri.Cvar_Get( "rtx_rt_refractive_ior", "1.33", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( rtx_rt_refractive_ior, "1.0", "2.5", CV_FLOAT );
@@ -2168,9 +2567,17 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_aviMotionJpegQuality, "Controls quality of Jpeg video capture when \\cl_aviMotionJpeg 1." );
 	r_screenshotJpegQuality = ri.Cvar_Get( "r_screenshotJpegQuality", "90", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_screenshotJpegQuality, "Controls quality of Jpeg screenshots when using screenshotJpeg." );
+	ri.Cvar_Set( "cl_captureActive", "0" );
+	r_levelshotSize = ri.Cvar_Get( "r_levelshotSize", "", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_levelshotSize, "Controls levelshot output size. Blank keeps the resolved source size, a single integer makes a square image, and WxH sets an explicit output size." );
+	r_levelshotDownscale = ri.Cvar_Get( "r_levelshotDownscale", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_levelshotDownscale, "1", NULL, CV_FLOAT );
+	ri.Cvar_SetDescription( r_levelshotDownscale, "Divides the resolved levelshot source size when r_levelshotSize is blank. 1 keeps full size, 2 halves it." );
+	r_levelshotSourceAspect = ri.Cvar_Get( "r_levelshotSourceAspect", "", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_levelshotSourceAspect, "Optional centered source crop aspect for levelshots, such as 4:3, 16:9, or 1:1. Blank keeps the full viewport." );
 
-	r_bloom_threshold = ri.Cvar_Get( "r_bloom_threshold", "0.6", CVAR_ARCHIVE_ND );
-	ri.Cvar_SetDescription( r_bloom_threshold, "Color level to extract to bloom texture, default is 0.6." );
+	r_bloom_threshold = ri.Cvar_Get( "r_bloom_threshold", "0.75", CVAR_ARCHIVE_ND );
+	ri.Cvar_SetDescription( r_bloom_threshold, "Color level to extract to bloom texture, default is 0.75." );
 	ri.Cvar_SetGroup( r_bloom_threshold, CVG_RENDERER );
 
 	r_bloom_threshold_mode = ri.Cvar_Get( "r_bloom_threshold_mode", "0", CVAR_ARCHIVE_ND );
@@ -2184,6 +2591,10 @@ static void R_Register( void )
 	r_bloom_modulate = ri.Cvar_Get( "r_bloom_modulate", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_bloom_modulate, "Modulate extracted color:\n 0: off (color = color, i.e. no changes)\n 1: by itself (color = color * color)\n 2: by intensity (color = color * luma(color))" );
 	ri.Cvar_SetGroup( r_bloom_modulate, CVG_RENDERER );
+	r_bloom_soft_knee = ri.Cvar_Get( "r_bloom_soft_knee", "0.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_bloom_soft_knee, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_bloom_soft_knee, "Softens scene-linear bloom extraction around r_bloom_threshold. 0 keeps the legacy hard cutoff; 1 uses a full threshold-width knee." );
+	ri.Cvar_SetGroup( r_bloom_soft_knee, CVG_RENDERER );
 
 	if ( glConfig.vidWidth )
 		return;
@@ -2229,10 +2640,66 @@ static void R_Register( void )
 	r_fbo = ri.Cvar_Get( "r_fbo", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_fbo, "Use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary video size and screenshot/video capture.\n Required for bloom, HDR rendering, anti-aliasing and greyscale effects." );
 	r_hdr = ri.Cvar_Get( "r_hdr", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
-	ri.Cvar_SetDescription(r_hdr, "Enables high dynamic range frame buffer texture format. Requires \\r_fbo 1.\n -1: 4-bit, for testing purposes, heavy color banding, might not work on all systems\n  0: 8 bit, default, moderate color banding with multi-stage shaders\n  1: 16 bit, enhanced blending precision, no color banding, might decrease performance on AMD / Intel GPUs\n" );
+	ri.Cvar_CheckRange( r_hdr, "-1", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_hdr,
+		"Selects the scene-linear HDR render pipeline. Requires \\r_fbo 1.\n"
+		" 0: display-referred SDR compatibility path\n"
+		" 1: scene-linear RGBA16F HDR pipeline with sRGB texture decode, floating-point bloom, and final tone mapping\n"
+		"-1: legacy debug alias for \\r_hdrPrecision -1 without enabling scene-linear HDR\n"
+		"HDR falls back to effective SDR when the required floating-point format features are unavailable." );
+	ri.Cvar_SetGroup( r_hdr, CVG_RENDERER );
+	r_hdrPrecision = ri.Cvar_Get( "r_hdrPrecision", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_hdrPrecision, "-1", "16", CV_INTEGER );
+	ri.Cvar_SetDescription( r_hdrPrecision,
+		"Internal FBO color precision for the SDR display pipeline; \\r_hdr 1 always requests RGBA16F.\n"
+		" 0: automatic 8-bit SDR storage\n"
+		"-1: debug 4-bit storage for banding tests\n"
+		" 8: force 8-bit storage\n"
+		"16: force 16-bit normalized SDR storage" );
+	ri.Cvar_SetGroup( r_hdrPrecision, CVG_RENDERER );
+	r_srgbTextures = ri.Cvar_Get( "r_srgbTextures", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_srgbTextures, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_srgbTextures, "Use sRGB sampled-image formats for authored color images in the scene-linear HDR pipeline. Data, lightmap, fog, and utility textures stay linear/data." );
+	ri.Cvar_SetGroup( r_srgbTextures, CVG_RENDERER );
+	r_tonemap = ri.Cvar_Get( "r_tonemap", "0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_tonemap, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_tonemap, "Final-pass tone mapper used by the scene-linear HDR pipeline:\n 0: legacy gamma/overbright\n 1: Reinhard\n 2: ACES fitted filmic curve" );
+	ri.Cvar_SetGroup( r_tonemap, CVG_RENDERER );
+	r_tonemapExposure = ri.Cvar_Get( "r_tonemapExposure", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_tonemapExposure, "0.1", "8.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_tonemapExposure, "Exposure multiplier used by scene-linear tone mapping and bloom extraction." );
+	ri.Cvar_SetGroup( r_tonemapExposure, CVG_RENDERER );
+	r_hudExcludePostProcess = ri.Cvar_Get( "r_hudExcludePostProcess", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_hudExcludePostProcess, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_hudExcludePostProcess, "Exclude later 3D HUD scenes (RDF_NOWORLDMODEL after the world view) from bloom and scene HDR post-processing where supported." );
+	ri.Cvar_SetGroup( r_hudExcludePostProcess, CVG_RENDERER );
 	r_bloom = ri.Cvar_Get( "r_bloom", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_bloom, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription(r_bloom, "Enables bloom post-processing effect. Requires \\r_fbo 1.");
+	r_liquid = ri.Cvar_Get( "r_liquid", "2", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_liquid, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_liquid, "Enable warped scene refraction and a Fresnel screen-space reflection for liquids: 0 off, 1 water, 2 water/slime/lava. Requires r_fbo 1 and vid_restart; authored liquid stages remain intact." );
+	ri.Cvar_SetGroup( r_liquid, CVG_RENDERER );
+	r_liquidResolution = ri.Cvar_Get( "r_liquidResolution", "1.0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_liquidResolution, "0.25", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidResolution, "Resolution scale of the liquid scene snapshot. 1.0 samples the scene at full resolution and is sharpest; lower values reduce bandwidth and soften refraction. Requires vid_restart." );
+	ri.Cvar_SetGroup( r_liquidResolution, CVG_RENDERER );
+	r_liquidRefraction = ri.Cvar_Get( "r_liquidRefraction", "0.65", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_liquidRefraction, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidRefraction, "Blend strength of warped scene refraction behind authored transparent liquid stages." );
+	ri.Cvar_SetGroup( r_liquidRefraction, CVG_RENDERER );
+	r_liquidWarpScale = ri.Cvar_Get( "r_liquidWarpScale", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_liquidWarpScale, "0.0", "2.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidWarpScale, "Multiplier for ambient liquid-wave distortion; 1.0 is about 12 pixels at 1080 lines and scales with view height." );
+	ri.Cvar_SetGroup( r_liquidWarpScale, CVG_RENDERER );
+	r_liquidReflection = ri.Cvar_Get( "r_liquidReflection", "0.65", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_liquidReflection, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidReflection, "Strength of the grazing-angle screen-space liquid reflection, with a bounded material-sheen fallback." );
+	ri.Cvar_SetGroup( r_liquidReflection, CVG_RENDERER );
+	r_liquidRipples = ri.Cvar_Get( "r_liquidRipples", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_liquidRipples, "0.0", "2.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidRipples, "Amplitude of visual ripple rings when players or projectiles enter, leave, or move through liquid; 0 disables the impulse feed." );
+	ri.Cvar_SetGroup( r_liquidRipples, CVG_RENDERER );
 
 	r_ext_multisample = ri.Cvar_Get( "r_ext_multisample", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_ext_multisample, "0", "64", CV_INTEGER );
@@ -2384,11 +2851,14 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 	ri.Cmd_RemoveCommand( "modellist" );
 	ri.Cmd_RemoveCommand( "screenshotBMP" );
 	ri.Cmd_RemoveCommand( "screenshotJPEG" );
+	ri.Cmd_RemoveCommand( "screenshotTGA" );
+	ri.Cmd_RemoveCommand( "screenshotPNG" );
 	ri.Cmd_RemoveCommand( "screenshot" );
 	ri.Cmd_RemoveCommand( "imagelist" );
 	ri.Cmd_RemoveCommand( "shaderlist" );
 	ri.Cmd_RemoveCommand( "skinlist" );
 	ri.Cmd_RemoveCommand( "gfxinfo" );
+	ri.Cmd_RemoveCommand( "r_staticLightReload" );
 	ri.Cmd_RemoveCommand( "shaderstate" );
 #ifdef USE_VULKAN
 	ri.Cmd_RemoveCommand( "vkinfo" );
@@ -2400,7 +2870,7 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 	}
 
 #ifdef USE_VULKAN
-	vk_release_resources();
+	vk_release_resources( code );
 #endif
 
 	R_DoneFreeType();
@@ -2511,6 +2981,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.AddLightToScene = RE_AddLightToScene;
 	re.AddAdditiveLightToScene = RE_AddAdditiveLightToScene;
 	re.AddLinearLightToScene = RE_AddLinearLightToScene;
+	re.AddLiquidInteractionToScene = RE_AddLiquidInteractionToScene;
 
 	re.RenderScene = RE_RenderScene;
 
@@ -2529,6 +3000,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 
 	re.ThrottleBackend = RE_ThrottleBackend;
 	re.FinishBloom = RE_FinishBloom;
+	re.DrawMenuDepthOfField = RE_DrawMenuDepthOfField;
 	re.CanMinimize = RE_CanMinimize;
 	re.GetConfig = RE_GetConfig;
 	re.VertexLighting = RE_VertexLighting;

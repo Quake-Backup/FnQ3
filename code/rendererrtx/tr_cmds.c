@@ -27,7 +27,13 @@ R_PerformanceCounters
 =====================
 */
 static void R_PerformanceCounters( void ) {
-	if ( !r_speeds->integer ) {
+	qboolean staticLightDebug;
+	qboolean surfaceLightDebug;
+
+	staticLightDebug = ( r_staticLightDebug && r_staticLightDebug->integer ) ? qtrue : qfalse;
+	surfaceLightDebug = ( r_surfaceLightProxyDebug && r_surfaceLightProxyDebug->integer ) ? qtrue : qfalse;
+
+	if ( !r_speeds->integer && !staticLightDebug && !surfaceLightDebug ) {
 		// clear the counters even if we aren't printing
 		Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 		Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
@@ -64,6 +70,43 @@ static void R_PerformanceCounters( void ) {
 			backEnd.pc.c_flareAdds, backEnd.pc.c_flareTests, backEnd.pc.c_flareRenders );
 	}
 
+	if ( ( r_speeds->integer == 4 || staticLightDebug ) &&
+		( tr.staticMapLights.loaded || tr.staticMapLights.parseFailed ) ) {
+		ri.Printf( PRINT_ALL,
+			"static lights file:%s loaded:%i parsefail:%i count:%i point:%i spot:%i spatial:%i/%i promoted:%i skip disabled:%i pvs:%i budget:%i unsupported:%i invalid:%i overflow:%i\n",
+			tr.staticMapLights.filename[0] ? tr.staticMapLights.filename : "<none>",
+			tr.staticMapLights.loaded, tr.staticMapLights.parseFailed,
+			tr.staticMapLights.count, tr.staticMapLights.pointCount,
+			tr.staticMapLights.spotCount, tr.staticMapLights.spatialized,
+			tr.staticMapLights.spatialFallback, tr.staticMapLights.promotedThisFrame,
+			tr.staticMapLights.skippedDisabledThisFrame,
+			tr.staticMapLights.skippedPVSThisFrame,
+			tr.staticMapLights.skippedBudgetThisFrame,
+			tr.staticMapLights.skippedUnsupported,
+			tr.staticMapLights.skippedInvalid,
+			tr.staticMapLights.skippedOverflow );
+	}
+
+	if ( ( r_speeds->integer == 4 || surfaceLightDebug ) &&
+		tr.surfaceLightProxies.built ) {
+		ri.Printf( PRINT_ALL,
+			"RTX surfacelight proxies count:%i point:%i linear:%i subdiv:%i/%i spatial:%i/%i selected:%i skip disabled:%i pvs:%i budget:%i sky:%i invalid:%i overflow:%i\n",
+			tr.surfaceLightProxies.count,
+			tr.surfaceLightProxies.pointProjectionCount,
+			tr.surfaceLightProxies.linearProjectionCount,
+			tr.surfaceLightProxies.subdividedSurfaces,
+			tr.surfaceLightProxies.subdivisionProxies,
+			tr.surfaceLightProxies.spatialized,
+			tr.surfaceLightProxies.spatialFallback,
+			tr.surfaceLightProxies.selectedThisFrame,
+			tr.surfaceLightProxies.skippedDisabledThisFrame,
+			tr.surfaceLightProxies.skippedPVSThisFrame,
+			tr.surfaceLightProxies.skippedBudgetThisFrame,
+			tr.surfaceLightProxies.skippedSky,
+			tr.surfaceLightProxies.skippedInvalid,
+			tr.surfaceLightProxies.skippedOverflow );
+	}
+
 	Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 	Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
 }
@@ -85,7 +128,7 @@ static void R_IssueRenderCommands( void ) {
 	// clear it out, in case this is a sync and not a buffer flip
 	cmdList->used = 0;
 
-	if ( backEnd.screenshotMask == 0 ) {
+	if ( backEnd.screenshotMask == 0 && !backEnd.levelshotPending ) {
 		if ( ri.CL_IsMinimized() )
 			return; // skip backend when minimized
 		if ( backEnd.throttle )
@@ -94,6 +137,8 @@ static void R_IssueRenderCommands( void ) {
 #ifdef USE_VULKAN
 		if ( ri.CL_IsMinimized() && !RE_CanMinimize() ) {
 			backEnd.screenshotMask = 0;
+			backEnd.levelshotPending = qfalse;
+			ri.Cvar_Set( "cl_captureActive", "0" );
 			return;
 		}
 #endif
@@ -467,6 +512,17 @@ void RE_FinishBloom( void )
 	}
 
 	cmd->commandId = RC_FINISHBLOOM;
+}
+
+
+void RE_DrawMenuDepthOfField( float amount )
+{
+	/*
+	 * Keep the renderer ABI aligned with Vulkan.  The Vulkan implementation
+	 * currently treats this as an optional no-op as well; retaining the hook
+	 * lets the client use the same feature probing path for both renderers.
+	 */
+	(void)amount;
 }
 
 

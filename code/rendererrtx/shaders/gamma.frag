@@ -14,6 +14,9 @@ layout(constant_id = 7) const int ditherMode = 0; // 0 - disabled, 1 - ordered
 layout(constant_id = 8) const int depth_r = 255;
 layout(constant_id = 9) const int depth_g = 255;
 layout(constant_id = 10) const int depth_b = 255;
+layout(constant_id = 14) const int toneMapMode = 0; // 0 - legacy, 1 - Reinhard, 2 - ACES fit
+layout(constant_id = 15) const float toneMapExposure = 1.0;
+layout(constant_id = 17) const int sceneLinearMode = 0;
 
 const vec3 sRGB = { 0.2126, 0.7152, 0.0722 };
 
@@ -46,8 +49,41 @@ vec3 dither(vec3 color) {
 	return cDithered / depth;
 }
 
+vec3 linearToSrgb(vec3 color) {
+	color = max(color, vec3(0.0));
+	vec3 encodedLow = color * 12.92;
+	vec3 encodedHigh = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
+	return mix(encodedLow, encodedHigh, step(vec3(0.0031308), color));
+}
+
+vec3 toneMapReinhard(vec3 color) {
+	color = max(color, vec3(0.0));
+	return color / (vec3(1.0) + color);
+}
+
+vec3 toneMapAces(vec3 color) {
+	const float a = 2.51;
+	const float b = 0.03;
+	const float c = 2.43;
+	const float d = 0.59;
+	const float e = 0.14;
+	color = max(color, vec3(0.0));
+	return clamp((color * (a * color + b)) / (color * (c * color + d) + e), vec3(0.0), vec3(1.0));
+}
+
+vec3 applyToneMap(vec3 color) {
+	if ( toneMapMode == 1 ) {
+		return toneMapReinhard(color);
+	}
+	if ( toneMapMode == 2 ) {
+		return toneMapAces(color);
+	}
+	return color;
+}
+
 void main() {
 	vec3 base = texture(texture0, frag_tex_coord).rgb;
+	vec3 color;
 
 	if ( greyscale == 1 )
 	{
@@ -59,16 +95,28 @@ void main() {
 		base = mix(base, luma, greyscale);
 	}
 
-	if ( gamma != 1.0 )
-	{
-		out_color = vec4(pow(base, vec3(gamma)) * obScale, 1);
+	if ( sceneLinearMode != 0 ) {
+		color = max(base * obScale * max(toneMapExposure, 0.0), vec3(0.0));
+		color = applyToneMap(color);
+		color = linearToSrgb(color);
+		if ( gamma != 1.0 ) {
+			color = pow(max(color, vec3(0.0)), vec3(gamma));
+		}
 	}
-	else
-	{
-		out_color = vec4(base * obScale, 1);
+	else {
+		if ( gamma != 1.0 )
+		{
+			color = pow(max(base, vec3(0.0)), vec3(gamma)) * obScale;
+		}
+		else
+		{
+			color = base * obScale;
+		}
 	}
 
 	if ( ditherMode == 1 ) {
-		out_color.rgb = dither(out_color.rgb);
+		color = dither(color);
 	}
+
+	out_color = vec4(color, 1);
 }

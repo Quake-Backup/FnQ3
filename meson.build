@@ -970,6 +970,15 @@ if get_option('glx-tests')
   )
 endif
 
+window_placement_tests = executable('fnq3_window_placement_tests',
+  'tests/window_placement_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnq3_window_placement', window_placement_tests)
+test('fnq3_window_management_source', python,
+  args: files('tests/window_management_source_tests.py'),
+)
+
 curl_summary = 'disabled'
 if use_curl
   curl_summary = '@0@ (@1@)'.format(use_curl_dlopen ? 'dlopen' : 'linked', curl_source)

@@ -674,6 +674,10 @@ void	CL_LoadJPG( const char *filename, unsigned char **pic, int *width, int *hei
 
 // base backend functions
 void	HandleEvents( void );
+void	CL_NotifyWindowResize( int width, int height, qboolean preserveWindow );
+void	CL_CompleteWindowResize( void );
+void	CL_CancelWindowResize( void );
+qboolean CL_IsWindowResizeRestart( void );
 
 // platform-specific
 void	GLimp_InitGamma(glconfig_t *config);

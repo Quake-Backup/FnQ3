@@ -3550,8 +3550,10 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 			if ( ri.GLimp_Shutdown ) {
 				ri.GLimp_Shutdown( code == REF_UNLOAD_DLL ? qtrue : qfalse );
 			}
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 		}
+		// Retain only the desktop window on REF_KEEP_WINDOW. Discarding mode
+		// feedback makes platform initialization query the live drawable.
+		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 	}
 
 	ri.FreeAll();

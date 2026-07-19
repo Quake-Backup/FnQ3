@@ -1193,32 +1193,92 @@ static sdlKeyInfo_t IN_MakeKeyInfo( const SDL_KeyboardEvent *event )
 	return keyinfo;
 }
 
+static void IN_RefreshDrawableIfChanged( int oldPixelWidth, int oldPixelHeight )
+{
+	if ( glw_state.isFullscreen || gw_minimized ||
+		glw_state.pixel_width < 4 || glw_state.pixel_height < 4 ||
+		( oldPixelWidth == glw_state.pixel_width &&
+		oldPixelHeight == glw_state.pixel_height ) ) {
+		return;
+	}
+
+	if ( glw_state.config &&
+		glw_state.pixel_width == glw_state.config->vidWidth &&
+		glw_state.pixel_height == glw_state.config->vidHeight ) {
+		CL_CancelWindowResize();
+		return;
+	}
+
+	// SDL window sizes are logical units. Preserve those in r_customWidth and
+	// let platform init publish the corresponding HiDPI drawable dimensions.
+	CL_NotifyWindowResize( glw_state.window_width,
+		glw_state.window_height, qtrue );
+}
+
+static void IN_UpdateWindowGeometry( qboolean savePosition, qboolean notifyResize )
+{
+	const int oldPixelWidth = glw_state.pixel_width;
+	const int oldPixelHeight = glw_state.pixel_height;
+	const SDL_WindowFlags flags = SDL_GetWindowFlags( SDL_window );
+	int x, y;
+
+	GLW_UpdateWindowState();
+
+	if ( savePosition && !gw_minimized && !glw_state.isFullscreen &&
+		!( flags & SDL_WINDOW_MAXIMIZED ) &&
+		SDL_GetWindowPosition( SDL_window, &x, &y ) ) {
+		Cvar_SetIntegerValue( "vid_xpos", x );
+		Cvar_SetIntegerValue( "vid_ypos", y );
+	}
+
+	if ( notifyResize ) {
+		IN_RefreshDrawableIfChanged( oldPixelWidth, oldPixelHeight );
+	}
+}
+
+static void IN_HandleDisplayEvent( void )
+{
+	const int oldPixelWidth = glw_state.pixel_width;
+	const int oldPixelHeight = glw_state.pixel_height;
+
+	GLW_UpdateWindowState();
+	if ( !glw_state.isFullscreen ) {
+		GLW_EnsureWindowOnScreen();
+		GLW_UpdateWindowState();
+		IN_RefreshDrawableIfChanged( oldPixelWidth, oldPixelHeight );
+	}
+}
+
 static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, int *lastKeyDown )
 {
 #ifdef DEBUG_EVENTS
 	Com_Printf( "%4i %s\n", window->timestamp, eventName( type ) );
+#else
+	(void)window;
 #endif
 
 	switch ( type )
 	{
 		case SDL_EVENT_WINDOW_MOVED:
-			GLW_UpdateWindowState();
-			if ( gw_active && !gw_minimized && !glw_state.isFullscreen ) {
-				Cvar_SetIntegerValue( "vid_xpos", window->data1 );
-				Cvar_SetIntegerValue( "vid_ypos", window->data2 );
-			}
+			IN_UpdateWindowGeometry( qtrue, qtrue );
 			break;
 
 		case SDL_EVENT_WINDOW_RESIZED:
 		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
 		case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
-			GLW_UpdateWindowState();
+			IN_UpdateWindowGeometry( qfalse, qtrue );
 			break;
 
 		case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+			IN_UpdateWindowGeometry( qfalse, qtrue );
+			if ( gw_active && re.SetColorMappings ) {
+				re.SetColorMappings();
+			}
+			break;
+
 		case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
 		case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
-			GLW_UpdateWindowState();
+			IN_UpdateWindowGeometry( qfalse, qfalse );
 			if ( gw_active && re.SetColorMappings ) {
 				re.SetColorMappings();
 			}
@@ -1245,7 +1305,7 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			if ( gw_active || !glw_state.isFullscreen ) {
 				gw_minimized = qfalse;
 			}
-			GLW_UpdateWindowState();
+			IN_UpdateWindowGeometry( qfalse, qtrue );
 			break;
 
 		case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -1266,7 +1326,7 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			gw_active = qtrue;
 			gw_minimized = qfalse;
 			mouse_focus = qtrue;
-			GLW_UpdateWindowState();
+			IN_UpdateWindowGeometry( qfalse, qtrue );
 			if ( re.SetColorMappings ) {
 				re.SetColorMappings();
 			}
@@ -1539,6 +1599,17 @@ void HandleEvents( void )
 			case SDL_EVENT_QUIT:
 			case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
 				Cbuf_ExecuteText( EXEC_NOW, "quit Closed window\n" );
+				break;
+
+			case SDL_EVENT_DISPLAY_ORIENTATION:
+			case SDL_EVENT_DISPLAY_ADDED:
+			case SDL_EVENT_DISPLAY_REMOVED:
+			case SDL_EVENT_DISPLAY_MOVED:
+			case SDL_EVENT_DISPLAY_DESKTOP_MODE_CHANGED:
+			case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+			case SDL_EVENT_DISPLAY_CONTENT_SCALE_CHANGED:
+			case SDL_EVENT_DISPLAY_USABLE_BOUNDS_CHANGED:
+				IN_HandleDisplayEvent();
 				break;
 
 			case SDL_EVENT_WINDOW_MOVED:

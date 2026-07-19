@@ -339,6 +339,16 @@ IF(FNQ3_GLX_LOGIC_TESTS)
 	ENDIF()
 ENDIF()
 
+enable_testing()
+ADD_EXECUTABLE(fnq3_window_placement_tests tests/window_placement_tests.cpp)
+target_compile_features(fnq3_window_placement_tests PRIVATE cxx_std_17)
+add_test(NAME fnq3_window_placement COMMAND fnq3_window_placement_tests)
+find_package(Python3 COMPONENTS Interpreter)
+IF(Python3_Interpreter_FOUND)
+	add_test(NAME fnq3_window_management_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/window_management_source_tests.py")
+ENDIF()
+
 # renderers
 AUX_SOURCE_DIRECTORY(code/renderercommon RENDERER_COMMON_SRCS)
 AUX_SOURCE_DIRECTORY(code/renderer RENDERER_GL_SRCS)

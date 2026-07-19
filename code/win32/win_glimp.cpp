@@ -40,6 +40,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "win_local.h"
 #include "glw_win.h"
 #include "win_raii.h"
+#include "../platform/window_placement.hpp"
 
 #ifdef USE_OPENGL_API
 #include "../renderer/qgl.h"
@@ -76,6 +77,80 @@ typedef HGLRC ( WINAPI *PFNWGLCREATECONTEXTATTRIBSARBPROC )( HDC hDC, HGLRC hSha
 
 static DEVMODE dm_desktop;
 static DEVMODE dm_current;
+
+static UINT GLW_GetMonitorDpi( HMONITOR monitor )
+{
+	typedef HRESULT (WINAPI *getDpiForMonitor_t)( HMONITOR, int, UINT *, UINT * );
+	typedef UINT (WINAPI *getDpiForWindow_t)( HWND );
+	static getDpiForMonitor_t getDpiForMonitor;
+	static getDpiForWindow_t getDpiForWindow;
+	static qboolean initialized;
+	UINT dpiX = 96;
+	UINT dpiY = 96;
+
+	if ( !initialized ) {
+		HMODULE user32 = GetModuleHandle( TEXT( "user32.dll" ) );
+		HMODULE shcore = LoadLibrary( TEXT( "shcore.dll" ) );
+		getDpiForWindow = user32
+			? reinterpret_cast<getDpiForWindow_t>( GetProcAddress( user32, "GetDpiForWindow" ) )
+			: NULL;
+		getDpiForMonitor = shcore
+			? reinterpret_cast<getDpiForMonitor_t>( GetProcAddress( shcore, "GetDpiForMonitor" ) )
+			: NULL;
+		initialized = qtrue;
+	}
+
+	if ( g_wv.hWnd && getDpiForWindow &&
+		MonitorFromWindow( g_wv.hWnd, MONITOR_DEFAULTTONEAREST ) == monitor ) {
+		const UINT dpi = getDpiForWindow( g_wv.hWnd );
+		if ( dpi ) {
+			return dpi;
+		}
+	}
+
+	if ( getDpiForMonitor && monitor &&
+		SUCCEEDED( getDpiForMonitor( monitor, 0, &dpiX, &dpiY ) ) && dpiX ) {
+		return dpiX;
+	}
+	return 96;
+}
+
+
+static void GLW_AdjustWindowRectForMonitor( RECT *rect, DWORD style, DWORD exstyle,
+	HMONITOR monitor )
+{
+	typedef BOOL (WINAPI *adjustWindowRectExForDpi_t)( LPRECT, DWORD, BOOL, DWORD, UINT );
+	static adjustWindowRectExForDpi_t adjustWindowRectExForDpi;
+	static qboolean initialized;
+
+	if ( !initialized ) {
+		HMODULE user32 = GetModuleHandle( TEXT( "user32.dll" ) );
+		adjustWindowRectExForDpi = user32
+			? reinterpret_cast<adjustWindowRectExForDpi_t>(
+				GetProcAddress( user32, "AdjustWindowRectExForDpi" ) )
+			: NULL;
+		initialized = qtrue;
+	}
+
+	if ( adjustWindowRectExForDpi &&
+		adjustWindowRectExForDpi( rect, style, FALSE, exstyle,
+			GLW_GetMonitorDpi( monitor ) ) ) {
+		return;
+	}
+	AdjustWindowRectEx( rect, style, FALSE, exstyle );
+}
+
+
+static void GLW_ConstrainOuterWindowToWorkArea( int *x, int *y, int width, int height )
+{
+	const fnq3::window::Position constrained = fnq3::window::ConstrainClientOrigin(
+		{ *x, *y }, width, height,
+		{ glw_state.workArea.left, glw_state.workArea.top,
+			glw_state.workArea.right - glw_state.workArea.left,
+			glw_state.workArea.bottom - glw_state.workArea.top } );
+	*x = constrained.x;
+	*y = constrained.y;
+}
 
 static rserr_t	GLW_SetMode( int mode, const char *modeFS, int colorbits,
 							 qboolean cdsFullscreen, qboolean vulkan );
@@ -768,7 +843,11 @@ static qboolean GLW_CreateWindow( int width, int height, int colorbits, qboolean
 			} else {
 				stylebits = WINDOW_STYLE_NORMAL;
 			}
-			AdjustWindowRect( &r, stylebits, FALSE );
+			r.left = 0;
+			r.top = 0;
+			r.right = width;
+			r.bottom = height;
+			GLW_AdjustWindowRectForMonitor( &r, stylebits, exstyle, glw_state.hMonitor );
 		}
 
 		w = r.right - r.left;
@@ -790,18 +869,7 @@ static qboolean GLW_CreateWindow( int width, int height, int colorbits, qboolean
 		{
 			x = vid_xpos->integer;
 			y = vid_ypos->integer;
-
-			// adjust window coordinates if necessary 
-			// so that the window is completely on screen
-			if ( w < glw_state.desktopWidth && (x + w) > glw_state.desktopWidth + glw_state.desktopX )
-				x = ( glw_state.desktopWidth + glw_state.desktopX - w );
-			if ( h < glw_state.desktopHeight && (y + h) > glw_state.desktopHeight + glw_state.desktopY )
-				y = ( glw_state.desktopHeight + glw_state.desktopY - h );
-
-			if ( x < glw_state.desktopX )
-				x = glw_state.desktopX;
-			if ( y < glw_state.desktopY )
-				y = glw_state.desktopY;
+			GLW_ConstrainOuterWindowToWorkArea( &x, &y, w, h );
 		}
 
 		stylebits &= ~WS_VISIBLE; // show window only after successive OpenGL/Vulkan initialization
@@ -853,32 +921,33 @@ static qboolean GLW_CreateWindow( int width, int height, int colorbits, qboolean
 			} else {
 				stylebits = WINDOW_STYLE_NORMAL;
 			}
-			AdjustWindowRect( &r, stylebits, FALSE );
+			r.left = 0;
+			r.top = 0;
+			r.right = width;
+			r.bottom = height;
+			GLW_AdjustWindowRectForMonitor( &r, stylebits, exstyle, glw_state.hMonitor );
 
 			w = r.right - r.left;
 			h = r.bottom - r.top;
 
 			x = vid_xpos->integer;
 			y = vid_ypos->integer;
-
-			// adjust window coordinates if necessary
-			// so that the window is completely on screen
-			if ( w < glw_state.desktopWidth && (x + w) > glw_state.desktopWidth + glw_state.desktopX )
-				x = ( glw_state.desktopWidth + glw_state.desktopX - w );
-			if ( h < glw_state.desktopHeight && (y + h) > glw_state.desktopHeight + glw_state.desktopY )
-				y = ( glw_state.desktopHeight + glw_state.desktopY - h );
-
-			if ( x < glw_state.desktopX )
-				x = glw_state.desktopX;
-			if ( y < glw_state.desktopY )
-				y = glw_state.desktopY;
+			GLW_ConstrainOuterWindowToWorkArea( &x, &y, w, h );
 		}
 
 		glw_state.cdsFullscreen = cdsFullscreen;
 
-		SetWindowLong( g_wv.hWnd, GWL_EXSTYLE, exstyle );
-		SetWindowLong( g_wv.hWnd, GWL_STYLE, stylebits );
-		SetWindowPos( g_wv.hWnd, NULL, x, y, w, h, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW );
+		if ( !CL_IsWindowResizeRestart() ) {
+			SetWindowLong( g_wv.hWnd, GWL_EXSTYLE, exstyle );
+			SetWindowLong( g_wv.hWnd, GWL_STYLE, stylebits );
+			SetWindowPos( g_wv.hWnd, NULL, x, y, w, h, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW );
+		} else {
+			GetWindowRect( g_wv.hWnd, &r );
+			x = r.left;
+			y = r.top;
+			w = r.right - r.left;
+			h = r.bottom - r.top;
+		}
 
 		// we must reflect actual drawable dimensions in glconfig
 		GetClientRect( g_wv.hWnd, &r );
@@ -1508,6 +1577,11 @@ static qboolean GLW_StartOpenGL( void )
 void GLimp_Init( glconfig_t *config )
 {
 	Com_Printf( "Initializing OpenGL subsystem\n" );
+	// REF_KEEP_WINDOW skips GLimp_Shutdown. Reinitialize input around the
+	// retained HWND so commands and native devices are never registered twice.
+	if ( g_wv.hWnd ) {
+		IN_Shutdown();
+	}
 
 	// glimp-specific
 
@@ -1669,6 +1743,9 @@ static qboolean GLW_StartVulkan( void )
 void VKimp_Init( glconfig_t *config )
 {
 	Com_Printf( "Initializing Vulkan subsystem\n" );
+	if ( g_wv.hWnd ) {
+		IN_Shutdown();
+	}
 
 	// feedback to renderer configuration
 	glw_state.config = config;

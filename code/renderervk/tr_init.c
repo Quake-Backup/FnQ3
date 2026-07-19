@@ -3634,8 +3634,8 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 			if ( ri.VKimp_Shutdown ) {
 				ri.VKimp_Shutdown( code == REF_UNLOAD_DLL ? qtrue : qfalse );
 			}
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 		}
+		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 #else
 		R_ClearSymTables();
 		Com_Memset( &glState, 0, sizeof( glState ) );
@@ -3644,8 +3644,8 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 			if ( ri.GLimp_Shutdown ) {
 				ri.GLimp_Shutdown( code == REF_UNLOAD_DLL ? qtrue : qfalse );
 			}
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 		}
+		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 #endif
 	}
 

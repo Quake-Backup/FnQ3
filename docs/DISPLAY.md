@@ -8,11 +8,11 @@ For HUD, menu, and cinematic layout on widescreen displays, use the separate [As
 
 `cl_renderer` selects the rendering backend and requires `vid_restart`.
 
-- `cl_renderer opengl`: Legacy OpenGL renderer and current compatibility default.
-- `cl_renderer glx`: Canonical OpenGL-lineage renderer module. Normal modular builds include it, and it preserves the OpenGL display and bloom surface while adding GLx-owned capability tiers, streaming, static-world, material, postprocess, output, and profiling paths.
-- `cl_renderer vulkan`: Modern backend with the same core display path controls for FBO rendering, HDR, multisampling, supersampling, render scaling, shader-based SDR gamma/overbright, and greyscale. Bloom is available here too, but the exposed control set is smaller.
+- `cl_renderer glx`: Default OpenGL-lineage renderer. It provides compatibility tiers, streaming, static-world, material, postprocess, output, and profiling paths.
+- `cl_renderer vk`: Vulkan raster renderer with FBO rendering, HDR, multisampling, supersampling, render scaling, shader-based SDR gamma/overbright, greyscale, and bloom.
+- `cl_renderer rtx`: Vulkan ray-tracing renderer. It requires a ray-tracing-capable Vulkan GPU for full RT mode; see the [RTX Renderer Guide](RTX.md).
 
-Use `glx` for OpenGL-lineage validation, GLx diagnostics, and the renderer path intended for promotion once [GLX_PROMOTION.md](fnquake3/GLX_PROMOTION.md) is green. Use `opengl` when you need the current legacy default for comparison or rollback. If you want the simpler cross-platform path and do not need the OpenGL-only bloom extras, `vulkan` is fine. See [GLX.md](GLX.md) for GLx migration and troubleshooting notes.
+Only `glx`, `vk`, and `rtx` are valid renderer selectors. Use `glx` for the broadest OpenGL compatibility, `vk` for Vulkan rasterization, or `rtx` for the ray-traced path. See [GLX.md](GLX.md) for GLx diagnostics.
 
 ## Display Modes And Window Behavior
 
@@ -80,6 +80,8 @@ The fast path is safe to use unconditionally: if the window cannot be reused —
 These settings control the render path behind the display output.
 
 - `r_fbo`: Enables framebuffer-object rendering. This is the foundation for the modern display path and is required for bloom, motion blur, enhanced liquid refraction, HDR, multisample anti-aliasing, supersampling, greyscale, and arbitrary internal render resolutions.
+- `r_globalFog`: Enables the optional, visual-only per-map fog sidecar layer. It is off by default, requires the framebuffer path, and is latched: use `vid_restart` after changing it.
+- `r_globalFogStrength`: Multiplies the loaded map fog opacity from `0.0` to `1.0`. Default is `1.0`; it can be adjusted live.
 - `r_hdr`: Selects the HDR-capable FBO render pipeline.
   - `0`: Display-referred SDR compatibility path.
   - `1`: High-precision FBO path. With the default legacy tone mapper this preserves Quake III's display-referred lighting; non-legacy tone mapping, color grading, and explicit HDR output use scene-linear color.
@@ -135,11 +137,51 @@ seta r_renderScale "4"
 vid_restart
 ```
 
+## Per-Map Global Fog
+
+Global fog is an optional presentation layer for maps which ship a matching
+ASCII sidecar at `maps/<mapname>.fog`. It is composited from the completed
+scene depth after the map's original authored brush fog, so it gives distant
+geometry a gentle atmospheric falloff without changing the BSP, gameplay,
+demos, networking, VM behavior, or normal Quake III fog volumes.
+
+Enable it with the framebuffer path:
+
+```cfg
+seta r_fbo "1"
+seta r_globalFog "1"
+seta r_globalFogStrength "1.0"
+vid_restart
+```
+
+The renderer looks up the current world basename (for example, `q3dm17` uses
+`maps/q3dm17.fog`) when the map loads. A missing sidecar is silently ignored;
+an invalid one is disabled with a console warning. Map authors can supply
+their own sidecar in a pk3 using this compact format:
+
+```text
+// normalized RGB color
+color 0.58 0.60 0.60
+mode exp2
+density 0.00014
+start 192
+opacity 0.28
+sky 1
+```
+
+`color` and `density` are required. `mode` can be `exp`, `exp2` (the default),
+or `linear`; linear mode additionally requires `end` greater than `start`.
+`opacity` ranges from `0` to `1`, while `sky` decides whether clear-depth sky
+pixels receive the layer. The stock presets deliberately use low-saturation
+colors and restrained density. For the full data contract and renderer
+ordering, see [Fog Rendering](fnquake3/FOG_RENDERING.md).
+
 ## Scene Presentation Controls
 
 These settings affect the rendered scene itself rather than the window mode.
 
 - `r_gamma`: Gamma correction factor. This is one of the first settings to check if the whole frame looks too dark or too washed out.
+- `r_mapOverBrightCap`: Caps normalized baked map lighting after `r_mapOverBrightBits` is applied. It ranges from `0` to `255` and defaults to `255`, which preserves classic behavior; lower values retain the RGB ratio of bright texels while limiting their peak intensity. It is latched, so use `vid_restart` after changing it.
 - `r_tonemap`: Final-pass tone scale for `r_hdr 1`.
   - `0`: Legacy gamma/overbright behavior.
   - `1`: Simple Reinhard, the per-channel `x / (1 + x)` curve. Existing configs that referred to this as `Reinhard` keep the same behavior for this release cycle.
@@ -222,14 +264,14 @@ Classic model shadow controls:
 
 Dynamic-light shadow-map controls:
 
-- `r_dlightShadows`: Enables dynamic-light shadow-map planning, atlas rendering, and filtered sampling. Default is `0`. This is latched, so use `vid_restart` after changing it.
+- `r_dlightShadows`: Enables dynamic-light shadow-map planning, atlas rendering, and filtered sampling. Default is `1`. This is latched, so use `vid_restart` after changing it.
 - `r_dlightShadowFilter`: Selects shadow filtering. Default is `2`.
   - `0`: Hard shadows.
   - `1`: 2x2 PCF.
   - `2`: Four-tap poisson PCF.
 - `r_dlightShadowResolution`: Requested per-face shadow-map resolution. Valid range is `64..1024`, default is `256`. The renderer rounds this down to a power of two and may reduce it to fit the atlas.
 - `r_dlightShadowMaxLights`: Maximum dynamic lights allowed to cast shadows in one view. Default is `4`. Lower values give each light more atlas space; higher values favor coverage over sharpness.
-- `r_dlightShadowStrength`: Controls how strongly shadow-map occlusion dims the dynamic light. Default is `0.6`.
+- `r_dlightShadowStrength`: Controls how strongly shadow-map occlusion dims the dynamic light. Default is `0.95`.
 - `r_dlightShadowBias`: Receiver bias in world units. Default is `4`.
 - `r_dlightShadowCasterDepthBias`: Constant depth bias while rendering shadow casters. Default is `1`.
 - `r_dlightShadowCasterSlopeBias`: Slope-scaled caster depth bias. Default is `1`.
@@ -472,10 +514,10 @@ seta r_bloom_modulate "2"
 seta r_bloom_intensity "0.45"
 ```
 
-OpenGL haze-heavy bloom:
+GLx haze-heavy bloom:
 
 ```cfg
-seta cl_renderer "opengl"
+seta cl_renderer "glx"
 seta r_fbo "1"
 seta r_bloom "1"
 seta r_bloom_threshold "0.55"
@@ -488,10 +530,10 @@ seta r_bloom_filter_size "8"
 vid_restart
 ```
 
-OpenGL HUD-inclusive bloom:
+GLx HUD-inclusive bloom:
 
 ```cfg
-seta cl_renderer "opengl"
+seta cl_renderer "glx"
 seta r_fbo "1"
 seta r_bloom "2"
 seta r_bloom_threshold "0.65"
@@ -499,10 +541,10 @@ seta r_bloom_threshold_mode "2"
 seta r_bloom_intensity "0.35"
 ```
 
-OpenGL lens reflection add-on:
+GLx lens reflection add-on:
 
 ```cfg
-seta cl_renderer "opengl"
+seta cl_renderer "glx"
 seta r_fbo "1"
 seta r_bloom "1"
 seta r_bloom_threshold "0.60"

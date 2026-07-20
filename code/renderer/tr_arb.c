@@ -32,6 +32,8 @@ static GLuint current_fp;
 
 static int programCompiled = 0;
 static int programEnabled	= 0;
+static qboolean globalFogCompositorStateLogged = qfalse;
+static qboolean globalFogCompositorActiveLogged = qfalse;
 static qboolean dlightShadowProgramsCompiled = qfalse;
 static qboolean csmShadowProgramsCompiled = qfalse;
 static qboolean dlightShadowCasterVPCompiled = qfalse;
@@ -1219,11 +1221,12 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 {
 	// one-entry cache: the plan lookups below are linear scans that run twice
 	// per lit batch (program eligibility + program setup) with identical
-	// inputs for every batch of the same light. tess.dlightUpdateParams is
-	// set whenever the light, fog or cull state changes, which covers every
-	// input this function reads (shadow manager and atlas state are constant
-	// across a lit pass).
+	// inputs for every batch of the same light. Keep the cache scoped to the
+	// current frame/view so live shadow cvar changes and a later atlas
+	// publication cannot reuse parameters from an earlier view.
 	static const dlight_t *cachedLight;
+	static int cachedFrameCount = -1;
+	static int cachedViewCount = -1;
 	static qboolean cachedResult;
 	static vec4_t cachedShadow;
 	static vec4_t cachedAtlas;
@@ -1236,7 +1239,9 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 	int atlasWidth;
 	int atlasHeight;
 
-	if ( !tess.dlightUpdateParams && dl == cachedLight ) {
+	if ( !tess.dlightUpdateParams && dl == cachedLight &&
+		cachedFrameCount == backEnd.viewParms.frameCount &&
+		cachedViewCount == tr.shadowManager.viewCount ) {
 		Vector4Copy( cachedShadow, dlightShadow );
 		Vector4Copy( cachedAtlas, shadowAtlas );
 		Vector4Copy( cachedDepth, shadowDepth );
@@ -1278,6 +1283,8 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 	}
 
 	cachedLight = dl;
+	cachedFrameCount = backEnd.viewParms.frameCount;
+	cachedViewCount = tr.shadowManager.viewCount;
 	Vector4Copy( dlightShadow, cachedShadow );
 	Vector4Copy( shadowAtlas, cachedAtlas );
 	Vector4Copy( shadowDepth, cachedDepth );
@@ -2639,6 +2646,54 @@ static const char *worldCelOutlineFP = {
 	"MOV result.color.w, edge.x; \n"
 	"END \n"
 };
+
+/* Screen-space global fog is applied to the resolved scene color using the
+ * copied depth image. It deliberately sits outside BSP fog assignment so
+ * authored brush fog remains a separate compatibility-preserving layer. */
+static const char *globalFogFP = {
+	"!!ARBfp1.0 \n"
+	"OPTION ARB_precision_hint_fastest; \n"
+	"PARAM fogColor = program.local[0]; \n"
+	"PARAM fogParams = program.local[1]; \n"
+	"PARAM depthParams = program.local[2]; \n"
+	"PARAM one = { 1.0, 1.0, 1.0, 1.0 }; \n"
+	"PARAM zero = { 0.0, 0.0, 0.0, 0.0 }; \n"
+	"PARAM expScale = { -1.442695, -1.442695, -1.442695, -1.442695 }; \n"
+	"TEMP base, depth, denom, distance, exponential, linear, modeMask; \n"
+	"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
+	"TEX depth, fragment.texcoord[0], texture[1], 2D; \n"
+	"MAD denom.x, -depth.x, depthParams.z, depthParams.y; \n"
+	"RCP denom.x, denom.x; \n"
+	"MUL distance.x, depthParams.x, depthParams.y; \n"
+	"MUL distance.x, distance.x, denom.x; \n"
+	"SUB distance.x, distance.x, fogParams.x; \n"
+	"MAX distance.x, distance.x, zero.x; \n"
+	"MUL distance.y, distance.x, fogParams.z; \n"
+	"MUL exponential.x, distance.y, expScale.x; \n"
+	"EX2 exponential.x, exponential.x; \n"
+	"SUB exponential.x, one.x, exponential.x; \n"
+	"MUL exponential.y, distance.y, distance.y; \n"
+	"MUL exponential.y, exponential.y, expScale.x; \n"
+	"EX2 exponential.y, exponential.y; \n"
+	"SUB exponential.y, one.x, exponential.y; \n"
+	"SGE modeMask.x, fogParams.w, 0.5; \n"
+	"LRP exponential.x, modeMask.x, exponential.y, exponential.x; \n"
+	"SUB linear.x, fogParams.y, fogParams.x; \n"
+	"RCP linear.y, linear.x; \n"
+	"MUL linear.x, distance.x, linear.y; \n"
+	"MOV_SAT linear.x, linear.x; \n"
+	"SGE modeMask.x, fogParams.w, 1.5; \n"
+	"LRP exponential.x, modeMask.x, linear.x, exponential.x; \n"
+	"MUL exponential.x, exponential.x, fogColor.w; \n"
+	"SGE modeMask.x, depth.x, 0.99999; \n"
+	"SUB modeMask.x, one.x, modeMask.x; \n"
+	"LRP modeMask.x, depthParams.w, one.x, modeMask.x; \n"
+	"MUL exponential.x, exponential.x, modeMask.x; \n"
+	"LRP base.xyz, exponential.x, fogColor, base; \n"
+	"MOV base.w, one.w; \n"
+	"MOV result.color, base; \n"
+	"END \n"
+};
 #endif
 
 qboolean GL_DepthFadeProgramAvailable( void )
@@ -3285,6 +3340,8 @@ static void ARB_DeletePrograms( void )
 	qglDeleteProgramsARB( ARRAY_LEN( programs ) - PROGRAM_BASE, programs + PROGRAM_BASE );
 	Com_Memset( programs, 0, sizeof( programs ) );
 	programCompiled = 0;
+	globalFogCompositorStateLogged = qfalse;
+	globalFogCompositorActiveLogged = qfalse;
 	dlightShadowProgramsCompiled = qfalse;
 	csmShadowProgramsCompiled = qfalse;
 #ifdef USE_FBO
@@ -3430,6 +3487,8 @@ qboolean ARB_UpdatePrograms( void )
 	}
 
 	if ( !ARB_CompileProgram( Fragment, worldCelOutlineFP, programs[ WORLD_CEL_FRAGMENT ] ) )
+		return qfalse;
+	if ( !ARB_CompileProgram( Fragment, globalFogFP, programs[ GLOBAL_FOG_FRAGMENT ] ) )
 		return qfalse;
 	if ( !ARB_CompileProgram( Fragment, ARB_BuildBlurProgram( buf, 7, qfalse, qtrue ), programs[ MOTION_BLUR_FRAGMENT ] ) )
 		return qfalse;
@@ -4813,6 +4872,118 @@ void FBO_DrawWorldCelOutline( void )
 }
 
 
+void FBO_DrawGlobalFog( void )
+{
+	const globalFog_t *fog;
+	const frameBuffer_t *source;
+	const frameBuffer_t *destination;
+	qboolean restore3D;
+	float opacity;
+	float zNear;
+	float zFar;
+	int sourceIndex;
+	int destinationIndex;
+
+	if ( r_globalFog && r_globalFog->integer && tr.world && tr.world->globalFog.loaded &&
+		!globalFogCompositorStateLogged ) {
+		ri.Printf( PRINT_DEVELOPER, "Global fog: compositor state fbo %i depth %i programs %i rdflags 0x%x\n",
+			fboEnabled, FBO_DepthTextureAvailable(), programCompiled, backEnd.refdef.rdflags );
+		globalFogCompositorStateLogged = qtrue;
+	}
+
+	if ( !r_globalFog || !r_globalFog->integer || !r_globalFogStrength ||
+		!tr.world || !tr.world->globalFog.loaded ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		!programCompiled || !FBO_DepthTextureAvailable() ) {
+		return;
+	}
+
+	fog = &tr.world->globalFog;
+	opacity = Com_Clamp( 0.0f, 1.0f, fog->opacity * r_globalFogStrength->value );
+	zNear = r_znear ? r_znear->value : 4.0f;
+	zFar = backEnd.viewParms.zFar;
+	if ( opacity <= 0.0f || zNear <= 0.0f || zFar <= zNear ) {
+		return;
+	}
+
+	if ( !FBO_DepthTextureReady() ) {
+		FBO_CopyDepthTexture();
+	}
+	if ( !FBO_DepthTextureReady() ) {
+		return;
+	}
+	if ( !globalFogCompositorActiveLogged ) {
+		ri.Printf( PRINT_DEVELOPER, "Global fog: compositor active (%s, density %.6f, effective opacity %.3f)\n",
+			fog->mode == GLOBAL_FOG_EXP ? "exp" :
+				( fog->mode == GLOBAL_FOG_EXP2 ? "exp2" : "linear" ),
+			fog->density, opacity );
+		globalFogCompositorActiveLogged = qtrue;
+	}
+	/* The multisample target cannot be sampled directly. Resolve its scene color
+	 * after preserving depth, then use the ordinary ping-pong pair so the fog
+	 * pass never samples from its own color attachment. */
+	if ( frameBufferMultiSampling ) {
+		FBO_BlitMS( qfalse );
+		blitMSfbo = qfalse;
+	}
+
+	sourceIndex = fboReadIndex;
+	if ( sourceIndex < 0 || sourceIndex > 1 ) {
+		return;
+	}
+	destinationIndex = sourceIndex == 0 ? 1 : 0;
+	source = &frameBuffers[ sourceIndex ];
+	destination = &frameBuffers[ destinationIndex ];
+
+	restore3D = !backEnd.projection2D;
+	if ( restore3D ) {
+		qglMatrixMode( GL_PROJECTION );
+		qglPushMatrix();
+		qglMatrixMode( GL_MODELVIEW );
+		qglPushMatrix();
+	}
+
+	RB_SetGL2D();
+	FBO_Bind( GL_FRAMEBUFFER, destination->fbo );
+	GL_Cull( CT_TWO_SIDED );
+	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
+	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	GL_BindTexture( 0, source->color );
+	GL_BindTexture( 1, depthFadeTexture );
+	GL_SelectTexture( 0 );
+	ARB_ProgramEnable( DUMMY_VERTEX, GLOBAL_FOG_FRAGMENT );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0,
+		fog->color[0], fog->color[1], fog->color[2], opacity );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 1,
+		fog->start, fog->end, fog->density, (float)fog->mode );
+	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 2,
+		zNear, zFar, zFar - zNear, fog->sky ? 1.0f : 0.0f );
+	RenderQuad( glConfig.vidWidth, glConfig.vidHeight );
+	ARB_ProgramDisable();
+
+	/* Existing bloom and motion-blur paths consume the resolved primary scene
+	 * buffer. Copy the ping-pong result back there rather than letting the fog
+	 * layer bypass those later visual passes. */
+	if ( destinationIndex != 0 ) {
+		FBO_Bind( GL_READ_FRAMEBUFFER, destination->fbo );
+		FBO_Bind( GL_DRAW_FRAMEBUFFER, frameBuffers[ 0 ].fbo );
+		qglBlitFramebuffer( 0, 0, destination->width, destination->height,
+			0, 0, frameBuffers[ 0 ].width, frameBuffers[ 0 ].height,
+			GL_COLOR_BUFFER_BIT, GL_NEAREST );
+	}
+	FBO_Bind( GL_FRAMEBUFFER, frameBuffers[ 0 ].fbo );
+	fboReadIndex = 0;
+
+	if ( restore3D ) {
+		qglMatrixMode( GL_PROJECTION );
+		qglPopMatrix();
+		qglMatrixMode( GL_MODELVIEW );
+		qglPopMatrix();
+		backEnd.projection2D = qfalse;
+	}
+}
+
+
 static void FBO_Bind( GLuint target, GLuint buffer )
 {
 #if 1
@@ -6131,6 +6302,7 @@ void QGL_InitFBO( void )
 	{
 		frameBufferMultiSampling = qtrue;
 		if ( r_flares->integer || ( r_depthFade && r_depthFade->integer ) ||
+			( r_globalFog && r_globalFog->integer ) ||
 			R_CelShadingWorldActive() )
 			depthStencil = qtrue;
 		else

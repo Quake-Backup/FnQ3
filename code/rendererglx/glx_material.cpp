@@ -91,8 +91,9 @@ static void GLX_Material_KeyName( const MaterialProgramKey &key, char *out, size
 	}
 
 	GLX_Material_FeatureName( key.features, features, sizeof( features ) );
-	std::snprintf( out, outSize, "%s/%s", GLX_Material_ModeName( key.mode ), features );
-	out[outSize - 1] = '\0';
+	Q_strncpyz( out, GLX_Material_ModeName( key.mode ), static_cast<int>( outSize ) );
+	Q_strcat( out, static_cast<int>( outSize ), "/" );
+	Q_strcat( out, static_cast<int>( outSize ), features );
 }
 
 static qboolean GLX_Material_AppendSource( char *out, size_t outSize, size_t *used,

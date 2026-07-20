@@ -3899,11 +3899,26 @@ static const void *RB_DrawSurfs( const void *data ) {
 	// draw main system development information (surface outlines, etc)
 	RB_DebugGraphics();
 
+#ifdef USE_FBO
+	/* Apply the optional sidecar layer after opaque/translucent scene work and
+	 * native BSP fog, but before final bloom/gamma and any later HUD scene. */
+	FBO_DrawGlobalFog();
+#endif
+
 	//TODO Maybe check for rdf_noworld stuff but q3mme has full 3d ui
 	backEnd.doneSurfaces = qtrue; // for bloom
 #ifdef USE_FBO
 	if ( !( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) ) {
 		FBO_MotionBlur();
+	}
+#endif
+#ifdef USE_PMLIGHT
+	if ( !( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) &&
+		( ( r_speeds && r_speeds->integer == 4 ) ||
+			( r_dlightShadowDebug && r_dlightShadowDebug->integer ) ||
+			( r_csmDebug && r_csmDebug->integer ) ||
+			( r_spotShadowDebug && r_spotShadowDebug->integer ) ) ) {
+		backEnd.shadowManagerDebug = tr.shadowManager;
 	}
 #endif
 

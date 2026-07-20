@@ -47,7 +47,7 @@ class LiquidRenderingSourceTests(unittest.TestCase):
 
     def test_liquid_cvar_surface_is_consistent_across_backends(self) -> None:
         expectations = (
-            ('Cvar_Get( "r_liquid", "0", CVAR_ARCHIVE_ND | CVAR_LATCH )',
+            ('Cvar_Get( "r_liquid", "2", CVAR_ARCHIVE_ND | CVAR_LATCH )',
              'Cvar_CheckRange( r_liquid, "0", "2", CV_INTEGER )'),
             ('Cvar_Get( "r_liquidResolution", "1.0", CVAR_ARCHIVE_ND | CVAR_LATCH )',
              'Cvar_CheckRange( r_liquidResolution, "0.25", "1.0", CV_FLOAT )'),

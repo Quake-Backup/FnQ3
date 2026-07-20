@@ -78,6 +78,8 @@ cvar_t	*r_drawSun;
 cvar_t	*r_dynamiclight;
 cvar_t	*r_depthFade;
 cvar_t	*r_fogMode;
+cvar_t	*r_globalFog;
+cvar_t	*r_globalFogStrength;
 cvar_t	*r_celShading;
 cvar_t	*r_celShadingWorld;
 cvar_t	*r_celShadingWorldWidth;
@@ -266,6 +268,7 @@ cvar_t	*r_lodCurveError;
 
 cvar_t	*r_overBrightBits;
 cvar_t	*r_mapOverBrightBits;
+cvar_t	*r_mapOverBrightCap;
 cvar_t	*r_mapGreyScale;
 
 cvar_t	*r_debugSurface;
@@ -2633,6 +2636,9 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_overBrightBits, "Sets the intensity of overall brightness of texture pixels." );
 	r_mapOverBrightBits = ri.Cvar_Get( "r_mapOverBrightBits", "2", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_mapOverBrightBits, "Sets the number of overbright bits baked into all lightmaps and map data." );
+	r_mapOverBrightCap = ri.Cvar_Get( "r_mapOverBrightCap", "255", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_mapOverBrightCap, "0", "255", CV_INTEGER );
+	ri.Cvar_SetDescription( r_mapOverBrightCap, "Caps normalized baked map lighting after overbright adjustment. Lower values preserve RGB ratios while limiting peak brightness." );
 	r_intensity = ri.Cvar_Get( "r_intensity", "1.25", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_intensity, "1", "255", CV_FLOAT );
 	ri.Cvar_SetDescription( r_intensity, "Global texture lighting scale." );
@@ -2724,6 +2730,14 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_fogMode, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_fogMode, "Fog evaluation mode: 0 legacy 256x32 lookup, 1 full-precision analytic. Applies immediately." );
 	ri.Cvar_SetGroup( r_fogMode, CVG_RENDERER );
+	r_globalFog = ri.Cvar_Get( "r_globalFog", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_globalFog, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_globalFog, "Enable optional per-map global fog from maps/<map>.fog. Requires the framebuffer path and vid_restart; never changes BSP fog volumes or gameplay." );
+	ri.Cvar_SetGroup( r_globalFog, CVG_RENDERER );
+	r_globalFogStrength = ri.Cvar_Get( "r_globalFogStrength", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_globalFogStrength, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_globalFogStrength, "Opacity multiplier for maps/<map>.fog global fog. Zero keeps the sidecar loaded but visually disabled." );
+	ri.Cvar_SetGroup( r_globalFogStrength, CVG_RENDERER );
 	r_celShading = ri.Cvar_Get( "r_celShading", "0", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celShading, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_celShading, "Enable cel shading on model entities, including brush models, player models, and the first-person weapon." );
@@ -2769,7 +2783,7 @@ static void R_Register( void )
 #if arm32 || arm64 // RPi4 GL driver have very poor ARB shaders performance...
 	r_dlightMode = ri.Cvar_Get( "r_dlightMode", "0", CVAR_ARCHIVE );
 #else
-	r_dlightMode = ri.Cvar_Get( "r_dlightMode", "1", CVAR_ARCHIVE );
+	r_dlightMode = ri.Cvar_Get( "r_dlightMode", "2", CVAR_ARCHIVE );
 #endif
 	ri.Cvar_CheckRange( r_dlightMode, "0", "2", CV_INTEGER );
 	ri.Cvar_SetDescription( r_dlightMode, "Dynamic light mode:\n 0: VQ3 'fake' dynamic lights\n 1: High-quality per-pixel dynamic lights, slightly faster than VQ3's on modern hardware\n 2: Same as 1 but applies to entity models too" );
@@ -3143,7 +3157,7 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_motionBlurStrength, "Camera-motion blur shutter scale. 0.25 is subtle; higher values increase the directional blur radius." );
 	ri.Cvar_SetGroup( r_motionBlurStrength, CVG_RENDERER );
 
-	r_liquid = ri.Cvar_Get( "r_liquid", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_liquid = ri.Cvar_Get( "r_liquid", "2", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_liquid, "0", "2", CV_INTEGER );
 	ri.Cvar_SetDescription( r_liquid, "Enable warped scene refraction and a Fresnel screen-space reflection for liquids: 0 off, 1 water, 2 water/slime/lava. Requires r_fbo 1 and vid_restart; authored liquid stages remain intact." );
 	ri.Cvar_SetGroup( r_liquid, CVG_RENDERER );
@@ -3355,7 +3369,7 @@ static void R_Register( void )
 	r_flaresFboEnabled = r_flares->integer ? qtrue : qfalse;
 
 #ifdef USE_FBO
-	r_fbo = ri.Cvar_Get( "r_fbo", "0", CVAR_ARCHIVE_ND );
+	r_fbo = ri.Cvar_Get( "r_fbo", "1", CVAR_ARCHIVE_ND );
 	R_MakeCvarInstant( r_fbo );
 	ri.Cvar_SetDescription( r_fbo, "Use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary video size and screenshot/video capture.\n Required for bloom, motion blur, HDR rendering, anti-aliasing and greyscale effects.\n OpenGL 3.0+ required. Applies after the current frame." );
 	ri.Cvar_SetGroup( r_fbo, CVG_RENDERER );
@@ -3536,8 +3550,10 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 			if ( ri.GLimp_Shutdown ) {
 				ri.GLimp_Shutdown( code == REF_UNLOAD_DLL ? qtrue : qfalse );
 			}
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 		}
+		// Retain only the desktop window on REF_KEEP_WINDOW. Discarding mode
+		// feedback makes platform initialization query the live drawable.
+		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 	}
 
 	ri.FreeAll();

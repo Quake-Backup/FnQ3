@@ -26,6 +26,8 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "canvas_geometry.hpp"
+#include "window_resize.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1970,7 +1972,64 @@ we also have to reload the UI and CGame because the renderer
 doesn't know what graphics to reload
 =================
 */
+static fnq3::client::WindowResizeScheduler cl_windowResize;
+static qboolean cl_windowResizeRestart;
+static qboolean cl_windowModeChange;
+
+static void CL_Vid_Restart( refShutdownCode_t shutdownCode );
+
+
+void CL_NotifyWindowResize( int width, int height, qboolean preserveWindow ) {
+	if ( !cls.rendererStarted || cl_windowModeChange || cl_windowResizeRestart ||
+		width < 4 || height < 4 ) {
+		return;
+	}
+
+	cl_windowResize.Notify( static_cast<std::uint32_t>( Sys_Milliseconds() ),
+		width, height, preserveWindow != qfalse );
+}
+
+
+void CL_CompleteWindowResize( void ) {
+	if ( !cl_windowModeChange && !cl_windowResizeRestart ) {
+		cl_windowResize.Complete(
+			static_cast<std::uint32_t>( Sys_Milliseconds() ) );
+	}
+}
+
+
+void CL_CancelWindowResize( void ) {
+	if ( !cl_windowModeChange && !cl_windowResizeRestart ) {
+		cl_windowResize.Reset();
+	}
+}
+
+
+qboolean CL_IsWindowResizeRestart( void ) {
+	return cl_windowResizeRestart;
+}
+
+
+static void CL_CheckWindowResize( void ) {
+	fnq3::client::WindowResizeRequest request;
+
+	if ( gw_minimized || !cl_windowResize.ConsumeIfReady(
+		static_cast<std::uint32_t>( Sys_Milliseconds() ), &request ) ) {
+		return;
+	}
+
+	Cvar_SetIntegerValue( "r_customWidth", request.width );
+	Cvar_SetIntegerValue( "r_customHeight", request.height );
+	Cvar_Set( "r_mode", "-1" );
+
+	cl_windowResizeRestart = qtrue;
+	CL_Vid_Restart( request.preserveWindow ? REF_KEEP_WINDOW : REF_DESTROY_WINDOW );
+	cl_windowResizeRestart = qfalse;
+}
+
+
 static void CL_Vid_Restart( refShutdownCode_t shutdownCode ) {
+	cl_windowResize.Reset();
 
 	// Settings may have changed so stop recording now
 	if ( CL_VideoRecording() )
@@ -2064,6 +2123,7 @@ static void CL_RendererSwitch_f( void ) {
 
 	if ( Cmd_Argc() < 2 || Cmd_Argc() > 3 ) {
 		Com_Printf( "usage: renderer_switch <renderer> [fast|keep_window|full]\n" );
+		Com_Printf( "renderers: glx, vk, rtx\n" );
 		Com_Printf( "current renderer: %s\n", cl_renderer->string );
 		return;
 	}
@@ -3231,6 +3291,8 @@ void CL_Frame( int msec, int realMsec ) {
 		return;
 	}
 
+	CL_CheckWindowResize();
+
 	// save the msec before checking pause
 	cls.realFrametime = realMsec;
 
@@ -3447,8 +3509,13 @@ static void CL_InitRenderer( void ) {
 		CL_InitRef();
 	}
 
+	// Synchronous native resize messages emitted by mode installation are not
+	// user resize requests and must not queue a second restart.
+	cl_windowModeChange = qtrue;
+
 	// this sets up the renderer and calls R_Init
 	re.BeginRegistration( &cls.glconfig );
+	cl_windowModeChange = qfalse;
 
 	// load character sets
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );
@@ -3456,23 +3523,18 @@ static void CL_InitRenderer( void ) {
 	cls.consoleShader = re.RegisterShader( "console" );
 	cls.cursorShader = re.RegisterShaderNoMip( "menu/art/3_cursor2" );
 
-	Con_CheckResize();
-
 	g_console_field_width = ((cls.glconfig.vidWidth / smallchar_width)) - 2;
 	g_consoleField.widthInChars = g_console_field_width;
 
-	// for 640x480 virtualized screen
-	cls.biasY = 0;
-	cls.biasX = 0;
-	if ( cls.glconfig.vidWidth * 480 > cls.glconfig.vidHeight * 640 ) {
-		// wide screen, scale by height
-		cls.scale = cls.glconfig.vidHeight * (1.0/480.0);
-		cls.biasX = 0.5 * ( cls.glconfig.vidWidth - ( cls.glconfig.vidHeight * (640.0/480.0) ) );
-	} else {
-		// no wide screen, scale by width
-		cls.scale = cls.glconfig.vidWidth * (1.0/640.0);
-		cls.biasY = 0.5 * ( cls.glconfig.vidHeight - ( cls.glconfig.vidWidth * (480.0/640) ) );
-	}
+	const fnq3::client::CanvasGeometry canvas =
+		fnq3::client::CalculateCanvasGeometry(
+			cls.glconfig.vidWidth, cls.glconfig.vidHeight );
+	cls.scale = canvas.scale;
+	cls.biasX = canvas.biasX;
+	cls.biasY = canvas.biasY;
+
+	// Console wrapping and centred extents depend on the new canvas transform.
+	Con_CheckResize();
 
 	SCR_Init();
 }
@@ -4036,12 +4098,7 @@ static void CL_ModeList_f( void )
 
 #ifdef USE_RENDERER_DLOPEN
 static bool isValidRenderer( const char *s ) {
-	while ( *s ) {
-		if ( !((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '1' && *s <= '9')) )
-			return false;
-		++s;
-	}
-	return true;
+	return s && ( strcmp( s, "glx" ) == 0 || strcmp( s, "vk" ) == 0 || strcmp( s, "rtx" ) == 0 );
 }
 #endif
 
@@ -4109,9 +4166,9 @@ static void CL_InitGLimp_Cvars( void )
 #ifdef RENDERER_DEFAULT
 	cl_renderer = Cvar_Get( "cl_renderer", XSTRING( RENDERER_DEFAULT ), CVAR_ARCHIVE | CVAR_LATCH );
 #else
-	cl_renderer = Cvar_Get( "cl_renderer", "vulkan", CVAR_ARCHIVE | CVAR_LATCH );
+	cl_renderer = Cvar_Get( "cl_renderer", "glx", CVAR_ARCHIVE | CVAR_LATCH );
 #endif
-	Cvar_SetDescription( cl_renderer, "Sets your desired renderer, requires \\vid_restart." );
+	Cvar_SetDescription( cl_renderer, "Selects glx, vk, or rtx; requires \\vid_restart." );
 
 	if ( !isValidRenderer( cl_renderer->string ) ) {
 		Cvar_ForceReset( "cl_renderer" );
@@ -4130,6 +4187,9 @@ void CL_Init( void ) {
 	cvar_t *cv;
 
 	Com_Printf( "----- Client Initialization -----\n" );
+	cl_windowResize.Reset();
+	cl_windowResizeRestart = qfalse;
+	cl_windowModeChange = qfalse;
 
 	Con_Init();
 
@@ -4414,6 +4474,10 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 	// check whether the client is running at all.
 	if ( !( com_cl_running && com_cl_running->integer ) )
 		return;
+
+	cl_windowResize.Reset();
+	cl_windowResizeRestart = qfalse;
+	cl_windowModeChange = qfalse;
 
 	Com_Printf( "----- Client Shutdown (%s) -----\n", finalmsg );
 

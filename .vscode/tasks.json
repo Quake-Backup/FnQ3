@@ -31,7 +31,7 @@
         "-Target",
         "both",
         "-Renderers",
-        "opengl,glx,vulkan,opengl2",
+        "glx,vk,rtx",
         "-Archive"
       ],
       "problemMatcher": [
@@ -75,9 +75,9 @@
         "--exe",
         "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
         "--renderers",
-        "opengl,glx",
+        "glx,vk",
         "--switch-sequence",
-        "opengl,glx,opengl,glx",
+        "glx,vk,glx,vk",
         "--maps",
         "q3dm1",
         "--profile",

@@ -24,7 +24,7 @@
       "args": [
         "+set",
         "cl_renderer",
-        "vulkan"
+        "vk"
       ],
       "cwd": "${workspaceFolder}\\meson\\build",
       "stopAtEntry": false,

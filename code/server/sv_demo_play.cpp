@@ -94,19 +94,19 @@ The caller must provide a buffer of at least MAX_MSGLEN_BUF bytes.
 */
 static qboolean SV_DemoReadRawMessage( msg_t *msg, byte *buf, int bufSize )
 {
-	int sequence, length;
+	int rawSequence, rawLength;
 
 	// sequence number (4 bytes)
-	if ( FS_Read( &sequence, 4, sv.demoFile ) != 4 ) {
+	if ( FS_Read( &rawSequence, 4, sv.demoFile ) != 4 ) {
 		return qfalse;
 	}
-	sequence = LittleLong( sequence );
+	const int sequence = LittleLong( rawSequence );
 
 	// length (4 bytes); -1 signals end of demo
-	if ( FS_Read( &length, 4, sv.demoFile ) != 4 ) {
+	if ( FS_Read( &rawLength, 4, sv.demoFile ) != 4 ) {
 		return qfalse;
 	}
-	length = LittleLong( length );
+	const int length = LittleLong( rawLength );
 
 	if ( length == -1 ) {
 		return qfalse; // normal EOF terminator

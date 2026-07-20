@@ -39,7 +39,7 @@ class CMakeConfigSourceTests(unittest.TestCase):
             cmake,
         )
 
-    def test_vulkan_module_respects_use_vulkan(self) -> None:
+    def test_vk_and_rtx_modules_have_independent_switches(self) -> None:
         cmake = CMAKE.read_text(encoding="utf-8")
         dynamic_renderers = re.search(
             r"IF\(USE_RENDERER_DLOPEN\)(?P<body>.*?)ELSE\(\)",
@@ -48,26 +48,26 @@ class CMakeConfigSourceTests(unittest.TestCase):
         )
         self.assertIsNotNone(dynamic_renderers)
         assert dynamic_renderers is not None
-        self.assertRegex(
-            dynamic_renderers.group("body"),
-            r"(?s)IF\(USE_VULKAN\).*?ADD_LIBRARY\(\$\{RENDERER_PREFIX\}_vulkan",
-        )
+        body = dynamic_renderers.group("body")
+        self.assertRegex(body, r"(?s)IF\(USE_VK\).*?ADD_LIBRARY\(\$\{RENDERER_PREFIX\}_vk")
+        self.assertRegex(body, r"(?s)IF\(USE_RTX\).*?ADD_LIBRARY\(\$\{RENDERER_PREFIX\}_rtx")
 
     def test_static_renderer_selection_uses_renderer_default(self) -> None:
         cmake = CMAKE.read_text(encoding="utf-8")
 
         self.assertGreaterEqual(
-            cmake.count('ELSEIF(RENDERER_DEFAULT STREQUAL "vulkan")'),
+            cmake.count('ELSEIF(RENDERER_DEFAULT STREQUAL "vk")'),
             2,
         )
-        self.assertNotIn("ELSEIF(USE_VULKAN)", cmake)
+        self.assertIn('IF(RENDERER_DEFAULT STREQUAL "rtx")', cmake)
+        self.assertNotIn("ELSEIF(USE_VK)", cmake)
 
     def test_cmake_rejects_renderer_choices_it_cannot_build(self) -> None:
         cmake = CMAKE.read_text(encoding="utf-8")
 
-        self.assertIn("set(FNQ3_CMAKE_RENDERERS opengl glx vulkan)", cmake)
+        self.assertIn("set(FNQ3_CMAKE_RENDERERS glx vk rtx)", cmake)
         self.assertIn("Unsupported CMake RENDERER_DEFAULT", cmake)
-        self.assertIn("use Meson for opengl2", cmake)
+        self.assertNotIn("opengl2", cmake.lower())
 
 
 if __name__ == "__main__":

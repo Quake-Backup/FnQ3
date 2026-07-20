@@ -1940,7 +1940,7 @@ intptr_t QDECL VM_Call( vm_t *vm, int nargs, int callnum, ... )
 	int i;
 
 	if ( !vm ) {
-		Com_Error( ERR_FATAL, "VM_Call with NULL vm" );
+		Com_Error( ERR_FATAL, "VM_Call with NULL vm (callnum %d)", callnum );
 	}
 
 #ifdef DEBUG

@@ -674,6 +674,9 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 	SV_SetConfigstring( CS_SERVERINFO, Cvar_InfoString( CVAR_SERVERINFO, nullptr ) );
 	cvar_modifiedFlags &= ~CVAR_SERVERINFO;
 
+	// this is a normal map spawn, not demo cinema playback
+	Cvar_Set( "sv_playingDemo", "0" );
+
 	// any media configstring setting now should issue a warning
 	// and any configstring changes should be reliably transmitted
 	// to all clients
@@ -717,6 +720,9 @@ void SV_Init( void )
 	//Cvar_Get ("protocol", va("%i", PROTOCOL_VERSION), CVAR_SERVERINFO | CVAR_ROM);
 	sv_mapname = Cvar_Get ("mapname", "nomap", CVAR_SERVERINFO | CVAR_ROM);
 	Cvar_SetDescription( sv_mapname, "Display the name of the current map being used on a server." );
+	Cvar_SetDescription(
+		Cvar_Get( "sv_playingDemo", "0", CVAR_SERVERINFO | CVAR_ROM ),
+		"Read-only: 1 while the server is replaying a demo (sv_playdemo cinema), 0 otherwise." );
 	sv_privateClients = Cvar_Get( "sv_privateClients", "0", CVAR_SERVERINFO );
 	Cvar_CheckRange( sv_privateClients, "0", va( "%i", MAX_CLIENTS-1 ), CV_INTEGER );
 	Cvar_SetDescription( sv_privateClients, "The number of spots, out of sv_maxclients, reserved for players with the server password (sv_privatePassword)." );
@@ -926,6 +932,7 @@ void SV_Shutdown( const char *finalmsg ) {
 	sv.time = 0;
 
 	Cvar_Set( "sv_running", "0" );
+	Cvar_Set( "sv_playingDemo", "0" );
 
 #ifndef DEDICATED
 	Cvar_Set( "ui_singlePlayerActive", "0" );

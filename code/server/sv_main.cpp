@@ -814,6 +814,7 @@ static void SVC_Info( const netadr_t *from ) {
 	Info_SetValueForKey( infostring.data(), "g_humanplayers", va( "%i", humans ) );
 	Info_SetValueForKey( infostring.data(), "sv_maxclients", va( "%i", sv.maxclients - sv_privateClients->integer ) );
 	Info_SetValueForKey( infostring.data(), "gametype", va( "%i", sv_gametype->integer ) );
+	Info_SetValueForKey( infostring.data(), "playingDemo", va( "%i", sv.demoPlayback ) );
 	Info_SetValueForKey( infostring.data(), "pure", va( "%i", sv.pure ) );
 	Info_SetValueForKey( infostring.data(), "g_needpass", va( "%d", Cvar_VariableIntegerValue( "g_needpass" ) ) );
 	gamedir = Cvar_VariableString( "fs_game" );

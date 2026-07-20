@@ -655,6 +655,7 @@ void SV_SpawnDemoServer( const char *demoName )
 	sv.state = SS_GAME;
 
 	Cvar_Set( "sv_running", "1" );
+	Cvar_Set( "sv_playingDemo", "1" );
 
 	// Read the very first snapshot so sv.time is valid before any client connects.
 	SV_DemoAdvance();

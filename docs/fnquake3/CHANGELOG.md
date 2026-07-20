@@ -25,6 +25,7 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 
 ### Fixes
 - Windowed mode no longer confines the mouse cursor to the window while a menu or the console is open, so the pointer can move to the desktop or another monitor and back seamlessly. The cursor stays locked during actual gameplay. In menus and the console the OS cursor is hidden and the in-game cursor snaps 1:1 to the real pointer position within the window.
+- Fixed a dedicated-server crash (`VM_Call with NULL vm`) triggered by typing any unrecognized console command while `sv_playdemo` demo cinema playback was active. Also added a new read-only `sv_playingDemo` cvar (visible locally and to remote `getinfo`/`getstatus` queries) so it's now possible to tell whether a server is currently replaying a demo.
 
 ### Documentation and Tooling
 - _None yet._

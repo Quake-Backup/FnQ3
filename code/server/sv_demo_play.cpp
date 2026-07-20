@@ -640,6 +640,20 @@ void SV_SpawnDemoServer( const char *demoName )
 	// Publish the mapname so clients see it in the serverinfo.
 	const char *mapname = Info_ValueForKey( sv.configstrings[CS_SERVERINFO], "mapname" );
 	if ( mapname && *mapname ) {
+		// Cinema skips CM_LoadMap (no collision data needed for snapshot replay), so
+		// unlike a normal map spawn this never gets a missing-BSP check for free.
+		// Check for existence only, before committing to playback, so a missing map
+		// aborts cleanly here instead of every connecting client discovering it and
+		// disconnecting individually.
+		fileHandle_t mapFile;
+		if ( FS_FOpenFileRead( va( "maps/%s.bsp", mapname ), &mapFile, qtrue ) < 0 ) {
+			Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: map '%s' referenced by this demo "
+				"was not found (maps/%s.bsp) — clients would be unable to load it and "
+				"disconnect\n", mapname, mapname );
+			SV_Shutdown( "demo cinema init failed" );
+			return;
+		}
+		FS_FCloseFile( mapFile );
 		Cvar_Set( "mapname", mapname );
 	}
 	sv_mapname = Cvar_Get( "mapname", "nomap", CVAR_SERVERINFO | CVAR_ROM );

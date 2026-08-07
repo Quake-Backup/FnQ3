@@ -37,46 +37,66 @@ static int RoundToInt( float value )
 	return static_cast<int>( value + 0.5f );
 }
 
-static float SCR_UpdateMenuDepthOfFieldAmount( bool targetActive )
+// Milliseconds the soft focus takes to reach the strength cl_menuBlur asks for.
+// Snapping straight to full blur reads as a flicker when a menu is toggled, and
+// a slower ramp starts to feel like input lag on the menu itself.
+constexpr int kMenuBlurFadeMsec = 140;
+
+/*
+Ramp the menu soft-focus strength toward whatever the current screen state asks
+for and return the value this frame should be drawn with. The ramp is wall-clock
+paced rather than frame paced, so the pull into focus takes the same time at 60
+and at 250 fps, and a stalled or backgrounded frame cannot jump it.
+*/
+static float SCR_UpdateMenuBlurStrength( bool targetActive )
 {
 	static int previousTime;
-	static float amount;
+	static float strength;
 	float target = 0.0f;
 	int delta;
-	int transitionTime;
 
-	if ( targetActive && cl_menuDepthOfField ) {
-		target = Com_Clamp( 0.0f, 1.0f, cl_menuDepthOfField->value );
+	// Com_Clamp is comparison based, so a non-finite cvar value passes straight
+	// through and latches strength to NaN for the rest of the session: every
+	// later comparison against it is false, so the ramp can never recover even
+	// after the cvar is set back to a sane value.
+	if ( targetActive && cl_menuBlur && cl_menuBlur->value == cl_menuBlur->value ) {
+		target = Com_Clamp( 0.0f, 1.0f, cl_menuBlur->value );
 	}
 
 	delta = previousTime ? cls.realtime - previousTime : 0;
 	previousTime = cls.realtime;
+	// A negative delta is a realtime reset and a very long one is a hitch or a
+	// restored window; neither is elapsed fade time.
 	if ( delta < 0 || delta > 1000 ) {
 		delta = 0;
 	}
 
-	transitionTime = cl_menuDepthOfFieldTime ? cl_menuDepthOfFieldTime->integer : 160;
-	if ( transitionTime <= 0 || delta <= 0 ) {
-		amount = target;
+	if ( delta <= 0 ) {
+		// No elapsed time to spend: hold. Snapping to the target here would
+		// defeat the fade on the stereo second eye, on a zero-millisecond
+		// frame, and on the hitch the clamp above deliberately discards.
 	} else {
-		const float step = static_cast<float>( delta ) / static_cast<float>( transitionTime );
-		if ( amount < target ) {
-			amount += step;
-			if ( amount > target ) {
-				amount = target;
+		// Written out rather than with std::min/std::max: <windows.h> reaches
+		// this translation unit and defines min/max as macros.
+		const float step = static_cast<float>( delta ) /
+			static_cast<float>( kMenuBlurFadeMsec );
+		if ( strength < target ) {
+			strength += step;
+			if ( strength > target ) {
+				strength = target;
 			}
-		} else if ( amount > target ) {
-			amount -= step;
-			if ( amount < target ) {
-				amount = target;
+		} else if ( strength > target ) {
+			strength -= step;
+			if ( strength < target ) {
+				strength = target;
 			}
 		}
 	}
 
-	if ( amount < 0.001f ) {
-		amount = 0.0f;
+	if ( strength < 0.001f ) {
+		strength = 0.0f;
 	}
-	return amount;
+	return strength;
 }
 
 class ScopedRenderColor {
@@ -706,7 +726,7 @@ This will be called twice if rendering in stereo mode
 static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	bool uiFullscreen;
 	bool uiVisible;
-	float menuDepthOfFieldAmount;
+	float menuBlurStrength;
 
 	re.BeginFrame( stereoFrame );
 
@@ -767,10 +787,14 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 		}
 	}
 
-	menuDepthOfFieldAmount = SCR_UpdateMenuDepthOfFieldAmount(
+	// Soften everything drawn so far - the 3D scene and the cgame HUD over it -
+	// so the in-game menu that draws next is the only sharp thing on screen. A
+	// fullscreen menu has no scene behind it to soften, and the connect and
+	// loading screens are not in-game menus.
+	menuBlurStrength = SCR_UpdateMenuBlurStrength(
 		uiVisible && !uiFullscreen && cls.state == CA_ACTIVE );
-	if ( menuDepthOfFieldAmount > 0.0f && re.DrawMenuDepthOfField ) {
-		re.DrawMenuDepthOfField( menuDepthOfFieldAmount );
+	if ( menuBlurStrength > 0.0f && re.DrawMenuBlur ) {
+		re.DrawMenuBlur( menuBlurStrength );
 	}
 
 	// the menu draws next
@@ -778,7 +802,11 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 		VM_Call( uivm, 1, UI_REFRESH, cls.realtime );
 	}
 
-	// console draws next
+	// The console is deliberately not softened.  It is the one layer that
+	// finishes the frame's post-processing itself, and every ordering tried
+	// around that either left it drawing with the descriptor sets bloom's blend
+	// pass had bound - so it did not appear at all - or dimmed the live HUD
+	// underneath it while the request faded out.  See MENU_SOFT_FOCUS.md.
 	Con_DrawConsole ();
 
 	// debug graph can be drawn on top of anything

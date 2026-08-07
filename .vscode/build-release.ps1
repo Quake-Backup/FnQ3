@@ -179,10 +179,10 @@ function Invoke-MesonInstall {
 		[string]$MesonPath,
 		[string]$BuildPath,
 		[string]$SelectedDestDir,
-		[string]$InstallTags = ''
+		[string]$InstallTags = 'runtime'
 	)
 
-	$installArgs = @('install', '-C', $BuildPath, '--no-rebuild')
+	$installArgs = @('install', '-C', $BuildPath, '--no-rebuild', '--skip-subprojects')
 	if ($SelectedDestDir) {
 		$installArgs += @('--destdir', $SelectedDestDir)
 	}

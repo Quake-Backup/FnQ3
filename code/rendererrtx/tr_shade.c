@@ -1223,8 +1223,22 @@ void VK_SetFogParams( vkUniform_t *uniform, int *fogStage )
 
 
 #ifdef USE_PMLIGHT
+static const mapLightDef_t *R_WorldSpotForDlight( const dlight_t *dl )
+{
+	const mapLightDef_t *light;
+
+	if ( !dl || !dl->linear || dl->worldSpotIndex < 0 ||
+		dl->worldSpotIndex >= tr.staticMapLights.count ) {
+		return NULL;
+	}
+
+	light = &tr.staticMapLights.lights[dl->worldSpotIndex];
+	return light->type == MAP_LIGHT_SPOT ? light : NULL;
+}
+
 static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	float radius;
+	const mapLightDef_t *worldSpot;
 
 #ifdef USE_VULKAN
 	if ( !glConfig.deviceSupportsGamma && !vk.fboActive )
@@ -1247,6 +1261,17 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	uniform->dlightFactors[1] = 0.0f;
 	uniform->dlightFactors[2] = 0.0f;
 	uniform->dlightFactors[3] = 0.0f;
+	worldSpot = R_WorldSpotForDlight( dl );
+	if ( worldSpot ) {
+		float outerAngle;
+		float innerAngle;
+
+		outerAngle = Com_Clamp( 1.0f, 179.0f, worldSpot->outerAngle );
+		innerAngle = Com_Clamp( 0.0f, outerAngle, worldSpot->innerAngle );
+		uniform->dlightFactors[1] = 1.0f;
+		uniform->dlightFactors[2] = cosf( innerAngle * (float)M_PI / 180.0f );
+		uniform->dlightFactors[3] = cosf( outerAngle * (float)M_PI / 180.0f );
+	}
 
 	if ( dl->linear )
 	{

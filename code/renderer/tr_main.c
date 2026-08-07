@@ -2103,7 +2103,8 @@ static void R_ShadowManagerCollectStaticSpotCandidates( void )
 {
 	int i;
 
-	if ( !r_staticLights || !r_staticLights->integer ||
+	if ( !r_dlightLoadWorld || !r_dlightLoadWorld->integer || !r_dlightMode ||
+		r_dlightMode->integer != 2 ||
 		!r_staticLightShadows || !r_staticLightShadows->integer ||
 		!tr.staticMapLights.loaded || tr.staticMapLights.parseFailed ) {
 		return;

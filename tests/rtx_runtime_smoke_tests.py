@@ -283,7 +283,7 @@ class RtxRuntimeSmokeGateTests(unittest.TestCase):
                 "r_liquid": "2",
                 "r_globalFog": "1",
                 "r_staticLightDebug": "1",
-                "r_staticLights": "1",
+                "r_dlightLoadWorld": "1",
                 "r_surfaceLightProxies": "1",
                 "r_surfaceLightProxyMaxLights": "16",
                 "r_tonemap": "1",
@@ -331,7 +331,7 @@ class RtxRuntimeSmokeGateTests(unittest.TestCase):
                 self.assertIn('set r_surfaceLightProxyMaxLights "16"', config_text)
                 self.assertIn('set rtx_rt_legacy_color_compat "1"', config_text)
                 self.assertIn('set rtx_rt_raster_reference "0"', config_text)
-                self.assertIn("r_staticLightReload", config_text)
+                self.assertIn("r_dlightReloadWorld", config_text)
                 if run["profile"] == "rt-pipeline":
                     self.assertIn(
                         'set rtx_rt_debug_visualizer "4"',

@@ -725,7 +725,9 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 	if ( !tr.staticMapLights.loaded || tr.staticMapLights.parseFailed || tr.staticMapLights.count <= 0 ) {
 		return;
 	}
-	if ( !r_staticLights || !r_staticLights->integer || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+	if ( !r_dlightLoadWorld || !r_dlightLoadWorld->integer ||
+		!r_dlightMode || r_dlightMode->integer != 2 ||
+		( fd->rdflags & RDF_NOWORLDMODEL ) ) {
 		tr.staticMapLights.skippedDisabledThisFrame = tr.staticMapLights.count;
 		return;
 	}

@@ -14,6 +14,19 @@
       }
     },
     {
+      "name": "weapon_bar",
+      "match": {
+        "shader": "icons/iconw_*",
+        "textLike": 0,
+        "region": { "x": 0.000, "y": 376.000, "w": 640.000, "h": 48.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "center",
+        "y": "middle"
+      }
+    },
+    {
       "name": "mini_scores_flags",
       "match": {
         "shader": "icons/*",

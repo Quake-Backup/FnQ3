@@ -70,7 +70,27 @@ For a scene distance `d = max(viewDistance - start, 0)`, the layer amount is
 `1 - exp(-density * d)` for `exp`, `1 - exp(-(density * d)^2)` for `exp2`, or
 `clamp(d / (end - start), 0, 1)` for `linear`. The amount is multiplied by
 `opacity * r_globalFogStrength` and then mixes the completed scene color toward
-`color`. The checked-in Quake III Arena and Team Arena presets use
+`color`.
+
+`color` is authored as a display-referred value, but the compositor writes into
+the scene colour buffer, which the final output transform still scales by the
+overbright factor and, in scene-linear mode, by the tone-map exposure.
+`R_GlobalFogSceneColor` converts the authored colour into that pre-output
+domain first (linearizing the sRGB value as well when the scene buffer is
+linear-light). Without the conversion an authored mid-grey reaches the display
+at roughly twice its brightness and the layer reads as a uniform wash rather
+than distance fog.
+
+Parsing is bounded by the byte count `FS_ReadFile` returned rather than by a
+NUL terminator, so an embedded NUL or a truncated read cannot widen it past the
+file, and a sidecar over 16 KiB is rejected on its declared size before it is
+allocated. The `0.1` density ceiling is compared through
+`GLOBAL_FOG_DENSITY_MAX`, a casted constant: on 32-bit x86 the x87 unit
+evaluates float expressions at excess precision, and a bare `0.1f` literal
+there keeps a value just below the float the parser stores for an authored
+`0.1`, which rejected the documented maximum.
+
+The checked-in Quake III Arena and Team Arena presets use
 low-saturation colors and deliberately readable densities. The supplied
 profiles use `exp`, with opacity caps keeping the layer atmospheric rather
 than opaque. `q3tourney5` (Fatal Instinct) has no

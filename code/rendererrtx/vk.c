@@ -1,5 +1,6 @@
 #include "tr_local.h"
 #include "vk.h"
+#include "../renderercommon/tr_menu_blur.h"
 
 #if defined( _DEBUG ) || !defined( NDEBUG )
 #define USE_VK_VALIDATION
@@ -309,13 +310,18 @@ typedef struct {
 
 typedef struct {
 	float positionRadius[4];	// xyz + radius
-	float colorType[4];		// rgb + type (0 point, 1 directional)
+	float colorType[4];		// rgb + type (0 point, 1 directional, 2 linear, 3 spot)
 	float directionSoftness[4];	// xyz + softness
 	uint32_t metadata[4];		// light policy flags + reserved
 } rtxRtGpuLight_t;
 
 #define RTX_RT_LIGHT_FLAG_CASTS_SHADOWS ( 1u << 0 )
 #define RTX_RT_LIGHT_FLAG_SHADOW_ONLY ( 1u << 1 )
+
+#define RTX_RT_LIGHT_TYPE_POINT 0.0f
+#define RTX_RT_LIGHT_TYPE_DIRECTIONAL 1.0f
+#define RTX_RT_LIGHT_TYPE_LINEAR 2.0f
+#define RTX_RT_LIGHT_TYPE_SPOT 3.0f
 
 #define RTX_RT_MAX_WORLD_ENTITY_LIGHTS 512
 
@@ -2477,6 +2483,19 @@ static uint32_t vk_rt_append_surface_lights( rtxRtGpuLight_t *lights,
 	return count;
 }
 
+static const mapLightDef_t *vk_rt_world_spot_for_dlight( const dlight_t *dl )
+{
+	const mapLightDef_t *light;
+
+	if ( !dl || !dl->linear || dl->worldSpotIndex < 0 ||
+		dl->worldSpotIndex >= tr.staticMapLights.count ) {
+		return NULL;
+	}
+
+	light = &tr.staticMapLights.lights[dl->worldSpotIndex];
+	return light->type == MAP_LIGHT_SPOT ? light : NULL;
+}
+
 static qboolean vk_rt_update_light_buffer( void )
 {
 	rtxRtGpuLight_t *lights = NULL;
@@ -2536,6 +2555,7 @@ static qboolean vk_rt_update_light_buffer( void )
 	 */
 	for ( i = 0; i < backEnd.refdef.num_dlights && count < gameplayLightLimit; i++ ) {
 		const dlight_t *dl = &backEnd.refdef.dlights[i];
+		const mapLightDef_t *worldSpot = vk_rt_world_spot_for_dlight( dl );
 		rtxRtGpuLight_t *dst;
 		float radius = dl->radius;
 		qboolean shadowOnly = rasterReference;
@@ -2553,10 +2573,29 @@ static qboolean vk_rt_update_light_buffer( void )
 		dst->colorType[0] = dl->color[0];
 		dst->colorType[1] = dl->color[1];
 		dst->colorType[2] = dl->color[2];
-		dst->colorType[3] = dl->linear ? 2.0f : 0.0f;
-		dst->directionSoftness[0] = dl->linear ? dl->origin2[0] : 0.0f;
-		dst->directionSoftness[1] = dl->linear ? dl->origin2[1] : 0.0f;
-		dst->directionSoftness[2] = dl->linear ? dl->origin2[2] : 0.0f;
+		if ( worldSpot ) {
+			floatint_t innerCos;
+			floatint_t outerCos;
+			float innerAngle;
+			float outerAngle;
+
+			outerAngle = Com_Clamp( 1.0f, 179.0f, worldSpot->outerAngle );
+			innerAngle = Com_Clamp( 0.0f, outerAngle, worldSpot->innerAngle );
+			innerCos.f = cosf( innerAngle * (float)M_PI / 180.0f );
+			outerCos.f = cosf( outerAngle * (float)M_PI / 180.0f );
+			dst->colorType[3] = RTX_RT_LIGHT_TYPE_SPOT;
+			dst->directionSoftness[0] = worldSpot->direction[0];
+			dst->directionSoftness[1] = worldSpot->direction[1];
+			dst->directionSoftness[2] = worldSpot->direction[2];
+			dst->metadata[1] = innerCos.u;
+			dst->metadata[2] = outerCos.u;
+		} else {
+			dst->colorType[3] = dl->linear ?
+				RTX_RT_LIGHT_TYPE_LINEAR : RTX_RT_LIGHT_TYPE_POINT;
+			dst->directionSoftness[0] = dl->linear ? dl->origin2[0] : 0.0f;
+			dst->directionSoftness[1] = dl->linear ? dl->origin2[1] : 0.0f;
+			dst->directionSoftness[2] = dl->linear ? dl->origin2[2] : 0.0f;
+		}
 		dst->directionSoftness[3] = vk_rt_shadow_softness();
 		dst->metadata[0] =
 			( dl->castsRtShadows ? RTX_RT_LIGHT_FLAG_CASTS_SHADOWS : 0u ) |
@@ -9258,6 +9297,68 @@ static void vk_create_render_passes( void )
 		SET_OBJECT_NAME( vk.render_pass.global_fog, "render pass - global fog", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
 	}
 
+	if ( vk.fboActive ) {
+		// Menu soft focus. Independent of r_bloom: the effect is gated by the
+		// client's cl_menuBlur, which the renderer cannot consult when it
+		// allocates from the fixed attachment pool, so the pyramid is always
+		// available and costs a few megabytes.
+		Com_Memset( &attachments[0], 0, sizeof( attachments[0] ) );
+		attachments[0].format = vk.color_format;
+		attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;	// fully overwritten
+		attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;		// sampled by the next step
+		attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachments[0].initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		colorRef0.attachment = 0;
+		colorRef0.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		Com_Memset( &subpass, 0, sizeof( subpass ) );
+		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorRef0;
+
+		/* Each pyramid step samples what the previous one wrote, so the
+		 * sample-after-write and write-after-sample pair the fog overlay uses
+		 * is exactly the synchronisation this needs too. */
+		Com_Memset( fogDeps, 0, sizeof( fogDeps ) );
+		fogDeps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+		fogDeps[0].dstSubpass = 0;
+		fogDeps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		fogDeps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		fogDeps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		fogDeps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		fogDeps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+		fogDeps[1].srcSubpass = 0;
+		fogDeps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+		fogDeps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		fogDeps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		fogDeps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		fogDeps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		fogDeps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+		Com_Memset( &desc, 0, sizeof( desc ) );
+		desc.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		desc.attachmentCount = 1;
+		desc.pAttachments = attachments;
+		desc.subpassCount = 1;
+		desc.pSubpasses = &subpass;
+		desc.dependencyCount = 2;
+		desc.pDependencies = fogDeps;
+
+		VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.menu_blur ) );
+		SET_OBJECT_NAME( vk.render_pass.menu_blur, "render pass - menu soft focus", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
+	}
+
 	if ( bloomEnabled ) {
 		// bloom extraction, using resolved/main fbo as a source
 		desc.attachmentCount = 1;
@@ -11745,6 +11846,41 @@ static void vk_update_attachment_descriptors( void ) {
 				qvkUpdateDescriptorSets( vk.device, 1, &desc, 0, NULL );
 			}
 		}
+
+		// menu soft-focus pyramid; the linear filter is what makes the
+		// downsample steps average their source instead of point-picking it.
+		{
+			uint32_t i;
+
+			Com_Memset( &sd, 0, sizeof( sd ) );
+			sd.gl_mag_filter = sd.gl_min_filter = GL_LINEAR;
+			sd.address_mode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+			sd.max_lod_1_0 = qtrue;
+			sd.noAnisotropy = qtrue;
+
+			info.sampler = vk_find_sampler( &sd );
+			info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+			/* vk.color_descriptor follows vk.blitFilter, which is nearest
+			 * unless supersampling is on; the first halving has to average. */
+			if ( vk.menu_blur_source_descriptor != VK_NULL_HANDLE ) {
+				info.imageView = vk.color_image_view;
+				desc.dstSet = vk.menu_blur_source_descriptor;
+				qvkUpdateDescriptorSets( vk.device, 1, &desc, 0, NULL );
+			}
+
+			for ( i = 0; i < VK_NUM_MENU_BLUR_IMAGES; i++ )
+			{
+				if ( vk.menu_blur_image_view[i] == VK_NULL_HANDLE ||
+					vk.menu_blur_descriptor[i] == VK_NULL_HANDLE ) {
+					continue;
+				}
+				info.imageView = vk.menu_blur_image_view[i];
+				desc.dstSet = vk.menu_blur_descriptor[i];
+
+				qvkUpdateDescriptorSets( vk.device, 1, &desc, 0, NULL );
+			}
+		}
 	}
 
 	if ( vk.liquidDepth.image_view && vk.liquidDepth.descriptor ) {
@@ -11845,6 +11981,20 @@ void vk_init_descriptors( void )
 			{
 				VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.bloom_image_descriptor[i] ) );
 			}
+		}
+
+		for ( i = 0; i < VK_NUM_MENU_BLUR_IMAGES; i++ )
+		{
+			if ( vk.menu_blur_image_view[i] == VK_NULL_HANDLE ) {
+				continue;
+			}
+			VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.menu_blur_descriptor[i] ) );
+			SET_OBJECT_NAME( vk.menu_blur_descriptor[i], va( "menu soft focus descriptor %i", i ), VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
+		}
+
+		if ( vk.menu_blur_image_view[0] != VK_NULL_HANDLE ) {
+			VK_CHECK( qvkAllocateDescriptorSets( vk.device, &alloc, &vk.menu_blur_source_descriptor ) );
+			SET_OBJECT_NAME( vk.menu_blur_source_descriptor, "menu soft focus scene descriptor", VK_DEBUG_REPORT_OBJECT_TYPE_DESCRIPTOR_SET_EXT );
 		}
 
 		alloc.descriptorSetCount = 1;
@@ -12316,11 +12466,13 @@ static void vk_create_shader_modules( void )
 	vk.modules.bloom_fs = SHADER_MODULE( bloom_frag_spv );
 	vk.modules.blur_fs = SHADER_MODULE( blur_frag_spv );
 	vk.modules.blend_fs = SHADER_MODULE( blend_frag_spv );
+	vk.modules.menu_blur_fs = SHADER_MODULE( menu_blur_frag_spv );
 	vk.modules.global_fog_fs = SHADER_MODULE( global_fog_frag_spv );
 
 	SET_OBJECT_NAME( vk.modules.bloom_fs, "bloom extraction fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.blur_fs, "gaussian blur fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.blend_fs, "final bloom blend fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
+	SET_OBJECT_NAME( vk.modules.menu_blur_fs, "menu soft focus fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 	SET_OBJECT_NAME( vk.modules.global_fog_fs, "global fog fragment module", VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT );
 
 	vk.modules.gamma_fs = SHADER_MODULE( gamma_frag_spv );
@@ -12612,6 +12764,13 @@ void vk_update_post_process_pipelines( void )
 		if ( vk.capture.image ) {
 			// update capture pipeline
 			vk_create_post_process_pipeline( 3, gls.captureWidth, gls.captureHeight );
+		}
+		if ( vk.render_pass.menu_blur != VK_NULL_HANDLE &&
+			vk.render_pass.post_bloom != VK_NULL_HANDLE &&
+			vk.menu_blur_image_view[0] != VK_NULL_HANDLE ) {
+			vk_create_post_process_pipeline( 6, vk.menu_blur_width[0], vk.menu_blur_height[0] );
+			vk_create_post_process_pipeline( 7, vk.menu_blur_width[1], vk.menu_blur_height[1] );
+			vk_create_post_process_pipeline( 8, glConfig.vidWidth, glConfig.vidHeight );
 		}
 		if ( vk.render_pass.global_fog != VK_NULL_HANDLE ) {
 			vk_create_post_process_pipeline( 4, glConfig.vidWidth, glConfig.vidHeight );
@@ -12968,6 +13127,51 @@ static void vk_create_depth_sample_view( void )
 }
 
 
+/*
+================
+vk_menu_blur_resolve_sizes
+
+Size the soft-focus pyramid for the current render target and report whether it
+is usable. The plan is asked for at full strength because the attachments are
+allocated once, at renderer init, while the strength the client sends varies per
+frame; only the sampling offsets change with strength, never the sizes.
+================
+*/
+static qboolean vk_menu_blur_resolve_sizes( menuBlurPlan_t *plan )
+{
+	if ( !R_MenuBlur_Plan( 1.0f, glConfig.vidWidth, glConfig.vidHeight, plan ) ) {
+		return qfalse;
+	}
+
+	vk.menu_blur_width[0] = plan->halfWidth;
+	vk.menu_blur_height[0] = plan->halfHeight;
+	vk.menu_blur_width[1] = plan->levelWidth;
+	vk.menu_blur_height[1] = plan->levelHeight;
+	vk.menu_blur_width[2] = plan->levelWidth;
+	vk.menu_blur_height[2] = plan->levelHeight;
+
+	return qtrue;
+}
+
+
+static void vk_create_menu_blur_attachments( VkImageUsageFlags usage )
+{
+	menuBlurPlan_t plan;
+	uint32_t i;
+
+	if ( !vk_menu_blur_resolve_sizes( &plan ) ) {
+		return;
+	}
+
+	for ( i = 0; i < VK_NUM_MENU_BLUR_IMAGES; i++ ) {
+		create_color_attachment( vk.menu_blur_width[i], vk.menu_blur_height[i],
+			VK_SAMPLE_COUNT_1_BIT, vk.color_format, usage,
+			&vk.menu_blur_image[i], &vk.menu_blur_image_view[i],
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, qfalse );
+	}
+}
+
+
 static void vk_create_attachments( void )
 {
 	uint32_t i;
@@ -13017,6 +13221,8 @@ static void vk_create_attachments( void )
 				&vk.liquidSnapshot.color_image_view,
 				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, qfalse );
 		}
+
+		vk_create_menu_blur_attachments( usage );
 
 		// screenmap-msaa
 		if ( vk.screenMapSamples > VK_SAMPLE_COUNT_1_BIT ) {
@@ -13162,6 +13368,29 @@ static void vk_create_framebuffers( void )
 			attachments[0] = vk.color_image_view;
 			VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.global_fog ) );
 			SET_OBJECT_NAME( vk.framebuffers.global_fog, "framebuffer - global fog", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
+		}
+
+		if ( vk.render_pass.menu_blur != VK_NULL_HANDLE )
+		{
+			// Menu soft focus. One render pass, three differently sized
+			// framebuffers: render pass compatibility ignores extent.
+			uint32_t n;
+
+			for ( n = 0; n < VK_NUM_MENU_BLUR_IMAGES; n++ )
+			{
+				if ( vk.menu_blur_image_view[n] == VK_NULL_HANDLE ) {
+					continue;
+				}
+
+				desc.renderPass = vk.render_pass.menu_blur;
+				desc.attachmentCount = 1;
+				desc.width = vk.menu_blur_width[n];
+				desc.height = vk.menu_blur_height[n];
+				attachments[0] = vk.menu_blur_image_view[n];
+
+				VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.menu_blur[n] ) );
+				SET_OBJECT_NAME( vk.framebuffers.menu_blur[n], va( "framebuffer - menu soft focus %i", n ), VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
+			}
 		}
 
 		if ( vk.render_pass.liquid_snapshot != VK_NULL_HANDLE &&
@@ -13367,6 +13596,16 @@ static void vk_destroy_framebuffers( void ) {
 	if ( vk.framebuffers.capture != VK_NULL_HANDLE ) {
 		qvkDestroyFramebuffer( vk.device, vk.framebuffers.capture, NULL );
 		vk.framebuffers.capture = VK_NULL_HANDLE;
+	}
+
+	{
+		uint32_t m;
+		for ( m = 0; m < VK_NUM_MENU_BLUR_IMAGES; m++ ) {
+			if ( vk.framebuffers.menu_blur[m] != VK_NULL_HANDLE ) {
+				qvkDestroyFramebuffer( vk.device, vk.framebuffers.menu_blur[m], NULL );
+				vk.framebuffers.menu_blur[m] = VK_NULL_HANDLE;
+			}
+		}
 	}
 
 	if ( vk.framebuffers.global_fog != VK_NULL_HANDLE ) {
@@ -13803,9 +14042,11 @@ void vk_initialize( void )
 		uint32_t i, maxSets;
 
 		pool_size[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		// color, screenmap, fog depth, liquid source/color/depth, the menu
+		// soft-focus pyramid plus its private linear scene view, then bloom
 		pool_size[0].descriptorCount =
-			MAX_DRAWIMAGES + 1 + 1 + 1 + 1 + 3 +
-			VK_NUM_BLOOM_PASSES * 2; // color, screenmap, fog depth, liquid source/color/depth, bloom
+			MAX_DRAWIMAGES + 1 + 1 + 1 + 1 + 3 + VK_NUM_MENU_BLUR_IMAGES + 1 +
+			VK_NUM_BLOOM_PASSES * 2;
 
 		pool_size[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
 		pool_size[1].descriptorCount = NUM_COMMAND_BUFFERS;
@@ -13897,6 +14138,22 @@ static void vk_destroy_attachments( void )
 		}
 	}
 
+	/* The descriptor sets themselves belong to the pool and are freed with it;
+	 * clearing the handles keeps vk_init_descriptors from believing a pyramid
+	 * that failed to reallocate still has one. */
+	for ( i = 0; i < VK_NUM_MENU_BLUR_IMAGES; i++ ) {
+		if ( vk.menu_blur_image[i] != VK_NULL_HANDLE ) {
+			qvkDestroyImage( vk.device, vk.menu_blur_image[i], NULL );
+			qvkDestroyImageView( vk.device, vk.menu_blur_image_view[i], NULL );
+			vk.menu_blur_image[i] = VK_NULL_HANDLE;
+			vk.menu_blur_image_view[i] = VK_NULL_HANDLE;
+		}
+		vk.menu_blur_descriptor[i] = VK_NULL_HANDLE;
+		vk.menu_blur_width[i] = 0;
+		vk.menu_blur_height[i] = 0;
+	}
+	vk.menu_blur_source_descriptor = VK_NULL_HANDLE;
+
 	if ( vk.color_image ) {
 		qvkDestroyImage( vk.device, vk.color_image, NULL );
 		qvkDestroyImageView( vk.device, vk.color_image_view, NULL );
@@ -13987,6 +14244,11 @@ static void vk_destroy_render_passes( void )
 		vk.render_pass.bloom_extract = VK_NULL_HANDLE;
 	}
 
+	if ( vk.render_pass.menu_blur != VK_NULL_HANDLE ) {
+		qvkDestroyRenderPass( vk.device, vk.render_pass.menu_blur, NULL );
+		vk.render_pass.menu_blur = VK_NULL_HANDLE;
+	}
+
 	for ( i = 0; i < ARRAY_LEN( vk.render_pass.blur ); i++ ) {
 		if ( vk.render_pass.blur[i] != VK_NULL_HANDLE ) {
 			qvkDestroyRenderPass( vk.device, vk.render_pass.blur[i], NULL );
@@ -14055,6 +14317,21 @@ static void vk_destroy_pipelines( qboolean resetCounter )
 	if ( vk.capture_pipeline ) {
 		qvkDestroyPipeline( vk.device, vk.capture_pipeline, NULL );
 		vk.capture_pipeline = VK_NULL_HANDLE;
+	}
+
+	if ( vk.menu_blur_half_pipeline != VK_NULL_HANDLE ) {
+		qvkDestroyPipeline( vk.device, vk.menu_blur_half_pipeline, NULL );
+		vk.menu_blur_half_pipeline = VK_NULL_HANDLE;
+	}
+
+	if ( vk.menu_blur_level_pipeline != VK_NULL_HANDLE ) {
+		qvkDestroyPipeline( vk.device, vk.menu_blur_level_pipeline, NULL );
+		vk.menu_blur_level_pipeline = VK_NULL_HANDLE;
+	}
+
+	if ( vk.menu_blur_composite_pipeline != VK_NULL_HANDLE ) {
+		qvkDestroyPipeline( vk.device, vk.menu_blur_composite_pipeline, NULL );
+		vk.menu_blur_composite_pipeline = VK_NULL_HANDLE;
 	}
 
 	if ( vk.bloom_extract_pipeline != VK_NULL_HANDLE ) {
@@ -14212,6 +14489,8 @@ void vk_shutdown( refShutdownCode_t code )
 	qvkDestroyShaderModule(vk.device, vk.modules.bloom_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.blur_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.blend_fs, NULL);
+	qvkDestroyShaderModule(vk.device, vk.modules.menu_blur_fs, NULL);
+	vk.modules.menu_blur_fs = VK_NULL_HANDLE;
 	qvkDestroyShaderModule(vk.device, vk.modules.global_fog_fs, NULL);
 	vk.modules.global_fog_fs = VK_NULL_HANDLE;
 
@@ -14820,6 +15099,36 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 			pipeline_name = "liquid scene snapshot pipeline";
 			blend = qfalse;
 			break;
+		case 6: // menu soft focus: full frame down to the half-resolution step
+			pipeline = &vk.menu_blur_half_pipeline;
+			fsmodule = vk.modules.menu_blur_fs;
+			renderpass = vk.render_pass.menu_blur;
+			layout = vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_POST_PROCESS );
+			samples = VK_SAMPLE_COUNT_1_BIT;
+			pipeline_name = "menu soft focus halve pipeline";
+			blend = qfalse;
+			break;
+		case 7: // menu soft focus: the downsample into, and every iteration at,
+		        // the pyramid level, which all share one target size
+			pipeline = &vk.menu_blur_level_pipeline;
+			fsmodule = vk.modules.menu_blur_fs;
+			renderpass = vk.render_pass.menu_blur;
+			layout = vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_POST_PROCESS );
+			samples = VK_SAMPLE_COUNT_1_BIT;
+			pipeline_name = "menu soft focus level pipeline";
+			blend = qfalse;
+			break;
+		case 8: // menu soft focus: composite the softened copy over the frame.
+		        // post_bloom is this backend's load-op-LOAD view of the main
+		        // framebuffer, the same target the fog overlay resumes into.
+			pipeline = &vk.menu_blur_composite_pipeline;
+			fsmodule = vk.modules.menu_blur_fs;
+			renderpass = vk.render_pass.post_bloom;
+			layout = vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_POST_PROCESS );
+			samples = vkSamples;
+			pipeline_name = "menu soft focus composite pipeline";
+			blend = qtrue;
+			break;
 		default: // gamma correction
 			pipeline = &vk.gamma_pipeline;
 			fsmodule = vk.modules.gamma_fs;
@@ -14935,7 +15244,8 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	frag_spec_info.pData = &frag_spec_data;
 
 	shader_stages[1].pSpecializationInfo =
-		( program_index == 4 || program_index == 5 ) ?
+		( program_index == 4 || program_index == 5 ||
+		  program_index == 6 || program_index == 7 || program_index == 8 ) ?
 			NULL : &frag_spec_info;
 
 	//
@@ -15012,7 +15322,7 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	attachment_blend_state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 	if ( blend ) {
 		attachment_blend_state.blendEnable = VK_TRUE;
-		if ( program_index == 4 ) {
+		if ( program_index == 4 || program_index == 8 ) {
 			attachment_blend_state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
 			attachment_blend_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 			attachment_blend_state.colorBlendOp = VK_BLEND_OP_ADD;
@@ -17287,7 +17597,10 @@ void vk_draw_global_fog( void )
 	const globalFog_t *fog = tr.world ? &tr.world->globalFog : NULL;
 	VkImageAspectFlags depthAspects = VK_IMAGE_ASPECT_DEPTH_BIT;
 	float constants[12];
+	qboolean sceneLinear;
+	vec3_t sceneColor;
 	float opacity;
+	float outputScale;
 	float zNear;
 	float zFar;
 
@@ -17318,9 +17631,18 @@ void vk_draw_global_fog( void )
 		return;
 	}
 
-	constants[0] = fog->color[0];
-	constants[1] = fog->color[1];
-	constants[2] = fog->color[2];
+	/* Match the gamma pipeline's obScale/tone-map exposure so the authored
+	 * color survives the output transform unchanged. */
+	sceneLinear = ( r_hdr && r_hdr->integer > 0 ) ? qtrue : qfalse;
+	outputScale = (float)( 1 << tr.overbrightBits );
+	if ( sceneLinear && r_tonemapExposure ) {
+		outputScale *= Com_Clamp( 0.1f, 8.0f, r_tonemapExposure->value );
+	}
+	R_GlobalFogSceneColor( fog, outputScale, sceneLinear, sceneColor );
+
+	constants[0] = sceneColor[0];
+	constants[1] = sceneColor[1];
+	constants[2] = sceneColor[2];
 	constants[3] = opacity;
 	constants[4] = fog->start;
 	constants[5] = fog->end;
@@ -17992,6 +18314,187 @@ void vk_read_pixels( byte *buffer, uint32_t width, uint32_t height )
 
 		end_command_buffer( command_buffer, "restore layout" );
 	}
+}
+
+
+/*
+====================
+vk_menu_blur
+
+Replace the finished frame with a soft-focus copy of itself, so the in-game menu
+drawn after this command is the only sharp thing on screen. See
+renderercommon/tr_menu_blur.h for the sampling plan; this is its RTX backend and
+it mirrors the Vulkan raster one.
+
+The whole effect runs through one fragment shader. Its tap offset is a push
+constant, so a zero offset turns the same pipeline into the plain bilinear
+resample the two downsample steps and the composite want, and the pyramid needs
+no copy shader of its own.
+====================
+*/
+static void vk_menu_blur_decline( const char *reason )
+{
+	static const char *lastReason;
+
+	if ( lastReason == reason ) {
+		return;
+	}
+	lastReason = reason;
+	// An in-game menu that stays sharp is indistinguishable from the effect
+	// being switched off, so say why rather than failing silently.
+	ri.Printf( PRINT_DEVELOPER, "Menu soft focus unavailable: %s\n", reason );
+}
+
+
+static void vk_menu_blur_draw( VkPipeline pipeline, VkDescriptorSet source,
+	float offsetX, float offsetY, float alpha )
+{
+	const VkPipelineLayout layout =
+		vk_pipeline_layout_handle( RTX_VK_PIPELINE_LAYOUT_POST_PROCESS );
+	float constants[4];
+
+	constants[0] = offsetX;
+	constants[1] = offsetY;
+	constants[2] = alpha;
+	constants[3] = 0.0f;
+
+	qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline );
+	qvkCmdPushConstants( vk.cmd->command_buffer, layout,
+		VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof( constants ), constants );
+	qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+		layout, 0, 1, &source, 0, NULL );
+	qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
+}
+
+
+static void vk_menu_blur_begin_level( uint32_t index )
+{
+	vk.renderWidth = vk.menu_blur_width[index];
+	vk.renderHeight = vk.menu_blur_height[index];
+	vk.renderScaleX = vk.renderScaleY = 1.0f;
+
+	vk_begin_render_pass( vk.render_pass.menu_blur, vk.framebuffers.menu_blur[index],
+		qfalse, vk.renderWidth, vk.renderHeight );
+}
+
+
+qboolean vk_menu_blur( float strength )
+{
+	menuBlurPlan_t plan;
+	uint32_t i;
+
+	if ( !R_MenuBlur_Plan( strength, glConfig.vidWidth, glConfig.vidHeight, &plan ) ) {
+		return qfalse;
+	}
+	if ( !vk.fboActive ) {
+		vk_menu_blur_decline( "the framebuffer post-processing path is not active" );
+		return qfalse;
+	}
+	if ( ri.CL_IsMinimized() ) {
+		return qfalse;
+	}
+	/* Test frame liveness, not vk.renderPassIndex alone.  That index is sticky
+	 * state rather than a recording flag: vk_end_render_pass deliberately leaves
+	 * it set, and vk_end_frame re-arms it after qvkEndCommandBuffer and
+	 * qvkQueueSubmit.  A mid-client-frame drain - the one level of re-entrant
+	 * SCR_UpdateScreen the client permits, or R_IssuePendingRenderCommands -
+	 * leaves the index reading MAIN with the frame already submitted, and ending
+	 * a render pass on that dead command buffer faults the device inside the ICD.
+	 *
+	 * POST_BLOOM is accepted alongside MAIN because the global fog overlay
+	 * leaves the frame in that pass, exactly as vk_draw_global_fog itself does. */
+	if ( vk.frame_count == 0 ||
+		( vk.renderPassIndex != RENDER_PASS_MAIN &&
+		  vk.renderPassIndex != RENDER_PASS_POST_BLOOM ) ) {
+		vk_menu_blur_decline( "no scene render pass is open on this frame" );
+		return qfalse;
+	}
+	/* The composite resumes through post_bloom, this backend's load-op-LOAD view
+	 * of the main framebuffer.  Re-beginning render_pass.main instead would
+	 * clear the frame the effect is supposed to soften. */
+	if ( vk.render_pass.menu_blur == VK_NULL_HANDLE ||
+		vk.render_pass.post_bloom == VK_NULL_HANDLE ||
+		vk.menu_blur_half_pipeline == VK_NULL_HANDLE ||
+		vk.menu_blur_level_pipeline == VK_NULL_HANDLE ||
+		vk.menu_blur_composite_pipeline == VK_NULL_HANDLE ) {
+		vk_menu_blur_decline( "the soft-focus pipelines were not created" );
+		return qfalse;
+	}
+	for ( i = 0; i < VK_NUM_MENU_BLUR_IMAGES; i++ ) {
+		if ( vk.framebuffers.menu_blur[i] == VK_NULL_HANDLE ||
+			vk.menu_blur_descriptor[i] == VK_NULL_HANDLE ) {
+			vk_menu_blur_decline( "the soft-focus pyramid was not allocated" );
+			return qfalse;
+		}
+	}
+	if ( vk.menu_blur_source_descriptor == VK_NULL_HANDLE ) {
+		vk_menu_blur_decline( "the soft-focus pyramid was not allocated" );
+		return qfalse;
+	}
+	/* The pipelines bake in their viewport, so a plan that no longer matches the
+	 * allocated pyramid would render into the wrong part of the target. */
+	if ( plan.halfWidth != (int)vk.menu_blur_width[0] ||
+		plan.halfHeight != (int)vk.menu_blur_height[0] ||
+		plan.levelWidth != (int)vk.menu_blur_width[1] ||
+		plan.levelHeight != (int)vk.menu_blur_height[1] ) {
+		vk_menu_blur_decline( "the soft-focus pyramid does not match the render target" );
+		return qfalse;
+	}
+
+	vk_end_render_pass(); // end main
+
+	/* Two exact halvings with the linear sampler, which averages the four
+	 * source texels a 2:1 reduction lands between. One 4:1 step would keep one
+	 * texel in four and make the backdrop crawl as the scene animates. */
+	vk_menu_blur_begin_level( 0 );
+	vk_menu_blur_draw( vk.menu_blur_half_pipeline, vk.menu_blur_source_descriptor, 0.0f, 0.0f, 1.0f );
+	vk_end_render_pass();
+
+	vk_menu_blur_begin_level( 1 );
+	vk_menu_blur_draw( vk.menu_blur_level_pipeline, vk.menu_blur_descriptor[0], 0.0f, 0.0f, 1.0f );
+	vk_end_render_pass();
+
+	/* Separable iterations ping-pong between [1] and [2] and end back in [1]. */
+	for ( i = 0; i < (uint32_t)plan.passCount; i++ ) {
+		const float spacing = R_MenuBlur_TapSpacing( plan.passSigma[i],
+			MENU_BLUR_KERNEL_VARIANCE_LINEAR3 ) * MENU_BLUR_LINEAR3_TAP;
+
+		vk_menu_blur_begin_level( 2 );
+		vk_menu_blur_draw( vk.menu_blur_level_pipeline, vk.menu_blur_descriptor[1],
+			spacing / (float)plan.levelWidth, 0.0f, 1.0f );
+		vk_end_render_pass();
+
+		vk_menu_blur_begin_level( 1 );
+		vk_menu_blur_draw( vk.menu_blur_level_pipeline, vk.menu_blur_descriptor[2],
+			0.0f, spacing / (float)plan.levelHeight, 1.0f );
+		vk_end_render_pass();
+	}
+
+	/* Composite back over the sharp frame. The upsample is the level texture's
+	 * bilinear filter, which is all the reconstruction a blur this wide needs. */
+	vk_begin_post_bloom_render_pass();
+	vk_menu_blur_draw( vk.menu_blur_composite_pipeline, vk.menu_blur_descriptor[1],
+		0.0f, 0.0f, plan.alpha );
+
+	/* Direct post-process binds bypass the normal descriptor/pipeline caches.
+	 * The null pipeline is load bearing: vk_menu_blur_draw binds descriptor set
+	 * 0 through the post-process layout, and binding through a layout
+	 * incompatible with the material layout disturbs the sets bound for it.
+	 * Nulling the cache is what forces the next draw to rebind them. */
+	vk.cmd->last_pipeline = VK_NULL_HANDLE;
+	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
+	vk.cmd->descriptor_set.start = 0;
+	vk.cmd->descriptor_set.end = VK_DESC_COUNT - 1;
+	Com_Memset( &vk.cmd->scissor_rect, 0xff, sizeof( vk.cmd->scissor_rect ) );
+
+	/* The same incompatibility leaves the MVP push constant undefined, and
+	 * unlike every other post-process detour in this file this one runs while
+	 * backEnd.projection2D is already set - so the next RB_StretchPic skips
+	 * RB_SetGL2D and nothing re-pushes it.  Every 2D draw after the composite
+	 * would otherwise be transformed by undefined values. */
+	vk_update_mvp( NULL );
+
+	return qtrue;
 }
 
 

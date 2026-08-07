@@ -67,8 +67,11 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
 
     require(light_object, "light->castsShadows = qtrue;", f"{label} shadow default", failures)
     require(light_object, "light->designerPriority = 1.0f;", f"{label} priority default", failures)
-    require(light_object, "light->resolution = 256;", f"{label} resolution default", failures)
-    require(light_object, "light->outerAngle = 45.0f;", f"{label} outer angle default", failures)
+    require(light_object, "light->radius = WORLD_DLIGHT_DEFAULT_RADIUS;", f"{label} radius default", failures)
+    require(light_object, "light->intensity = WORLD_DLIGHT_DEFAULT_INTENSITY;", f"{label} intensity default", failures)
+    require(light_object, "light->resolution = WORLD_DLIGHT_DEFAULT_SHADOW_RESOLUTION;", f"{label} resolution default", failures)
+    require(light_object, "light->innerAngle = WORLD_DLIGHT_DEFAULT_INNER_ANGLE;", f"{label} inner angle default", failures)
+    require(light_object, "light->outerAngle = WORLD_DLIGHT_DEFAULT_OUTER_ANGLE;", f"{label} outer angle default", failures)
     require(light_object, "unsupportedType = qtrue;", f"{label} unsupported type flag", failures)
     require(light_object, "*skipReason = 1;", f"{label} unsupported skip reason", failures)
     require(light_object, "*skipReason = 2;", f"{label} invalid skip reason", failures)
@@ -116,7 +119,9 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
     require(loader, "tr.staticMapLights.loaded = qtrue;", f"{label} loaded flag before parse", failures)
     require(loader, "tr.staticMapLights.parseFailed = qtrue;", f"{label} parse-failed flag", failures)
     require(loader, "tr.staticMapLights.count = 0;", f"{label} parse-failed count reset", failures)
-    require(loader, "WARNING: failed to parse static map lights file %s", f"{label} parse warning", failures)
+    require(loader, "WORLD_DLIGHT_FILE_EXTENSION", f"{label} world dlight filename", failures)
+    require(loader, "WORLD_DLIGHT_LEGACY_FILE_EXTENSION", f"{label} legacy filename fallback", failures)
+    require(loader, "WARNING: failed to parse world dlight file %s", f"{label} parse warning", failures)
 
 
 def main() -> int:

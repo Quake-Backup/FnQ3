@@ -2258,7 +2258,8 @@ static qboolean FS_RootArchiveAllowsMapSidecar( const char *qpath )
 	}
 
 	return COM_CompareExtension( qpath, ".azb" ) ||
-		COM_CompareExtension( qpath, ".fog" );
+		COM_CompareExtension( qpath, ".fog" ) ||
+		COM_CompareExtension( qpath, ".dlight" );
 }
 
 

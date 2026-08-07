@@ -75,15 +75,25 @@ jobs:
 
       - name: Stamp release build version
         shell: msys2 {0}
-        run: python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+        run: |
+          python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+          python scripts/generate_docs.py
 
+      # --wrap-mode=forcefallback and -static together are what make the package
+      # self-contained. The release stages no runtime libraries, so a dependency
+      # resolved against something the MSYS2 runner happens to have installed
+      # becomes a DLL the player does not have; the MinGW C/C++ runtimes are in
+      # the same position. The dependency check below is the backstop.
       - name: Build
         shell: msys2 {0}
         run: |
           mkdir -p bin
           meson setup meson/build-${{ matrix.arch }} \
             --buildtype=release \
+            --wrap-mode=forcefallback \
             --prefix "$PWD/bin" \
+            -Dc_link_args=-static \
+            -Dcpp_link_args=-static \
             -Dcurl=enabled \
             -Dcurl-dlopen=false \
             -Dsdl=disabled \
@@ -94,11 +104,15 @@ jobs:
             -Dglx-tests=false \
             -Dlibjpeg-turbo:simd=disabled
           meson compile -C meson/build-${{ matrix.arch }}
-          meson install -C meson/build-${{ matrix.arch }} --no-rebuild
+          meson install -C meson/build-${{ matrix.arch }} --no-rebuild --tags runtime --skip-subprojects
 
       - name: Verify release layout
         shell: msys2 {0}
         run: python scripts/verify_release_layout.py bin
+
+      - name: Verify runtime dependencies
+        shell: msys2 {0}
+        run: python scripts/check_windows_dll_deps.py bin
 
       - uses: actions/upload-artifact@v7
         with:
@@ -135,11 +149,17 @@ jobs:
           submodules: recursive
 
       - name: Stamp release build version
-        run: python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+        run: |
+          python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+          python scripts/generate_docs.py
 
       - name: Install Meson
         run: python -m pip install meson ninja
 
+      # --wrap-mode=forcefallback keeps a runner-installed library from being
+      # linked into a package that ships no runtime libraries, and the static
+      # CRT removes the Visual C++ redistributable from the player's side of
+      # the deal. The dependency check below is the backstop.
       - name: Build
         shell: cmd
         run: |
@@ -148,15 +168,18 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=${{ matrix.vs_arch }} -host_arch=x64 || exit /b
           if /I "${{ matrix.arch }}"=="arm64" (
-            meson setup meson\build-${{ matrix.arch }} --cross-file scripts\windows-arm64-cross.ini --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+            meson setup meson\build-${{ matrix.arch }} --cross-file scripts\windows-arm64-cross.ini --buildtype=release --wrap-mode=forcefallback --prefix "%CD%\bin" -Db_vscrt=static_from_buildtype -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           ) else (
-            meson setup meson\build-${{ matrix.arch }} --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+            meson setup meson\build-${{ matrix.arch }} --buildtype=release --wrap-mode=forcefallback --prefix "%CD%\bin" -Db_vscrt=static_from_buildtype -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           )
           meson compile -C meson\build-${{ matrix.arch }} || exit /b
-          meson install -C meson\build-${{ matrix.arch }} --no-rebuild || exit /b
+          meson install -C meson\build-${{ matrix.arch }} --no-rebuild --tags runtime --skip-subprojects || exit /b
 
       - name: Verify release layout
         run: python scripts/verify_release_layout.py bin
+
+      - name: Verify runtime dependencies
+        run: python scripts/check_windows_dll_deps.py bin
 
       - uses: actions/upload-artifact@v7
         with:
@@ -397,8 +420,13 @@ jobs:
       - name: Fetch tags
         run: git fetch --force --tags origin
 
+      # release.py ships .install/README.html, which is generated from the
+      # stamped version, so it has to be re-rendered after stamping or the
+      # package documents the previous build number.
       - name: Stamp release build version
-        run: python scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+        run: |
+          python scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+          python scripts/generate_docs.py
 
       - name: Download artifacts
         uses: actions/download-artifact@v8

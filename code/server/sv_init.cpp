@@ -279,7 +279,7 @@ static void SV_AllocClients( int count )
 	svs.clients = SV_ZTagMallocArray<client_t>( count, TAG_CLIENTS );
 	sv.maxclients = count;
 	for ( client_t &client : SV_Clients() ) {
-		client = {};
+		Com_Memset( &client, 0, sizeof( client ) );
 	}
 	SV_SetSnapshotParams();
 }
@@ -360,7 +360,7 @@ void SV_ChangeMaxClients( void ) {
 		if ( slot.client.state >= CS_CONNECTED ) {
 			oldClients[slot.index] = slot.client;
 		} else {
-			oldClients[slot.index] = {};
+			Com_Memset( &oldClients[slot.index], 0, sizeof( oldClients[slot.index] ) );
 		}
 	}
 
@@ -394,10 +394,10 @@ void SV_ClearServer( void ) {
 
 	if ( !sv_levelTimeReset->integer ) {
 		const int preservedTime = sv.time;
-		sv = {};
+		Com_Memset( &sv, 0, sizeof( sv ) );
 		sv.time = preservedTime;
 	} else {
-		sv = {};
+		Com_Memset( &sv, 0, sizeof( sv ) );
 	}
 }
 
@@ -922,7 +922,9 @@ void SV_Shutdown( const char *finalmsg ) {
 
 		SV_ZFree( svs.clients );
 	}
-	svs = {};
+	// serverStatic_t contains the shared snapshot frame store. Clear the global
+	// directly rather than creating a multi-megabyte temporary on the stack.
+	Com_Memset( &svs, 0, sizeof( svs ) );
 	sv.time = 0;
 
 	Cvar_Set( "sv_running", "0" );

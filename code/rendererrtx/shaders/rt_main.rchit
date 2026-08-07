@@ -444,6 +444,9 @@ void main()
 	for (uint lightIndex = 0u; lightIndex < pc.lightCount; lightIndex++) {
 		RtLight light = u_lights.lights[lightIndex];
 		vec3 lightColor = max(light.colorType.rgb, vec3(0.0));
+		bool directionalLight = light.colorType.w > 0.5 && light.colorType.w < 1.5;
+		bool linearLight = light.colorType.w >= 1.5 && light.colorType.w < 2.5;
+		bool spotLight = light.colorType.w >= 2.5 && light.colorType.w < 3.5;
 		vec3 L;
 		float radianceScale = 1.0;
 		float maxT = 100000.0;
@@ -454,12 +457,12 @@ void main()
 		bool shadowOnly =
 			(light.metadata.x & RTX_RT_LIGHT_FLAG_SHADOW_ONLY) != 0u;
 
-		if (light.colorType.w > 0.5 && light.colorType.w < 1.5) {
+		if (directionalLight) {
 			/* tr.sunDirection points from the world toward the visible sun. */
 			L = normalize(light.directionSoftness.xyz);
 		} else {
 			vec3 lightPosition = light.positionRadius.xyz;
-			if (light.colorType.w >= 1.5) {
+			if (linearLight) {
 				vec3 segment = light.directionSoftness.xyz - light.positionRadius.xyz;
 				float segmentLengthSquared = dot(segment, segment);
 				if (segmentLengthSquared > 1e-6) {
@@ -483,6 +486,25 @@ void main()
 				float falloff = edge * edge;
 				float distAtten = 1.0 / (1.0 + (dist * dist) * (invRadius * invRadius) * 2.0);
 				radianceScale = falloff * distAtten;
+			}
+			if (spotLight) {
+				vec3 lightToFragment = -toLight / dist;
+				vec3 spotDirection = normalize(light.directionSoftness.xyz);
+				float innerCos = uintBitsToFloat(light.metadata.y);
+				float outerCos = uintBitsToFloat(light.metadata.z);
+				float coneFactor;
+
+				innerCos = clamp(innerCos, -1.0, 1.0);
+				outerCos = clamp(outerCos, -1.0, 1.0);
+				innerCos = max(innerCos, outerCos + 0.00001);
+				coneFactor = smoothstep(
+					outerCos,
+					innerCos,
+					dot(lightToFragment, spotDirection));
+				if (coneFactor <= 0.0) {
+					continue;
+				}
+				radianceScale *= coneFactor;
 			}
 			maxT = dist - 0.02;
 		}

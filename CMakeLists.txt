@@ -343,10 +343,23 @@ enable_testing()
 ADD_EXECUTABLE(fnq3_window_placement_tests tests/window_placement_tests.cpp)
 target_compile_features(fnq3_window_placement_tests PRIVATE cxx_std_17)
 add_test(NAME fnq3_window_placement COMMAND fnq3_window_placement_tests)
+ADD_EXECUTABLE(fnq3_cinematic_bounds_tests tests/cinematic_bounds_tests.cpp)
+target_compile_features(fnq3_cinematic_bounds_tests PRIVATE cxx_std_17)
+add_test(NAME fnq3_cinematic_bounds COMMAND fnq3_cinematic_bounds_tests)
 find_package(Python3 COMPONENTS Interpreter)
 IF(Python3_Interpreter_FOUND)
+	add_test(NAME fnq3_cinematic_input_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/cinematic_input_source_tests.py")
 	add_test(NAME fnq3_window_management_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/window_management_source_tests.py")
+	add_test(NAME fnq3_demo_message_bounds_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/demo_message_bounds_source_tests.py")
+	add_test(NAME fnq3_client_state_clear_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/client_state_clear_source_tests.py")
+	add_test(NAME fnq3_server_state_clear_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/server_state_clear_source_tests.py")
+	add_test(NAME fnq3_format_bounds_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/format_bounds_source_tests.py")
 ENDIF()
 
 # renderers

@@ -1112,7 +1112,7 @@ gotnewcl:
 	// accept the new client
 	// this is the only place a client_t is ever initialized
 	// we got a newcl, so reset the reliableSequence and reliableAcknowledge
-	*newcl = {};
+	Com_Memset( newcl, 0, sizeof( *newcl ) );
 	clientNum = SV_ClientIndex( newcl );
 #if 0 // skip this until CS_PRIMED
 	//ent = SV_GentityNum( clientNum );

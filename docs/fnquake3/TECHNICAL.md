@@ -121,6 +121,7 @@ Renderer-focused verification lives beside the release packaging flow:
 
 - [`docs/fnquake3/FOG_RENDERING.md`](./FOG_RENDERING.md) records the shared analytic fog curve, optional global map-sidecar layer, GLx/Vulkan/RTX execution changes, fixed-function fallback, performance effects, and volumetric-fog compatibility boundary.
 - [`docs/fnquake3/LIQUID_RENDERING.md`](./LIQUID_RENDERING.md) documents the opt-in liquid scene capture and overlay, GLx/Vulkan/RTX parity contract, client visual impulse feed, compatibility boundaries, screen-space limitations, and possible higher tiers.
+- [`docs/fnquake3/MENU_SOFT_FOCUS.md`](./MENU_SOFT_FOCUS.md) describes the `cl_menuBlur` in-game menu soft focus: the shared Gaussian-pyramid sampling plan the three backends drive, why they exchange sigma rather than tap offsets, which screen layers are deliberately left sharp, the Vulkan frame-liveness and render-pass-resume preconditions, and the decline reporting that replaced the old silent `cl_menuDepthOfField` path.
 - [`docs/fnquake3/RTX_PARITY.md`](./RTX_PARITY.md) defines relevant Vulkan parity without diluting RTX's identity: native primary-world rays and closest-hit lighting are authoritative, while raster supplies depth, permitted fallback, and the exact overlay for content not yet RT-owned. It records per-map authored-sun selection and unit conversion, native ray-shadowed `q3map_surfaceLight` emitters, capability-gated RGBA16F scene/bloom storage, final SDR output/capture encoding, intentional secondary-view/entity/translucency limits, strict required-mode failure, and the RTX hardware-promotion matrix.
 - [`docs/fnquake3/GLX_FINAL_CONTRACT.md`](./GLX_FINAL_CONTRACT.md) is the accepted target ADR for the final GLx replacement renderer: stable C ABI, GLx-owned draw behavior, five product tiers, deterministic pass order, and a scene-linear color pipeline.
 - [`docs/fnquake3/GLX_COLORSPACE_AUDIT.md`](./GLX_COLORSPACE_AUDIT.md) records the audited sRGB/linear texture classes, framebuffer-sRGB policy, blending expectations, and screenshot capture color space for GLx color-pipeline work.
@@ -142,6 +143,11 @@ search order, map loading, or game-side entity state. Treat every
 shadowmapping change as visual and compatibility-sensitive at the same time:
 the visuals are optional, while the render order, asset acceptance, and
 fallback behavior must stay predictable.
+
+Versioned renderer-owned map lights and the current-map surfacelight
+generator are documented in
+[`WORLD_DLIGHTS.md`](./WORLD_DLIGHTS.md). These `.dlight` sidecars remain
+visual-only data and have no entity-system or gameplay representation.
 
 The subsystem is organized around three atlas families:
 

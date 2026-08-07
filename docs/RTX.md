@@ -100,7 +100,7 @@ The RTX defaults follow the Vulkan renderer's normal visible feature set:
 - `r_fogMode 1` uses analytic Quake III fog. `r_globalFog 1` permits optional
   depth-aware `maps/<map>.fog` atmosphere supplied by the active game.
 - `r_depthFade 1` softens eligible translucent particle intersections.
-- `r_staticLights 1` permits renderer-only `maps/<map>.lights.json` lights
+- `r_dlightLoadWorld 1` permits renderer-only `maps/<map>.dlight` lights
   supplied by the active game. `r_staticLightMaxLights` limits how many are
   promoted into a scene.
 - `rtx_rt_world_light_scale 0.35` promotes BSP compile-time light entities into

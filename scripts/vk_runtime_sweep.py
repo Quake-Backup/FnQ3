@@ -250,7 +250,7 @@ DLIGHT_SHADOW_SCENE_CVARS = {
     "r_dlightShadowFilter": "2",
     "r_dlightShadowMaxLights": "8",
     "r_dlightShadowResolution": "256",
-    "r_staticLights": "1",
+    "r_dlightLoadWorld": "1",
     "r_staticLightDebug": "1",
     "r_staticLightMaxLights": "8",
     "r_staticLightShadows": "1",
@@ -512,7 +512,7 @@ STARTUP_CVAR_NAMES = {
     "r_dlightShadowFilter",
     "r_dlightShadowMaxLights",
     "r_dlightShadowResolution",
-    "r_staticLights",
+    "r_dlightLoadWorld",
     "r_staticLightDebug",
     "r_staticLightMaxLights",
     "r_staticLightShadows",
@@ -894,8 +894,9 @@ def write_dlight_shadow_sidecar_lights(
     for map_name, lights in sorted(lights_by_map.items()):
         if not lights:
             continue
-        path = maps_dir / f"{map_name}.lights.json"
+        path = maps_dir / f"{map_name}.dlight"
         payload = {
+            "format": "fnquake3-world-dlights",
             "version": 1,
             "lights": lights,
         }

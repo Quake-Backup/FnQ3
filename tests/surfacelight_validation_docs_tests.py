@@ -107,7 +107,7 @@ def check_combined_atlas_roadmap(failures: list[str]) -> None:
     require(artifacts, "sidecarLights", "run sidecar evidence", failures)
     require(artifacts, "combined-shadow-atlas", "combined atlas scene", failures)
     require(artifacts, "q3dm6", "representative map", failures)
-    require(artifacts, "maps/q3dm6.lights.json", "generated sidecar path", failures)
+    require(artifacts, "maps/q3dm6.dlight", "generated sidecar path", failures)
     require(artifacts, "combined-sidecar-spot", "generated sidecar light", failures)
     require(artifacts, "vk-modern-dlight-shadows-combined-shadow-atlas-q3dm6-vk", "Vulkan baseline key", failures)
     require(artifacts, "rc-parity-dlight-shadows-combined-shadow-atlas-q3dm6-glx", "GLx baseline key", failures)
@@ -131,7 +131,7 @@ def check_combined_atlas_roadmap(failures: list[str]) -> None:
         "developer=1",
         "logfile=2",
         "r_dlightShadows=1",
-        "r_staticLights=1",
+        "r_dlightLoadWorld=1",
         "r_staticLightShadows=1",
         "r_spotShadows=1",
         "r_surfaceLightProxies=1",

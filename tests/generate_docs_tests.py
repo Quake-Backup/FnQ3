@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +19,23 @@ class GenerateDocsTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "missing_key"):
                 generate_docs.render(template, {"version": "0.1.0"})
+
+    def test_generated_docs_are_written_with_lf_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "nested" / "README.html"
+
+            self.assertTrue(generate_docs.write_if_changed(target, "first\nsecond\n"))
+            self.assertEqual(target.read_bytes(), b"first\nsecond\n")
+            # Unchanged content must not rewrite the file.
+            self.assertFalse(generate_docs.write_if_changed(target, "first\nsecond\n"))
+
+    def test_writer_avoids_apis_the_release_container_python_lacks(self) -> None:
+        """The Linux release lanes run this in an ubuntu:20.04 container, whose
+        Python 3.8 has no newline argument on Path.write_text(). Adding one there
+        fails only on those lanes, long after the change looks fine locally."""
+        source = (ROOT / "scripts" / "generate_docs.py").read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"write_text\([^)]*newline", source))
+        self.assertIn('path.open("w", encoding="utf-8", newline="\\n")', source)
 
 
 if __name__ == "__main__":

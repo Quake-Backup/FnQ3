@@ -34,6 +34,25 @@ def section(text: str, start: str, end: str, label: str, failures: list[str]) ->
     return text[start_index:end_index]
 
 
+def first_section(text: str, starts: list[str], end: str, label: str, failures: list[str]) -> str:
+    """Section from the earliest start marker present.
+
+    A renderer may satisfy the loader contract in one function or split the file
+    read out into a helper; either shape is fine as long as the whole span still
+    sets the flags and reports the failures below.
+    """
+    found = [index for index in (text.find(start) for start in starts) if index >= 0]
+    if not found:
+        failures.append(f"missing section start {label}: {' or '.join(starts)}")
+        return ""
+    start_index = min(found)
+    end_index = text.find(end, start_index)
+    if end_index < 0:
+        failures.append(f"missing section end {label}: {end}")
+        return text[start_index:]
+    return text[start_index:end_index]
+
+
 def check_source(label: str, relative_path: str, failures: list[str]) -> None:
     source = (ROOT / relative_path).read_text(encoding="utf-8")
     light_object = section(
@@ -57,9 +76,12 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
         f"{label} top parser",
         failures,
     )
-    loader = section(
+    loader = first_section(
         source,
-        "static void R_LoadStaticMapLightsForWorld",
+        [
+            "static qboolean R_LoadStaticMapLightsFile",
+            "static void R_LoadStaticMapLightsForWorld",
+        ],
         "void R_StaticMapLightsReload_f",
         f"{label} sidecar loader",
         failures,

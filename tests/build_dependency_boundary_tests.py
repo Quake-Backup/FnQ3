@@ -119,6 +119,48 @@ class BuildDependencyBoundaryTests(unittest.TestCase):
                 )
                 self.assertRegex(meson, pattern)
 
+    def test_makefile_install_stages_the_same_release_docs_as_meson(self) -> None:
+        """The Linux and macOS release lanes stage with `make install`, and
+        scripts/verify_release_layout.py gates DESTDIR before upload. When only
+        meson.build carried the docs, every one of those lanes failed."""
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        for source, destination in (
+            ("LICENSE", "LICENSE"),
+            ("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
+            (".install/README.html", "README.html"),
+            ("docs/GLX.md", "docs/GLX.md"),
+            ("docs/RTX.md", "docs/RTX.md"),
+            ("docs/fnquake3/TECHNICAL.md", "docs/fnquake3/TECHNICAL.md"),
+        ):
+            with self.subTest(source=source):
+                self.assertIn(f"{source}:{destination}", makefile)
+
+        start = makefile.index("\ninstall: release\n")
+        end = makefile.index("\nclean:", start)
+        rule = makefile[start:end]
+        self.assertIn("$(RELEASE_DOCS)", rule)
+        self.assertIn('$(INSTALL) -D -m 0644 "$$src" "$(DESTDIR)/$$dst"', rule)
+
+    def test_release_lanes_render_generated_docs_before_staging(self) -> None:
+        """.install/README.html is staged into the package and generated from the
+        stamped version, so a lane that builds without re-rendering it ships the
+        previous build number."""
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        for job in ("ubuntu-x86", "ubuntu-arm64", "macos-x86"):
+            block = workflow_job_block(workflow, job)
+            with self.subTest(job=job):
+                self.assertIn("scripts/generate_docs.py", block)
+                self.assertLess(
+                    block.index("manual_release.py stamp-version"),
+                    block.index("scripts/generate_docs.py"),
+                )
+                self.assertLess(
+                    block.index("scripts/generate_docs.py"),
+                    block.index("verify_release_layout.py"),
+                )
+
     def test_third_party_notice_bundle_covers_bundled_dependencies(self) -> None:
         notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
 

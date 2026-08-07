@@ -40,6 +40,11 @@ curl_fallback_defaults = quiet_fallback_defaults + [
   'http2=disabled',
   'idn=disabled',
   'libuv=disabled',
+  # zlib is the same story as zstd: MSYS2 always has it, curl's 'libz' defaults
+  # to auto and linked it, and the client then imported an unshipped zlib1.dll.
+  # Nothing here sets CURLOPT_ACCEPT_ENCODING, so the transfer encoding it
+  # provides is never requested.
+  'libz=disabled',
   'psl=disabled',
   'rtmp=disabled',
   'ssh=disabled',

@@ -51,6 +51,10 @@ SYSTEM_DLLS = frozenset(
         "iphlpapi.dll",
         "kernel32.dll",
         "mswsock.dll",
+        # The legacy C runtime, an OS component since Windows 2000 and what the
+        # MSYS2 MINGW32/MINGW64 toolchains target. The MSVC lane uses the UCRT
+        # instead, which is covered by ucrtbase.dll and the api-ms-win-crt-* set.
+        "msvcrt.dll",
         "normaliz.dll",
         "ntdll.dll",
         "ole32.dll",

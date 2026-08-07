@@ -46,6 +46,7 @@ class BundledCurlIsSelfContainedTests(unittest.TestCase):
             "http2",
             "idn",
             "libuv",
+            "libz",
             "psl",
             "rtmp",
             "ssh",
@@ -261,7 +262,11 @@ class DependencyAuditTests(unittest.TestCase):
         self.assertTrue(audit.is_system_dll("kernel32.DLL"))
         self.assertTrue(audit.is_system_dll("api-ms-win-core-synch-l1-2-0.dll"))
         self.assertTrue(audit.is_system_dll("ucrtbase.dll"))
+        # The MinGW lanes target the legacy CRT rather than the UCRT the MSVC
+        # lane uses; both are part of Windows.
+        self.assertTrue(audit.is_system_dll("msvcrt.dll"))
         self.assertFalse(audit.is_system_dll("libzstd.dll"))
+        self.assertFalse(audit.is_system_dll("zlib1.dll"))
         self.assertFalse(audit.is_system_dll("VCRUNTIME140.dll"))
         self.assertFalse(audit.is_system_dll("libstdc++-6.dll"))
 

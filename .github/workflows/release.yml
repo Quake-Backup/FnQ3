@@ -258,7 +258,9 @@ jobs:
           submodules: recursive
 
       - name: Stamp release build version
-        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+        run: |
+          python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+          python3 scripts/generate_docs.py
 
       - name: Build
         run: |
@@ -297,7 +299,9 @@ jobs:
           submodules: recursive
 
       - name: Stamp release build version
-        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+        run: |
+          python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+          python3 scripts/generate_docs.py
 
       - name: Build
         run: |
@@ -341,7 +345,9 @@ jobs:
           submodules: recursive
 
       - name: Stamp release build version
-        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+        run: |
+          python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+          python3 scripts/generate_docs.py
 
       - name: Build
         run: |

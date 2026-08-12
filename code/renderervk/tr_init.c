@@ -115,7 +115,7 @@ cvar_t	*r_dlightIntensity;
 #endif
 cvar_t	*r_dlightSaturation;
 cvar_t	*r_dlightOverbrightGamut;
-cvar_t	*r_staticLights;
+cvar_t	*r_dlightLoadWorld;
 cvar_t	*r_staticLightMaxLights;
 cvar_t	*r_staticLightShadows;
 cvar_t	*r_staticLightShadowMaxLights;
@@ -2722,6 +2722,8 @@ static void R_Register( void )
 	ri.Cmd_AddCommand( "r_dlightTest", R_DlightTest_f );
 #endif
 	ri.Cmd_AddCommand( "r_staticLightReload", R_StaticMapLightsReload_f );
+	ri.Cmd_AddCommand( "r_dlightReloadWorld", R_StaticMapLightsReload_f );
+	ri.Cmd_AddCommand( "r_dlightGenerateWorld", R_WorldDlightsGenerate_f );
 #ifdef USE_VULKAN
 	ri.Cmd_AddCommand( "vkinfo", VkInfo_f );
 #endif
@@ -2943,7 +2945,7 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_dlightShadowDebug, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_dlightShadowDebug, "Prints dynamic-light shadow planning counters each frame." );
 	ri.Cvar_SetGroup( r_dlightShadowDebug, CVG_RENDERER );
-	r_spotShadows = ri.Cvar_Get( "r_spotShadows", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_spotShadows = ri.Cvar_Get( "r_spotShadows", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_spotShadows, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_spotShadows, "Enables planning for the 2D spotlight shadow atlas used by sidecar spot lights and surfacelight proxies." );
 	ri.Cvar_SetGroup( r_spotShadows, CVG_RENDERER );
@@ -2970,25 +2972,25 @@ static void R_Register( void )
 	r_dlightOverbrightGamut = ri.Cvar_Get( "r_dlightOverbrightGamut", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightOverbrightGamut, "0", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightOverbrightGamut, "Compresses overbright dynamic light chroma toward linear luminance; 0 preserves raw mod-provided colors." );
-	r_staticLights = ri.Cvar_Get( "r_staticLights", "1", CVAR_ARCHIVE_ND );
-	ri.Cvar_CheckRange( r_staticLights, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_staticLights, "Enables renderer-only static map lights loaded from maps/<mapname>.lights.json sidecar files." );
-	ri.Cvar_SetGroup( r_staticLights, CVG_RENDERER );
+	r_dlightLoadWorld = ri.Cvar_Get( "r_dlightLoadWorld", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_dlightLoadWorld, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_dlightLoadWorld, "Loads renderer-only world dynamic lights from maps/<mapname>.dlight sidecar files when r_dlightMode is 2." );
+	ri.Cvar_SetGroup( r_dlightLoadWorld, CVG_RENDERER );
 	r_staticLightMaxLights = ri.Cvar_Get( "r_staticLightMaxLights", "8", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_staticLightMaxLights, "0", va( "%i", MAX_DLIGHTS ), CV_INTEGER );
-	ri.Cvar_SetDescription( r_staticLightMaxLights, "Maximum number of static sidecar lights promoted into a scene." );
+	ri.Cvar_SetDescription( r_staticLightMaxLights, "Maximum number of visible world dlights promoted into a scene." );
 	ri.Cvar_SetGroup( r_staticLightMaxLights, CVG_RENDERER );
 	r_staticLightShadows = ri.Cvar_Get( "r_staticLightShadows", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_staticLightShadows, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_staticLightShadows, "Allows eligible static sidecar lights to enter the point-light shadow planner." );
+	ri.Cvar_SetDescription( r_staticLightShadows, "Allows eligible shadow-casting world dlights to enter the shadow planners." );
 	ri.Cvar_SetGroup( r_staticLightShadows, CVG_RENDERER );
 	r_staticLightShadowMaxLights = ri.Cvar_Get( "r_staticLightShadowMaxLights", "2", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_staticLightShadowMaxLights, "0", va( "%i", MAX_DLIGHTS ), CV_INTEGER );
-	ri.Cvar_SetDescription( r_staticLightShadowMaxLights, "Maximum number of promoted static sidecar lights allowed to be shadow candidates." );
+	ri.Cvar_SetDescription( r_staticLightShadowMaxLights, "Maximum number of promoted point world dlights allowed to be shadow candidates." );
 	ri.Cvar_SetGroup( r_staticLightShadowMaxLights, CVG_RENDERER );
 	r_staticLightDebug = ri.Cvar_Get( "r_staticLightDebug", "0", CVAR_CHEAT );
 	ri.Cvar_CheckRange( r_staticLightDebug, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_staticLightDebug, "Prints static sidecar light loading and promotion counters." );
+	ri.Cvar_SetDescription( r_staticLightDebug, "Prints world dlight loading and promotion counters." );
 	ri.Cvar_SetGroup( r_staticLightDebug, CVG_RENDERER );
 	r_surfaceLightProxies = ri.Cvar_Get( "r_surfaceLightProxies", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_surfaceLightProxies, "0", "1", CV_INTEGER );
@@ -3601,6 +3603,8 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 	ri.Cmd_RemoveCommand( "r_dlightTest" );
 #endif
 	ri.Cmd_RemoveCommand( "r_staticLightReload" );
+	ri.Cmd_RemoveCommand( "r_dlightReloadWorld" );
+	ri.Cmd_RemoveCommand( "r_dlightGenerateWorld" );
 	ri.Cmd_RemoveCommand( "shaderstate" );
 #ifdef USE_VULKAN
 	ri.Cmd_RemoveCommand( "vkinfo" );
@@ -3746,7 +3750,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 
 	re.ThrottleBackend = RE_ThrottleBackend;
 	re.FinishBloom = RE_FinishBloom;
-	re.DrawMenuDepthOfField = RE_DrawMenuDepthOfField;
+	re.DrawMenuBlur = RE_DrawMenuBlur;
 	re.CanMinimize = RE_CanMinimize;
 	re.GetConfig = RE_GetConfig;
 	re.VertexLighting = RE_VertexLighting;

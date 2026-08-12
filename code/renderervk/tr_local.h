@@ -53,6 +53,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../renderercommon/tr_public.h"
 #include "../renderercommon/tr_global_fog.h"
 #include "../renderercommon/tr_liquid.h"
+#include "../renderercommon/tr_world_dlights.h"
 #include "tr_common.h"
 #include "iqm.h"
 
@@ -870,7 +871,7 @@ typedef struct {
 	float		intensity;
 } worldSun_t;
 
-#define MAX_STATIC_MAP_LIGHTS 128
+#define MAX_STATIC_MAP_LIGHTS WORLD_DLIGHT_MAX_LIGHTS
 #define MAX_SURFACELIGHT_PROXIES 256
 
 typedef enum {
@@ -2105,7 +2106,7 @@ extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
 extern cvar_t	*r_dlightSaturation;	// 0.0 - 1.0
 extern cvar_t	*r_dlightOverbrightGamut;	// 0.0 - 1.0
-extern cvar_t	*r_staticLights;			// 0 - 1
+extern cvar_t	*r_dlightLoadWorld;		// 0 - 1
 extern cvar_t	*r_staticLightMaxLights;		// 0 - MAX_DLIGHTS
 extern cvar_t	*r_staticLightShadows;		// 0 - 1
 extern cvar_t	*r_staticLightShadowMaxLights; // 0 - MAX_DLIGHTS
@@ -2641,6 +2642,7 @@ void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction );
 void R_DlightTest_f( void );
 #endif
 void R_StaticMapLightsReload_f( void );
+void R_WorldDlightsGenerate_f( void );
 
 void RE_RenderScene( const refdef_t *fd );
 
@@ -2765,6 +2767,11 @@ typedef struct {
 
 typedef struct {
 	int		commandId;
+	float	strength;
+} menuBlurCommand_t;
+
+typedef struct {
+	int		commandId;
 	shader_t	*shader;
 	float	x, y;
 	float	w, h;
@@ -2818,6 +2825,7 @@ typedef enum {
 	RC_DRAW_BUFFER,
 	RC_SWAP_BUFFERS,
 	RC_FINISHBLOOM,
+	RC_MENU_BLUR,
 	RC_COLORMASK,
 	RC_CLEARDEPTH,
 	RC_CLEARCOLOR
@@ -2875,7 +2883,7 @@ void RE_TakeVideoFrame( int width, int height,
 		byte *captureBuffer, byte *encodeBuffer, qboolean motionJpeg );
 
 void RE_FinishBloom( void );
-void RE_DrawMenuDepthOfField( float amount );
+void RE_DrawMenuBlur( float strength );
 void RE_ThrottleBackend( void );
 qboolean RE_CanMinimize( void );
 const glconfig_t *RE_GetConfig( void );

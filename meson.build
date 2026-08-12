@@ -22,7 +22,42 @@ cpp = meson.get_compiler('cpp')
 
 fallback_defaults = ['default_library=static']
 quiet_fallback_defaults = fallback_defaults + ['warning_level=0']
-curl_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
+# The bundled curl only ever fetches pk3 files over plain HTTP(S), but most of
+# its optional features default to 'auto' and are satisfied by whatever happens
+# to be installed on the build host. On an MSYS2 runner that silently linked
+# libzstd (a dependency of the mingw gcc package, so always present) into the
+# client, and nothing in the release layout ships it -- the published binary
+# then failed to start with "libzstd.dll was not found". Pin every optional
+# transfer encoding and protocol off so the bundled curl is self-contained on
+# every host, whatever it has lying around.
+curl_fallback_defaults = quiet_fallback_defaults + [
+  'tests=disabled',
+  'tool=disabled',
+  'unittests=disabled',
+  'brotli=disabled',
+  'gsasl=disabled',
+  'gss-api=disabled',
+  'http2=disabled',
+  'idn=disabled',
+  'libuv=disabled',
+  # zlib is the same story as zstd: MSYS2 always has it, curl's 'libz' defaults
+  # to auto and linked it, and the client then imported an unshipped zlib1.dll.
+  # Nothing here sets CURLOPT_ACCEPT_ENCODING, so the transfer encoding it
+  # provides is never requested.
+  'libz=disabled',
+  'psl=disabled',
+  'rtmp=disabled',
+  'ssh=disabled',
+  'zstd=disabled',
+]
+
+if host_machine.system() == 'windows'
+  # Windows gets TLS from Schannel, which is part of the OS, so refusing to
+  # hunt for a host OpenSSL costs nothing here. Elsewhere the fallback is only
+  # reached with --wrap-mode=forcefallback, where dropping OpenSSL would
+  # silently produce an HTTP-only curl, so leave that decision to the host.
+  curl_fallback_defaults += ['openssl=disabled']
+endif
 openal_fallback_defaults = quiet_fallback_defaults
 vorbis_fallback_defaults = quiet_fallback_defaults + ['tests=false', 'ogg:default_library=static']
 jpeg_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
@@ -883,6 +918,31 @@ custom_target('FnQuake3-pkg.fnz',
   install_tag: 'runtime',
 )
 
+install_data('LICENSE',
+  install_dir: '.',
+  install_tag: 'runtime',
+)
+install_data('THIRD_PARTY_NOTICES.md',
+  install_dir: '.',
+  install_tag: 'runtime',
+)
+install_data('.install/README.html',
+  install_dir: '.',
+  install_tag: 'runtime',
+)
+install_data('docs/GLX.md',
+  install_dir: 'docs',
+  install_tag: 'runtime',
+)
+install_data('docs/RTX.md',
+  install_dir: 'docs',
+  install_tag: 'runtime',
+)
+install_data('docs/fnquake3/TECHNICAL.md',
+  install_dir: 'docs/fnquake3',
+  install_tag: 'runtime',
+)
+
 if get_option('audio-tests')
   audio_zone_tests = executable('fnq3_audio_zone_tests',
     'tests/audio/audiozone_runtime_tests.cpp',
@@ -947,6 +1007,15 @@ if get_option('glx-tests')
   test('fnq3_static_map_lights_source', python,
     args: files('tests/static_map_lights_source_tests.py'),
   )
+  test('fnq3_world_dlights_source', python,
+    args: files('tests/world_dlights_source_tests.py'),
+  )
+  test('fnq3_vulkan_world_dlight_spot_cone_source', python,
+    args: files('tests/vulkan_world_dlight_spot_cone_source_tests.py'),
+  )
+  test('fnq3_rtx_world_dlight_spot_source', python,
+    args: files('tests/rtx_world_dlight_spot_source_tests.py'),
+  )
   test('fnq3_surface_light_proxy_source', python,
     args: files('tests/surface_light_proxy_source_tests.py'),
   )
@@ -975,8 +1044,53 @@ window_placement_tests = executable('fnq3_window_placement_tests',
   cpp_args: common_cpp_args,
 )
 test('fnq3_window_placement', window_placement_tests)
+# Exercises the sampling plan the three renderer backends share, so a change to
+# the pyramid or the kernel constants cannot silently desynchronise them.
+menu_blur_tests = executable('fnq3_menu_blur_tests',
+  'tests/menu_blur_tests.cpp',
+  'code/qcommon/q_shared.c',
+  c_args: common_c_args,
+  cpp_args: common_cpp_args,
+)
+test('fnq3_menu_blur', menu_blur_tests)
+test('fnq3_menu_blur_source', python,
+  args: files('tests/menu_blur_source_tests.py'),
+)
+test('fnq3_external_lightmap_source', python,
+  args: files('tests/external_lightmap_source_tests.py'),
+)
+test('fnq3_windows_runtime_dependency', python,
+  args: files('tests/windows_runtime_dependency_tests.py'),
+)
+cinematic_bounds_tests = executable('fnq3_cinematic_bounds_tests',
+  'tests/cinematic_bounds_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnq3_cinematic_bounds', cinematic_bounds_tests)
+test('fnq3_cinematic_input_source', python,
+  args: files('tests/cinematic_input_source_tests.py'),
+)
 test('fnq3_window_management_source', python,
   args: files('tests/window_management_source_tests.py'),
+)
+test('fnq3_demo_message_bounds_source', python,
+  args: files('tests/demo_message_bounds_source_tests.py'),
+)
+test('fnq3_client_state_clear_source', python,
+  args: files('tests/client_state_clear_source_tests.py'),
+)
+test('fnq3_server_state_clear_source', python,
+  args: files('tests/server_state_clear_source_tests.py'),
+)
+test('fnq3_format_bounds_source', python,
+  args: files('tests/format_bounds_source_tests.py'),
+)
+test('fnq3_build_dependency_boundary_source', python,
+  args: files('tests/build_dependency_boundary_tests.py'),
+)
+test('fnq3_release_packaging', python,
+  args: files('tests/release_packaging_tests.py'),
+  timeout: 120,
 )
 
 curl_summary = 'disabled'

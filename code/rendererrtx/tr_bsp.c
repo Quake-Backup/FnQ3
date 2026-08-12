@@ -54,7 +54,24 @@ static void R_LoadGlobalFogForWorld( void )
 	int size;
 
 	R_GlobalFogClear( &s_worldData.globalFog );
+	if ( !r_globalFog || !r_globalFog->integer ) {
+		return;
+	}
+
 	Com_sprintf( filename, sizeof( filename ), "maps/%s.fog", s_worldData.baseName );
+
+	/* Size the file before it is read, so an oversized sidecar is rejected
+	 * without ever being allocated. */
+	size = ri.FS_ReadFile( filename, NULL );
+	if ( size <= 0 ) {
+		return;
+	}
+	if ( size > GLOBAL_FOG_SIDECAR_MAX_BYTES ) {
+		ri.Printf( PRINT_WARNING, "WARNING: global fog sidecar %s is too large (%i bytes, limit %i)\n",
+			filename, size, GLOBAL_FOG_SIDECAR_MAX_BYTES );
+		return;
+	}
+
 	buffer.v = NULL;
 	size = ri.FS_ReadFile( filename, &buffer.v );
 	if ( !buffer.v || size <= 0 ) {
@@ -69,7 +86,7 @@ static void R_LoadGlobalFogForWorld( void )
 		ri.FS_FreeFile( buffer.v );
 		return;
 	}
-	if ( !R_GlobalFogParse( &s_worldData.globalFog, buffer.c, error, sizeof( error ) ) ) {
+	if ( !R_GlobalFogParse( &s_worldData.globalFog, buffer.c, size, error, sizeof( error ) ) ) {
 		R_GlobalFogClear( &s_worldData.globalFog );
 		ri.Printf( PRINT_WARNING, "WARNING: invalid global fog sidecar %s: %s\n", filename, error );
 	} else {
@@ -237,13 +254,16 @@ static qboolean R_StaticMapLightsParseLightObject( const char **p, mapLightDef_t
 	light->leafArea = -1;
 	VectorSet( light->direction, 0.0f, 0.0f, -1.0f );
 	VectorSet( light->color, 1.0f, 1.0f, 1.0f );
+	light->radius = WORLD_DLIGHT_DEFAULT_RADIUS;
+	light->intensity = WORLD_DLIGHT_DEFAULT_INTENSITY;
+	light->innerAngle = WORLD_DLIGHT_DEFAULT_INNER_ANGLE;
+	light->outerAngle = WORLD_DLIGHT_DEFAULT_OUTER_ANGLE;
 	light->castsShadows = qtrue;
 	light->designerPriority = 1.0f;
-	light->resolution = 256;
-	light->outerAngle = 45.0f;
+	light->resolution = WORLD_DLIGHT_DEFAULT_SHADOW_RESOLUTION;
 
 	hasOrigin = qfalse;
-	hasDirection = qfalse;
+	hasDirection = qtrue;
 	unsupportedType = qfalse;
 	*accepted = qfalse;
 	*skipReason = 0;
@@ -319,7 +339,8 @@ static qboolean R_StaticMapLightsParseLightObject( const char **p, mapLightDef_t
 			if ( !R_StaticMapLightsParseBool( p, &light->castsShadows ) ) {
 				return qfalse;
 			}
-		} else if ( !Q_stricmp( key, "resolution" ) ) {
+		} else if ( !Q_stricmp( key, "resolution" ) ||
+			!Q_stricmp( key, "shadowResolution" ) ) {
 			if ( !R_StaticMapLightsParseInt( p, &light->resolution ) ) {
 				return qfalse;
 			}
@@ -428,12 +449,18 @@ static qboolean R_StaticMapLightsParseLightsArray( const char **p )
 	return qtrue;
 }
 
-static qboolean R_ParseStaticMapLights( const char *text )
+static qboolean R_ParseStaticMapLights( const char *text, qboolean legacyFormat )
 {
 	const char *p;
 	const char *token;
+	char formatName[MAX_TOKEN_CHARS];
+	qboolean hasFormat;
+	qboolean hasVersion;
 
 	p = text;
+	formatName[0] = '\0';
+	hasFormat = qfalse;
+	hasVersion = qfalse;
 	token = COM_ParseComplex( &p, qtrue );
 	if ( strcmp( token, "{" ) != 0 ) {
 		return qfalse;
@@ -458,10 +485,18 @@ static qboolean R_ParseStaticMapLights( const char *text )
 			return qfalse;
 		}
 
-		if ( !Q_stricmp( key, "version" ) ) {
+		if ( !Q_stricmp( key, "format" ) ) {
+			token = COM_ParseComplex( &p, qtrue );
+			if ( !*token || strchr( "{}[],:", token[0] ) ) {
+				return qfalse;
+			}
+			Q_strncpyz( formatName, token, sizeof( formatName ) );
+			hasFormat = qtrue;
+		} else if ( !Q_stricmp( key, "version" ) ) {
 			if ( !R_StaticMapLightsParseInt( &p, &tr.staticMapLights.version ) ) {
 				return qfalse;
 			}
+			hasVersion = qtrue;
 		} else if ( !Q_stricmp( key, "lights" ) ) {
 			if ( !R_StaticMapLightsParseLightsArray( &p ) ) {
 				return qfalse;
@@ -469,6 +504,12 @@ static qboolean R_ParseStaticMapLights( const char *text )
 		} else if ( !R_StaticMapLightsSkipValue( &p ) ) {
 			return qfalse;
 		}
+	}
+
+	if ( !legacyFormat && ( !hasFormat || !hasVersion ||
+		strcmp( formatName, WORLD_DLIGHT_FORMAT_NAME ) != 0 ||
+		tr.staticMapLights.version != WORLD_DLIGHT_FORMAT_VERSION ) ) {
+		return qfalse;
 	}
 
 	return qtrue;
@@ -482,14 +523,38 @@ static void R_LoadStaticMapLightsForWorld( void )
 	} buffer;
 	int size;
 	char filename[MAX_QPATH];
+	qboolean legacyFormat;
 
 	buffer.v = NULL;
-	Com_sprintf( filename, sizeof( filename ), "maps/%s.lights.json", s_worldData.baseName );
 	R_ClearStaticMapLights();
+	Com_sprintf( filename, sizeof( filename ), "maps/%s%s", s_worldData.baseName,
+		WORLD_DLIGHT_FILE_EXTENSION );
 	Q_strncpyz( tr.staticMapLights.filename, filename, sizeof( tr.staticMapLights.filename ) );
-
+	legacyFormat = qfalse;
 	size = ri.FS_ReadFile( filename, &buffer.v );
+	if ( size < 0 ) {
+		if ( buffer.v ) {
+			ri.FS_FreeFile( buffer.v );
+		}
+		buffer.v = NULL;
+		Com_sprintf( filename, sizeof( filename ), "maps/%s%s",
+			s_worldData.baseName, WORLD_DLIGHT_LEGACY_FILE_EXTENSION );
+		size = ri.FS_ReadFile( filename, &buffer.v );
+		if ( size < 0 ) {
+			if ( buffer.v ) {
+				ri.FS_FreeFile( buffer.v );
+			}
+			return;
+		}
+		legacyFormat = qtrue;
+		Q_strncpyz( tr.staticMapLights.filename, filename,
+			sizeof( tr.staticMapLights.filename ) );
+	}
+
 	if ( !buffer.v || size <= 0 ) {
+		tr.staticMapLights.loaded = qtrue;
+		tr.staticMapLights.parseFailed = qtrue;
+		ri.Printf( PRINT_WARNING, "WARNING: failed to read world dlight file %s\n", filename );
 		if ( buffer.v ) {
 			ri.FS_FreeFile( buffer.v );
 		}
@@ -497,13 +562,19 @@ static void R_LoadStaticMapLightsForWorld( void )
 	}
 
 	tr.staticMapLights.loaded = qtrue;
-	if ( !R_ParseStaticMapLights( buffer.c ) ) {
+	if ( size > WORLD_DLIGHT_MAX_FILE_SIZE ) {
 		tr.staticMapLights.parseFailed = qtrue;
 		tr.staticMapLights.count = 0;
-		ri.Printf( PRINT_WARNING, "WARNING: failed to parse static map lights file %s\n", filename );
+		ri.Printf( PRINT_WARNING,
+			"WARNING: world dlight file %s is too large (%i bytes, limit %i)\n",
+			filename, size, WORLD_DLIGHT_MAX_FILE_SIZE );
+	} else if ( !R_ParseStaticMapLights( buffer.c, legacyFormat ) ) {
+		tr.staticMapLights.parseFailed = qtrue;
+		tr.staticMapLights.count = 0;
+		ri.Printf( PRINT_WARNING, "WARNING: failed to parse world dlight file %s\n", filename );
 	} else if ( r_staticLightDebug && r_staticLightDebug->integer ) {
 		ri.Printf( PRINT_ALL,
-			"static lights file:%s version:%i loaded:%i point:%i spot:%i spatial:%i/%i skipped unsupported:%i invalid:%i overflow:%i\n",
+			"world dlights file:%s version:%i loaded:%i point:%i spot:%i spatial:%i/%i skipped unsupported:%i invalid:%i overflow:%i\n",
 			filename, tr.staticMapLights.version, tr.staticMapLights.count,
 			tr.staticMapLights.pointCount, tr.staticMapLights.spotCount,
 			tr.staticMapLights.spatialized, tr.staticMapLights.spatialFallback,
@@ -514,17 +585,22 @@ static void R_LoadStaticMapLightsForWorld( void )
 	ri.FS_FreeFile( buffer.v );
 }
 
-void R_StaticMapLightsReload_f( void )
+void R_WorldDlightsReload_f( void )
 {
 	if ( !tr.worldMapLoaded || !tr.world ) {
 		R_ClearStaticMapLights();
-		ri.Printf( PRINT_ALL, "No world map loaded; static map lights cleared\n" );
+		ri.Printf( PRINT_ALL, "No world map loaded; world dlights cleared\n" );
 		return;
 	}
 
 	R_LoadStaticMapLightsForWorld();
-	ri.Printf( PRINT_ALL, "Reloaded %i static map lights from %s\n",
+	ri.Printf( PRINT_ALL, "Reloaded %i world dlights from %s\n",
 		tr.staticMapLights.count, tr.staticMapLights.filename );
+}
+
+void R_StaticMapLightsReload_f( void )
+{
+	R_WorldDlightsReload_f();
 }
 
 static void R_ClearSurfaceLightProxies( void )
@@ -1232,6 +1308,148 @@ static void R_BuildSurfaceLightProxiesForWorld( void )
 			tr.surfaceLightProxies.skippedSky, tr.surfaceLightProxies.skippedInvalid,
 			tr.surfaceLightProxies.skippedOverflow );
 	}
+}
+
+static qboolean R_WorldDlightsAppend( char *text, int capacity, int *length,
+	const char *format, ... )
+{
+	va_list args;
+	int remaining;
+	int written;
+
+	if ( !text || !length || *length < 0 || *length >= capacity ) {
+		return qfalse;
+	}
+
+	remaining = capacity - *length;
+	va_start( args, format );
+	written = Q_vsnprintf( text + *length, remaining, format, args );
+	va_end( args );
+	if ( written < 0 || written >= remaining ) {
+		text[capacity - 1] = '\0';
+		return qfalse;
+	}
+
+	*length += written;
+	return qtrue;
+}
+
+void R_WorldDlightsGenerate_f( void )
+{
+	char filename[MAX_QPATH];
+	char *text;
+	qboolean force;
+	int capacity;
+	int length;
+	int count;
+	int i;
+
+	force = qfalse;
+	if ( ri.Cmd_Argc() > 2 ||
+		( ri.Cmd_Argc() == 2 && Q_stricmp( ri.Cmd_Argv( 1 ), "force" ) ) ) {
+		ri.Printf( PRINT_ALL, "usage: r_dlightGenerateWorld [force]\n" );
+		return;
+	}
+	if ( ri.Cmd_Argc() == 2 ) {
+		force = qtrue;
+	}
+
+	if ( !tr.worldMapLoaded || !tr.world || !tr.surfaceLightProxies.built ) {
+		ri.Printf( PRINT_ALL, "No world map loaded; no world dlights generated\n" );
+		return;
+	}
+
+	Com_sprintf( filename, sizeof( filename ), "maps/%s%s", s_worldData.baseName,
+		WORLD_DLIGHT_FILE_EXTENSION );
+	if ( !force && ri.FS_ReadFile( filename, NULL ) >= 0 ) {
+		ri.Printf( PRINT_WARNING,
+			"World dlight file %s already exists; use r_dlightGenerateWorld force to replace it\n",
+			filename );
+		return;
+	}
+
+	capacity = WORLD_DLIGHT_MAX_FILE_SIZE + 1;
+	text = ri.Malloc( capacity );
+	if ( !text ) {
+		ri.Printf( PRINT_WARNING, "Unable to allocate world dlight output buffer\n" );
+		return;
+	}
+	text[0] = '\0';
+	length = 0;
+	count = MIN( tr.surfaceLightProxies.count, MAX_STATIC_MAP_LIGHTS );
+	if ( tr.surfaceLightProxies.skippedOverflow > 0 ) {
+		ri.Printf( PRINT_WARNING,
+			"WARNING: world dlight generation omitted %i surface lights beyond the %i-light format limit\n",
+			tr.surfaceLightProxies.skippedOverflow, MAX_STATIC_MAP_LIGHTS );
+	}
+
+	if ( !R_WorldDlightsAppend( text, capacity, &length,
+		"{\n  \"format\": \"%s\",\n  \"version\": %i,\n  \"lights\": [\n",
+		WORLD_DLIGHT_FORMAT_NAME, WORLD_DLIGHT_FORMAT_VERSION ) ) {
+		goto overflow;
+	}
+
+	for ( i = 0; i < count; i++ ) {
+		const surfaceLightProxy_t *proxy;
+		vec3_t direction;
+		float radius;
+		float intensity;
+		float priority;
+
+		proxy = &tr.surfaceLightProxies.proxies[i];
+		if ( VectorNormalize2( proxy->normal, direction ) <= 0.0f ) {
+			VectorSet( direction, 0.0f, 0.0f, -1.0f );
+		}
+		radius = proxy->radius > 0.0f ? proxy->radius : WORLD_DLIGHT_DEFAULT_RADIUS;
+		intensity = proxy->intensity > 0.0f ? proxy->intensity : WORLD_DLIGHT_DEFAULT_INTENSITY;
+		priority = proxy->designerPriority > 0.0f ? proxy->designerPriority : 1.0f;
+
+		if ( !R_WorldDlightsAppend( text, capacity, &length,
+			"    {\n"
+			"      \"name\": \"surfacelight_%03i_surface_%i\",\n"
+			"      \"type\": \"spot\",\n"
+			"      \"origin\": [%.6f, %.6f, %.6f],\n"
+			"      \"direction\": [%.6f, %.6f, %.6f],\n"
+			"      \"color\": [%.6f, %.6f, %.6f],\n"
+			"      \"radius\": %.6f,\n"
+			"      \"intensity\": %.6f,\n"
+			"      \"innerAngle\": %.6f,\n"
+			"      \"outerAngle\": %.6f,\n"
+			"      \"castsShadows\": true,\n"
+			"      \"shadowResolution\": %i,\n"
+			"      \"priority\": %.6f\n"
+			"    }%s\n",
+			i, proxy->sourceSurface,
+			proxy->origin[0], proxy->origin[1], proxy->origin[2],
+			direction[0], direction[1], direction[2],
+			proxy->color[0], proxy->color[1], proxy->color[2],
+			radius, intensity, WORLD_DLIGHT_DEFAULT_INNER_ANGLE,
+			WORLD_DLIGHT_DEFAULT_OUTER_ANGLE,
+			WORLD_DLIGHT_DEFAULT_SHADOW_RESOLUTION, priority,
+			( i + 1 < count ) ? "," : "" ) ) {
+			goto overflow;
+		}
+	}
+
+	if ( !R_WorldDlightsAppend( text, capacity, &length, "  ]\n}\n" ) ) {
+		goto overflow;
+	}
+
+	ri.FS_WriteFile( filename, text, length );
+	ri.Free( text );
+	if ( !ri.FS_FileExists( filename ) ) {
+		ri.Printf( PRINT_WARNING, "WARNING: failed to write world dlight file %s\n", filename );
+		return;
+	}
+	R_LoadStaticMapLightsForWorld();
+	ri.Printf( PRINT_ALL, "Generated %i world dlights in %s\n", count, filename );
+	return;
+
+overflow:
+	ri.Free( text );
+	ri.Printf( PRINT_WARNING,
+		"World dlight generation exceeded the %i-byte file limit; no file was written\n",
+		WORLD_DLIGHT_MAX_FILE_SIZE );
 }
 
 static void HSVtoRGB( float h, float s, float v, float rgb[3] )

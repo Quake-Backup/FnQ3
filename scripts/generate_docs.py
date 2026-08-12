@@ -36,7 +36,11 @@ def write_if_changed(path: Path, content: str) -> bool:
     current = path.read_text(encoding="utf-8") if path.exists() else None
     if current == content:
         return False
-    path.write_text(content, encoding="utf-8", newline="\n")
+    # Path.write_text() only grew a newline argument in 3.10, and the Linux
+    # release lanes run this in an ubuntu:20.04 container on Python 3.8.
+    # Path.open() has always taken it.
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
     return True
 
 

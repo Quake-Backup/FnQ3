@@ -34,6 +34,7 @@ from root_archive import (
     validate_archive_member_names,
     validate_root_archive,
     validate_root_archive_names,
+    validate_zip_integrity,
     write_root_archive,
     zip_info_is_symlink,
 )
@@ -41,6 +42,7 @@ from root_archive import (
 
 DEFAULT_DOCS = [
     (ROOT / "LICENSE", Path("LICENSE")),
+    (ROOT / "THIRD_PARTY_NOTICES.md", Path("THIRD_PARTY_NOTICES.md")),
     (ROOT / "docs" / "fnquake3" / "TECHNICAL.md", Path("docs") / "fnquake3" / "TECHNICAL.md"),
     (
         ROOT / "docs" / "GLX.md",
@@ -342,6 +344,7 @@ def validate_release_archive_contents(archive_path: Path) -> None:
             raise ValueError(
                 f"{ROOT_ARCHIVE_NAME} exceeds the {MAX_EMBEDDED_ROOT_ARCHIVE_SIZE}-byte validation limit"
             )
+        validate_zip_integrity(archive, archive_name=archive_path.name)
         with archive.open(root_archive_info) as root_archive_handle:
             root_archive_bytes = root_archive_handle.read(MAX_EMBEDDED_ROOT_ARCHIVE_SIZE + 1)
         if len(root_archive_bytes) > MAX_EMBEDDED_ROOT_ARCHIVE_SIZE:
@@ -359,7 +362,8 @@ def validate_release_archive_contents(archive_path: Path) -> None:
                     f"{ROOT_ARCHIVE_NAME} contains unsupported symbolic link entry: {info.filename}"
                 )
             root_archive_names.append(info.filename)
-    validate_root_archive_names(root_archive_names)
+        validate_root_archive_names(root_archive_names)
+        validate_zip_integrity(root_archive, archive_name=ROOT_ARCHIVE_NAME)
 
 
 def validate_stage_tree(stage_root: Path) -> None:

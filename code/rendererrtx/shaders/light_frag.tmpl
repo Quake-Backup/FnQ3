@@ -94,15 +94,30 @@ void main() {
 	vec4 lightColorRadius = lightColor;
 
 #ifdef USE_LINE
-	// project fragment on light vector
-	float scale = clamp( dot( -L.xyz, lightVector.xyz ) * lightVector.w, 0.0, 1.0 );
-	vec4 LL = lightVector * scale + L;
+	// World sidecar spots use point-light distance attenuation clipped by their
+	// authored cone. Other linear dlights retain the legacy capsule projection.
+	bool worldSpot = dlightFactors.y > 0.5;
+	vec4 LL;
+	float coneFactor = 1.0;
+	if (worldSpot) {
+		vec3 lightToFrag = -L.xyz;
+		float lightToFragLength2 = max(dot(lightToFrag, lightToFrag), 0.00000001);
+		float cosTheta = dot(lightToFrag * inversesqrt(lightToFragLength2), normalize(lightVector.xyz));
+		float outerCos = dlightFactors.w;
+		float innerCos = max(dlightFactors.z, outerCos + 0.00001);
+		coneFactor = smoothstep(outerCos, innerCos, cosTheta);
+		LL = L;
+	} else {
+		// project fragment on the legacy linear light vector
+		float scale = clamp( dot( -L.xyz, lightVector.xyz ) * lightVector.w, 0.0, 1.0 );
+		LL = lightVector * scale + L;
+	}
 
 	vec3 nL = normalize(LL.xyz); // normalized light vector
 	vec3 nV = normalize(V.xyz);	// normalized view vector
 
 	// light intensity
-	float intensFactor = 1.0 - (dot(LL.xyz, LL.xyz) * lightColorRadius.w);
+	float intensFactor = (1.0 - (dot(LL.xyz, LL.xyz) * lightColorRadius.w)) * coneFactor;
 #else
 	vec3 nL = normalize(L.xyz);	// normalized light vector
 	vec3 nV = normalize(V.xyz);	// normalized view vector

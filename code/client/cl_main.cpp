@@ -83,8 +83,7 @@ cvar_t	*cl_shownet;
 cvar_t	*cl_autoRecordDemo;
 cvar_t	*cl_drawRecording;
 cvar_t	*cl_menuAspect;
-cvar_t	*cl_menuDepthOfField;
-cvar_t	*cl_menuDepthOfFieldTime;
+cvar_t	*cl_menuBlur;
 cvar_t	*cl_cinematicAspect;
 cvar_t	*cl_hudAspect;
 cvar_t	*cl_hudDump;
@@ -892,8 +891,8 @@ void CL_ReadDemoMessage( void ) {
 		CL_DemoCompleted();
 		return;
 	}
-	if ( buf.cursize > buf.maxsize ) {
-		Com_Error (ERR_DROP, "CL_ReadDemoMessage: demoMsglen > MAX_MSGLEN");
+	if ( buf.cursize < 0 || buf.cursize > buf.maxsize ) {
+		Com_Error( ERR_DROP, "CL_ReadDemoMessage: invalid message length %d", buf.cursize );
 	}
 	r = FileRead( clc.demofile, buf.data, buf.cursize );
 	if ( r != buf.cursize ) {
@@ -1316,7 +1315,9 @@ void CL_ClearState( void ) {
 
 //	S_StopAllSounds();
 
-	cl = {};
+	// clientActive_t is several megabytes; aggregate assignment can materialize
+	// a temporary copy on the stack, which overflows under instrumentation.
+	Com_Memset( &cl, 0, sizeof( cl ) );
 }
 
 
@@ -1465,7 +1466,7 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 	CL_ClearState();
 
 	// wipe the client connection
-	clc = {};
+	Com_Memset( &clc, 0, sizeof( clc ) );
 
 	cls.state = CA_DISCONNECTED;
 
@@ -2762,7 +2763,7 @@ static void hash_insert( const netadr_t *addr )
 static void hash_reset( void )
 {
 	hash_count = 0;
-	hash_list = {};
+	hash_list.fill( {} );
 	hash_table.fill( nullptr );
 }
 
@@ -4240,14 +4241,15 @@ void CL_Init( void ) {
 		"Menu aspect correction:\n"
 		" 0 - stretch menu widgets to the framebuffer\n"
 		" 1 - keep menu widgets, including 3D model viewports, in centered 4:3 space" );
-	cl_menuDepthOfField = Cvar_Get( "cl_menuDepthOfField", "0", CVAR_ARCHIVE );
-	Cvar_CheckRange( cl_menuDepthOfField, "0", "1", CV_FLOAT );
-	Cvar_SetDescription( cl_menuDepthOfField,
-		"Depth-of-field strength for the live game view behind the in-game menu. 0 disables the effect; requires renderer support." );
-	cl_menuDepthOfFieldTime = Cvar_Get( "cl_menuDepthOfFieldTime", "160", CVAR_ARCHIVE );
-	Cvar_CheckRange( cl_menuDepthOfFieldTime, "0", "1000", CV_INTEGER );
-	Cvar_SetDescription( cl_menuDepthOfFieldTime,
-		"Milliseconds used to fade the in-game menu depth-of-field effect in and out." );
+	cl_menuBlur = Cvar_Get( "cl_menuBlur", "1", CVAR_ARCHIVE );
+	Cvar_CheckRange( cl_menuBlur, "0", "1", CV_FLOAT );
+	Cvar_SetDescription( cl_menuBlur,
+		"Soft-focus strength applied to the frame behind an in-game menu.\n"
+		" 0 - leave the scene sharp\n"
+		" 0..1 - scales both the blur radius and how far the softened copy\n"
+		"        replaces the sharp frame (1 is the default full soft focus)\n"
+		"Gameplay is never affected; the effect exists only while a menu is open.\n"
+		"The connect screen and the console are not softened." );
 	cl_cinematicAspect = Cvar_Get( "cl_cinematicAspect", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_cinematicAspect, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( cl_cinematicAspect,
@@ -4544,7 +4546,7 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 
 	recursive = false;
 
-	cls = {};
+	Com_Memset( &cls, 0, sizeof( cls ) );
 	Key_SetCatcher( 0 );
 	Com_Printf( "-----------------------\n" );
 }

@@ -67,6 +67,30 @@ def main() -> int:
         failures,
     )
     require(
+        glx_module,
+        'float spotRange = max(u_DlightFactors.z - u_DlightFactors.w, 0.0001);',
+        "GLX GLSL independent spotlight cone range",
+        failures,
+    )
+    require(
+        glx_module,
+        'spotFactor = clamp((spotCos - u_DlightFactors.w) / spotRange, 0.0, 1.0);',
+        "GLX GLSL spotlight cone attenuation",
+        failures,
+    )
+    require(
+        glx_module,
+        'intensity *= spotFactor;',
+        "GLX GLSL spotlight intensity modulation",
+        failures,
+    )
+    require(
+        glx_module,
+        '    } else {\\n"\n\t\t"        float along = clamp(',
+        "GLX GLSL capsule projection restricted to unmarked linear lights",
+        failures,
+    )
+    require(
         tr_arb,
         "static qboolean GLX_SpotShadowParams",
         "OpenGL spot-shadow uniform setup",
@@ -82,6 +106,60 @@ def main() -> int:
         tr_arb,
         "FBO_BindSpotShadowTexture( 2 );",
         "OpenGL spot atlas texture binding",
+        failures,
+    )
+    require(
+        tr_arb,
+        "static void ARB_DlightFactors",
+        "OpenGL receiver-lighting factor setup",
+        failures,
+    )
+    require(
+        tr_arb,
+        "if ( !dl || !dl->linear || !dl->spot )",
+        "OpenGL cone restriction to explicitly marked spots",
+        failures,
+    )
+    require(
+        tr_arb,
+        "factors[2] = dl->spotInnerCos;",
+        "OpenGL inner-cone upload",
+        failures,
+    )
+    require(
+        tr_arb,
+        "factors[3] = dl->spotOuterCos;",
+        "OpenGL outer-cone upload",
+        failures,
+    )
+    require(
+        tr_arb,
+        "LRP dnLV, dlightFactors.y, LV, dnLV;",
+        "legacy ARB point-distance selection for authored spots",
+        failures,
+    )
+    require(
+        tr_arb,
+        'LRP tmp.z, dlightFactors.y, tmp.w, {1.0};',
+        "legacy ARB shadow-independent spotlight cone attenuation",
+        failures,
+    )
+    require(
+        gl_tr_scene,
+        "dl->spot = qtrue;",
+        "OpenGL authored world-spot marker",
+        failures,
+    )
+    require(
+        gl_tr_scene,
+        "dl->spotInnerCos = cosf( DEG2RAD( light->innerAngle ) );",
+        "OpenGL precomputed inner cone",
+        failures,
+    )
+    require(
+        gl_tr_scene,
+        "dl->spotOuterCos = cosf( DEG2RAD( light->outerAngle ) );",
+        "OpenGL precomputed outer cone",
         failures,
     )
     require(

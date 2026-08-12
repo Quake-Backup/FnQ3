@@ -26,6 +26,26 @@ def add_zip_symlink(archive: zipfile.ZipFile, name: str, target: str = "target")
     archive.writestr(info, target)
 
 
+def corrupt_zip_member(archive_path: Path, member_name: str) -> None:
+    with zipfile.ZipFile(archive_path) as archive:
+        info = archive.getinfo(member_name)
+
+    archive_bytes = bytearray(archive_path.read_bytes())
+    filename_length = int.from_bytes(
+        archive_bytes[info.header_offset + 26 : info.header_offset + 28],
+        "little",
+    )
+    extra_length = int.from_bytes(
+        archive_bytes[info.header_offset + 28 : info.header_offset + 30],
+        "little",
+    )
+    member_offset = info.header_offset + 30 + filename_length + extra_length
+    if info.compress_size < 1:
+        raise ValueError(f"cannot corrupt empty ZIP member: {member_name}")
+    archive_bytes[member_offset + info.compress_size // 2] ^= 1
+    archive_path.write_bytes(archive_bytes)
+
+
 class ReleasePackagingTests(unittest.TestCase):
     def test_release_zip_is_deterministic_and_sorted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,6 +129,7 @@ class ReleasePackagingTests(unittest.TestCase):
         destinations = {destination.as_posix() for _source, destination in release.DEFAULT_DOCS}
 
         self.assertIn("LICENSE", destinations)
+        self.assertIn("THIRD_PARTY_NOTICES.md", destinations)
         self.assertIn("README.html", destinations)
         self.assertIn("docs/fnquake3/TECHNICAL.md", destinations)
         self.assertIn("docs/GLX.md", destinations)
@@ -206,6 +227,30 @@ class ReleasePackagingTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "symbolic link entry"):
                 root_archive.validate_root_archive(archive_path)
+
+    def test_root_archive_validation_rejects_corrupt_member_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / release.ROOT_ARCHIVE_NAME
+            root_archive.write_root_archive(archive_path)
+            corrupt_zip_member(archive_path, "baseq3/maps/q3dm1.azb")
+
+            with self.assertRaisesRegex(ValueError, "baseq3/maps/q3dm1.azb"):
+                root_archive.validate_root_archive(archive_path)
+
+    def test_zip_integrity_validation_bounds_uncompressed_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / "oversized.zip"
+            with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("large.bin", b"A" * 32)
+
+            with zipfile.ZipFile(archive_path) as archive:
+                with self.assertRaisesRegex(ValueError, "uncompressed validation limit"):
+                    root_archive.validate_zip_integrity(
+                        archive,
+                        archive_name=archive_path.name,
+                        max_member_bytes=16,
+                        max_total_bytes=64,
+                    )
 
     def test_root_archive_rejects_custom_sources_outside_package_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -344,6 +389,35 @@ class ReleasePackagingTests(unittest.TestCase):
                 add_zip_symlink(archive, "linked.txt")
 
             with self.assertRaisesRegex(ValueError, "symbolic link entry"):
+                release.validate_release_archive_contents(archive_path)
+
+    def test_release_archive_validation_rejects_corrupt_outer_member_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = root / "stage"
+            stage_root.mkdir()
+            (stage_root / "fnquake3.x64.exe").write_bytes(b"engine payload" * 128)
+            release.copy_docs(stage_root)
+            release.build_root_archive(stage_root)
+            archive_path = root / "fnq3-corrupt-outer.zip"
+            release.write_deterministic_zip(archive_path, stage_root)
+            corrupt_zip_member(archive_path, "fnquake3.x64.exe")
+
+            with self.assertRaisesRegex(ValueError, r"fnquake3\.x64\.exe"):
+                release.validate_release_archive_contents(archive_path)
+
+    def test_release_archive_validation_rejects_corrupt_embedded_root_member_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = root / "stage"
+            stage_root.mkdir()
+            release.copy_docs(stage_root)
+            embedded_archive = release.build_root_archive(stage_root)
+            corrupt_zip_member(embedded_archive, "baseq3/maps/q3dm1.azb")
+            archive_path = root / "fnq3-corrupt-embedded.zip"
+            release.write_deterministic_zip(archive_path, stage_root)
+
+            with self.assertRaisesRegex(ValueError, "baseq3/maps/q3dm1.azb"):
                 release.validate_release_archive_contents(archive_path)
 
     def test_release_archive_validation_bounds_embedded_root_archive(self) -> None:
@@ -514,20 +588,22 @@ class ReleasePackagingTests(unittest.TestCase):
             stale_archive.parent.mkdir(parents=True)
             stale_archive.write_bytes(b"stale")
 
-            manifest = release.build_archives(
-                argparse.Namespace(
-                    channel="manual",
-                    artifact_root=artifact_root,
-                    output_dir=output_dir,
-                    temp_dir=root / "stage",
-                    build_date="2026-06-20",
-                    build_number=7,
-                    commit="abcdef1234567890",
-                    ref_name=None,
-                    glx_proof_root=None,
-                    glx_rollback_metadata=None,
+            with mock.patch.object(release.subprocess, "run") as generate_docs:
+                manifest = release.build_archives(
+                    argparse.Namespace(
+                        channel="manual",
+                        artifact_root=artifact_root,
+                        output_dir=output_dir,
+                        temp_dir=root / "stage",
+                        build_date="2026-06-20",
+                        build_number=7,
+                        commit="abcdef1234567890",
+                        ref_name=None,
+                        glx_proof_root=None,
+                        glx_rollback_metadata=None,
+                    )
                 )
-            )
+            generate_docs.assert_called_once()
 
             archive_path = Path(str(manifest["archives"][0]["path"]))
             self.assertTrue(archive_path.is_absolute())

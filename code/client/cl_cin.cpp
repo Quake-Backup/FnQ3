@@ -37,6 +37,7 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "cinematic_bounds.hpp"
 
 #include <algorithm>
 #include <array>
@@ -47,6 +48,25 @@ using fnq3::OpenFileRead;
 using fnq3::ScopedFileHandle;
 using fnq3::ScopedTempMemory;
 using fnq3::ToQboolean;
+using fnq3::client::kRoQChunkHeaderBytes;
+using fnq3::client::kRoQDecodedAudioSampleCapacity;
+using fnq3::client::kRoQFileHeaderBytes;
+using fnq3::client::kRoQMaxPayloadBytes;
+using fnq3::client::kRoQQuadInfoBytes;
+using fnq3::client::kRoQReadBufferBytes;
+using fnq3::client::RoQFileHeaderReadComplete;
+using fnq3::client::RoQInitialPayloadIsValid;
+using fnq3::client::RoQBlockFits;
+using fnq3::client::RoQByteReader;
+using fnq3::client::RoQPayloadFits;
+using fnq3::client::RoQPlanCodebook;
+using fnq3::client::RoQPlanRead;
+using fnq3::client::RoQQuadInfoIsValid;
+using fnq3::client::RoQRangeFits;
+using fnq3::client::RoQReadComplete;
+using fnq3::client::RoQReadKind;
+using fnq3::client::RoQReadPlanIsValid;
+using fnq3::client::RoQStereoPayloadIsPaired;
 
 namespace {
 
@@ -55,6 +75,8 @@ constexpr int MINSIZE = 4;
 
 constexpr int DEFAULT_CIN_WIDTH = 512;
 constexpr int DEFAULT_CIN_HEIGHT = 512;
+static_assert( DEFAULT_CIN_WIDTH == fnq3::client::kRoQMaxWidth );
+static_assert( DEFAULT_CIN_HEIGHT == fnq3::client::kRoQMaxHeight );
 
 [[maybe_unused]] constexpr int ROQ_QUAD = 0x1000;
 constexpr int ROQ_QUAD_INFO = 0x1001;
@@ -65,6 +87,7 @@ constexpr int ROQ_QUAD_HANG = 0x1013;
 constexpr int ROQ_PACKET = 0x1030;
 constexpr int ZA_SOUND_MONO = 0x1020;
 constexpr int ZA_SOUND_STEREO = 0x1021;
+constexpr unsigned short ROQ_FILE_ID = 0x1084;
 
 template <typename T>
 static byte *AsWritableBytes( T *ptr )
@@ -90,7 +113,7 @@ extern	int		s_rawend;
 }
 
 
-static void RoQ_init( void );
+static bool RoQ_init( void );
 static void CIN_SetLooping (int handle, qboolean loop);
 
 static const char *CL_CinematicBasename( const char *path )
@@ -172,11 +195,12 @@ static std::array<unsigned short, 256 * 256 * 4> vq8;
 
 struct cinematics_t {
 	std::array<byte, DEFAULT_CIN_WIDTH * DEFAULT_CIN_HEIGHT * 4 * 2> linbuf;
-	std::array<byte, 65536> file;
+	std::array<byte, kRoQReadBufferBytes> file;
+	std::array<short, kRoQDecodedAudioSampleCapacity> sound;
 	std::array<short, 256> sqrTable;
 
 	std::array<int, 256> mcomp;
-	byte				*qStatus[2][32768];
+	byte				*qStatus[2][fnq3::client::kRoQStatusCapacity];
 
 	long				oldXOff, oldYOff;
 	unsigned long		oldysize, oldxsize;
@@ -189,6 +213,7 @@ struct cin_cache {
 	int					CIN_WIDTH, CIN_HEIGHT;
 	int					xpos, ypos, width, height;
 	bool				looping, holdAtEnd, dirty, alterGameState, silent, shader;
+	bool				eofPending, quadInfoValid;
 	ScopedFileHandle	iFile;
 	e_status			status;
 	int					startTime;
@@ -203,10 +228,10 @@ struct cin_cache {
 	unsigned int		roq_id;
 	long				screenDelta;
 
-	void ( *VQ0)(byte *status, void *qdata );
-	void ( *VQ1)(byte *status, void *qdata );
-	void ( *VQNormal)(byte *status, void *qdata );
-	void ( *VQBuffer)(byte *status, void *qdata );
+	bool ( *VQ0)(byte **status, const byte *qdata, std::size_t dataBytes );
+	bool ( *VQ1)(byte **status, const byte *qdata, std::size_t dataBytes );
+	bool ( *VQNormal)(byte **status, const byte *qdata, std::size_t dataBytes );
+	bool ( *VQBuffer)(byte **status, const byte *qdata, std::size_t dataBytes );
 
 	long				samplesPerPixel;				// defaults to 2
 	byte*				gray;
@@ -523,11 +548,123 @@ static void blit2_32( byte *src, byte *dst, int spl  )
 *
 ******************************************************************************/
 
-static void blitVQQuad32fs( byte **status, unsigned char *data )
+static bool RoQVQPayloadIsValid( byte **status, const byte *data,
+	std::size_t dataBytes )
+{
+	const long samplesPerLine = cinTable[currentHandle].samplesPerLine;
+	if ( samplesPerLine <= 0 ) {
+		return false;
+	}
+
+	RoQByteReader reader( data, dataBytes );
+	unsigned short codesRemaining = 0;
+	unsigned short packedCodes = 0;
+	std::size_t index = 0;
+
+	auto readCode = [&]( unsigned short &code ) {
+		if ( !codesRemaining ) {
+			codesRemaining = 7;
+			if ( !reader.ReadLittleShort( packedCodes ) ) {
+				return false;
+			}
+		} else {
+			--codesRemaining;
+		}
+		code = static_cast<unsigned short>( packedCodes & 0xc000 );
+		packedCodes <<= 2;
+		return true;
+	};
+
+	auto blockFits = [&]( byte *destination, std::size_t rowBytes,
+		std::size_t rows, int motionOffset ) {
+		const auto destinationOffset = destination - cin.linbuf.data();
+		const std::int64_t sourceOffset = destinationOffset + motionOffset;
+		return RoQBlockFits( destinationOffset, rowBytes, rows,
+				static_cast<std::size_t>( samplesPerLine ), cin.linbuf.size() )
+			&& RoQBlockFits( sourceOffset, rowBytes, rows,
+				static_cast<std::size_t>( samplesPerLine ), cin.linbuf.size() );
+	};
+
+	for (;;) {
+		if ( index >= fnq3::client::kRoQStatusCapacity ) {
+			return false;
+		}
+		if ( status[index] == nullptr ) {
+			return true;
+		}
+
+		unsigned short code;
+		if ( !readCode( code ) ) {
+			return false;
+		}
+		std::uint8_t operand;
+		switch ( code ) {
+			case 0x8000:
+				if ( !reader.ReadByte( operand )
+					|| !blockFits( status[index], 32, 8, 0 ) ) {
+					return false;
+				}
+				index += 5;
+				break;
+			case 0xc000:
+				++index;
+				for ( unsigned int i = 0; i < 4; ++i, ++index ) {
+					if ( index >= fnq3::client::kRoQStatusCapacity
+						|| status[index] == nullptr || !readCode( code ) ) {
+						return false;
+					}
+					switch ( code ) {
+						case 0x8000:
+							if ( !reader.ReadByte( operand )
+								|| !blockFits( status[index], 16, 4, 0 ) ) {
+								return false;
+							}
+							break;
+						case 0xc000:
+							if ( !blockFits( status[index], 16, 4, 0 ) ) {
+								return false;
+							}
+							for ( unsigned int vector = 0; vector < 4; ++vector ) {
+								if ( !reader.ReadByte( operand ) ) {
+									return false;
+								}
+							}
+							break;
+						case 0x4000:
+							if ( !reader.ReadByte( operand )
+								|| !blockFits( status[index], 16, 4,
+									cin.mcomp[operand] ) ) {
+								return false;
+							}
+							break;
+					}
+				}
+				break;
+			case 0x4000:
+				if ( !reader.ReadByte( operand )
+					|| !blockFits( status[index], 32, 8,
+						cin.mcomp[operand] ) ) {
+					return false;
+				}
+				index += 5;
+				break;
+			case 0x0000:
+				index += 5;
+				break;
+		}
+	}
+}
+
+static bool blitVQQuad32fs( byte **status, const byte *data,
+	std::size_t dataBytes )
 {
 unsigned short	newd, celdata, code;
 unsigned int	index, i;
 int		spl;
+
+	if ( !RoQVQPayloadIsValid( status, data, dataBytes ) ) {
+		return false;
+	}
 
 	newd	= 0;
 	celdata = 0;
@@ -599,6 +736,7 @@ int		spl;
 				break;
 		}
 	} while ( status[index] != nullptr );
+	return true;
 }
 
 /******************************************************************************
@@ -726,7 +864,8 @@ static unsigned int yuv_to_rgb24( long y, long u, long v )
 *
 ******************************************************************************/
 
-static void decodeCodeBook( byte *input, unsigned short roq_flags )
+static void decodeCodeBook( byte *input,
+	const fnq3::client::RoQCodebookPlan &plan )
 {
 	long	i, j, two, four;
 	unsigned short	*aptr, *bptr, *cptr, *dptr;
@@ -737,14 +876,8 @@ static void decodeCodeBook( byte *input, unsigned short roq_flags )
 		unsigned short *s;
 	} iaptr, ibptr, icptr, idptr;
 
-	if (!roq_flags) {
-		two = four = 256;
-	} else {
-		two  = roq_flags>>8;
-		if (!two) two = 256;
-		four = roq_flags&0xff;
-	}
-
+	two = plan.twoByTwoEntries;
+	four = plan.fourByFourEntries;
 	four *= 2;
 
 	bptr = vq2.data();
@@ -1077,13 +1210,21 @@ static void setupQuad( long xOff, long yOff )
 *
 ******************************************************************************/
 
-static void readQuadInfo( byte *qData )
+static bool readQuadInfo( byte *qData, std::uint32_t payloadBytes )
 {
 	const glconfig_t *config;
-	if (currentHandle < 0) return;
+	if ( currentHandle < 0 || payloadBytes != kRoQQuadInfoBytes ) {
+		return false;
+	}
 
-	cinTable[currentHandle].xsize    = qData[0]+qData[1]*256;
-	cinTable[currentHandle].ysize    = qData[2]+qData[3]*256;
+	const unsigned int width = qData[0] + qData[1] * 256;
+	const unsigned int height = qData[2] + qData[3] * 256;
+	if ( !RoQQuadInfoIsValid( payloadBytes, width, height ) ) {
+		return false;
+	}
+
+	cinTable[currentHandle].xsize    = width;
+	cinTable[currentHandle].ysize    = height;
 	cinTable[currentHandle].maxsize  = qData[4]+qData[5]*256;
 	cinTable[currentHandle].minsize  = qData[6]+qData[7]*256;
 	
@@ -1118,6 +1259,7 @@ static void readQuadInfo( byte *qData )
 			Com_Printf( "HACK: approxmimating cinematic for Rage Pro or Voodoo\n" );
 		}
 	}
+	return true;
 }
 
 
@@ -1158,8 +1300,8 @@ static void initRoQ( void )
 {
 	if (currentHandle < 0) return;
 
-	cinTable[currentHandle].VQNormal = reinterpret_cast<void (*)(byte *, void *)>( blitVQQuad32fs );
-	cinTable[currentHandle].VQBuffer = reinterpret_cast<void (*)(byte *, void *)>( blitVQQuad32fs );
+	cinTable[currentHandle].VQNormal = blitVQQuad32fs;
+	cinTable[currentHandle].VQBuffer = blitVQQuad32fs;
 	cinTable[currentHandle].samplesPerPixel = 4;
 	ROQ_GenYUVTables();
 	RllSetupTable();
@@ -1190,15 +1332,51 @@ static byte* RoQFetchInterlaced( byte *source ) {
 */
 
 
+static bool RoQReadHeader( void )
+{
+	const int bytesRead = FileRead( cinTable[currentHandle].iFile.get(),
+		cin.file.data(), kRoQFileHeaderBytes );
+	if ( !RoQFileHeaderReadComplete( bytesRead ) ) {
+		return false;
+	}
+
+	const unsigned short roqId = static_cast<unsigned short>( cin.file[0] )
+		+ static_cast<unsigned short>( cin.file[1] ) * 256;
+	return roqId == ROQ_FILE_ID && RoQ_init();
+}
+
 static void RoQReset( void ) {
 	
 	if (currentHandle < 0) return;
 
+	cinTable[currentHandle].eofPending = false;
 	cinTable[currentHandle].iFile.reset();
-	OpenFileRead( cinTable[currentHandle].fileName.data(), cinTable[currentHandle].iFile, qtrue );
-	FileRead( cinTable[currentHandle].iFile.get(), cin.file.data(), 16 );
-	RoQ_init();
+	const int fileSize = OpenFileRead( cinTable[currentHandle].fileName.data(),
+		cinTable[currentHandle].iFile, qtrue );
+	if ( fileSize <= 0 || !RoQReadHeader() ) {
+		Com_DPrintf( "RoQReset: failed to read a valid RoQ header\n" );
+		cinTable[currentHandle].iFile.reset();
+		cinTable[currentHandle].fileName[0] = '\0';
+		cinTable[currentHandle].looping = false;
+		cinTable[currentHandle].status = FMV_EOF;
+		return;
+	}
+
+	cinTable[currentHandle].ROQSize = fileSize;
 	cinTable[currentHandle].status = FMV_LOOPED;
+}
+
+
+static void RoQFinishPendingEnd( void )
+{
+	cinTable[currentHandle].eofPending = false;
+	if ( cinTable[currentHandle].holdAtEnd ) {
+		cinTable[currentHandle].status = FMV_IDLE;
+	} else if ( cinTable[currentHandle].looping ) {
+		RoQReset();
+	} else {
+		cinTable[currentHandle].status = FMV_EOF;
+	}
 }
 
 
@@ -1213,25 +1391,41 @@ static void RoQReset( void ) {
 static void RoQInterrupt()
 {
 	byte				*framedata;
-	std::array<short, 32768> sbuf;
-        int		ssize;
-        
+	int				bytesRead;
+	int				ssize;
+
 	if (currentHandle < 0) return;
 
-	FileRead( cinTable[currentHandle].iFile.get(), cin.file.data(), cinTable[currentHandle].RoQFrameSize + 8 );
-	if ( cinTable[currentHandle].RoQPlayed >= cinTable[currentHandle].ROQSize ) { 
-		if (!cinTable[currentHandle].holdAtEnd) {
-			if (cinTable[currentHandle].looping) {
-				RoQReset();
-			} else {
-				cinTable[currentHandle].status = FMV_EOF;
-			}
-		} else {
-			cinTable[currentHandle].status = FMV_IDLE;
-		}
-		return; 
+	if ( !RoQPayloadFits( cinTable[currentHandle].RoQFrameSize ) ) {
+		Com_DPrintf( "RoQInterrupt: chunk payload exceeds %u bytes\n",
+			static_cast<unsigned int>( kRoQMaxPayloadBytes ) );
+		cinTable[currentHandle].status = FMV_EOF;
+		return;
 	}
 
+	const std::size_t outerPayloadBytes = cinTable[currentHandle].RoQFrameSize;
+	const int filePosition = FS_FTell( cinTable[currentHandle].iFile.get() );
+	const auto readPlan = RoQPlanRead( cinTable[currentHandle].RoQFrameSize,
+		filePosition, cinTable[currentHandle].ROQSize );
+	if ( !RoQReadPlanIsValid( readPlan ) ) {
+		Com_DPrintf( "RoQInterrupt: chunk payload or next header exceeds file boundary\n" );
+		cinTable[currentHandle].status = FMV_EOF;
+		return;
+	}
+	const std::size_t readBufferBytes = readPlan.bytes;
+	bytesRead = FileRead( cinTable[currentHandle].iFile.get(), cin.file.data(),
+		readBufferBytes );
+	if ( !RoQReadComplete( readPlan, bytesRead ) ) {
+		Com_DPrintf( "RoQInterrupt: truncated chunk payload\n" );
+		cinTable[currentHandle].status = FMV_EOF;
+		return;
+	}
+	cinTable[currentHandle].RoQPlayed = filePosition + bytesRead;
+	const bool terminalChunk = readPlan.kind == RoQReadKind::terminalPayload;
+
+	std::size_t frameOffset = 0;
+	std::size_t packetPayloadEnd = 0;
+	bool parsingPacket = false;
 	framedata = cin.file.data();
 //
 // new frame is ready
@@ -1240,15 +1434,30 @@ static void RoQInterrupt()
 		switch(cinTable[currentHandle].roq_id)
 		{
 			case	ROQ_QUAD_VQ:
+				if ( !cinTable[currentHandle].quadInfoValid ) {
+					Com_DPrintf( "RoQInterrupt: VQ frame precedes quad info\n" );
+					cinTable[currentHandle].status = FMV_EOF;
+					return;
+				}
 				if ((cinTable[currentHandle].numQuads&1)) {
 					cinTable[currentHandle].normalBuffer0 = cinTable[currentHandle].t[1];
 					RoQPrepMcomp( cinTable[currentHandle].roqF0, cinTable[currentHandle].roqF1 );
-					cinTable[currentHandle].VQ1( AsWritableBytes( cin.qStatus[1] ), framedata);
+					if ( !cinTable[currentHandle].VQ1( cin.qStatus[1], framedata,
+						cinTable[currentHandle].RoQFrameSize ) ) {
+						Com_DPrintf( "RoQInterrupt: truncated or invalid VQ payload\n" );
+						cinTable[currentHandle].status = FMV_EOF;
+						return;
+					}
 					cinTable[currentHandle].buf = 	cin.linbuf.data() + cinTable[currentHandle].screenDelta;
 				} else {
 					cinTable[currentHandle].normalBuffer0 = cinTable[currentHandle].t[0];
 					RoQPrepMcomp( cinTable[currentHandle].roqF0, cinTable[currentHandle].roqF1 );
-					cinTable[currentHandle].VQ0( AsWritableBytes( cin.qStatus[0] ), framedata );
+					if ( !cinTable[currentHandle].VQ0( cin.qStatus[0], framedata,
+						cinTable[currentHandle].RoQFrameSize ) ) {
+						Com_DPrintf( "RoQInterrupt: truncated or invalid VQ payload\n" );
+						cinTable[currentHandle].status = FMV_EOF;
+						return;
+					}
 					cinTable[currentHandle].buf = 	cin.linbuf.data();
 				}
 				if (cinTable[currentHandle].numQuads == 0) {		// first frame
@@ -1259,34 +1468,67 @@ static void RoQInterrupt()
 				cinTable[currentHandle].numQuads++;
 				cinTable[currentHandle].dirty = true;
 				break;
-			case	ROQ_CODEBOOK:
-				decodeCodeBook( framedata, static_cast<unsigned short>( cinTable[currentHandle].roq_flags ) );
+			case	ROQ_CODEBOOK: {
+				const auto codebookPlan = RoQPlanCodebook(
+					cinTable[currentHandle].RoQFrameSize,
+					static_cast<unsigned short>( cinTable[currentHandle].roq_flags ) );
+				if ( !codebookPlan.valid ) {
+					Com_DPrintf( "RoQInterrupt: truncated codebook payload\n" );
+					cinTable[currentHandle].status = FMV_EOF;
+					return;
+				}
+				decodeCodeBook( framedata, codebookPlan );
 				break;
+			}
 			case	ZA_SOUND_MONO:
 				if (!cinTable[currentHandle].silent) {
-					ssize = RllDecodeMonoToStereo( framedata, sbuf.data(), cinTable[currentHandle].RoQFrameSize, 0, static_cast<unsigned short>( cinTable[currentHandle].roq_flags ));
-						S_RawSamples( ssize, 22050, 2, 1, AsWritableBytes( sbuf.data() ), s_volume->value );
+					ssize = RllDecodeMonoToStereo( framedata, cin.sound.data(), cinTable[currentHandle].RoQFrameSize, 0, static_cast<unsigned short>( cinTable[currentHandle].roq_flags ));
+						S_RawSamples( ssize, 22050, 2, 1, AsWritableBytes( cin.sound.data() ), s_volume->value );
 				}
 				break;
 			case	ZA_SOUND_STEREO:
+				if ( !RoQStereoPayloadIsPaired( cinTable[currentHandle].RoQFrameSize ) ) {
+					Com_DPrintf( "RoQInterrupt: odd stereo chunk payload\n" );
+					cinTable[currentHandle].status = FMV_EOF;
+					return;
+				}
 				if (!cinTable[currentHandle].silent) {
 					if (cinTable[currentHandle].numQuads == -1) {
 						S_Update( 333 );
 						s_rawend = s_soundtime;
 					}
-					ssize = RllDecodeStereoToStereo( framedata, sbuf.data(), cinTable[currentHandle].RoQFrameSize, 0, static_cast<unsigned short>( cinTable[currentHandle].roq_flags ));
-						S_RawSamples( ssize, 22050, 2, 2, AsWritableBytes( sbuf.data() ), s_volume->value );
+					ssize = RllDecodeStereoToStereo( framedata, cin.sound.data(), cinTable[currentHandle].RoQFrameSize, 0, static_cast<unsigned short>( cinTable[currentHandle].roq_flags ));
+						S_RawSamples( ssize, 22050, 2, 2, AsWritableBytes( cin.sound.data() ), s_volume->value );
 				}
 				break;
 			case	ROQ_QUAD_INFO:
+				if ( cinTable[currentHandle].RoQFrameSize != kRoQQuadInfoBytes ) {
+					Com_DPrintf( "RoQInterrupt: invalid quad-info payload size\n" );
+					cinTable[currentHandle].status = FMV_EOF;
+					return;
+				}
 				if (cinTable[currentHandle].numQuads == -1) {
-					readQuadInfo( framedata );
+					if ( !readQuadInfo( framedata,
+						cinTable[currentHandle].RoQFrameSize ) ) {
+						Com_DPrintf( "RoQInterrupt: invalid quad-info dimensions\n" );
+						cinTable[currentHandle].status = FMV_EOF;
+						return;
+					}
 					setupQuad( 0, 0 );
+					cinTable[currentHandle].quadInfoValid = true;
 					cinTable[currentHandle].startTime = cinTable[currentHandle].lastTime = CL_ScaledMilliseconds();
 				}
 				if (cinTable[currentHandle].numQuads != 1) cinTable[currentHandle].numQuads = 0;
 				break;
 			case	ROQ_PACKET:
+				if ( parsingPacket || !RoQRangeFits( frameOffset,
+					cinTable[currentHandle].RoQFrameSize, outerPayloadBytes ) ) {
+					Com_DPrintf( "RoQInterrupt: invalid nested packet range\n" );
+					cinTable[currentHandle].status = FMV_EOF;
+					return;
+				}
+				packetPayloadEnd = frameOffset + cinTable[currentHandle].RoQFrameSize;
+				parsingPacket = true;
 				cinTable[currentHandle].inMemory = cinTable[currentHandle].roq_flags;
 				cinTable[currentHandle].RoQFrameSize = 0;           // for header
 				break;
@@ -1299,30 +1541,46 @@ static void RoQInterrupt()
 				cinTable[currentHandle].status = FMV_EOF;
 				break;
 		}
-		//
-		// read in next frame data
-		//
-		if ( cinTable[currentHandle].RoQPlayed >= cinTable[currentHandle].ROQSize ) {
-			if (!cinTable[currentHandle].holdAtEnd) {
-				if (cinTable[currentHandle].looping) {
-					RoQReset();
-				} else {
-					cinTable[currentHandle].status = FMV_EOF;
-				}
-			} else {
-				cinTable[currentHandle].status = FMV_IDLE;
-			}
+		if ( cinTable[currentHandle].status == FMV_EOF ) {
+			return;
+		}
+		const std::size_t payloadLimit = parsingPacket
+			? packetPayloadEnd : outerPayloadBytes;
+		if ( !RoQRangeFits( frameOffset,
+			cinTable[currentHandle].RoQFrameSize, payloadLimit ) ) {
+			Com_DPrintf( "RoQInterrupt: chunk payload escapes packet boundary\n" );
+			cinTable[currentHandle].status = FMV_EOF;
+			return;
+		}
+		frameOffset += cinTable[currentHandle].RoQFrameSize;
+
+		const bool embeddedHeader = parsingPacket
+			&& cinTable[currentHandle].inMemory > 0;
+		if ( parsingPacket && !embeddedHeader && frameOffset != packetPayloadEnd ) {
+			Com_DPrintf( "RoQInterrupt: packet payload count does not match its size\n" );
+			cinTable[currentHandle].status = FMV_EOF;
+			return;
+		}
+		if ( terminalChunk && !embeddedHeader ) {
+			cinTable[currentHandle].eofPending = true;
+			return;
+		}
+		const std::size_t headerLimit = embeddedHeader
+			? packetPayloadEnd : readBufferBytes;
+		if ( !RoQRangeFits( frameOffset, kRoQChunkHeaderBytes, headerLimit ) ) {
+			Com_DPrintf( "RoQInterrupt: chunk header escapes packet boundary\n" );
+			cinTable[currentHandle].status = FMV_EOF;
 			return;
 		}
 
-		framedata		 += cinTable[currentHandle].RoQFrameSize;
+		framedata = cin.file.data() + frameOffset;
 		cinTable[currentHandle].roq_id		 = framedata[0] + framedata[1]*256;
 		cinTable[currentHandle].RoQFrameSize = framedata[2] + framedata[3]*256 + framedata[4]*65536;
 		cinTable[currentHandle].roq_flags	 = framedata[6] + framedata[7]*256;
 		cinTable[currentHandle].roqF0		 = static_cast<signed char>( framedata[7] );
 		cinTable[currentHandle].roqF1		 = static_cast<signed char>( framedata[6] );
 
-		if (cinTable[currentHandle].RoQFrameSize>65536||cinTable[currentHandle].roq_id==0x1084) {
+		if ( !RoQPayloadFits( cinTable[currentHandle].RoQFrameSize ) || cinTable[currentHandle].roq_id == ROQ_FILE_ID ) {
 			Com_DPrintf("roq_size>65536||roq_id==0x1084\n");
 			cinTable[currentHandle].status = FMV_EOF;
 			if (cinTable[currentHandle].looping) {
@@ -1330,9 +1588,18 @@ static void RoQInterrupt()
 			}
 			return;
 		}
-		if (cinTable[currentHandle].inMemory && (cinTable[currentHandle].status != FMV_EOF)) {
+		if ( embeddedHeader ) {
+			const std::size_t embeddedPayloadOffset =
+				frameOffset + kRoQChunkHeaderBytes;
+			if ( !RoQRangeFits( embeddedPayloadOffset,
+				cinTable[currentHandle].RoQFrameSize, packetPayloadEnd ) ) {
+				Com_DPrintf( "RoQInterrupt: embedded chunk escapes packet boundary\n" );
+				cinTable[currentHandle].status = FMV_EOF;
+				return;
+			}
 			cinTable[currentHandle].inMemory--;
-			framedata += 8;
+			frameOffset = embeddedPayloadOffset;
+			framedata = cin.file.data() + frameOffset;
 			continue;
 		}
 		break;
@@ -1340,9 +1607,8 @@ static void RoQInterrupt()
 //
 // one more frame hits the dust
 //
-//	assert(cinTable[currentHandle].RoQFrameSize <= 65536);
+//	assert(cinTable[currentHandle].RoQFrameSize <= kRoQMaxPayloadBytes);
 //	r = Sys_StreamedRead( cin.file, cinTable[currentHandle].RoQFrameSize+8, 1, cinTable[currentHandle].iFile );
-	cinTable[currentHandle].RoQPlayed	+= cinTable[currentHandle].RoQFrameSize+8;
 }
 
 
@@ -1354,11 +1620,13 @@ static void RoQInterrupt()
 *
 ******************************************************************************/
 
-static void RoQ_init( void )
+static bool RoQ_init( void )
 {
 	cinTable[currentHandle].startTime = cinTable[currentHandle].lastTime = CL_ScaledMilliseconds();
 
-	cinTable[currentHandle].RoQPlayed = 24;
+	cinTable[currentHandle].RoQPlayed = kRoQFileHeaderBytes;
+	cinTable[currentHandle].eofPending = false;
+	cinTable[currentHandle].quadInfoValid = false;
 
 /*	get frame rate */	
 	cinTable[currentHandle].roqFPS	 = cin.file[ 6] + cin.file[ 7]*256;
@@ -1371,10 +1639,11 @@ static void RoQ_init( void )
 	cinTable[currentHandle].RoQFrameSize	= cin.file[10] + cin.file[11]*256 + cin.file[12]*65536;
 	cinTable[currentHandle].roq_flags	= cin.file[14] + cin.file[15]*256;
 
-	if (cinTable[currentHandle].RoQFrameSize > 65536 || !cinTable[currentHandle].RoQFrameSize) { 
-		return;
+	if ( !RoQInitialPayloadIsValid( cinTable[currentHandle].RoQFrameSize ) ) {
+		return false;
 	}
 
+	return true;
 }
 
 
@@ -1387,15 +1656,19 @@ static void RoQ_init( void )
 ******************************************************************************/
 
 static void RoQShutdown( void ) {
-	if (!cinTable[currentHandle].buf) {
+	if ( currentHandle < 0 ) {
 		return;
 	}
 
-	if ( cinTable[currentHandle].status == FMV_IDLE ) {
+	if ( cinTable[currentHandle].status == FMV_IDLE
+		&& !cinTable[currentHandle].iFile
+		&& cinTable[currentHandle].fileName[0] == '\0' ) {
+		currentHandle = -1;
 		return;
 	}
 	Com_DPrintf("finished cinematic\n");
 	cinTable[currentHandle].status = FMV_IDLE;
+	cinTable[currentHandle].eofPending = false;
 
 	cinTable[currentHandle].iFile.reset();
 
@@ -1473,6 +1746,9 @@ e_status CIN_RunCinematic( int handle )
 			return cinTable[currentHandle].status;
 		}
 	}
+	if ( cinTable[currentHandle].eofPending ) {
+		RoQFinishPendingEnd();
+	}
 
 	if (cinTable[currentHandle].status == FMV_IDLE) {
 		return cinTable[currentHandle].status;
@@ -1489,6 +1765,9 @@ e_status CIN_RunCinematic( int handle )
 		&& (cinTable[currentHandle].status == FMV_PLAY) ) 
 	{
 		RoQInterrupt();
+		if ( cinTable[currentHandle].eofPending ) {
+			break;
+		}
 		if (start != cinTable[currentHandle].startTime) {
 			cinTable[currentHandle].tfps = (((CL_ScaledMilliseconds() - cinTable[currentHandle].startTime)*3)/100);
 			start = cinTable[currentHandle].startTime;
@@ -1502,12 +1781,14 @@ e_status CIN_RunCinematic( int handle )
 	}
 
 	if (cinTable[currentHandle].status == FMV_EOF) {
-	  if (cinTable[currentHandle].looping) {
-		RoQReset();
-	  } else {
+		if (cinTable[currentHandle].looping) {
+			RoQReset();
+			if (cinTable[currentHandle].status != FMV_EOF) {
+				return cinTable[currentHandle].status;
+			}
+		}
 		RoQShutdown();
 		return FMV_EOF;
-	  }
 	}
 
 	return cinTable[currentHandle].status;
@@ -1520,7 +1801,6 @@ CIN_PlayCinematic
 ==================
 */
 int CIN_PlayCinematic( const char *arg, int x, int y, int w, int h, int systemBits ) {
-	unsigned short RoQID;
 	std::array<char, MAX_OSPATH> name;
 	int		i;
 
@@ -1548,7 +1828,9 @@ int CIN_PlayCinematic( const char *arg, int x, int y, int w, int h, int systemBi
 
 	Com_DPrintf("CIN_PlayCinematic( %s )\n", arg);
 
-	cin = {};
+	// cinematics_t owns multi-megabyte decode buffers. Clear its static storage
+	// in place so startup does not materialize a stack-sized aggregate temporary.
+	Com_Memset( &cin, 0, sizeof( cin ) );
 	currentHandle = CIN_HandleForVideo();
 
 	cin.currentHandle = currentHandle;
@@ -1589,12 +1871,8 @@ int CIN_PlayCinematic( const char *arg, int x, int y, int w, int h, int systemBi
 
 	initRoQ();
 					
-	FileRead( cinTable[currentHandle].iFile.get(), cin.file.data(), 16 );
-
-	RoQID = static_cast<unsigned short>( cin.file[0] ) + static_cast<unsigned short>( cin.file[1] ) * 256;
-	if (RoQID == 0x1084)
+	if ( RoQReadHeader() )
 	{
-		RoQ_init();
 //		FS_Read (cin.file, cinTable[currentHandle].RoQFrameSize+8, cinTable[currentHandle].iFile);
 
 		cinTable[currentHandle].status = FMV_PLAY;
@@ -1612,9 +1890,11 @@ int CIN_PlayCinematic( const char *arg, int x, int y, int w, int h, int systemBi
 
 		return currentHandle;
 	}
-	Com_DPrintf("trFMV::play(), invalid RoQ ID\n");
+	Com_DPrintf("trFMV::play(), invalid or truncated RoQ header\n");
 
-	RoQShutdown();
+	cinTable[currentHandle].iFile.reset();
+	cinTable[currentHandle].fileName[0] = '\0';
+	currentHandle = -1;
 	return -1;
 }
 
@@ -1779,7 +2059,9 @@ void CL_PlayCinematic_f( void ) {
 	if (CL_handle >= 0) {
 		do {
 			SCR_RunCinematic();
-		} while (cinTable[currentHandle].buf == nullptr && cinTable[currentHandle].status == FMV_PLAY); // wait for first frame (load codebook and sound)
+		} while ( CL_handle >= 0 && CL_handle < MAX_VIDEO_HANDLES
+			&& cinTable[CL_handle].buf == nullptr
+			&& cinTable[CL_handle].status == FMV_PLAY ); // wait for first frame (load codebook and sound)
 	}
 }
 

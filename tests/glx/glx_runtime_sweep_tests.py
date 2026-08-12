@@ -6131,7 +6131,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
         self.assertEqual(startup["r_dlightShadows"], "1")
         self.assertEqual(startup["r_dlightShadowMaxLights"], "8")
-        self.assertEqual(startup["r_staticLights"], "1")
+        self.assertEqual(startup["r_dlightLoadWorld"], "1")
         self.assertEqual(startup["r_staticLightShadows"], "1")
         self.assertEqual(startup["r_csmShadows"], "1")
         self.assertEqual(startup["r_csmResolution"], "512")
@@ -6206,9 +6206,10 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0]["map"], "q3dm6")
-            sidecar = root / "baseq3" / "maps" / "q3dm6.lights.json"
+            sidecar = root / "baseq3" / "maps" / "q3dm6.dlight"
             self.assertTrue(sidecar.exists())
             text = sidecar.read_text(encoding="utf-8")
+            self.assertIn('"format": "fnquake3-world-dlights"', text)
             self.assertIn('"type": "spot"', text)
             self.assertIn('"combined-sidecar-spot"', text)
 

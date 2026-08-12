@@ -174,7 +174,7 @@ As of June 4, 2026:
   shadow scene on `q3dm6`, with CSM, point dynamic-light shadows, generated
   sidecar spot shadows, surfacelight spot proxy shadows, and the shared shadow
   manager schedule active in one frame.
-- `[x]` Dlight shadow scene runs stage `maps/q3dm6.lights.json` under the
+- `[x]` Dlight shadow scene runs stage `maps/q3dm6.dlight` under the
   sweep homepath for the combined smoke scene, report the generated sidecar in
   top-level `dlightShadowSidecars` metadata, and preserve per-run
   `sidecarLights` evidence.
@@ -305,7 +305,7 @@ Representative runtime scene:
 - Scene id: `combined-shadow-atlas`.
 - Map: `q3dm6`.
 - Category: `combined-shadow-atlas`.
-- Static sidecar: generated `maps/q3dm6.lights.json` containing
+- Static sidecar: generated `maps/q3dm6.dlight` containing
   `combined-sidecar-spot`.
 - Vulkan baseline key:
   `vk-modern-dlight-shadows-combined-shadow-atlas-q3dm6-vulkan`.
@@ -317,7 +317,7 @@ Required combined-smoke debug cvars:
 - `developer=1`, `logfile=2`, `r_dynamiclight=1`, `r_dlightMode=2`,
   `r_dlightShadows=1`, `r_dlightShadowDebug=1`,
   `r_dlightShadowMaxLights=8`, and `r_dlightShadowResolution=256`.
-- `r_staticLights=1`, `r_staticLightDebug=1`,
+- `r_dlightLoadWorld=1`, `r_staticLightDebug=1`,
   `r_staticLightMaxLights=8`, `r_staticLightShadows=1`, and
   `r_staticLightShadowMaxLights=2`.
 - `r_spotShadows=1`, `r_spotShadowDebug=1`,

@@ -78,12 +78,84 @@ class GlobalFogSourceTests(unittest.TestCase):
         self.assertIn("GLOBAL_FOG_EXP2", header)
         self.assertIn("GLOBAL_FOG_LINEAR", header)
 
+        # The tokenizer takes an explicit end pointer and a byte count instead
+        # of relying on a NUL terminator, so an embedded NUL or a truncated
+        # read cannot widen parsing past what FS_ReadFile returned.
+        self.assertIn("GLOBAL_FOG_TOKEN_MAX_BYTES 64", header)
+        self.assertIn("R_GlobalFogNextToken( const char **cursor, const char *end,", header)
+        self.assertIn("textLength > GLOBAL_FOG_SIDECAR_MAX_BYTES", header)
+        self.assertIn("R_GlobalFogSetError", header)
+        self.assertIn("malformed or overlong token", header)
+
+        # 0.1 has no exact binary form and x87 evaluates float expressions at
+        # excess precision, so the documented maximum density needs a cast to
+        # land on the same float the parser stores for an authored "0.1".
+        self.assertIn("#define GLOBAL_FOG_DENSITY_MAX ( (float)0.1f )", header)
+        self.assertIn("fog->density > GLOBAL_FOG_DENSITY_MAX", header)
+        self.assertNotIn("fog->density > 0.1f", header)
+
     def test_all_raster_capable_backends_load_the_current_map_sidecar(self) -> None:
         for renderer in ("renderer", "renderervk", "rendererrtx"):
             bsp = (ROOT / "code" / renderer / "tr_bsp.c").read_text(encoding="utf-8")
             self.assertIn('"maps/%s.fog"', bsp)
             self.assertIn("R_GlobalFogParse", bsp)
             self.assertIn("R_LoadGlobalFogForWorld();", bsp)
+
+    def test_sidecar_loading_is_gated_and_sized_before_it_is_read(self) -> None:
+        """An oversized sidecar must be rejected on its declared size, not
+        allocated first and measured afterwards, and a disabled r_globalFog
+        must not read the file at all."""
+        for renderer in ("renderer", "renderervk", "rendererrtx"):
+            bsp = (ROOT / "code" / renderer / "tr_bsp.c").read_text(encoding="utf-8")
+            start = bsp.index("static void R_LoadGlobalFogForWorld( void )")
+            loader = bsp[start:bsp.index("\nstatic ", start + 1)]
+            with self.subTest(renderer=renderer):
+                self.assertLess(
+                    loader.index("R_GlobalFogClear"), loader.index("r_globalFog->integer")
+                )
+                self.assertLess(
+                    loader.index("r_globalFog->integer"), loader.index("ri.FS_ReadFile")
+                )
+                preflight = loader.index("ri.FS_ReadFile( filename, NULL )")
+                buffered = loader.index("ri.FS_ReadFile( filename, &buffer.v )")
+                first_limit = loader.index("size > GLOBAL_FOG_SIDECAR_MAX_BYTES")
+                second_limit = loader.index(
+                    "size > GLOBAL_FOG_SIDECAR_MAX_BYTES", first_limit + 1
+                )
+                self.assertLess(preflight, first_limit)
+                self.assertLess(first_limit, buffered)
+                self.assertLess(buffered, second_limit)
+                # The parser is handed the byte count it was read with.
+                self.assertIn(
+                    "R_GlobalFogParse( &s_worldData.globalFog, buffer.c, size,", loader
+                )
+
+    def test_authored_color_is_converted_into_the_scene_buffer_domain(self) -> None:
+        """The compositor blends into the scene color buffer, which the output
+        transform still scales by overbright (and by the tone-map exposure in
+        scene-linear mode). Without the conversion an authored mid-grey reaches
+        the display at twice its brightness and the layer reads as a uniform
+        wash instead of distance fog."""
+        header = (ROOT / "code/renderercommon/tr_global_fog.h").read_text(encoding="utf-8")
+        self.assertIn("R_GlobalFogSceneColor", header)
+        self.assertIn("R_GlobalFogSrgbToLinear", header)
+
+        uses = {
+            "code/renderer/tr_arb.c": "sceneColor[0], sceneColor[1], sceneColor[2], opacity",
+            "code/renderervk/vk.c": "constants[0] = sceneColor[0];",
+            "code/rendererrtx/vk.c": "constants[0] = sceneColor[0];",
+        }
+        for path, consumed in uses.items():
+            source = (ROOT / path).read_text(encoding="utf-8")
+            with self.subTest(path=path):
+                self.assertIn(
+                    "R_GlobalFogSceneColor( fog, outputScale, sceneLinear, sceneColor );",
+                    source,
+                )
+                self.assertIn(consumed, source)
+                # The authored value must not reach the shader unconverted.
+                self.assertNotIn("constants[0] = fog->color[0];", source)
+                self.assertNotIn("fog->color[0], fog->color[1], fog->color[2], opacity", source)
 
     def test_compositors_use_resolved_scene_depth(self) -> None:
         arb = (ROOT / "code/renderer/tr_arb.c").read_text(encoding="utf-8")

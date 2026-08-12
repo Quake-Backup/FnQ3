@@ -463,6 +463,9 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	dl->additive = additive;
 	dl->linear = qfalse;
 #ifdef USE_PMLIGHT
+	dl->spot = qfalse;
+	dl->spotInnerCos = 0.0f;
+	dl->spotOuterCos = 0.0f;
 	dl->shadowEligible = qtrue;
 	dl->shadowPlanned = qfalse;
 	dl->shadowIndex = -1;
@@ -523,6 +526,9 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	dl->additive = 0;
 	dl->linear = qtrue;
 #ifdef USE_PMLIGHT
+	dl->spot = qfalse;
+	dl->spotInnerCos = 0.0f;
+	dl->spotOuterCos = 0.0f;
 	dl->shadowEligible = qtrue;
 	dl->shadowPlanned = qfalse;
 	dl->shadowIndex = -1;
@@ -734,7 +740,8 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 	if ( !tr.staticMapLights.loaded || tr.staticMapLights.parseFailed || tr.staticMapLights.count <= 0 ) {
 		return;
 	}
-	if ( !r_staticLights || !r_staticLights->integer || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+	if ( !r_dlightLoadWorld || !r_dlightLoadWorld->integer || !r_dlightMode ||
+		r_dlightMode->integer != 2 || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
 		tr.staticMapLights.skippedDisabledThisFrame = tr.staticMapLights.count;
 		return;
 	}
@@ -815,6 +822,9 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 
 		dl = &backEndData->dlights[before];
 		if ( light->type == MAP_LIGHT_SPOT ) {
+			dl->spot = qtrue;
+			dl->spotInnerCos = cosf( DEG2RAD( light->innerAngle ) );
+			dl->spotOuterCos = cosf( DEG2RAD( light->outerAngle ) );
 			dl->shadowSpotSource = SHADOW_SPOT_SOURCE_STATIC_MAP;
 			dl->shadowSpotSourceIndex = bestIndex;
 		}

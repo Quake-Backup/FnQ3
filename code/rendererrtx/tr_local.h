@@ -48,6 +48,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../renderercommon/tr_public.h"
 #include "../renderercommon/tr_global_fog.h"
 #include "../renderercommon/tr_liquid.h"
+#include "../renderercommon/tr_world_dlights.h"
 #include "tr_common.h"
 #include "iqm.h"
 
@@ -115,6 +116,7 @@ typedef struct dlight_s {
 	vec3_t	transformed2;		// origin2 in local coordinate system
 	int		additive;			// texture detail is lost tho when the lightmap is dark
 	qboolean linear;
+	int		worldSpotIndex;	// static world-light index, or -1 for point/legacy linear lights
 	qboolean castsRtShadows;	// RT visibility policy; raster lighting remains unchanged
 #ifdef USE_PMLIGHT
 	struct litSurf_s	*head;
@@ -1012,7 +1014,7 @@ typedef struct {
 	const char	*entityParsePoint;
 } world_t;
 
-#define MAX_STATIC_MAP_LIGHTS 128
+#define MAX_STATIC_MAP_LIGHTS WORLD_DLIGHT_MAX_LIGHTS
 
 typedef enum {
 	MAP_LIGHT_POINT,
@@ -1459,7 +1461,7 @@ extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
 extern cvar_t	*r_dlightSaturation;	// 0.0 - 1.0
 extern cvar_t	*r_dlightOverbrightGamut;	// 0.0 - 1.0
-extern cvar_t	*r_staticLights;			// 0 - 1
+extern cvar_t	*r_dlightLoadWorld;		// 0 - 1
 extern cvar_t	*r_staticLightMaxLights;	// 0 - MAX_DLIGHTS
 extern cvar_t	*r_staticLightDebug;			// 0 - 1
 extern cvar_t	*r_surfaceLightProxies;		// 0 - 1
@@ -2018,6 +2020,8 @@ void RE_AddLightToScene( const vec3_t org, float intensity, float r, float g, fl
 void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float intensity, float r, float g, float b );
 void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction );
+void R_WorldDlightsReload_f( void );
+void R_WorldDlightsGenerate_f( void );
 void R_StaticMapLightsReload_f( void );
 
 void RE_RenderScene( const refdef_t *fd );
@@ -2143,6 +2147,11 @@ typedef struct {
 
 typedef struct {
 	int		commandId;
+	float	strength;
+} menuBlurCommand_t;
+
+typedef struct {
+	int		commandId;
 	shader_t	*shader;
 	float	x, y;
 	float	w, h;
@@ -2183,6 +2192,7 @@ typedef enum {
 	RC_DRAW_BUFFER,
 	RC_SWAP_BUFFERS,
 	RC_FINISHBLOOM,
+	RC_MENU_BLUR,
 	RC_COLORMASK,
 	RC_CLEARDEPTH,
 	RC_CLEARCOLOR
@@ -2235,7 +2245,7 @@ void RE_TakeVideoFrame( int width, int height,
 		byte *captureBuffer, byte *encodeBuffer, qboolean motionJpeg );
 
 void RE_FinishBloom( void );
-void RE_DrawMenuDepthOfField( float amount );
+void RE_DrawMenuBlur( float strength );
 void RE_ThrottleBackend( void );
 qboolean RE_CanMinimize( void );
 const glconfig_t *RE_GetConfig( void );

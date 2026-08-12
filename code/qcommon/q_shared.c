@@ -1726,7 +1726,7 @@ int QDECL Com_sprintf( char *dest, int size, const char *fmt, ...)
 	}
 
 	va_start( argptr, fmt );
-	len = vsprintf( bigbuffer, fmt, argptr );
+	len = Q_vsnprintf( bigbuffer, sizeof( bigbuffer ), fmt, argptr );
 	va_end( argptr );
 
 	if ( len >= sizeof( bigbuffer ) || len < 0 ) 
@@ -1762,7 +1762,6 @@ va
 
 does a varargs printf into a temp buffer, so I don't need to have
 varargs versions of all text functions.
-FIXME: make this buffer size safe someday
 ============
 */
 const char *QDECL va( const char *format, ... )
@@ -1776,7 +1775,7 @@ const char *QDECL va( const char *format, ... )
 	index ^= 1;
 
 	va_start( argptr, format );
-	vsprintf( buf, format, argptr );
+	Q_vsnprintf( buf, sizeof( string[0] ), format, argptr );
 	va_end( argptr );
 
 	return buf;

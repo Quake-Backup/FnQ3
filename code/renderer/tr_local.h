@@ -46,6 +46,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../renderercommon/tr_public.h"
 #include "../renderercommon/tr_global_fog.h"
 #include "../renderercommon/tr_liquid.h"
+#include "../renderercommon/tr_world_dlights.h"
 #include "tr_common.h"
 #include "iqm.h"
 #include "qgl.h"
@@ -80,6 +81,9 @@ typedef struct dlight_s {
 	int		additive;			// texture detail is lost tho when the lightmap is dark
 	qboolean linear;
 #ifdef USE_PMLIGHT
+	qboolean spot;			// authored cone light, distinct from a legacy linear/capsule light
+	float spotInnerCos;
+	float spotOuterCos;
 	struct litSurf_s	*head;
 	struct litSurf_s	*tail;
 	qboolean shadowEligible;
@@ -801,7 +805,7 @@ typedef struct {
 	float		intensity;
 } worldSun_t;
 
-#define MAX_STATIC_MAP_LIGHTS 128
+#define MAX_STATIC_MAP_LIGHTS WORLD_DLIGHT_MAX_LIGHTS
 #define MAX_SURFACELIGHT_PROXIES 256
 
 typedef enum {
@@ -2025,7 +2029,7 @@ extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
 extern cvar_t	*r_dlightSaturation;	// 0.0 - 1.0
 extern cvar_t	*r_dlightOverbrightGamut;	// 0.0 - 1.0
-extern cvar_t	*r_staticLights;			// 0 - 1
+extern cvar_t	*r_dlightLoadWorld;		// 0 - 1
 extern cvar_t	*r_staticLightMaxLights;		// 0 - MAX_DLIGHTS
 extern cvar_t	*r_staticLightShadows;		// 0 - 1
 extern cvar_t	*r_staticLightShadowMaxLights; // 0 - MAX_DLIGHTS
@@ -2520,7 +2524,7 @@ void FBO_BlitSS( void );
 qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalPass );
 void FBO_CopyScreen( void );
 qboolean FBO_CopyLiquidScreen( void );
-void FBO_MenuDepthOfField( float amount );
+void FBO_MenuBlur( float strength );
 GLuint FBO_ScreenTexture( void );
 GLuint FBO_LiquidScreenTexture( void );
 qboolean FBO_DepthFadeAvailable( void );
@@ -2644,6 +2648,7 @@ void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction );
 void R_DlightTest_f( void );
 #endif
 void R_StaticMapLightsReload_f( void );
+void R_WorldDlightsGenerate_f( void );
 
 void RE_RenderScene( const refdef_t *fd );
 
@@ -2812,8 +2817,8 @@ typedef struct
 typedef struct
 {
 	int commandId;
-	float amount;
-} menuDepthOfFieldCommand_t;
+	float strength;
+} menuBlurCommand_t;
 #endif
 
 typedef struct
@@ -2834,7 +2839,7 @@ typedef enum {
 	RC_SWAP_BUFFERS,
 #ifdef USE_FBO
 	RC_FINISHBLOOM,
-	RC_MENU_DEPTH_OF_FIELD,
+	RC_MENU_BLUR,
 #endif
 	RC_COLORMASK,
 	RC_CLEARDEPTH,
@@ -2893,7 +2898,7 @@ void RE_TakeVideoFrame( int width, int height,
 		byte *captureBuffer, byte *encodeBuffer, qboolean motionJpeg );
 
 void RE_FinishBloom( void );
-void RE_DrawMenuDepthOfField( float amount );
+void RE_DrawMenuBlur( float strength );
 void RE_ThrottleBackend( void );
 qboolean RE_CanMinimize( void );
 const glconfig_t *RE_GetConfig( void );

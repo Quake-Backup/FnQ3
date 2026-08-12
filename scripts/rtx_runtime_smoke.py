@@ -54,6 +54,7 @@ opacity 0.30
 sky 1
 """
 Q3DM1_LIGHTS_SIDECAR: dict[str, object] = {
+    "format": "fnquake3-world-dlights",
     "version": 1,
     "metadata": {
         "purpose": "isolated RTX parity runtime validation",
@@ -110,7 +111,7 @@ COMMON_CVARS = {
     "r_mode": "-1",
     "r_srgbTextures": "1",
     "r_staticLightDebug": "1",
-    "r_staticLights": "1",
+    "r_dlightLoadWorld": "1",
     "r_surfaceLightProxies": "1",
     "r_surfaceLightProxyMaxLights": "16",
     "r_swapInterval": "0",
@@ -206,7 +207,7 @@ RT_NATIVE_DISPATCH_MARKER = (
 )
 Q3DM1_GLOBAL_FOG_MARKER = "Global fog: loaded maps/q3dm1.fog"
 Q3DM1_STATIC_LIGHTS_MARKER = (
-    "Reloaded 2 static map lights from maps/q3dm1.lights.json"
+    "Reloaded 2 world dlights from maps/q3dm1.dlight"
 )
 
 ERROR_PATTERNS = (
@@ -394,7 +395,7 @@ def build_profile_cfg(
                 f"echo RTX_SMOKE_SCENE_READY {profile_name} {map_name}",
                 "gfxinfo",
                 "vkinfo",
-                "r_staticLightReload",
+                "r_dlightReloadWorld",
                 f"screenshotPNG {screenshot_name}",
                 f"wait {screenshot_wait}",
                 f"echo RTX_SMOKE_SCREENSHOT_REQUESTED {profile_name} {map_name} {screenshot_name}",
@@ -465,7 +466,7 @@ def write_runtime_sidecars(
     fog_path = maps_dir / "q3dm1.fog"
     fog_path.write_text(Q3DM1_FOG_SIDECAR, encoding="utf-8", newline="\n")
 
-    lights_path = maps_dir / "q3dm1.lights.json"
+    lights_path = maps_dir / "q3dm1.dlight"
     lights_path.write_text(
         json.dumps(Q3DM1_LIGHTS_SIDECAR, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

@@ -833,13 +833,16 @@ class RtxRendererParitySourceTests(unittest.TestCase):
         scene = read_text("code/rendererrtx/tr_scene.c")
         world = read_text("code/rendererrtx/tr_world.c")
 
-        self.assertIn("#define MAX_STATIC_MAP_LIGHTS 128", self.local_header)
+        self.assertIn(
+            "#define MAX_STATIC_MAP_LIGHTS WORLD_DLIGHT_MAX_LIGHTS",
+            self.local_header,
+        )
         self.assertIn("mapLightDef_t lights[MAX_STATIC_MAP_LIGHTS]", self.local_header)
         self.assertIn("staticMapLights_t\t\tstaticMapLights;", self.local_header)
 
         self.assertRegex(
             self.init,
-            r'ri\.Cvar_Get\(\s*"r_staticLights",\s*"1",\s*CVAR_ARCHIVE_ND\s*\)',
+            r'ri\.Cvar_Get\(\s*"r_dlightLoadWorld",\s*"1",\s*CVAR_ARCHIVE_ND\s*\)',
         )
         self.assertRegex(
             self.init,
@@ -867,9 +870,10 @@ class RtxRendererParitySourceTests(unittest.TestCase):
         loader = source_section(
             bsp,
             "static void R_LoadStaticMapLightsForWorld",
-            "void R_StaticMapLightsReload_f",
+            "void R_WorldDlightsReload_f",
         )
-        self.assertIn('"maps/%s.lights.json"', loader)
+        self.assertIn("WORLD_DLIGHT_FILE_EXTENSION", loader)
+        self.assertIn("WORLD_DLIGHT_LEGACY_FILE_EXTENSION", loader)
         self.assertIn("R_ParseStaticMapLights", loader)
         self.assertIn("tr.staticMapLights.parseFailed = qtrue;", loader)
 
@@ -929,11 +933,15 @@ class RtxRendererParitySourceTests(unittest.TestCase):
             "static qboolean vk_rt_update_light_buffer( void )\n{",
             "static void vk_rt_destroy_as",
         )
-        self.assertIn("dst->colorType[3] = dl->linear ? 2.0f : 0.0f;", light_update)
+        self.assertIn("const mapLightDef_t *worldSpot", light_update)
+        self.assertIn("dst->colorType[3] = RTX_RT_LIGHT_TYPE_SPOT;", light_update)
+        self.assertIn("RTX_RT_LIGHT_TYPE_LINEAR : RTX_RT_LIGHT_TYPE_POINT", light_update)
         self.assertIn(
             "dst->directionSoftness[0] = dl->linear ? dl->origin2[0] : 0.0f;",
             light_update,
         )
+        self.assertIn("dst->metadata[1] = innerCos.u;", light_update)
+        self.assertIn("dst->metadata[2] = outerCos.u;", light_update)
         self.assertIn("dl->castsRtShadows", light_update)
 
         self.assertIn("static lights file:%s loaded:%i parsefail:%i", self.commands)
@@ -1101,7 +1109,7 @@ class RtxRendererParitySourceTests(unittest.TestCase):
         self.assertIn("cl_captureActive->integer", client_hud)
         self.assertIn("cl_captureActive->integer", client_cgame)
 
-    def test_screenshot_aliases_and_menu_dof_match_the_renderer_contract(self) -> None:
+    def test_screenshot_aliases_and_menu_blur_match_the_renderer_contract(self) -> None:
         vk_init = read_text("code/renderervk/tr_init.c")
         core_commands = {
             "screenshot",
@@ -1137,15 +1145,15 @@ class RtxRendererParitySourceTests(unittest.TestCase):
         self.assertIn("R_SavePNG(", self.init)
         self.assertIn("RB_TakeScreenshotPNG", self.backend)
 
-        self.assertIn("void RE_DrawMenuDepthOfField( float amount )", self.commands)
-        self.assertIn(
-            "re.DrawMenuDepthOfField = RE_DrawMenuDepthOfField",
-            self.init,
-        )
-        self.assertIn(
-            "void RE_DrawMenuDepthOfField( float amount );",
-            self.local_header,
-        )
+        self.assertIn("void RE_DrawMenuBlur( float strength )", self.commands)
+        self.assertIn("re.DrawMenuBlur = RE_DrawMenuBlur", self.init)
+        self.assertIn("void RE_DrawMenuBlur( float strength );", self.local_header)
+        # The RTX hook used to be a deliberate no-op that only kept the ABI
+        # aligned. It now queues real work, so assert the command reaches the
+        # backend rather than just that the entry point exists.
+        self.assertIn("cmd->commandId = RC_MENU_BLUR;", self.commands)
+        self.assertIn("data = RB_MenuBlur(data);", self.backend)
+        self.assertIn("vk_menu_blur( cmd->strength );", self.backend)
 
     def test_win32_display_output_query_is_outside_the_opengl_guard(self) -> None:
         win_glimp = read_text("code/win32/win_glimp.cpp")

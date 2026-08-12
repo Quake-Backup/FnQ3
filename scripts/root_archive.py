@@ -4,6 +4,7 @@ import os
 import shutil
 import stat
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Iterable
 
@@ -15,6 +16,8 @@ PKG_ROOT = ROOT / "pkg"
 ZIP_SYMLINK_MODE = 0o120000
 ZIP_FILE_TYPE_MASK = 0o170000
 ZIP_COPY_BUFFER_SIZE = 1024 * 1024
+MAX_ZIP_MEMBER_UNCOMPRESSED_SIZE = 512 * 1024 * 1024
+MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE = 2 * 1024 * 1024 * 1024
 WINDOWS_RESERVED_BASENAMES = {
     "CON",
     "PRN",
@@ -170,6 +173,63 @@ def zip_info_is_symlink(info: zipfile.ZipInfo) -> bool:
     return ((info.external_attr >> 16) & ZIP_FILE_TYPE_MASK) == ZIP_SYMLINK_MODE
 
 
+def validate_zip_integrity(
+    archive: zipfile.ZipFile,
+    *,
+    archive_name: str,
+    max_member_bytes: int = MAX_ZIP_MEMBER_UNCOMPRESSED_SIZE,
+    max_total_bytes: int = MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE,
+) -> None:
+    declared_total = 0
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        if info.file_size > max_member_bytes:
+            raise ValueError(
+                f"{archive_name} member {info.filename} exceeds the "
+                f"{max_member_bytes}-byte uncompressed validation limit"
+            )
+        declared_total += info.file_size
+        if declared_total > max_total_bytes:
+            raise ValueError(
+                f"{archive_name} exceeds the {max_total_bytes}-byte total "
+                "uncompressed validation limit"
+            )
+
+    bytes_read_total = 0
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        try:
+            with archive.open(info) as member:
+                bytes_read_member = 0
+                while chunk := member.read(ZIP_COPY_BUFFER_SIZE):
+                    bytes_read_member += len(chunk)
+                    bytes_read_total += len(chunk)
+                    if bytes_read_member > max_member_bytes:
+                        raise ValueError(
+                            f"{archive_name} member {info.filename} exceeds the "
+                            f"{max_member_bytes}-byte uncompressed validation limit"
+                        )
+                    if bytes_read_total > max_total_bytes:
+                        raise ValueError(
+                            f"{archive_name} exceeds the {max_total_bytes}-byte total "
+                            "uncompressed validation limit"
+                        )
+        except (
+            EOFError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            zipfile.BadZipFile,
+            zlib.error,
+        ) as exc:
+            raise ValueError(
+                f"{archive_name} contains unreadable or corrupt archive member "
+                f"{info.filename}: {exc}"
+            ) from exc
+
+
 def required_root_archive_names(
     assets: Iterable[tuple[Path, Path]] = DEFAULT_ROOT_ARCHIVE_REQUIRED_ASSETS,
 ) -> list[str]:
@@ -214,7 +274,8 @@ def validate_root_archive(archive_path: Path) -> None:
                     f"{archive_path.name} contains unsupported symbolic link entry: {info.filename}"
                 )
             archived_names.append(info.filename)
-    validate_root_archive_names(archived_names, archive_name=archive_path.name)
+        validate_root_archive_names(archived_names, archive_name=archive_path.name)
+        validate_zip_integrity(archive, archive_name=archive_path.name)
 
 
 def write_root_archive(

@@ -34,6 +34,25 @@ def section(text: str, start: str, end: str, label: str, failures: list[str]) ->
     return text[start_index:end_index]
 
 
+def first_section(text: str, starts: list[str], end: str, label: str, failures: list[str]) -> str:
+    """Section from the earliest start marker present.
+
+    A renderer may satisfy the loader contract in one function or split the file
+    read out into a helper; either shape is fine as long as the whole span still
+    sets the flags and reports the failures below.
+    """
+    found = [index for index in (text.find(start) for start in starts) if index >= 0]
+    if not found:
+        failures.append(f"missing section start {label}: {' or '.join(starts)}")
+        return ""
+    start_index = min(found)
+    end_index = text.find(end, start_index)
+    if end_index < 0:
+        failures.append(f"missing section end {label}: {end}")
+        return text[start_index:]
+    return text[start_index:end_index]
+
+
 def check_source(label: str, relative_path: str, failures: list[str]) -> None:
     source = (ROOT / relative_path).read_text(encoding="utf-8")
     light_object = section(
@@ -57,9 +76,12 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
         f"{label} top parser",
         failures,
     )
-    loader = section(
+    loader = first_section(
         source,
-        "static void R_LoadStaticMapLightsForWorld",
+        [
+            "static qboolean R_LoadStaticMapLightsFile",
+            "static void R_LoadStaticMapLightsForWorld",
+        ],
         "void R_StaticMapLightsReload_f",
         f"{label} sidecar loader",
         failures,
@@ -67,8 +89,11 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
 
     require(light_object, "light->castsShadows = qtrue;", f"{label} shadow default", failures)
     require(light_object, "light->designerPriority = 1.0f;", f"{label} priority default", failures)
-    require(light_object, "light->resolution = 256;", f"{label} resolution default", failures)
-    require(light_object, "light->outerAngle = 45.0f;", f"{label} outer angle default", failures)
+    require(light_object, "light->radius = WORLD_DLIGHT_DEFAULT_RADIUS;", f"{label} radius default", failures)
+    require(light_object, "light->intensity = WORLD_DLIGHT_DEFAULT_INTENSITY;", f"{label} intensity default", failures)
+    require(light_object, "light->resolution = WORLD_DLIGHT_DEFAULT_SHADOW_RESOLUTION;", f"{label} resolution default", failures)
+    require(light_object, "light->innerAngle = WORLD_DLIGHT_DEFAULT_INNER_ANGLE;", f"{label} inner angle default", failures)
+    require(light_object, "light->outerAngle = WORLD_DLIGHT_DEFAULT_OUTER_ANGLE;", f"{label} outer angle default", failures)
     require(light_object, "unsupportedType = qtrue;", f"{label} unsupported type flag", failures)
     require(light_object, "*skipReason = 1;", f"{label} unsupported skip reason", failures)
     require(light_object, "*skipReason = 2;", f"{label} invalid skip reason", failures)
@@ -116,7 +141,9 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
     require(loader, "tr.staticMapLights.loaded = qtrue;", f"{label} loaded flag before parse", failures)
     require(loader, "tr.staticMapLights.parseFailed = qtrue;", f"{label} parse-failed flag", failures)
     require(loader, "tr.staticMapLights.count = 0;", f"{label} parse-failed count reset", failures)
-    require(loader, "WARNING: failed to parse static map lights file %s", f"{label} parse warning", failures)
+    require(loader, "WORLD_DLIGHT_FILE_EXTENSION", f"{label} world dlight filename", failures)
+    require(loader, "WORLD_DLIGHT_LEGACY_FILE_EXTENSION", f"{label} legacy filename fallback", failures)
+    require(loader, "WARNING: failed to parse world dlight file %s", f"{label} parse warning", failures)
 
 
 def main() -> int:

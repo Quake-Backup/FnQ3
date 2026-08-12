@@ -1540,6 +1540,20 @@ static qboolean VK_SpotShadowParams( const dlight_t *dl, const shadowSpotLightPl
 	return qtrue;
 }
 
+static const mapLightDef_t *VK_WorldSpotForDlight( const dlight_t *dl )
+{
+	const mapLightDef_t *light;
+
+	if ( !dl || !dl->linear || dl->shadowSpotSource != SHADOW_SPOT_SOURCE_STATIC_MAP ||
+		dl->shadowSpotSourceIndex < 0 ||
+		dl->shadowSpotSourceIndex >= tr.staticMapLights.count ) {
+		return NULL;
+	}
+
+	light = &tr.staticMapLights.lights[dl->shadowSpotSourceIndex];
+	return light->type == MAP_LIGHT_SPOT ? light : NULL;
+}
+
 static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	float radius;
 	vec4_t shadowInfo = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -1548,6 +1562,7 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	float shadowStrength = 0.0f;
 	const shadowPointLightPlan_t *shadowPlan;
 	const shadowSpotLightPlan_t *spotPlan;
+	const mapLightDef_t *worldSpot;
 	qboolean dlightShadow;
 
 #ifdef USE_VULKAN
@@ -1588,6 +1603,20 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 	Vector4Copy( shadowAtlas, uniform->depthFadeScale );
 	Vector4Copy( shadowMode, uniform->depthFadeBias );
 	uniform->depthFadeScale[3] = dlightShadow ? 1.0f : 0.0f;
+	/* z/w carry the visible world-spot cone cosines.  Values outside the
+	 * cosine range are a sentinel that preserves point and legacy line lights. */
+	uniform->depthFadeBias[2] = 2.0f;
+	uniform->depthFadeBias[3] = 2.0f;
+	worldSpot = VK_WorldSpotForDlight( dl );
+	if ( worldSpot ) {
+		float outerAngle;
+		float innerAngle;
+
+		outerAngle = Com_Clamp( 1.0f, 179.0f, worldSpot->outerAngle );
+		innerAngle = Com_Clamp( 0.0f, outerAngle, worldSpot->innerAngle );
+		uniform->depthFadeBias[2] = cosf( innerAngle * (float)M_PI / 180.0f );
+		uniform->depthFadeBias[3] = cosf( outerAngle * (float)M_PI / 180.0f );
+	}
 
 	if ( dl->linear )
 	{

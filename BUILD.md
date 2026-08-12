@@ -60,7 +60,9 @@ Install Visual Studio Community Edition 2017 or later, then build through Meson 
 
 `meson compile -C meson/build-msvc`
 
-`meson install -C meson/build-msvc --destdir dist`
+`meson install -C meson/build-msvc --destdir dist --tags runtime --skip-subprojects`
+
+The runtime tag omits development artifacts such as renderer import libraries, while `--skip-subprojects` keeps bundled dependency headers, libraries, and helper tools out of the game directory. FnQuake3 explicitly restores the notice and verbatim license files for dependencies that are bundled into the runtime package.
 
 The older `code/win32/msvc2017/fnquake3.sln` project files are kept for legacy reference while packaging finishes migrating. Prefer Meson for dependency resolution; it uses the wrap files under `subprojects/` instead of deleted in-tree third-party source directories.
 

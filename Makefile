@@ -740,6 +740,20 @@ STANDARD_AUDIO_ZONE_FILES = $(addprefix $(PKG_ROOT)/baseq3/maps/,$(addsuffix .az
 PKG_FILES = $(shell find $(PKG_ROOT) -type f 2>/dev/null)
 ROOT_ARCHIVE = FnQuake3-pkg.fnz
 
+# A staged install is a complete release root, not just the binaries:
+# scripts/verify_release_layout.py gates DESTDIR before the release workflow
+# uploads it. Kept in step with DEFAULT_DOCS in scripts/release.py and the
+# install_data() calls in meson.build -- the Meson lanes staged these and the
+# Makefile lanes did not, which failed every Linux and macOS release build.
+# Entries are source:destination, relative to the tree root and DESTDIR.
+RELEASE_DOCS = \
+  LICENSE:LICENSE \
+  THIRD_PARTY_NOTICES.md:THIRD_PARTY_NOTICES.md \
+  .install/README.html:README.html \
+  docs/GLX.md:docs/GLX.md \
+  docs/RTX.md:docs/RTX.md \
+  docs/fnquake3/TECHNICAL.md:docs/fnquake3/TECHNICAL.md
+
 TARGETS =
 
 ifneq ($(BUILD_SERVER),0)
@@ -1631,6 +1645,11 @@ install: release
 		fi \
 	done
 	$(INSTALL) -D -m 0644 "$(BR)/$(ROOT_ARCHIVE)" "$(DESTDIR)/$(ROOT_ARCHIVE)"
+	@for doc in $(RELEASE_DOCS); do \
+		src="$${doc%%:*}"; \
+		dst="$${doc##*:}"; \
+		$(INSTALL) -D -m 0644 "$$src" "$(DESTDIR)/$$dst"; \
+	done
 
 clean: clean-debug clean-release
 

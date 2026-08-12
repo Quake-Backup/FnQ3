@@ -469,6 +469,7 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	dl->color[2] = b;
 	dl->additive = additive;
 	dl->linear = qfalse;
+	dl->worldSpotIndex = -1;
 	dl->castsRtShadows = qtrue;
 }
 
@@ -516,6 +517,7 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	dl->color[2] = b;
 	dl->additive = 0;
 	dl->linear = qtrue;
+	dl->worldSpotIndex = -1;
 	dl->castsRtShadows = qtrue;
 }
 
@@ -634,7 +636,9 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 	if ( !tr.staticMapLights.loaded || tr.staticMapLights.parseFailed || tr.staticMapLights.count <= 0 ) {
 		return;
 	}
-	if ( !r_staticLights || !r_staticLights->integer || ( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+	if ( !r_dlightLoadWorld || !r_dlightLoadWorld->integer ||
+		!r_dlightMode || r_dlightMode->integer != 2 ||
+		( fd->rdflags & RDF_NOWORLDMODEL ) ) {
 		tr.staticMapLights.skippedDisabledThisFrame += tr.staticMapLights.count;
 		return;
 	}
@@ -711,6 +715,9 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 		}
 
 		dl = &backEndData->dlights[before];
+		if ( light->type == MAP_LIGHT_SPOT ) {
+			dl->worldSpotIndex = bestIndex;
+		}
 		dl->castsRtShadows = light->castsShadows;
 		tr.staticMapLights.promotedThisFrame++;
 		promotedThisScene++;

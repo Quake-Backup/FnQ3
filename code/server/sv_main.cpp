@@ -814,6 +814,7 @@ static void SVC_Info( const netadr_t *from ) {
 	Info_SetValueForKey( infostring.data(), "g_humanplayers", va( "%i", humans ) );
 	Info_SetValueForKey( infostring.data(), "sv_maxclients", va( "%i", sv.maxclients - sv_privateClients->integer ) );
 	Info_SetValueForKey( infostring.data(), "gametype", va( "%i", sv_gametype->integer ) );
+	Info_SetValueForKey( infostring.data(), "playingDemo", va( "%i", sv.demoPlayback ) );
 	Info_SetValueForKey( infostring.data(), "pure", va( "%i", sv.pure ) );
 	Info_SetValueForKey( infostring.data(), "g_needpass", va( "%d", Cvar_VariableIntegerValue( "g_needpass" ) ) );
 	gamedir = Cvar_VariableString( "fs_game" );
@@ -1415,11 +1416,24 @@ void SV_Frame( int msec, int realMsec ) {
 		sv.timeResidual -= frameMsec;
 
 		if ( sv.demoPlayback ) {
+			// Before playback starts, hold on the first frame until a real
+			// player is fully in-game so they see the demo from the beginning.
+			if ( sv.demoWaitingForViewer ) {
+				for ( const client_t &client : SV_Clients() ) {
+					if ( client.state == CS_ACTIVE &&
+						 client.netchan.remoteAddress.type != NA_BOT ) {
+						sv.demoWaitingForViewer = qfalse;
+						break;
+					}
+				}
+			}
+
 			// Advance demo by one snapshot per frame tick.
 			// SV_DemoAdvance updates sv.time from the demo's serverTime.
-			// If the demo has ended we still advance sv.time to keep
-			// client connections alive (hold on last frame).
-			if ( sv.demoEnded ) {
+			// While waiting for a viewer, or once the demo has ended, we
+			// still advance sv.time to keep client connections alive
+			// (hold on frame 0 / hold on last frame respectively).
+			if ( sv.demoWaitingForViewer || sv.demoEnded ) {
 				sv.time += frameMsec;
 			} else {
 				SV_DemoAdvance();

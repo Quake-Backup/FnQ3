@@ -539,9 +539,11 @@ void SV_SpawnDemoServer( const char *demoName )
 	CL_ShutdownAll();
 #endif
 
-	// Do NOT clear the hunk — we have no BSP, so no new hunk allocation
-	// is needed.  Just clear the per-level server_t and reset snapshot
-	// storage.
+	// We still hunk-allocate snapshot entity storage below on every call
+	// (same as SV_SpawnServer), so the hunk must be cleared first or it
+	// fills up and Hunk_Alloc starts failing after a handful of demos.
+	Hunk_Clear();
+	CM_ClearMap();
 
 	// Init/resize client slots if needed.
 	if ( !Cvar_VariableIntegerValue( "sv_running" ) ) {
@@ -638,20 +640,36 @@ void SV_SpawnDemoServer( const char *demoName )
 	// Publish the mapname so clients see it in the serverinfo.
 	const char *mapname = Info_ValueForKey( sv.configstrings[CS_SERVERINFO], "mapname" );
 	if ( mapname && *mapname ) {
+		// Cinema skips CM_LoadMap (no collision data needed for snapshot replay), so
+		// unlike a normal map spawn this never gets a missing-BSP check for free.
+		// Check for existence only, before committing to playback, so a missing map
+		// aborts cleanly here instead of every connecting client discovering it and
+		// disconnecting individually.
+		fileHandle_t mapFile;
+		if ( FS_FOpenFileRead( va( "maps/%s.bsp", mapname ), &mapFile, qtrue ) < 0 ) {
+			Com_Printf( S_COLOR_RED "SV_SpawnDemoServer: map '%s' referenced by this demo "
+				"was not found (maps/%s.bsp) — clients would be unable to load it and "
+				"disconnect\n", mapname, mapname );
+			SV_Shutdown( "demo cinema init failed" );
+			return;
+		}
+		FS_FCloseFile( mapFile );
 		Cvar_Set( "mapname", mapname );
 	}
 	sv_mapname = Cvar_Get( "mapname", "nomap", CVAR_SERVERINFO | CVAR_ROM );
 
 	// Mark demo playback active.
-	sv.demoPlayback = qtrue;
-	sv.demoEnded    = qfalse;
-	sv.demoNumEnts  = 0;
-	sv.demoPS       = {};
-	sv.demoPrevPS   = {};
+	sv.demoPlayback         = qtrue;
+	sv.demoEnded            = qfalse;
+	sv.demoWaitingForViewer = qtrue;
+	sv.demoNumEnts          = 0;
+	sv.demoPS               = {};
+	sv.demoPrevPS           = {};
 
 	sv.state = SS_GAME;
 
 	Cvar_Set( "sv_running", "1" );
+	Cvar_Set( "sv_playingDemo", "1" );
 
 	// Read the very first snapshot so sv.time is valid before any client connects.
 	SV_DemoAdvance();

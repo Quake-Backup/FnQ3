@@ -101,6 +101,7 @@ typedef struct {
 	int				demoClientNum;				// recorded player's clientNum from demo header
 	int				demoChecksumFeed;			// checksumFeed from demo header
 	qboolean		demoEnded;					// EOF reached, holding on last frame
+	qboolean		demoWaitingForViewer;		// hold on first frame until a client is CS_ACTIVE
 	int				demoMessageSequence;		// sequence counter from the demo stream
 	playerState_t	demoPS;						// current decoded playerState
 	entityState_t	demoPrevPS_base;			// previous playerState for delta decoding

@@ -1282,6 +1282,7 @@ void RB_IQMSurfaceAnim( const surfaceType_t *surface ) {
 	int		*tri;
 	glIndex_t	*ptr;
 	glIndex_t	base;
+	int		baseIndex;
 
 	RB_CHECKOVERFLOW( surf->num_vertexes, surf->num_triangles * 3 );
 
@@ -1454,6 +1455,7 @@ void RB_IQMSurfaceAnim( const surfaceType_t *surface ) {
 	tri = data->triangles + 3 * surf->first_triangle;
 	ptr = &tess.indexes[tess.numIndexes];
 	base = tess.numVertexes;
+	baseIndex = tess.numIndexes;
 
 	for( i = 0; i < surf->num_triangles; i++ ) {
 		*ptr++ = base + (*tri++ - surf->first_vertex);
@@ -1463,6 +1465,8 @@ void RB_IQMSurfaceAnim( const surfaceType_t *surface ) {
 
 	tess.numIndexes += 3 * surf->num_triangles;
 	tess.numVertexes += surf->num_vertexes;
+	RB_TessellateModelSurface( base, surf->num_vertexes, baseIndex,
+		3 * surf->num_triangles, SF_IQM, qtrue );
 }
 
 int R_IQMLerpTag( orientation_t *tag, iqmData_t *data,

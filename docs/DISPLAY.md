@@ -218,6 +218,22 @@ These settings affect the rendered scene itself rather than the window mode.
 
 Use [ASPECT_CORRECTION.md](ASPECT_CORRECTION.md) for HUD, menu, and cinematic layout. That guide is intentionally separate because those settings solve a different problem than scene FOV, render scaling, or bloom.
 
+### Runtime Model Smoothing
+
+`r_modelTessellation` smooths animated model geometry after frame interpolation
+or skeletal skinning. It applies to MD3, MDR, and IQM model surfaces, including
+players, weapons, and items, without changing the model's authored LOD choice:
+
+- `0`: Low. Draw the original triangles without runtime smoothing.
+- `1`: Medium. The default; replace each source triangle with four curved triangles.
+- `2`: High. Replace each source triangle with nine curved triangles.
+
+The setting is live and shared by GLx, Vulkan, and RTX. It increases CPU geometry
+work and submitted triangle count, especially on high. `r_lodbias` remains the
+separate control for choosing pre-authored model LODs. Legacy stencil shadow
+volumes keep the authored topology so their silhouette-edge pairing remains
+compatible.
+
 ## Soft Particles
 
 Soft particles use the scene depth buffer to fade supported translucent effects as they intersect world geometry. This softens the hard clipping that can otherwise appear where smoke, explosions, blood trails, and similar sprites meet floors, walls, or other map surfaces. The effect is visual-only: it does not change demos, protocol behavior, assets, or game logic.
@@ -646,6 +662,7 @@ Settings that are usually safe to tune live:
 - `r_colorGradeAdaptWhitePoint`
 - `r_colorGradeLUT`
 - `r_colorGradeLUTScale`
+- `r_modelTessellation`
 - `r_celShading`
 - `r_celShadingModelShadows`
 - `r_celViewWeapon`

@@ -53,7 +53,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../renderercommon/tr_public.h"
 #include "../renderercommon/tr_global_fog.h"
 #include "../renderercommon/tr_liquid.h"
+#include "../renderercommon/tr_model_tessellation.h"
 #include "../renderercommon/tr_world_dlights.h"
+#include "../renderercommon/tr_dlight_debug.h"
 #include "tr_common.h"
 #include "iqm.h"
 
@@ -895,6 +897,11 @@ typedef struct {
 	int			style;
 	qboolean	castsShadows;
 	float		designerPriority;
+	float		fadeStart;
+	float		fadeEnd;
+	int			pvsFrame;			// tr.frameCount when last passing the PVS test
+	int			promotedFrame;		// tr.frameCount when last submitted, for the debug overlay
+	int			shadowFrame;		// tr.frameCount when last granted a shadow slot
 } mapLightDef_t;
 
 typedef struct {
@@ -955,6 +962,8 @@ typedef struct {
 	int			skippedSky;
 	int			skippedInvalid;
 	int			skippedOverflow;
+	int			flippedNormals;		// winding cross disagreed with the authored facing
+	int			skippedSolid;		// discarded: origin resolved inside solid geometry
 	int			promotedThisFrame;
 	int			shadowEligibleThisFrame;
 	int			spotShadowDeferredThisFrame;
@@ -2056,6 +2065,7 @@ extern cvar_t	*r_stereoSeparation;			// separation of cameras for stereo renderi
 
 extern cvar_t	*r_lodbias;				// push/pull LOD transitions
 extern cvar_t	*r_lodscale;
+extern cvar_t	*r_modelTessellation;		// runtime model smoothing quality
 
 extern cvar_t	*r_teleporterFlash;		// teleport hyperspace visual
 
@@ -2111,7 +2121,9 @@ extern cvar_t	*r_staticLightMaxLights;		// 0 - MAX_DLIGHTS
 extern cvar_t	*r_staticLightShadows;		// 0 - 1
 extern cvar_t	*r_staticLightShadowMaxLights; // 0 - MAX_DLIGHTS
 extern cvar_t	*r_staticLightDebug;			// 0 - 1
-extern cvar_t	*r_surfaceLightProxies;		// 0 - 1
+extern cvar_t	*r_dlightDebugDraw;			// 0 - 2
+extern cvar_t	*r_surfaceLightProxies;
+extern cvar_t	*r_surfaceLightProxyRadiance;		// 0 - 1
 extern cvar_t	*r_surfaceLightProxyMaxLights; // 0 - MAX_DLIGHTS
 extern cvar_t	*r_surfaceLightProxyShadows;	// 0 - 1
 extern cvar_t	*r_surfaceLightProxyShadowMaxLights; // 0 - MAX_DLIGHTS
@@ -2494,6 +2506,9 @@ void RB_BeginSurface( shader_t *shader, int fogNum );
 void RB_EndSurface( void );
 void RB_CheckOverflow( int verts, int indexes );
 #define RB_CHECKOVERFLOW(v,i) RB_CheckOverflow(v,i)
+void RB_TessellateModelSurface( int firstVertex, int numVertexes,
+	int firstIndex, int numIndexes, surfaceType_t surfType,
+	qboolean hasVertexColors );
 
 void RB_StageIteratorGeneric( void );
 void RB_StageIteratorSky( void );
@@ -2551,6 +2566,7 @@ int R_LightForPoint( vec3_t point, vec3_t ambientLight, vec3_t directedLight, ve
 void VK_LightingPass( void );
 void VK_CSMShadowPass( void );
 qboolean R_LightCullBounds( const dlight_t* dl, const vec3_t mins, const vec3_t maxs );
+qboolean R_EntityCastsFrameShadow( trRefEntity_t *ent, const vec3_t mins, const vec3_t maxs );
 qboolean R_DlightShadowAtlasLayout( int maxLights, int requestedFaceSize, int maxTextureSize, dlightShadowAtlasLayout_t *layout );
 qboolean R_SpotShadowAtlasLayout( int maxLights, int requestedTileSize, int maxTextureSize, spotShadowAtlasLayout_t *layout );
 qboolean R_CSMShadowAtlasLayout( int cascadeCount, int requestedCascadeSize, int maxTextureSize, csmShadowAtlasLayout_t *layout );
@@ -2642,6 +2658,7 @@ void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction );
 void R_DlightTest_f( void );
 #endif
 void R_StaticMapLightsReload_f( void );
+void R_WorldDlightsStatus_f( void );
 void R_WorldDlightsGenerate_f( void );
 
 void RE_RenderScene( const refdef_t *fd );

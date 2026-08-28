@@ -109,6 +109,8 @@ void RB_CheckOverflow( int verts, int indexes ) {
 	RB_RestoreSurfaceRestartState( &state );
 }
 
+#include "../renderercommon/tr_model_tessellation_impl.h"
+
 
 /*
 ==============
@@ -915,6 +917,8 @@ static void RB_SurfaceMesh(md3Surface_t *surface) {
 	}
 
 	tess.numVertexes += surface->numVerts;
+	RB_TessellateModelSurface( Doug, surface->numVerts, Bob, indexes,
+		SF_MD3, qfalse );
 
 }
 

@@ -406,7 +406,7 @@ void RB_MDRSurfaceAnim( mdrSurface_t *surface )
 			tempVert[2] += w->boneWeight * ( DotProduct( bone->matrix[2], w->offset ) + bone->matrix[2][3] );
 			
 #ifdef USE_TESS_NEEDS_NORMAL
-			if ( tess.needsNormal )
+			if ( tess.needsNormal || ( r_modelTessellation && r_modelTessellation->integer > MODEL_TESSELLATION_LOW ) )
 #endif
 			{
 				tempNormal[0] += w->boneWeight * DotProduct( bone->matrix[0], v->normal );
@@ -420,7 +420,7 @@ void RB_MDRSurfaceAnim( mdrSurface_t *surface )
 		tess.xyz[baseVertex + j][2] = tempVert[2];
 
 #ifdef USE_TESS_NEEDS_NORMAL
-		if ( tess.needsNormal )
+		if ( tess.needsNormal || ( r_modelTessellation && r_modelTessellation->integer > MODEL_TESSELLATION_LOW ) )
 #endif
 		{
 			tess.normal[baseVertex + j][0] = tempNormal[0];
@@ -435,6 +435,8 @@ void RB_MDRSurfaceAnim( mdrSurface_t *surface )
 	}
 
 	tess.numVertexes += surface->numVerts;
+	RB_TessellateModelSurface( baseVertex, surface->numVerts,
+		baseIndex, indexes, SF_MDR, qfalse );
 }
 
 

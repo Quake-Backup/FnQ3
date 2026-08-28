@@ -48,8 +48,20 @@ class PersonalShadowSourceTests(unittest.TestCase):
                         source,
                     )
                     self.assertIn("R_AddLitSurfFlags( (void *)surface, shader, fogNum,", source)
-                    self.assertIn("personalModel ? LSF_SHADOW_CASTER_ONLY : 0", source)
-                    self.assertRegex(source, r"if\s*\(\s*!personalModel\s*\)")
+                    self.assertIn(
+                        "( personalModel || shadowCasterOnly ) ? LSF_SHADOW_CASTER_ONLY : 0",
+                        source,
+                    )
+                    # a personal model, and a caster the frustum rejected, both
+                    # contribute shadow geometry without a view draw surface
+                    self.assertRegex(
+                        source, r"if\s*\(\s*!personalModel\s*&&\s*!shadowCasterOnly\s*\)"
+                    )
+                    self.assertIn("shadowCasterOnly = qtrue;", source)
+                    self.assertIn(
+                        "( personalShadowCaster || shadowCasterOnly ) && shader->sort == SS_OPAQUE",
+                        source,
+                    )
 
 
 if __name__ == "__main__":

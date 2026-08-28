@@ -3218,6 +3218,48 @@ Returns a freshly allocated shader with all the needed info
 from the current global working shader
 =========================
 */
+/*
+q3map2 takes an emitter's colour from its own texture whenever the shader does
+not name one explicitly, and most retail light shaders declare nothing but
+q3map_surfaceLight.  Without this the surfacelight path fell through to the
+lightmap and vertex averages, which on a light panel are themselves blown out,
+so every generated light came out white regardless of the fixture.
+*/
+static void R_ResolveSurfaceLightImageColor( void )
+{
+	const shaderStage_t *pStage;
+	vec3_t color;
+	int stage;
+
+	if ( !shader.surfaceLightValid || shader.surfaceLightColorValid ||
+		shader.surfaceLightImageColorValid ) {
+		return;
+	}
+
+	for ( stage = 0; stage < MAX_SHADER_STAGES; stage++ ) {
+		pStage = &stages[stage];
+		if ( !pStage->active ) {
+			break;
+		}
+		// the lightmap stage carries the bake, not the fixture's own colour
+		if ( pStage->bundle[0].lightmap != LIGHTMAP_INDEX_NONE ||
+			!pStage->bundle[0].image[0] ) {
+			continue;
+		}
+		if ( !R_ImageAverageColor( pStage->bundle[0].image[0]->imgName, color ) ) {
+			continue;
+		}
+		if ( MAX( color[0], MAX( color[1], color[2] ) ) <= 0.0f ) {
+			continue;
+		}
+
+		VectorCopy( color, shader.surfaceLightImageColor );
+		shader.surfaceLightImageColorValid = qtrue;
+		return;
+	}
+}
+
+
 static shader_t *FinishShader( void ) {
 	int			stage, i, n, m;
 	qboolean	hasLightmapStage;
@@ -3486,6 +3528,8 @@ static shader_t *FinishShader( void ) {
 			}
 		}
 	}
+
+	R_ResolveSurfaceLightImageColor();
 
 	// determine which stage iterator function is appropriate
 	ComputeStageIteratorFunc();

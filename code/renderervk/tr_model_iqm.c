@@ -1075,6 +1075,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	int			i, j;
 	qboolean		personalModel;
 	qboolean		personalShadowCaster;
+	qboolean		shadowCasterOnly;
 	int			cull;
 	int			fogNum;
 	shader_t		*shader;
@@ -1094,6 +1095,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	// don't add third_person objects if not in a portal
 	personalModel = (ent->e.renderfx & RF_THIRD_PERSON) && !R_ViewPassIsPortal( &tr.viewParms );
 	personalShadowCaster = personalModel && !(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ));
+	shadowCasterOnly = qfalse;
 
 	if ( data->num_frames > 0 ) {
 		if ( ent->e.renderfx & RF_WRAP_FRAMES ) {
@@ -1128,7 +1130,17 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	//
 	cull = R_CullIQM ( data, ent );
 	if ( cull == CULL_OUT ) {
+#ifdef USE_PMLIGHT
+		// keep a caster the frustum rejected when a shadow-casting light still
+		// reaches it, otherwise its shadow blinks out as it leaves the screen
+		if ( personalModel || !R_IQMModelBounds( data, ent, bounds[0], bounds[1] ) ||
+			!R_EntityCastsFrameShadow( ent, bounds[0], bounds[1] ) ) {
+			return;
+		}
+		shadowCasterOnly = qtrue;
+#else
 		return;
+#endif
 	}
 
 	//
@@ -1180,6 +1192,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 
 		// stencil shadows can't do personal models unless I polyhedron clip
 		if ( !personalModel
+			&& !shadowCasterOnly
 			&& r_shadows->integer == 2 
 			&& fogNum == 0
 			&& !(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ) ) 
@@ -1195,11 +1208,11 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 			R_AddDrawSurf( (void *)surface, tr.projectionShadowShader, 0, 0 );
 		}
 
-		if ( personalShadowCaster && shader->sort == SS_OPAQUE ) {
+		if ( ( personalShadowCaster || shadowCasterOnly ) && shader->sort == SS_OPAQUE ) {
 			R_AddDrawSurfFlags( (void *)surface, shader, fogNum, 0, DSF_SHADOW_CASTER_ONLY );
 		}
 
-		if ( !personalModel ) {
+		if ( !personalModel && !shadowCasterOnly ) {
 			R_AddDrawSurf( (void *)surface, shader, fogNum, 0 );
 			tr.needScreenMap |= shader->hasScreenMap;
 		}
@@ -1210,7 +1223,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 				dl = dlights[ n ];
 				tr.light = dl;
 				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
-					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
+					( personalModel || shadowCasterOnly ) ? LSF_SHADOW_CASTER_ONLY : 0 );
 			}
 		}
 #endif
@@ -1332,6 +1345,7 @@ void RB_IQMSurfaceAnim( const surfaceType_t *surface ) {
 	int		*tri;
 	glIndex_t	*ptr;
 	glIndex_t	base;
+	int		baseIndex;
 
 	RB_CHECKOVERFLOW( surf->num_vertexes, surf->num_triangles * 3 );
 
@@ -1504,6 +1518,7 @@ void RB_IQMSurfaceAnim( const surfaceType_t *surface ) {
 	tri = data->triangles + 3 * surf->first_triangle;
 	ptr = &tess.indexes[tess.numIndexes];
 	base = tess.numVertexes;
+	baseIndex = tess.numIndexes;
 
 	for( i = 0; i < surf->num_triangles; i++ ) {
 		*ptr++ = base + (*tri++ - surf->first_vertex);
@@ -1513,6 +1528,8 @@ void RB_IQMSurfaceAnim( const surfaceType_t *surface ) {
 
 	tess.numIndexes += 3 * surf->num_triangles;
 	tess.numVertexes += surf->num_vertexes;
+	RB_TessellateModelSurface( base, surf->num_vertexes, baseIndex,
+		3 * surf->num_triangles, SF_IQM, qtrue );
 }
 
 int R_IQMLerpTag( orientation_t *tag, iqmData_t *data,

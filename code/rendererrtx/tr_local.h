@@ -48,6 +48,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../renderercommon/tr_public.h"
 #include "../renderercommon/tr_global_fog.h"
 #include "../renderercommon/tr_liquid.h"
+#include "../renderercommon/tr_model_tessellation.h"
 #include "../renderercommon/tr_world_dlights.h"
 #include "tr_common.h"
 #include "iqm.h"
@@ -1037,6 +1038,11 @@ typedef struct {
 	int			style;
 	qboolean	castsShadows;
 	float		designerPriority;
+	float		fadeStart;
+	float		fadeEnd;
+	int			pvsFrame;			// tr.frameCount when last passing the PVS test
+	int			promotedFrame;		// tr.frameCount when last submitted, for the debug overlay
+	int			shadowFrame;		// tr.frameCount when last granted a shadow slot
 } mapLightDef_t;
 
 typedef struct {
@@ -1072,6 +1078,8 @@ typedef struct {
 	int			skippedSky;
 	int			skippedInvalid;
 	int			skippedOverflow;
+	int			flippedNormals;		// winding cross disagreed with the authored facing
+	int			skippedSolid;		// discarded: origin resolved inside solid geometry
 	int			selectedThisFrame;
 	int			skippedDisabledThisFrame;
 	int			skippedPVSThisFrame;
@@ -1441,6 +1449,7 @@ extern cvar_t	*r_stereoSeparation;			// separation of cameras for stereo renderi
 
 extern cvar_t	*r_lodbias;				// push/pull LOD transitions
 extern cvar_t	*r_lodscale;
+extern cvar_t	*r_modelTessellation;		// runtime model smoothing quality
 
 extern cvar_t	*r_teleporterFlash;		// teleport hyperspace visual
 
@@ -1464,7 +1473,8 @@ extern cvar_t	*r_dlightOverbrightGamut;	// 0.0 - 1.0
 extern cvar_t	*r_dlightLoadWorld;		// 0 - 1
 extern cvar_t	*r_staticLightMaxLights;	// 0 - MAX_DLIGHTS
 extern cvar_t	*r_staticLightDebug;			// 0 - 1
-extern cvar_t	*r_surfaceLightProxies;		// 0 - 1
+extern cvar_t	*r_surfaceLightProxies;
+extern cvar_t	*r_surfaceLightProxyRadiance;		// 0 - 1
 extern cvar_t	*r_surfaceLightProxyMaxLights;	// 0 - MAX_RT_SURFACELIGHT_LIGHTS
 extern cvar_t	*r_surfaceLightProxyDebug;	// 0 - 1
 #ifdef USE_VULKAN
@@ -1888,6 +1898,9 @@ void RB_BeginSurface( shader_t *shader, int fogNum );
 void RB_EndSurface( void );
 void RB_CheckOverflow( int verts, int indexes );
 #define RB_CHECKOVERFLOW(v,i) RB_CheckOverflow(v,i)
+void RB_TessellateModelSurface( int firstVertex, int numVertexes,
+	int firstIndex, int numIndexes, surfaceType_t surfType,
+	qboolean hasVertexColors );
 
 void RB_StageIteratorGeneric( void );
 void RB_StageIteratorSky( void );

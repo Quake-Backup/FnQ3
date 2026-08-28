@@ -173,7 +173,7 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
     require(projection, "if ( area <= Square( 96.0f ) )", f"{label} point projection threshold", failures)
     require(projection, "return SURFACE_LIGHT_PROXY_SPOT;", f"{label} large planar spot projection", failures)
     require(add_proxy, "if ( accum->area <= 1.0f )", f"{label} tiny-area rejection", failures)
-    require(add_proxy, "if ( VectorNormalize2( accum->normalAccum, normal ) <= 0.0f )", f"{label} zero-normal rejection", failures)
+    require(add_proxy, "if ( !R_SurfaceLightResolveNormal( accum, normal ) ) {", f"{label} zero-normal rejection", failures)
     require(add_proxy, "VectorScale( accum->centroidAccum, 1.0f / accum->area, origin );", f"{label} stable emitter centroid", failures)
     require(add_proxy, "proxy->projection = R_SurfaceLightProxyProjection( accum->area );", f"{label} projection stored from area", failures)
     require(add_proxy, "proxy->area = accum->area;", f"{label} proxy area stored", failures)
@@ -181,8 +181,9 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
     require(add_proxy, "proxy->shadowCasterRadius = R_SurfaceLightProxyShadowCasterRadius( shader,", f"{label} proxy shadow caster radius stored", failures)
     require(add_proxy, "proxy->shadowConeAngle = R_SurfaceLightProxyShadowConeAngle(", f"{label} proxy shadow cone angle stored", failures)
     require(add_proxy, "VectorCopy( normal, proxy->normal );", f"{label} normalized proxy normal stored", failures)
-    require(add_proxy, "offset = Com_Clamp( 8.0f, 64.0f, proxy->radius * 0.05f );", f"{label} bounded normal offset", failures)
-    require(add_proxy, "VectorMA( origin, offset, normal, proxy->origin );", f"{label} emitter origin offset along normal", failures)
+    require(source, "#define SURFACELIGHT_PROXY_ORIGIN_OFFSET 4.0f", f"{label} bounded normal offset", failures)
+    require(add_proxy, "R_SurfaceLightPlaceProxyOrigin( origin, normal, proxy->origin );", f"{label} emitter origin offset along normal", failures)
+    require(add_proxy, "R_SurfaceLightOriginInSolid( proxy->origin, &proxy->leafCluster, &proxy->leafArea )", f"{label} solid-origin discard", failures)
     require(add_proxy, "tr.surfaceLightProxies.spotProjectionCount++;", f"{label} spot projection accounting", failures)
     require(add_proxy, "tr.surfaceLightProxies.skippedOverflow++;", f"{label} overflow accounting", failures)
 
@@ -216,12 +217,12 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
         require(local_section, "R_AddSurfaceLightBucketedProxies( surfaceIndex, shader, &accum, buckets, bucketCount );", f"{label} {local_label} bucketed proxy emission", failures)
         require(local_section, "return R_AddSurfaceLightProxy( surfaceIndex, shader, &accum );", f"{label} {local_label} direct proxy fallback", failures)
 
-    require(face, "VectorCopy( face->plane.normal, accum.normalAccum );", f"{label} face plane-normal fallback", failures)
+    require(face, "VectorScale( face->plane.normal, accum.area, accum.orientAccum );", f"{label} face plane-normal facing", failures)
     require(face, "if ( !face || face->numPoints <= 0 || face->numIndices < 3 )", f"{label} invalid face rejection", failures)
     require(grid, "if ( !grid || grid->width < 2 || grid->height < 2 )", f"{label} invalid grid rejection", failures)
-    require(grid, "VectorAdd( accum.normalAccum, grid->verts[i].normal, accum.normalAccum );", f"{label} grid vertex-normal fallback", failures)
+    require(grid, "VectorAdd( accum.orientAccum, grid->verts[i].normal, accum.orientAccum );", f"{label} grid vertex-normal facing", failures)
     require(tri, "if ( !tri || tri->numVerts <= 0 || tri->numIndexes < 3 )", f"{label} invalid triangle-soup rejection", failures)
-    require(tri, "VectorAdd( accum.normalAccum, tri->verts[i].normal, accum.normalAccum );", f"{label} triangle-soup vertex-normal fallback", failures)
+    require(tri, "VectorAdd( accum.orientAccum, tri->verts[i].normal, accum.orientAccum );", f"{label} triangle-soup vertex-normal facing", failures)
     require_order(
         dispatch,
         [

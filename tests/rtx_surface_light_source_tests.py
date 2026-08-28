@@ -112,7 +112,11 @@ class RtxSurfaceLightSourceTests(unittest.TestCase):
             "radius = extent * 2.0f + sqrtf( shader->surfaceLight ) * 8.0f;",
             radius,
         )
-        self.assertIn("return Com_Clamp( 64.0f, 4096.0f, radius );", radius)
+        self.assertIn(
+            "return Com_Clamp( 64.0f, SURFACELIGHT_PROXY_MAX_RADIUS, radius );", radius
+        )
+        # a proxy is an accent around its fixture, not an area light for the room
+        self.assertIn("#define SURFACELIGHT_PROXY_MAX_RADIUS 1024.0f", self.bsp)
 
         color = source_section(
             self.bsp,

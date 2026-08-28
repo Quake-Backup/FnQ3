@@ -820,6 +820,22 @@ static void R_StaticMapLightsNormalizeColor( vec3_t color )
 	}
 }
 
+/*
+An authored fade band only means anything when it ends past where it starts.
+Anything else - a single value, a reversed pair, a negative distance - is
+reduced to "no fade" so a malformed sidecar dims nothing rather than
+extinguishing the light everywhere.
+*/
+static void R_StaticMapLightsNormalizeFade( mapLightDef_t *light )
+{
+	light->fadeStart = Com_Clamp( 0.0f, WORLD_DLIGHT_MAX_FADE_DISTANCE, light->fadeStart );
+	light->fadeEnd = Com_Clamp( 0.0f, WORLD_DLIGHT_MAX_FADE_DISTANCE, light->fadeEnd );
+	if ( light->fadeEnd <= light->fadeStart ) {
+		light->fadeStart = WORLD_DLIGHT_DEFAULT_FADE_START;
+		light->fadeEnd = WORLD_DLIGHT_DEFAULT_FADE_END;
+	}
+}
+
 static qboolean R_StaticMapLightsParseLightObject( const char **p, mapLightDef_t *light, qboolean *accepted, int *skipReason )
 {
 	const char *token;
@@ -840,6 +856,8 @@ static qboolean R_StaticMapLightsParseLightObject( const char **p, mapLightDef_t
 	light->castsShadows = qtrue;
 	light->designerPriority = 1.0f;
 	light->resolution = WORLD_DLIGHT_DEFAULT_SHADOW_RESOLUTION;
+	light->fadeStart = WORLD_DLIGHT_DEFAULT_FADE_START;
+	light->fadeEnd = WORLD_DLIGHT_DEFAULT_FADE_END;
 
 	hasOrigin = qfalse;
 	hasDirection = qtrue;
@@ -927,6 +945,14 @@ static qboolean R_StaticMapLightsParseLightObject( const char **p, mapLightDef_t
 			if ( !R_StaticMapLightsParseFloat( p, &light->designerPriority ) ) {
 				return qfalse;
 			}
+		} else if ( !Q_stricmp( key, "fadeStart" ) ) {
+			if ( !R_StaticMapLightsParseFloat( p, &light->fadeStart ) ) {
+				return qfalse;
+			}
+		} else if ( !Q_stricmp( key, "fadeEnd" ) ) {
+			if ( !R_StaticMapLightsParseFloat( p, &light->fadeEnd ) ) {
+				return qfalse;
+			}
 		} else if ( !Q_stricmp( key, "style" ) ) {
 			if ( !R_StaticMapLightsParseInt( p, &light->style ) ) {
 				return qfalse;
@@ -952,9 +978,10 @@ static qboolean R_StaticMapLightsParseLightObject( const char **p, mapLightDef_t
 	light->radius = Com_Clamp( 1.0f, 8192.0f, light->radius );
 	light->intensity = Com_Clamp( 1.0f, 8192.0f, light->intensity );
 	light->designerPriority = Com_Clamp( 0.0f, 16.0f, light->designerPriority );
-	light->resolution = (int)Com_Clamp( 64.0f, 1024.0f, (float)light->resolution );
+	light->resolution = R_WorldDlightClampShadowResolution( light->resolution );
 	light->outerAngle = Com_Clamp( 1.0f, 179.0f, light->outerAngle );
 	light->innerAngle = Com_Clamp( 0.0f, light->outerAngle, light->innerAngle );
+	R_StaticMapLightsNormalizeFade( light );
 
 	if ( !hasOrigin || light->designerPriority <= 0.0f ) {
 		*skipReason = 2;
@@ -1160,6 +1187,61 @@ static void R_LoadStaticMapLightsForWorld( void )
 	}
 }
 
+static int R_WorldDlightCvarValue( const cvar_t *cvar, int fallback )
+{
+	return cvar ? cvar->integer : fallback;
+}
+
+/*
+Prints every gate a world dlight has to clear, in the order it has to clear
+them.  "256 lights loaded but nothing visible" is almost always one archived
+cvar, and reading them one at a time from the console does not make that
+obvious.
+*/
+void R_WorldDlightsStatus_f( void )
+{
+	const staticMapLights_t *lights = &tr.staticMapLights;
+
+	if ( !tr.worldMapLoaded || !tr.world ) {
+		ri.Printf( PRINT_ALL, "world dlights: no world map loaded\n" );
+		return;
+	}
+
+	ri.Printf( PRINT_ALL, "world dlights: file %s\n",
+		lights->filename[0] ? lights->filename : "<none>" );
+	if ( !lights->loaded ) {
+		ri.Printf( PRINT_ALL, "  no sidecar found; run r_dlightGenerateWorld to author one\n" );
+		return;
+	}
+	if ( lights->parseFailed ) {
+		ri.Printf( PRINT_ALL, "  PARSE FAILED; no lights are active\n" );
+		return;
+	}
+
+	ri.Printf( PRINT_ALL, "  loaded:%i point:%i spot:%i version:%i\n",
+		lights->count, lights->pointCount, lights->spotCount, lights->version );
+	ri.Printf( PRINT_ALL, "  gates: r_dlightMode %i (needs 2)  r_dlightLoadWorld %i (needs 1)  r_dynamiclight %i (needs 1)\n",
+		R_WorldDlightCvarValue( r_dlightMode, 0 ),
+		R_WorldDlightCvarValue( r_dlightLoadWorld, 0 ),
+		R_WorldDlightCvarValue( r_dynamiclight, 0 ) );
+	ri.Printf( PRINT_ALL, "  budget: r_staticLightMaxLights %i  r_staticLightShadowMaxLights %i\n",
+		R_WorldDlightCvarValue( r_staticLightMaxLights, 0 ),
+		R_WorldDlightCvarValue( r_staticLightShadowMaxLights, 0 ) );
+	ri.Printf( PRINT_ALL, "  shadows: r_dlightShadows %i  r_staticLightShadows %i  r_spotShadows %i\n",
+		R_WorldDlightCvarValue( r_dlightShadows, 0 ),
+		R_WorldDlightCvarValue( r_staticLightShadows, 0 ),
+		R_WorldDlightCvarValue( r_spotShadows, 0 ) );
+	ri.Printf( PRINT_ALL, "  last frame: promoted:%i shadowEligible:%i skipped disabled:%i pvs:%i budget:%i\n",
+		lights->promotedThisFrame, lights->shadowEligibleThisFrame,
+		lights->skippedDisabledThisFrame, lights->skippedPVSThisFrame,
+		lights->skippedBudgetThisFrame );
+	ri.Printf( PRINT_ALL, "  point shadows planned:%i considered:%i skipped linear:%i nosurfaces:%i budget:%i\n",
+		tr.pc.c_dlightShadowPlanned, tr.pc.c_dlightShadowConsidered,
+		tr.pc.c_dlightShadowSkippedLinear, tr.pc.c_dlightShadowSkippedNoSurfaces,
+		tr.pc.c_dlightShadowSkippedBudget );
+	ri.Printf( PRINT_ALL, "  use r_dlightDebugDraw 2 to see every light's origin, reach, and cone\n" );
+}
+
 void R_StaticMapLightsReload_f( void )
 {
 	if ( !tr.worldMapLoaded || !tr.world ) {
@@ -1179,6 +1261,20 @@ static void R_ClearSurfaceLightProxies( void )
 }
 
 #define SURFACELIGHT_PROXY_SUBDIVIDE_MIN_SIZE 64.0f
+/* just enough to clear the emitting surface without drifting off it */
+#define SURFACELIGHT_PROXY_ORIGIN_OFFSET 4.0f
+
+/* The q3map_surfaceLight value a retail light panel typically declares. */
+#define SURFACELIGHT_PROXY_REFERENCE_EMISSION 300.0f
+/* Peak radiance such a panel emits, via r_surfaceLightProxyRadiance.  Well
+   under 1 because the proxy is added on top of a lightmap that already carries
+   this fixture's contribution; emitting at full texture colour double-counts
+   the light the room has already received. */
+#define SURFACELIGHT_PROXY_DEFAULT_RADIANCE 0.15f
+#define SURFACELIGHT_PROXY_MIN_RADIANCE_SCALE 0.15f
+#define SURFACELIGHT_PROXY_MAX_RADIANCE_SCALE 1.5f
+/* A proxy is an accent around its fixture, not an area light for the room. */
+#define SURFACELIGHT_PROXY_MAX_RADIUS 1024.0f
 #define SURFACELIGHT_PROXY_SUBDIVIDE_MAX_SIZE 1024.0f
 #define SURFACELIGHT_PROXY_SUBDIVIDE_MAX_AXIS 4
 #define SURFACELIGHT_PROXY_SUBDIVIDE_MAX_BUCKETS ( SURFACELIGHT_PROXY_SUBDIVIDE_MAX_AXIS * SURFACELIGHT_PROXY_SUBDIVIDE_MAX_AXIS )
@@ -1186,6 +1282,10 @@ static void R_ClearSurfaceLightProxies( void )
 typedef struct {
 	vec3_t centroidAccum;
 	vec3_t normalAccum;
+	// the surface's own authored normal (face plane, or baked vertex normals).
+	// normalAccum comes from the triangle winding and only describes the plane;
+	// this is the half that knows which side of it is outside the brush.
+	vec3_t orientAccum;
 	vec3_t colorAccum;
 	vec3_t boundsMins;
 	vec3_t boundsMaxs;
@@ -1205,6 +1305,7 @@ static void R_ClearSurfaceLightProxyAccum( surfaceLightProxyAccum_t *accum )
 {
 	VectorClear( accum->centroidAccum );
 	VectorClear( accum->normalAccum );
+	VectorClear( accum->orientAccum );
 	VectorClear( accum->colorAccum );
 	VectorSet( accum->boundsMins, 999999.0f, 999999.0f, 999999.0f );
 	VectorSet( accum->boundsMaxs, -999999.0f, -999999.0f, -999999.0f );
@@ -1314,6 +1415,58 @@ static void R_SurfaceLightResolveColor( const shader_t *shader,
 	VectorCopy( shader->surfaceLightColor, color );
 }
 
+/*
+q3map_surfaceLight is a radiosity emission budget, not a dynamic-light peak.
+The map already ships that energy baked into its lightmap, so a proxy that
+emits at full texture colour is adding a second copy of light the room has
+already received - which is what blew out whole areas.
+
+Treat the authored value as a relative strength instead: a light panel at the
+retail-typical 300 lands on the reference radiance, and the curve is square
+root so a 1000-unit emitter reads brighter without being three times as hot.
+The result is a rim of extra light around the fixture rather than a re-light.
+*/
+static float R_SurfaceLightProxyRadiance( const shader_t *shader )
+{
+	float reference;
+	float emission;
+	float scale;
+
+	reference = r_surfaceLightProxyRadiance ?
+		Com_Clamp( 0.0f, 1.0f, r_surfaceLightProxyRadiance->value ) :
+		SURFACELIGHT_PROXY_DEFAULT_RADIANCE;
+
+	emission = shader->surfaceLight;
+	if ( !( emission > 0.0f ) ) {
+		return reference;
+	}
+
+	scale = sqrtf( emission / SURFACELIGHT_PROXY_REFERENCE_EMISSION );
+	scale = Com_Clamp( SURFACELIGHT_PROXY_MIN_RADIANCE_SCALE,
+		SURFACELIGHT_PROXY_MAX_RADIANCE_SCALE, scale );
+
+	return scale * reference;
+}
+
+/*
+Rescale a resolved hue to the radiance the emitter deserves.  The hue is
+normalized to unit peak first so a dim texture and a bright one of the same
+colour emit at the same strength - the fixture's brightness is carried by
+q3map_surfaceLight, not by how light its texture happens to be.
+*/
+static void R_SurfaceLightApplyRadiance( const shader_t *shader, vec3_t color )
+{
+	float peak;
+
+	peak = MAX( color[0], MAX( color[1], color[2] ) );
+	if ( peak <= 0.0f ) {
+		VectorSet( color, 1.0f, 1.0f, 1.0f );
+		peak = 1.0f;
+	}
+
+	VectorScale( color, R_SurfaceLightProxyRadiance( shader ) / peak, color );
+}
+
 static qboolean R_SurfaceLightTriangleInfo( const vec3_t a, const vec3_t b, const vec3_t c,
 	vec3_t centroid, vec3_t cross, float *area )
 {
@@ -1365,7 +1518,7 @@ static float R_SurfaceLightProxyRadius( const shader_t *shader, float area )
 		radius = shader->surfaceLightSubdivide;
 	}
 
-	return Com_Clamp( 64.0f, 4096.0f, radius );
+	return Com_Clamp( 64.0f, SURFACELIGHT_PROXY_MAX_RADIUS, radius );
 }
 
 static float R_SurfaceLightProxyFootprintRadius( const surfaceLightProxyAccum_t *accum,
@@ -1447,19 +1600,78 @@ static surfaceLightProxyProjection_t R_SurfaceLightProxyProjection( float area )
 	return SURFACE_LIGHT_PROXY_SPOT;
 }
 
+/*
+The winding cross product describes the emitter's plane but its sign follows
+the BSP index order, which for a world face points back into the brush.  Take
+the direction from the accumulated winding - it is area weighted and precise -
+but take the side from the surface's authored normal, which is the only source
+that knows which way the surface actually faces.
+*/
+static qboolean R_SurfaceLightResolveNormal( const surfaceLightProxyAccum_t *accum, vec3_t normal )
+{
+	vec3_t authored;
+	qboolean hasAuthored;
+
+	hasAuthored = ( VectorNormalize2( accum->orientAccum, authored ) > 0.0f ) ? qtrue : qfalse;
+
+	if ( VectorNormalize2( accum->normalAccum, normal ) > 0.0f ) {
+		if ( hasAuthored && DotProduct( normal, authored ) < 0.0f ) {
+			VectorNegate( normal, normal );
+			tr.surfaceLightProxies.flippedNormals++;
+		}
+		return qtrue;
+	}
+
+	if ( hasAuthored ) {
+		VectorCopy( authored, normal );
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+/*
+Lift the light just clear of its emitting surface.  The offset only has to
+break the coplanar tie with the surface it came from - pushing it further
+moves the apparent source away from the light fixture and, on a recessed
+emitter, straight through the brush behind it.
+*/
+static void R_SurfaceLightPlaceProxyOrigin( const vec3_t centroid, const vec3_t normal,
+	vec3_t origin )
+{
+	VectorMA( centroid, SURFACELIGHT_PROXY_ORIGIN_OFFSET, normal, origin );
+}
+
+/*
+A proxy that resolves into a leaf the world cannot see out of is inside solid
+geometry, where it lights nothing and casts no shadow.  Discard it rather than
+carry a light that can never contribute.  Maps built without vis have no
+cluster to test against, so there the proxy stands as placed.
+*/
+static qboolean R_SurfaceLightOriginInSolid( const vec3_t origin, int *cluster, int *area )
+{
+	qboolean resolved;
+
+	resolved = R_PointLeafClusterArea( origin, cluster, area );
+	if ( !tr.world || tr.world->numClusters <= 0 ) {
+		return qfalse;
+	}
+
+	return resolved ? qfalse : qtrue;
+}
+
 static qboolean R_AddSurfaceLightProxy( int surfaceIndex, const shader_t *shader,
 	const surfaceLightProxyAccum_t *accum )
 {
 	surfaceLightProxy_t *proxy;
 	vec3_t origin;
 	vec3_t normal;
-	float offset;
 
 	if ( accum->area <= 1.0f ) {
 		tr.surfaceLightProxies.skippedInvalid++;
 		return qfalse;
 	}
-	if ( VectorNormalize2( accum->normalAccum, normal ) <= 0.0f ) {
+	if ( !R_SurfaceLightResolveNormal( accum, normal ) ) {
 		tr.surfaceLightProxies.skippedInvalid++;
 		return qfalse;
 	}
@@ -1490,15 +1702,25 @@ static qboolean R_AddSurfaceLightProxy( int surfaceIndex, const shader_t *shader
 	proxy->castsShadows = qtrue;
 	VectorCopy( normal, proxy->normal );
 	R_SurfaceLightResolveColor( shader, accum->colorAccum, accum->area, proxy->color );
+	R_SurfaceLightApplyRadiance( shader, proxy->color );
 	if ( proxy->projection == SURFACE_LIGHT_PROXY_SPOT ) {
 		tr.surfaceLightProxies.spotProjectionCount++;
 	} else {
 		tr.surfaceLightProxies.pointProjectionCount++;
 	}
 
-	offset = Com_Clamp( 8.0f, 64.0f, proxy->radius * 0.05f );
-	VectorMA( origin, offset, normal, proxy->origin );
-	if ( R_PointLeafClusterArea( proxy->origin, &proxy->leafCluster, &proxy->leafArea ) ) {
+	R_SurfaceLightPlaceProxyOrigin( origin, normal, proxy->origin );
+	if ( R_SurfaceLightOriginInSolid( proxy->origin, &proxy->leafCluster, &proxy->leafArea ) ) {
+		tr.surfaceLightProxies.count--;
+		tr.surfaceLightProxies.skippedSolid++;
+		if ( proxy->projection == SURFACE_LIGHT_PROXY_POINT ) {
+			tr.surfaceLightProxies.pointProjectionCount--;
+		} else {
+			tr.surfaceLightProxies.spotProjectionCount--;
+		}
+		return qfalse;
+	}
+	if ( proxy->leafCluster >= 0 ) {
 		tr.surfaceLightProxies.spatialized++;
 	} else {
 		tr.surfaceLightProxies.spatialFallback++;
@@ -1644,6 +1866,9 @@ static qboolean R_AddSurfaceLightBucketedProxies( int surfaceIndex, const shader
 		if ( buckets[i].area <= 1.0f ) {
 			continue;
 		}
+		// every bucket came off the same surface, so it inherits that surface's
+		// facing; its own winding accumulation only knows the plane
+		VectorCopy( total->orientAccum, buckets[i].orientAccum );
 		if ( R_AddSurfaceLightProxy( surfaceIndex, shader, &buckets[i] ) ) {
 			tr.surfaceLightProxies.subdivisionProxies++;
 			added = qtrue;
@@ -1688,9 +1913,10 @@ static qboolean R_BuildSurfaceLightFaceProxy( int surfaceIndex, const shader_t *
 			color0, color1, color2, &accum );
 	}
 
+	// the face plane is the authoritative outward normal for a planar surface
+	VectorScale( face->plane.normal, accum.area, accum.orientAccum );
 	if ( VectorLengthSquared( accum.normalAccum ) <= 0.0f ) {
-		VectorCopy( face->plane.normal, accum.normalAccum );
-		VectorScale( accum.normalAccum, accum.area, accum.normalAccum );
+		VectorCopy( accum.orientAccum, accum.normalAccum );
 	}
 
 	subdivide = R_SurfaceLightBeginSubdivision( shader, &accum, &subdiv );
@@ -1768,12 +1994,17 @@ static qboolean R_BuildSurfaceLightGridProxy( int surfaceIndex, const shader_t *
 		}
 	}
 
-	if ( VectorLengthSquared( accum.normalAccum ) <= 0.0f ) {
+	{
+		// q3map2 bakes vertex normals pointing away from the solid, so they
+		// carry the facing the winding cross cannot
 		int i;
 
 		for ( i = 0; i < grid->width * grid->height; i++ ) {
-			VectorAdd( accum.normalAccum, grid->verts[i].normal, accum.normalAccum );
+			VectorAdd( accum.orientAccum, grid->verts[i].normal, accum.orientAccum );
 		}
+	}
+	if ( VectorLengthSquared( accum.normalAccum ) <= 0.0f ) {
+		VectorCopy( accum.orientAccum, accum.normalAccum );
 	}
 
 	subdivide = R_SurfaceLightBeginSubdivision( shader, &accum, &subdiv );
@@ -1852,10 +2083,13 @@ static qboolean R_BuildSurfaceLightTriProxy( int surfaceIndex, const shader_t *s
 			color0, color1, color2, &accum );
 	}
 
+	// q3map2 bakes vertex normals pointing away from the solid, so they carry
+	// the facing the winding cross cannot
+	for ( i = 0; i < tri->numVerts; i++ ) {
+		VectorAdd( accum.orientAccum, tri->verts[i].normal, accum.orientAccum );
+	}
 	if ( VectorLengthSquared( accum.normalAccum ) <= 0.0f ) {
-		for ( i = 0; i < tri->numVerts; i++ ) {
-			VectorAdd( accum.normalAccum, tri->verts[i].normal, accum.normalAccum );
-		}
+		VectorCopy( accum.orientAccum, accum.normalAccum );
 	}
 
 	subdivide = R_SurfaceLightBeginSubdivision( shader, &accum, &subdiv );
@@ -1952,13 +2186,14 @@ static void R_BuildSurfaceLightProxiesForWorld( void )
 
 	if ( r_surfaceLightProxyDebug && r_surfaceLightProxyDebug->integer ) {
 		ri.Printf( PRINT_ALL,
-			"surfacelight proxies sources:%i built:%i point:%i spot:%i subdiv:%i/%i spatial:%i/%i skip sky:%i invalid:%i overflow:%i\n",
+			"surfacelight proxies sources:%i built:%i point:%i spot:%i subdiv:%i/%i spatial:%i/%i flipped:%i solid:%i skip sky:%i invalid:%i overflow:%i\n",
 			tr.surfaceLightProxies.sourceSurfaces, tr.surfaceLightProxies.count,
 			tr.surfaceLightProxies.pointProjectionCount,
 			tr.surfaceLightProxies.spotProjectionCount,
 			tr.surfaceLightProxies.subdividedSurfaces,
 			tr.surfaceLightProxies.subdivisionProxies,
 			tr.surfaceLightProxies.spatialized, tr.surfaceLightProxies.spatialFallback,
+			tr.surfaceLightProxies.flippedNormals, tr.surfaceLightProxies.skippedSolid,
 			tr.surfaceLightProxies.skippedSky, tr.surfaceLightProxies.skippedInvalid,
 			tr.surfaceLightProxies.skippedOverflow );
 	}
@@ -1977,10 +2212,47 @@ static qboolean R_WorldDlightAppend( char *output, int capacity, int *length,
 	return qtrue;
 }
 
+/*
+Shader names carry '/' and can carry quotes or backslashes, none of which may
+reach a JSON string body unescaped.  Anything outside printable ASCII is
+dropped rather than escaped: the field exists so an author can find the
+emitting surface, not to round-trip arbitrary bytes.
+*/
+static void R_WorldDlightQuoteName( const char *name, char *out, int outSize )
+{
+	int read;
+	int write;
+
+	write = 0;
+	for ( read = 0; name && name[read] && write < outSize - 2; read++ ) {
+		char c = name[read];
+
+		if ( c == '"' || c == '\\' ) {
+			out[write++] = '\\';
+		} else if ( c < 0x20 || (unsigned char)c > 0x7e ) {
+			continue;
+		}
+		out[write++] = c;
+	}
+	out[write] = '\0';
+}
+
+/*
+Version 1 spells a proxy's projection as its light type.  A small emitter is
+built as a point proxy and is the only surface light the raster point-shadow
+planner will accept, so writing every entry as a spot - as this generator once
+did - silently demoted each of those lights to a linear light that
+R_PlanDlightShadows rejects outright.
+*/
+static const char *R_WorldDlightProxyTypeName( const surfaceLightProxy_t *proxy )
+{
+	return ( proxy->projection == SURFACE_LIGHT_PROXY_SPOT ) ? "spot" : "point";
+}
+
 void R_WorldDlightsGenerate_f( void )
 {
 	char filename[MAX_QPATH];
-	char line[1024];
+	char line[2048];
 	char *output;
 	int outputLength;
 	int argc;
@@ -2024,6 +2296,12 @@ void R_WorldDlightsGenerate_f( void )
 			"WARNING: world dlight generation omitted %i surface lights beyond the %i-light format limit\n",
 			tr.surfaceLightProxies.skippedOverflow, MAX_STATIC_MAP_LIGHTS );
 	}
+	if ( tr.surfaceLightProxies.count > count ) {
+		ri.Printf( PRINT_WARNING,
+			"WARNING: world dlight generation truncated %i of %i surface lights to the %i-light format limit\n",
+			tr.surfaceLightProxies.count - count, tr.surfaceLightProxies.count,
+			MAX_STATIC_MAP_LIGHTS );
+	}
 	line[0] = '\0';
 	Com_sprintf( line, sizeof( line ),
 		"{\n"
@@ -2040,10 +2318,14 @@ void R_WorldDlightsGenerate_f( void )
 
 	for ( i = 0; i < count; i++ ) {
 		const surfaceLightProxy_t *proxy;
+		char shaderName[MAX_QPATH * 2];
 		vec3_t direction;
 		float radius;
 		float intensity;
 		float priority;
+		float outerAngle;
+		float innerAngle;
+		int resolution;
 		int lineLength;
 
 		proxy = &tr.surfaceLightProxies.proxies[i];
@@ -2053,11 +2335,22 @@ void R_WorldDlightsGenerate_f( void )
 		radius = proxy->radius > 0.0f ? proxy->radius : WORLD_DLIGHT_DEFAULT_RADIUS;
 		intensity = proxy->intensity > 0.0f ? proxy->intensity : WORLD_DLIGHT_DEFAULT_INTENSITY;
 		priority = proxy->designerPriority > 0.0f ? proxy->designerPriority : 1.0f;
+		// carry the cone the proxy builder already derived from the emitter's
+		// footprint instead of stamping the format defaults on every entry,
+		// so a reloaded sidecar lights the map the way the live proxy did
+		outerAngle = proxy->shadowConeAngle > 0.0f ?
+			proxy->shadowConeAngle : WORLD_DLIGHT_DEFAULT_OUTER_ANGLE;
+		innerAngle = outerAngle * ( WORLD_DLIGHT_DEFAULT_INNER_ANGLE /
+			WORLD_DLIGHT_DEFAULT_OUTER_ANGLE );
+		resolution = R_WorldDlightShadowResolutionForRadius(
+			proxy->shadowCasterRadius > 0.0f ? proxy->shadowCasterRadius : radius );
+		R_WorldDlightQuoteName( proxy->shaderName, shaderName, sizeof( shaderName ) );
 
 		lineLength = Com_sprintf( line, sizeof( line ),
 			"    {\n"
 			"      \"name\": \"surfacelight_%03i_surface_%i\",\n"
-			"      \"type\": \"spot\",\n"
+			"      \"shader\": \"%s\",\n"
+			"      \"type\": \"%s\",\n"
 			"      \"origin\": [%.6f, %.6f, %.6f],\n"
 			"      \"direction\": [%.6f, %.6f, %.6f],\n"
 			"      \"color\": [%.6f, %.6f, %.6f],\n"
@@ -2065,17 +2358,18 @@ void R_WorldDlightsGenerate_f( void )
 			"      \"intensity\": %.6f,\n"
 			"      \"innerAngle\": %.6f,\n"
 			"      \"outerAngle\": %.6f,\n"
-			"      \"castsShadows\": true,\n"
+			"      \"castsShadows\": %s,\n"
 			"      \"shadowResolution\": %i,\n"
 			"      \"priority\": %.6f\n"
 			"    }%s\n",
-			i, proxy->sourceSurface,
+			i, proxy->sourceSurface, shaderName,
+			R_WorldDlightProxyTypeName( proxy ),
 			proxy->origin[0], proxy->origin[1], proxy->origin[2],
 			direction[0], direction[1], direction[2],
 			proxy->color[0], proxy->color[1], proxy->color[2],
-			radius, intensity, WORLD_DLIGHT_DEFAULT_INNER_ANGLE,
-			WORLD_DLIGHT_DEFAULT_OUTER_ANGLE,
-			WORLD_DLIGHT_DEFAULT_SHADOW_RESOLUTION, priority,
+			radius, intensity, innerAngle, outerAngle,
+			proxy->castsShadows ? "true" : "false",
+			resolution, priority,
 			( i + 1 < count ) ? "," : "" );
 		if ( !R_WorldDlightAppend( output, WORLD_DLIGHT_MAX_FILE_SIZE + 1, &outputLength,
 			line, lineLength ) ) {
@@ -2103,8 +2397,9 @@ void R_WorldDlightsGenerate_f( void )
 	}
 
 	R_LoadStaticMapLightsForWorld();
-	ri.Printf( PRINT_ALL, "Generated and loaded %i world dlights in %s\n",
-		tr.staticMapLights.count, filename );
+	ri.Printf( PRINT_ALL, "Generated and loaded %i world dlights in %s (point:%i spot:%i)\n",
+		tr.staticMapLights.count, filename,
+		tr.staticMapLights.pointCount, tr.staticMapLights.spotCount );
 }
 
 static shader_t *ShaderForShaderNum( const int shaderNum, int lightmapNum ) {

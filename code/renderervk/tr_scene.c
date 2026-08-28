@@ -572,6 +572,18 @@ static qboolean R_LightCandidateVisibleInPVS( const refdef_t *fd, const vec3_t o
 	return qfalse;
 }
 
+/*
+Authored distance fade.  Returns 1 for every light that does not use it, so
+sidecars written before the fade keys existed keep their exact behaviour.
+*/
+static float R_StaticMapLightFade( const mapLightDef_t *light, const refdef_t *fd )
+{
+	vec3_t delta;
+
+	VectorSubtract( light->origin, fd->vieworg, delta );
+	return R_WorldDlightDistanceFade( light->fadeStart, light->fadeEnd, VectorLength( delta ) );
+}
+
 static float R_StaticMapLightScenePriority( const mapLightDef_t *light, const refdef_t *fd )
 {
 	vec3_t delta;
@@ -579,6 +591,12 @@ static float R_StaticMapLightScenePriority( const mapLightDef_t *light, const re
 	float dist2;
 	float radius2;
 	float directionalWeight;
+	float fade;
+
+	fade = R_StaticMapLightFade( light, fd );
+	if ( fade <= 0.0f ) {
+		return 0.0f;
+	}
 
 	brightness = light->color[0];
 	if ( light->color[1] > brightness ) {
@@ -606,8 +624,8 @@ static float R_StaticMapLightScenePriority( const mapLightDef_t *light, const re
 		}
 	}
 
-	return brightness * directionalWeight * light->designerPriority * light->intensity * radius2 /
-		( dist2 + radius2 + 1.0f );
+	return fade * brightness * directionalWeight * light->designerPriority * light->intensity *
+		radius2 / ( dist2 + radius2 + 1.0f );
 }
 
 static void R_StaticMapLightSpotEnd( const mapLightDef_t *light, vec3_t end )
@@ -755,6 +773,7 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 		if ( R_StaticMapLightVisibleInPVS( fd, light ) ) {
 			visible[i] = qtrue;
 			visibleCount++;
+			tr.staticMapLights.lights[i].pvsFrame = tr.frameCount;
 		} else {
 			tr.staticMapLights.skippedPVSThisFrame++;
 		}
@@ -766,7 +785,9 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 	for ( pass = 0; pass < budget; pass++ ) {
 		const mapLightDef_t *light;
 		dlight_t *dl;
+		vec3_t color;
 		float bestPriority;
+		float fade;
 		int bestIndex;
 		int before;
 
@@ -792,15 +813,22 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 		selected[bestIndex] = qtrue;
 		light = &tr.staticMapLights.lights[bestIndex];
 		before = r_numdlights;
+		// the fade rides on the radiance rather than the reach: dimming the
+		// colour keeps the lit volume stable while the light goes out
+		fade = R_StaticMapLightFade( light, fd );
+		if ( fade <= 0.0f ) {
+			continue;
+		}
+		VectorScale( light->color, fade, color );
 		if ( light->type == MAP_LIGHT_SPOT ) {
 			vec3_t end;
 
 			R_StaticMapLightSpotEnd( light, end );
 			RE_AddLinearLightToScene( light->origin, end, light->radius,
-				light->color[0], light->color[1], light->color[2] );
+				color[0], color[1], color[2] );
 		} else {
 			RE_AddDynamicLightToScene( light->origin, light->radius,
-				light->color[0], light->color[1], light->color[2], qfalse );
+				color[0], color[1], color[2], qfalse );
 		}
 		if ( r_numdlights <= before ) {
 			continue;
@@ -814,11 +842,17 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 		dl->shadowEligible = ( light->type == MAP_LIGHT_POINT &&
 			r_staticLightShadows && r_staticLightShadows->integer &&
 			light->castsShadows && shadowPromoted < shadowBudget ) ? qtrue : qfalse;
-		dl->shadowPriorityMultiplier = light->designerPriority *
+		dl->shadowPriorityMultiplier = fade * light->designerPriority *
 			Com_Clamp( 0.25f, 4.0f, light->intensity / light->radius );
+
+		// stamped for the r_dlightDebugDraw overlay, which has no other way to
+		// tell an authored light that reached the frame from one that lost the
+		// budget or the PVS test
+		tr.staticMapLights.lights[bestIndex].promotedFrame = tr.frameCount;
 
 		tr.staticMapLights.promotedThisFrame++;
 		if ( dl->shadowEligible ) {
+			tr.staticMapLights.lights[bestIndex].shadowFrame = tr.frameCount;
 			tr.staticMapLights.shadowEligibleThisFrame++;
 			shadowPromoted++;
 		}

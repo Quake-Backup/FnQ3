@@ -91,6 +91,7 @@ cvar_t	*r_dlightLoadWorld;
 cvar_t	*r_staticLightMaxLights;
 cvar_t	*r_staticLightDebug;
 cvar_t	*r_surfaceLightProxies;
+cvar_t	*r_surfaceLightProxyRadiance;
 cvar_t	*r_surfaceLightProxyMaxLights;
 cvar_t	*r_surfaceLightProxyDebug;
 #ifdef USE_VULKAN
@@ -127,6 +128,7 @@ cvar_t	*r_dlightBacks;
 
 cvar_t	*r_lodbias;
 cvar_t	*r_lodscale;
+cvar_t	*r_modelTessellation;
 
 cvar_t	*r_norefresh;
 cvar_t	*r_drawentities;
@@ -2013,6 +2015,10 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_lodCurveError, "Level of detail error on curved surface grids. Higher values result in better quality at a distance." );
 	r_lodbias = ri.Cvar_Get( "r_lodbias", "-2", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_lodbias, "Sets the level of detail of in-game models:\n -2: Ultra (further delays LOD transition in the distance)\n -1: Very High (delays LOD transition in the distance)\n 0: High\n 1: Medium\n 2: Low" );
+	r_modelTessellation = ri.Cvar_Get( "r_modelTessellation", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_modelTessellation, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_modelTessellation, "Runtime smoothing for model and character geometry:\n 0: Low (original triangles)\n 1: Medium (4 smoothed triangles per source triangle)\n 2: High (9 smoothed triangles per source triangle)" );
+	ri.Cvar_SetGroup( r_modelTessellation, CVG_RENDERER );
 	r_flares = ri.Cvar_Get ("r_flares", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_flares, "Enables corona effects on light sources." );
 	r_znear = ri.Cvar_Get( "r_znear", "4", CVAR_CHEAT );
@@ -2095,6 +2101,10 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_surfaceLightProxies, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_surfaceLightProxies, "Enables bounded q3map_surfaceLight proxies as native RTX analytic lights with ray-traced visibility." );
 	ri.Cvar_SetGroup( r_surfaceLightProxies, CVG_RENDERER );
+	r_surfaceLightProxyRadiance = ri.Cvar_Get( "r_surfaceLightProxyRadiance", "0.15", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_surfaceLightProxyRadiance, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_surfaceLightProxyRadiance, "Peak radiance a q3map_surfaceLight 300 emitter contributes as a proxy light.\nProxies add to the baked lightmap, so values near 1 double-count light the map already has.\nApplied when the world is loaded, so reload the map before r_dlightGenerateWorld to rebake it." );
+	ri.Cvar_SetGroup( r_surfaceLightProxyRadiance, CVG_RENDERER );
 	r_surfaceLightProxyMaxLights = ri.Cvar_Get( "r_surfaceLightProxyMaxLights", "16", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_surfaceLightProxyMaxLights, "0",
 		va( "%i", MAX_RT_SURFACELIGHT_LIGHTS ), CV_INTEGER );

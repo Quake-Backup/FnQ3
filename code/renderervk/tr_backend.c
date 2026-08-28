@@ -3571,6 +3571,157 @@ static void RB_DebugPolygon( int color, int numPoints, float *points ) {
 }
 
 
+#ifdef USE_PMLIGHT
+/*
+================
+RB_FlushDlightDebugLines
+
+Pushes one light's accumulated wireframe through the existing surface-debug
+line pipeline.  DEPTH_RANGE_ZERO keeps the overlay in front of the scene: a
+light buried in geometry is exactly the case this view exists to explain.
+================
+*/
+static void RB_FlushDlightDebugLines( dlightDebugLines_t *lines, const vec3_t color )
+{
+	byte rgba[3];
+	int i;
+
+	if ( lines->numVerts < 2 ) {
+		lines->numVerts = 0;
+		return;
+	}
+	if ( lines->numVerts > SHADER_MAX_VERTEXES ) {
+		lines->numVerts = SHADER_MAX_VERTEXES & ~1;
+	}
+
+	for ( i = 0; i < 3; i++ ) {
+		rgba[i] = (byte)( Com_Clamp( 0.0f, 1.0f, color[i] ) * 255.0f );
+	}
+
+	for ( i = 0; i < lines->numVerts; i++ ) {
+		VectorCopy( lines->verts + i * 3, tess.xyz[i] );
+		tess.svars.colors[0][i].rgba[0] = rgba[0];
+		tess.svars.colors[0][i].rgba[1] = rgba[1];
+		tess.svars.colors[0][i].rgba[2] = rgba[2];
+		tess.svars.colors[0][i].rgba[3] = 255;
+	}
+	tess.numVertexes = lines->numVerts;
+	tess.numIndexes = 0;
+
+	vk_bind_pipeline( vk.surface_debug_pipeline_outline );
+	vk_bind_geometry( TESS_XYZ | TESS_RGBA0 );
+	vk_draw_geometry( DEPTH_RANGE_ZERO, qfalse );
+
+	tess.numVertexes = 0;
+	lines->numVerts = 0;
+}
+
+
+/*
+================
+RB_DlightDebugColor
+
+Promoted lights draw in their own colour so an author can see what each one
+actually emits; lights the budget or the PVS dropped draw dim grey, which is
+the difference between "authored wrong" and "never reached the frame".
+================
+*/
+static void RB_DlightDebugColor( const mapLightDef_t *light, qboolean promoted,
+	qboolean shadowed, vec3_t color )
+{
+	float scale;
+
+	if ( !promoted ) {
+		VectorSet( color, 0.30f, 0.30f, 0.34f );
+		return;
+	}
+
+	VectorCopy( light->color, color );
+	scale = color[0];
+	if ( color[1] > scale ) {
+		scale = color[1];
+	}
+	if ( color[2] > scale ) {
+		scale = color[2];
+	}
+	if ( scale > 0.0f ) {
+		VectorScale( color, 1.0f / scale, color );
+	} else {
+		VectorSet( color, 1.0f, 1.0f, 1.0f );
+	}
+
+	if ( !shadowed ) {
+		VectorScale( color, 0.55f, color );
+	}
+}
+
+
+/*
+====================
+RB_DrawWorldDlightDebug
+
+r_dlightDebugDraw overlay: origin cross, reach sphere, and spot cone for every
+world dlight in the loaded sidecar.
+====================
+*/
+static void RB_DrawWorldDlightDebug( void )
+{
+	static float vertexBuffer[DLIGHT_DEBUG_VERTS_PER_LIGHT * 3];
+	dlightDebugLines_t lines;
+	qboolean promotedOnly;
+	int i;
+
+	if ( !r_dlightDebugDraw || !r_dlightDebugDraw->integer ) {
+		return;
+	}
+	if ( ( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) || !tr.world ) {
+		return;
+	}
+	if ( !tr.staticMapLights.loaded || tr.staticMapLights.parseFailed ||
+		tr.staticMapLights.count <= 0 ) {
+		return;
+	}
+
+	promotedOnly = ( r_dlightDebugDraw->integer < DLIGHT_DEBUG_ALL ) ? qtrue : qfalse;
+
+	GL_Bind( tr.whiteImage );
+	vk_update_mvp( NULL );
+
+	for ( i = 0; i < tr.staticMapLights.count; i++ ) {
+		const mapLightDef_t *light = &tr.staticMapLights.lights[i];
+		vec3_t color;
+		qboolean promoted;
+		qboolean shadowed;
+		float crossSize;
+
+		promoted = ( light->promotedFrame == backEnd.viewParms.frameCount ) ? qtrue : qfalse;
+		shadowed = ( light->shadowFrame == backEnd.viewParms.frameCount ) ? qtrue : qfalse;
+		if ( promotedOnly && !promoted ) {
+			continue;
+		}
+		// the overlay is for reading the lights acting on the room you are in,
+		// so it follows the same PVS gate the promotion pass applied rather than
+		// drawing every light in the map through the walls
+		if ( light->pvsFrame != backEnd.viewParms.frameCount ) {
+			continue;
+		}
+
+		// one light per batch keeps every shape in that light's own colour
+		R_DlightDebugBegin( &lines, vertexBuffer, DLIGHT_DEBUG_VERTS_PER_LIGHT );
+		RB_DlightDebugColor( light, promoted, shadowed, color );
+		crossSize = Com_Clamp( 4.0f, 24.0f, light->radius * 0.06f );
+		R_DlightDebugCross( &lines, light->origin, crossSize );
+		R_DlightDebugSphere( &lines, light->origin, light->radius );
+		if ( light->type == MAP_LIGHT_SPOT ) {
+			R_DlightDebugCone( &lines, light->origin, light->direction,
+				light->radius, light->innerAngle, light->outerAngle );
+		}
+		RB_FlushDlightDebugLines( &lines, color );
+	}
+}
+#endif // USE_PMLIGHT
+
+
 /*
 ====================
 RB_DebugGraphics
@@ -3579,6 +3730,10 @@ Visualization aid for movement clipping debugging
 ====================
 */
 static void RB_DebugGraphics( void ) {
+
+#ifdef USE_PMLIGHT
+	RB_DrawWorldDlightDebug();
+#endif
 
 	if ( !r_debugSurface->integer ) {
 		return;

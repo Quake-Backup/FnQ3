@@ -3741,6 +3741,163 @@ static void RB_DebugPolygon( int color, int numPoints, float *points ) {
 }
 
 
+#ifdef USE_PMLIGHT
+/*
+================
+RB_FlushDlightDebugLines
+
+Two passes per batch: the occluded copy first with depth testing off and a low
+alpha, then the unoccluded copy at full strength.  A light buried in geometry
+is exactly the case this overlay exists to explain, so it has to stay visible
+through walls while still reading as "behind something".
+================
+*/
+static void RB_FlushDlightDebugLines( dlightDebugLines_t *lines, const vec3_t color )
+{
+	if ( lines->numVerts < 2 ) {
+		lines->numVerts = 0;
+		return;
+	}
+
+	GL_ClientState( 0, CLS_NONE );
+	qglVertexPointer( 3, GL_FLOAT, 0, lines->verts );
+
+	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_SRC_ALPHA |
+		GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
+	qglColor4f( color[0], color[1], color[2], 0.22f );
+#ifdef RENDERER_GLX
+	GLX_CompatDrawArrays( GL_LINES, 0, lines->numVerts,
+		GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_DEBUG );
+#else
+	qglDrawArrays( GL_LINES, 0, lines->numVerts );
+#endif
+
+	GL_State( GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
+	qglColor4f( color[0], color[1], color[2], 1.0f );
+#ifdef RENDERER_GLX
+	GLX_CompatDrawArrays( GL_LINES, 0, lines->numVerts,
+		GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_DEBUG );
+#else
+	qglDrawArrays( GL_LINES, 0, lines->numVerts );
+#endif
+
+	lines->numVerts = 0;
+}
+
+
+/*
+================
+RB_DlightDebugColor
+
+Promoted lights draw in their own colour so an author can see what each one
+actually emits; lights the budget or the PVS dropped draw dim grey, which is
+the difference between "authored wrong" and "never reached the frame".
+================
+*/
+static void RB_DlightDebugColor( const mapLightDef_t *light, qboolean promoted,
+	qboolean shadowed, vec3_t color )
+{
+	float scale;
+
+	if ( !promoted ) {
+		VectorSet( color, 0.30f, 0.30f, 0.34f );
+		return;
+	}
+
+	VectorCopy( light->color, color );
+	scale = color[0];
+	if ( color[1] > scale ) {
+		scale = color[1];
+	}
+	if ( color[2] > scale ) {
+		scale = color[2];
+	}
+	if ( scale > 0.0f ) {
+		VectorScale( color, 1.0f / scale, color );
+	} else {
+		VectorSet( color, 1.0f, 1.0f, 1.0f );
+	}
+
+	if ( !shadowed ) {
+		// no shadow slot this frame: desaturate toward the light's own hue at
+		// half strength so shadow casters stay the ones that pop
+		VectorScale( color, 0.55f, color );
+	}
+}
+
+
+/*
+====================
+RB_DrawWorldDlightDebug
+
+r_dlightDebugDraw overlay: origin cross, reach sphere, and spot cone for every
+world dlight in the loaded sidecar.
+====================
+*/
+static void RB_DrawWorldDlightDebug( void )
+{
+	static float vertexBuffer[DLIGHT_DEBUG_MAX_VERTS * 3];
+	dlightDebugLines_t lines;
+	qboolean promotedOnly;
+	int i;
+
+	if ( !r_dlightDebugDraw || !r_dlightDebugDraw->integer ) {
+		return;
+	}
+	if ( ( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) || !tr.world ) {
+		return;
+	}
+	if ( !tr.staticMapLights.loaded || tr.staticMapLights.parseFailed ||
+		tr.staticMapLights.count <= 0 ) {
+		return;
+	}
+
+	promotedOnly = ( r_dlightDebugDraw->integer < DLIGHT_DEBUG_ALL ) ? qtrue : qfalse;
+
+	GL_ProgramDisable();
+	GL_SelectTexture( 0 );
+	qglDisable( GL_TEXTURE_2D );
+	qglLoadMatrixf( backEnd.viewParms.world.modelMatrix );
+
+	R_DlightDebugBegin( &lines, vertexBuffer, DLIGHT_DEBUG_MAX_VERTS );
+
+	for ( i = 0; i < tr.staticMapLights.count; i++ ) {
+		const mapLightDef_t *light = &tr.staticMapLights.lights[i];
+		vec3_t color;
+		qboolean promoted;
+		qboolean shadowed;
+		float crossSize;
+
+		promoted = ( light->promotedFrame == backEnd.viewParms.frameCount ) ? qtrue : qfalse;
+		shadowed = ( light->shadowFrame == backEnd.viewParms.frameCount ) ? qtrue : qfalse;
+		if ( promotedOnly && !promoted ) {
+			continue;
+		}
+		// the overlay is for reading the lights acting on the room you are in,
+		// so it follows the same PVS gate the promotion pass applied rather than
+		// drawing every light in the map through the walls
+		if ( light->pvsFrame != backEnd.viewParms.frameCount ) {
+			continue;
+		}
+
+		// one light per batch keeps every shape in that light's own colour
+		RB_DlightDebugColor( light, promoted, shadowed, color );
+		crossSize = Com_Clamp( 4.0f, 24.0f, light->radius * 0.06f );
+		R_DlightDebugCross( &lines, light->origin, crossSize );
+		R_DlightDebugSphere( &lines, light->origin, light->radius );
+		if ( light->type == MAP_LIGHT_SPOT ) {
+			R_DlightDebugCone( &lines, light->origin, light->direction,
+				light->radius, light->innerAngle, light->outerAngle );
+		}
+		RB_FlushDlightDebugLines( &lines, color );
+	}
+
+	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	qglEnable( GL_TEXTURE_2D );
+}
+#endif // USE_PMLIGHT
+
+
 /*
 ====================
 RB_DebugGraphics
@@ -3749,6 +3906,10 @@ Visualization aid for movement clipping debugging
 ====================
 */
 static void RB_DebugGraphics( void ) {
+
+#ifdef USE_PMLIGHT
+	RB_DrawWorldDlightDebug();
+#endif
 
 	if ( !r_debugSurface->integer ) {
 		return;

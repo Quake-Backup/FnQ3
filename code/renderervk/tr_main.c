@@ -1529,17 +1529,29 @@ static int R_CountDlightShadowReceivers( const dlight_t *dl )
 }
 
 
-static qboolean R_DlightShadowProjectionValid( const dlight_t *dl )
-{
-	vec4_t eye, clip, normalized, window;
+/*
+A light casts shadows onto whatever its own volume reaches, so the volume is
+what has to meet the frustum - not the light's origin.  Testing the origin
+projection instead dropped the shadow plan the moment the source passed behind
+the near plane or out the side of the screen, which is exactly when a light
+above or beside the viewer is throwing its longest shadows into view.  That
+made shadows blink out and back as the camera moved through a lit area.
 
-	R_TransformModelToClip( dl->origin, tr.viewParms.world.modelMatrix, tr.viewParms.projectionMatrix, eye, clip );
-	if ( clip[3] <= 0.0f ) {
-		return qfalse;
+A linear light spans origin..origin2, so both ends are tested.
+*/
+static qboolean R_DlightShadowVolumeVisible( const dlight_t *dl )
+{
+	float radius;
+
+	radius = MAX( dl->radius, 1.0f );
+	if ( R_CullPointAndRadius( dl->origin, radius ) != CULL_OUT ) {
+		return qtrue;
+	}
+	if ( dl->linear && R_CullPointAndRadius( dl->origin2, radius ) != CULL_OUT ) {
+		return qtrue;
 	}
 
-	R_TransformClipToWindow( clip, &tr.viewParms, normalized, window );
-	return ( normalized[2] >= 0.0f && normalized[2] <= 1.0f ) ? qtrue : qfalse;
+	return qfalse;
 }
 
 
@@ -1571,6 +1583,49 @@ static float R_DlightShadowPriority( const dlight_t *dl, int receivers )
 
 	return brightness * receiverScale * radius2 * priorityMultiplier / ( dist2 + radius2 + 1.0f );
 }
+
+/*
+=================
+R_EntityCastsFrameShadow
+
+A model outside the view frustum still throws its shadow onto geometry that is
+inside it.  Dropping such a model outright - which the frustum cull in each
+model path does - makes its shadow blink out the moment the caster leaves the
+screen, which is very visible on players and items moving past a lit doorway.
+
+Answers whether any shadow-eligible light in this view reaches the entity, so
+the model paths can keep it as a shadow-only caster instead.  `mins`/`maxs` are
+the model-space bounds the caller already computed; the light is transformed
+into entity space to meet them, matching the lighting path.
+=================
+*/
+qboolean R_EntityCastsFrameShadow( trRefEntity_t *ent, const vec3_t mins, const vec3_t maxs )
+{
+	int i;
+
+	if ( !r_dlightShadows || !r_dlightShadows->integer || !r_dlightMode ||
+		r_dlightMode->integer < 2 || ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		return qfalse;
+	}
+	if ( ent->e.renderfx & ( RF_NOSHADOW | RF_FIRST_PERSON | RF_DEPTHHACK ) ) {
+		return qfalse;
+	}
+
+	for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
+		dlight_t *dl = &tr.viewParms.dlights[i];
+
+		if ( !dl->shadowEligible ) {
+			continue;
+		}
+		R_TransformDlights( 1, dl, &tr.or );
+		if ( !R_LightCullBounds( dl, mins, maxs ) ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
 
 static void R_ShadowManagerStorePointLightRecord( shadowPointLightPlan_t *record,
 	int dlightIndex, const dlight_t *dl )
@@ -1795,6 +1850,7 @@ static float R_ShadowSpotStaticPriority( const mapLightDef_t *light )
 	float dist2;
 	float radius2;
 	float directionalWeight;
+	float fade;
 
 	brightness = R_ShadowSpotBrightness( light->color );
 	if ( brightness <= 0.0f || light->radius <= 0.0f ||
@@ -1803,6 +1859,12 @@ static float R_ShadowSpotStaticPriority( const mapLightDef_t *light )
 	}
 
 	VectorSubtract( light->origin, tr.refdef.vieworg, delta );
+	// a light the author faded out must not hold an atlas tile the lights
+	// still contributing could use
+	fade = R_WorldDlightDistanceFade( light->fadeStart, light->fadeEnd, VectorLength( delta ) );
+	if ( fade <= 0.0f ) {
+		return 0.0f;
+	}
 	dist2 = DotProduct( delta, delta );
 	radius2 = Square( light->radius );
 	directionalWeight = 1.0f;
@@ -1812,8 +1874,8 @@ static float R_ShadowSpotStaticPriority( const mapLightDef_t *light )
 		directionalWeight = Com_Clamp( 0.15f, 1.0f, 0.35f + 0.65f * facing );
 	}
 
-	return brightness * directionalWeight * light->designerPriority * light->intensity * radius2 /
-		( dist2 + radius2 + 1.0f );
+	return fade * brightness * directionalWeight * light->designerPriority * light->intensity *
+		radius2 / ( dist2 + radius2 + 1.0f );
 }
 
 static float R_ShadowSpotSurfaceHemisphereWeight( const surfaceLightProxy_t *proxy )
@@ -2369,7 +2431,7 @@ static void R_PlanDlightShadows( void )
 			tr.pc.c_dlightShadowSkippedNoSurfaces++;
 			continue;
 		}
-		if ( !R_DlightShadowProjectionValid( dl ) ) {
+		if ( !R_DlightShadowVolumeVisible( dl ) ) {
 			tr.pc.c_dlightShadowSkippedProjection++;
 			continue;
 		}

@@ -97,8 +97,11 @@ def check_source(label: str, relative_path: str, failures: list[str]) -> None:
     require(light_object, "unsupportedType = qtrue;", f"{label} unsupported type flag", failures)
     require(light_object, "*skipReason = 1;", f"{label} unsupported skip reason", failures)
     require(light_object, "*skipReason = 2;", f"{label} invalid skip reason", failures)
-    require(light_object, "light->resolution = (int)Com_Clamp( 64.0f, 1024.0f, (float)light->resolution );", f"{label} resolution clamp", failures)
+    require(light_object, "light->resolution = R_WorldDlightClampShadowResolution( light->resolution );", f"{label} resolution clamp", failures)
     require(light_object, "light->innerAngle = Com_Clamp( 0.0f, light->outerAngle, light->innerAngle );", f"{label} cone clamp", failures)
+    require(light_object, "light->fadeStart = WORLD_DLIGHT_DEFAULT_FADE_START;", f"{label} fade start default", failures)
+    require(light_object, "light->fadeEnd = WORLD_DLIGHT_DEFAULT_FADE_END;", f"{label} fade end default", failures)
+    require(light_object, "R_StaticMapLightsNormalizeFade( light );", f"{label} fade normalization", failures)
     require(light_object, "} else if ( !R_StaticMapLightsSkipValue( p ) ) {", f"{label} forward-compatible object key skip", failures)
     require_order(
         light_object,

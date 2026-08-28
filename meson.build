@@ -1056,6 +1056,14 @@ test('fnq3_menu_blur', menu_blur_tests)
 test('fnq3_menu_blur_source', python,
   args: files('tests/menu_blur_source_tests.py'),
 )
+model_tessellation_tests = executable('fnq3_model_tessellation_tests',
+  'tests/model_tessellation_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnq3_model_tessellation', model_tessellation_tests)
+test('fnq3_model_tessellation_source', python,
+  args: files('tests/model_tessellation_source_tests.py'),
+)
 test('fnq3_external_lightmap_source', python,
   args: files('tests/external_lightmap_source_tests.py'),
 )

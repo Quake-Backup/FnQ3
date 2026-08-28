@@ -203,6 +203,7 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 	int				cull;
 	qboolean	personalModel;
 	qboolean	personalShadowCaster;
+	qboolean	shadowCasterOnly;
 #ifdef USE_PMLIGHT
 	dlight_t		*dl;
 	int				n;
@@ -215,6 +216,7 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 
 	personalModel = (ent->e.renderfx & RF_THIRD_PERSON) && !R_ViewPassIsPortal( &tr.viewParms );
 	personalShadowCaster = personalModel && !(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ));
+	shadowCasterOnly = qfalse;
 
 	if ( ent->e.renderfx & RF_WRAP_FRAMES )
 	{
@@ -245,7 +247,17 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 	//
 	cull = R_MDRCullModel (header, ent);
 	if ( cull == CULL_OUT ) {
+#ifdef USE_PMLIGHT
+		// keep a caster the frustum rejected when a shadow-casting light still
+		// reaches it, otherwise its shadow blinks out as it leaves the screen
+		R_MDRModelBounds( header, ent, bounds[0], bounds[1] );
+		if ( personalModel || !R_EntityCastsFrameShadow( ent, bounds[0], bounds[1] ) ) {
+			return;
+		}
+		shadowCasterOnly = qtrue;
+#else
 		return;
+#endif
 	}
 
 	// figure out the current LOD of the model we're rendering, and set the lod pointer respectively.
@@ -314,6 +326,7 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 
 		// stencil shadows can't do personal models unless I polyhedron clip
 		if ( !personalModel
+			&& !shadowCasterOnly
 		        && r_shadows->integer == 2
 			&& fogNum == 0
 			&& !(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ) )
@@ -331,11 +344,11 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 			R_AddDrawSurf( (void *)surface, tr.projectionShadowShader, 0, 0 );
 		}
 
-		if ( personalShadowCaster && shader->sort == SS_OPAQUE ) {
+		if ( ( personalShadowCaster || shadowCasterOnly ) && shader->sort == SS_OPAQUE ) {
 			R_AddDrawSurfFlags( (void *)surface, shader, fogNum, 0, DSF_SHADOW_CASTER_ONLY );
 		}
 
-		if ( !personalModel ) {
+		if ( !personalModel && !shadowCasterOnly ) {
 			R_AddDrawSurf( (void *)surface, shader, fogNum, 0 );
 			tr.needScreenMap |= shader->hasScreenMap;
 		}
@@ -346,7 +359,7 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 				dl = dlights[ n ];
 				tr.light = dl;
 				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
-					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
+					( personalModel || shadowCasterOnly ) ? LSF_SHADOW_CASTER_ONLY : 0 );
 			}
 		}
 #endif
@@ -459,7 +472,7 @@ void RB_MDRSurfaceAnim( mdrSurface_t *surface )
 			tempVert[2] += w->boneWeight * ( DotProduct( bone->matrix[2], w->offset ) + bone->matrix[2][3] );
 			
 #ifdef USE_TESS_NEEDS_NORMAL
-			if ( tess.needsNormal )
+			if ( tess.needsNormal || ( r_modelTessellation && r_modelTessellation->integer > MODEL_TESSELLATION_LOW ) )
 #endif
 			{
 				tempNormal[0] += w->boneWeight * DotProduct( bone->matrix[0], v->normal );
@@ -473,7 +486,7 @@ void RB_MDRSurfaceAnim( mdrSurface_t *surface )
 		tess.xyz[baseVertex + j][2] = tempVert[2];
 
 #ifdef USE_TESS_NEEDS_NORMAL
-		if ( tess.needsNormal )
+		if ( tess.needsNormal || ( r_modelTessellation && r_modelTessellation->integer > MODEL_TESSELLATION_LOW ) )
 #endif
 		{
 			tess.normal[baseVertex + j][0] = tempNormal[0];
@@ -488,6 +501,8 @@ void RB_MDRSurfaceAnim( mdrSurface_t *surface )
 	}
 
 	tess.numVertexes += surface->numVerts;
+	RB_TessellateModelSurface( baseVertex, surface->numVerts,
+		baseIndex, indexes, SF_MDR, qfalse );
 }
 
 

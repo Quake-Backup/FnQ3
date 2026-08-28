@@ -125,7 +125,9 @@ cvar_t	*r_staticLightMaxLights;
 cvar_t	*r_staticLightShadows;
 cvar_t	*r_staticLightShadowMaxLights;
 cvar_t	*r_staticLightDebug;
+cvar_t	*r_dlightDebugDraw;
 cvar_t	*r_surfaceLightProxies;
+cvar_t	*r_surfaceLightProxyRadiance;
 cvar_t	*r_surfaceLightProxyMaxLights;
 cvar_t	*r_surfaceLightProxyShadows;
 cvar_t	*r_surfaceLightProxyShadowMaxLights;
@@ -204,6 +206,7 @@ cvar_t	*r_dlightBacks;
 
 cvar_t	*r_lodbias;
 cvar_t	*r_lodscale;
+cvar_t	*r_modelTessellation;
 
 cvar_t	*r_norefresh;
 cvar_t	*r_drawentities;
@@ -2626,6 +2629,7 @@ static void R_Register( void )
 #endif
 	ri.Cmd_AddCommand( "r_staticLightReload", R_StaticMapLightsReload_f );
 	ri.Cmd_AddCommand( "r_dlightReloadWorld", R_StaticMapLightsReload_f );
+	ri.Cmd_AddCommand( "r_dlightWorldStatus", R_WorldDlightsStatus_f );
 	ri.Cmd_AddCommand( "r_dlightGenerateWorld", R_WorldDlightsGenerate_f );
 	GLX_CompatRegisterCommands();
 
@@ -2705,6 +2709,10 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_lodCurveError, "Level of detail error on curved surface grids. Higher values result in better quality at a distance." );
 	r_lodbias = ri.Cvar_Get( "r_lodbias", "-2", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_lodbias, "Sets the level of detail of in-game models:\n -2: Ultra (further delays LOD transition in the distance)\n -1: Very High (delays LOD transition in the distance)\n 0: High\n 1: Medium\n 2: Low" );
+	r_modelTessellation = ri.Cvar_Get( "r_modelTessellation", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_modelTessellation, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_modelTessellation, "Runtime smoothing for model and character geometry:\n 0: Low (original triangles)\n 1: Medium (4 smoothed triangles per source triangle)\n 2: High (9 smoothed triangles per source triangle)" );
+	ri.Cvar_SetGroup( r_modelTessellation, CVG_RENDERER );
 	r_znear = ri.Cvar_Get( "r_znear", "4", CVAR_CHEAT );
 	ri.Cvar_CheckRange( r_znear, "0.001", "200", CV_FLOAT );
 	ri.Cvar_SetDescription( r_znear, "Viewport distance from view origin (how close objects can be to the player before they're clipped out of the scene)." );
@@ -2890,10 +2898,18 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_staticLightDebug, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_staticLightDebug, "Prints world dlight loading and promotion counters." );
 	ri.Cvar_SetGroup( r_staticLightDebug, CVG_RENDERER );
+	r_dlightDebugDraw = ri.Cvar_Get( "r_dlightDebugDraw", "0", CVAR_CHEAT );
+	ri.Cvar_CheckRange( r_dlightDebugDraw, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_dlightDebugDraw, "Draws world dlight wireframes:\n 0: off\n 1: only lights promoted this frame\n 2: every loaded world dlight, unpromoted ones in grey" );
+	ri.Cvar_SetGroup( r_dlightDebugDraw, CVG_RENDERER );
 	r_surfaceLightProxies = ri.Cvar_Get( "r_surfaceLightProxies", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_surfaceLightProxies, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_surfaceLightProxies, "Promotes non-sky q3map_surfaceLight world surfaces into renderer-only proxy lights." );
 	ri.Cvar_SetGroup( r_surfaceLightProxies, CVG_RENDERER );
+	r_surfaceLightProxyRadiance = ri.Cvar_Get( "r_surfaceLightProxyRadiance", "0.15", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_surfaceLightProxyRadiance, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_surfaceLightProxyRadiance, "Peak radiance a q3map_surfaceLight 300 emitter contributes as a proxy light.\nProxies add to the baked lightmap, so values near 1 double-count light the map already has.\nApplied when the world is loaded, so reload the map before r_dlightGenerateWorld to rebake it." );
+	ri.Cvar_SetGroup( r_surfaceLightProxyRadiance, CVG_RENDERER );
 	r_surfaceLightProxyMaxLights = ri.Cvar_Get( "r_surfaceLightProxyMaxLights", "4", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_surfaceLightProxyMaxLights, "0", va( "%i", MAX_DLIGHTS ), CV_INTEGER );
 	ri.Cvar_SetDescription( r_surfaceLightProxyMaxLights, "Maximum number of surfacelight proxies promoted into a scene." );
@@ -3524,6 +3540,7 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 #endif
 	ri.Cmd_RemoveCommand( "r_staticLightReload" );
 	ri.Cmd_RemoveCommand( "r_dlightReloadWorld" );
+	ri.Cmd_RemoveCommand( "r_dlightWorldStatus" );
 	ri.Cmd_RemoveCommand( "r_dlightGenerateWorld" );
 	ri.Cmd_RemoveCommand( "shaderstate" );
 	GLX_CompatRemoveCommands();

@@ -291,6 +291,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 	int				fogNum;
 	qboolean		personalModel;
 	qboolean		personalShadowCaster;
+	qboolean		shadowCasterOnly;
 #ifdef USE_PMLIGHT
 	dlight_t		*dl;
 	int				n;
@@ -301,6 +302,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 	// don't add third_person objects if not in a portal
 	personalModel = (ent->e.renderfx & RF_THIRD_PERSON) && !R_ViewPassIsPortal( &tr.viewParms );
 	personalShadowCaster = personalModel && !(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ));
+	shadowCasterOnly = qfalse;
 
 	if ( ent->e.renderfx & RF_WRAP_FRAMES ) {
 		ent->e.frame %= tr.currentModel->md3[0]->numFrames;
@@ -337,7 +339,12 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 	//
 	cull = R_CullModel( header, ent, bounds );
 	if ( cull == CULL_OUT ) {
-		return;
+		// keep a caster the frustum rejected when a shadow-casting light still
+		// reaches it, otherwise its shadow blinks out as it leaves the screen
+		if ( personalModel || !R_EntityCastsFrameShadow( ent, bounds[0], bounds[1] ) ) {
+			return;
+		}
+		shadowCasterOnly = qtrue;
 	}
 
 	//
@@ -406,6 +413,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 
 		// stencil shadows can't do personal models unless I polyhedron clip
 		if ( !personalModel
+			&& !shadowCasterOnly
 			&& r_shadows->integer == 2 
 			&& fogNum == 0
 			&& !(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ) ) 
@@ -415,18 +423,19 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 
 		// projection shadows work fine with personal models
 		if ( r_shadows->integer == 3
+			&& !shadowCasterOnly
 			&& fogNum == 0
 			&& (ent->e.renderfx & RF_SHADOW_PLANE )
 			&& shader->sort == SS_OPAQUE ) {
 			R_AddDrawSurf( (void *)surface, tr.projectionShadowShader, 0, 0 );
 		}
 
-		if ( personalShadowCaster && shader->sort == SS_OPAQUE ) {
+		if ( ( personalShadowCaster || shadowCasterOnly ) && shader->sort == SS_OPAQUE ) {
 			R_AddDrawSurfFlags( (void *)surface, shader, fogNum, 0, DSF_SHADOW_CASTER_ONLY );
 		}
 
 		// don't add third_person objects if not viewing through a portal
-		if ( !personalModel ) {
+		if ( !personalModel && !shadowCasterOnly ) {
 			R_AddDrawSurf( (void *)surface, shader, fogNum, 0 );
 			tr.needScreenMap |= shader->hasScreenMap;
 		}
@@ -437,7 +446,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 				dl = dlights[ n ];
 				tr.light = dl;
 				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
-					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
+					( personalModel || shadowCasterOnly ) ? LSF_SHADOW_CASTER_ONLY : 0 );
 			}
 		}
 #endif

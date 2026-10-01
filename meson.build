@@ -1056,6 +1056,19 @@ test('fnq3_menu_blur', menu_blur_tests)
 test('fnq3_menu_blur_source', python,
   args: files('tests/menu_blur_source_tests.py'),
 )
+# Exercise the actual Vulkan binder with a mock command sink, without a GPU.
+vk_descriptor_bindings = custom_target('vk_descriptor_bindings',
+  input: 'code/renderervk/vk.c',
+  output: 'vk_descriptor_bindings.inc',
+  command: [python, files('tests/vulkan/extract_descriptor_bindings.py'), '@INPUT@', '@OUTPUT@'],
+)
+vk_descriptor_tests = executable('fnq3_vk_descriptor_tests',
+  'tests/vulkan/descriptor_bindings_tests.c',
+  vk_descriptor_bindings,
+  include_directories: include_directories('.'),
+  c_args: common_c_args,
+)
+test('fnq3_vk_descriptors', vk_descriptor_tests)
 model_tessellation_tests = executable('fnq3_model_tessellation_tests',
   'tests/model_tessellation_tests.cpp',
   cpp_args: common_cpp_args,

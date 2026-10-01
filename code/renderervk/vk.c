@@ -10631,33 +10631,48 @@ void vk_bind_material( const vk_material_t *material )
 
 void vk_bind_descriptor_sets( void )
 {
-	uint32_t offsets[2], offset_count;
+	uint32_t offset, offset_count;
 	uint32_t start, end, count, i;
 
 	start = vk.cmd->descriptor_set.start;
 	if ( start == ~0U )
 		return;
 
-	end = vk.cmd->descriptor_set.end;
+	end = MIN( vk.cmd->descriptor_set.end,
+		MIN( VK_DESC_COUNT, vk.maxBoundDescriptorSets ) - 1 );
+	if ( start > end ) {
+		vk.cmd->descriptor_set.start = ~0U;
+		vk.cmd->descriptor_set.end = 0;
+		return;
+	}
 
-	offset_count = 0;
-	if ( /*start == VK_DESC_STORAGE || */ start == VK_DESC_UNIFORM ) { // uniform offset or storage offset
-		offsets[ offset_count++ ] = vk.cmd->descriptor_set.offset[ start ];
+	/* Single-texture fragment variants declare set 2 for depth fade even
+	 * when its specialization constant disables sampling. MoltenVK still
+	 * needs that descriptor when binding the shader's resources. */
+	if ( start <= VK_DESC_DEPTH_FADE && end < VK_DESC_DEPTH_FADE &&
+		vk.maxBoundDescriptorSets > VK_DESC_DEPTH_FADE ) {
+		end = VK_DESC_DEPTH_FADE;
 	}
 
 	count = end - start + 1;
 
-	/* Fill NULL descriptor gaps, including the range end: full-range rebinds
-	 * after mid-frame post-process passes can cover sets (texture2, fog
-	 * collapse) that no material has used yet this frame, and one NULL handle
-	 * would invalidate the entire bind. */
-	for ( i = start + 1; i <= end; i++ ) {
+	/* A main-layout restore can include sets no material has used yet.
+	 * Set 0 is a dynamic uniform buffer; all other gaps need a sampler. */
+	for ( i = start; i <= end; i++ ) {
 		if ( vk.cmd->descriptor_set.current[i] == VK_NULL_HANDLE ) {
-			vk.cmd->descriptor_set.current[i] = tr.whiteImage->descriptor;
+			if ( i == VK_DESC_UNIFORM ) {
+				vk.cmd->descriptor_set.current[i] = vk.cmd->uniform_descriptor;
+				vk.cmd->descriptor_set.offset[i] = vk.cmd->uniform_read_offset;
+			} else {
+				vk.cmd->descriptor_set.current[i] = tr.whiteImage->descriptor;
+			}
 		}
 	}
 
-	qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline_layout, start, count, vk.cmd->descriptor_set.current + start, offset_count, offsets );
+	/* Read the offset after supplying a missing uniform descriptor. */
+	offset_count = ( start == VK_DESC_UNIFORM ) ? 1 : 0;
+	offset = vk.cmd->descriptor_set.offset[VK_DESC_UNIFORM];
+	qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline_layout, start, count, vk.cmd->descriptor_set.current + start, offset_count, &offset );
 	vk.stats.descriptor_bind_calls++;
 	vk.stats.descriptor_bind_sets += count;
 

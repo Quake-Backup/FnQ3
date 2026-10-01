@@ -16,6 +16,12 @@ Run the script tests directly:
 python tests/vulkan/vk_runtime_sweep_tests.py
 ```
 
+`meson test -C meson/build fnq3_vk_descriptors` compiles the production
+descriptor binder with a mock Vulkan command sink. It checks first-frame
+single-texture draws, preservation of active depth samplers, sampler gaps,
+uniform offsets after a post-process restore, device descriptor limits, and
+unchanged-state caching without a GPU or retail assets.
+
 Generate dry-run gate artifacts from the repository root:
 
 ```sh
